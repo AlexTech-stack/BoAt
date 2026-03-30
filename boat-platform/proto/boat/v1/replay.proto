@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package boat.v1;
+
+import "boat/v1/common.proto";
+
+message StartReplayRequest { string trace_id = 1; string simulation_id = 2; }
+message SeekReplayRequest { string replay_id = 1; uint64 tick = 2; }
+message StreamReplayRequest { string replay_id = 1; }
+
+message ReplayEvent {
+  string replay_id = 1;
+  uint64 tick = 2;
+  string payload = 3;
+}
+
+message ReplayControlResponse { bool accepted = 1; ErrorDetail error = 2; }
+
+service ReplayService {
+  rpc StartReplay(StartReplayRequest) returns (ReplayControlResponse);
+  rpc SeekReplay(SeekReplayRequest) returns (ReplayControlResponse);
+  rpc StreamReplay(StreamReplayRequest) returns (stream ReplayEvent);
+}

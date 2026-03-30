@@ -1,0 +1,8 @@
+set(CPACK_PACKAGE_NAME "boat-platform")
+set(CPACK_PACKAGE_VENDOR "cetitec")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_CONTACT "maintainers@boat.local")
+set(CPACK_GENERATOR "TGZ")
+set(CPACK_SOURCE_GENERATOR "TGZ")
+
+include(CPack)
