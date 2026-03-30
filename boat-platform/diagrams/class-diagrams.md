@@ -18,6 +18,11 @@ classDiagram
     IPlugin <|-- NetworkSimPlugin
 ```
 
+`IPlugin` in this diagram maps to the C ABI dispatch table `BoatPluginVTable`
+defined in `sdk/cpp/include/boat/plugin.h`. Implementations expose
+`boat_plugin_create`, `boat_plugin_destroy`, and `boat_plugin_abi_version`
+entry points and route lifecycle calls through that vtable.
+
 ## Signal Router Hierarchy
 
 ```mermaid
