@@ -14,4 +14,48 @@ function(boat_register_proto_directory proto_dir)
     COMMENT "Checking proto contract availability"
     VERBATIM
   )
+
+  if(TARGET protobuf::protoc AND TARGET grpc_cpp_plugin)
+    set(BOAT_PROTO_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated/proto" CACHE PATH "Generated proto include directory" FORCE)
+    file(MAKE_DIRECTORY "${BOAT_PROTO_GENERATED_DIR}")
+
+    get_filename_component(proto_base_dir "${proto_dir}/../.." ABSOLUTE)
+    set(generated_cc_files "")
+    set(generated_h_files "")
+
+    foreach(proto_file IN LISTS proto_files)
+      get_filename_component(proto_name "${proto_file}" NAME_WE)
+      get_filename_component(proto_relative "${proto_file}" DIRECTORY)
+      file(RELATIVE_PATH proto_rel_dir "${proto_base_dir}" "${proto_relative}")
+      set(output_dir "${BOAT_PROTO_GENERATED_DIR}/${proto_rel_dir}")
+      file(MAKE_DIRECTORY "${output_dir}")
+
+      set(pb_cc "${output_dir}/${proto_name}.pb.cc")
+      set(pb_h "${output_dir}/${proto_name}.pb.h")
+      set(grpc_cc "${output_dir}/${proto_name}.grpc.pb.cc")
+      set(grpc_h "${output_dir}/${proto_name}.grpc.pb.h")
+
+      add_custom_command(
+        OUTPUT "${pb_cc}" "${pb_h}" "${grpc_cc}" "${grpc_h}"
+        COMMAND protobuf::protoc
+        ARGS
+          "--proto_path=${proto_base_dir}"
+          "--cpp_out=${BOAT_PROTO_GENERATED_DIR}"
+          "--grpc_out=${BOAT_PROTO_GENERATED_DIR}"
+          "--plugin=protoc-gen-grpc=$<TARGET_FILE:grpc_cpp_plugin>"
+          "${proto_file}"
+        DEPENDS "${proto_file}" protobuf::protoc grpc_cpp_plugin
+        COMMENT "Generating protobuf/grpc sources for ${proto_file}"
+        VERBATIM
+      )
+
+      list(APPEND generated_cc_files "${pb_cc}" "${grpc_cc}")
+      list(APPEND generated_h_files "${pb_h}" "${grpc_h}")
+    endforeach()
+
+    add_library(boat_proto_generated INTERFACE)
+    target_include_directories(boat_proto_generated INTERFACE "${BOAT_PROTO_GENERATED_DIR}")
+    target_sources(boat_proto_generated INTERFACE ${generated_cc_files} ${generated_h_files})
+    add_dependencies(boat_proto_generated boat_proto_contracts)
+  endif()
 endfunction()
