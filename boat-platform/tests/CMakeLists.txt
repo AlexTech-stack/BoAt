@@ -11,5 +11,5 @@ target_link_libraries(boat_determinism_seed PRIVATE boat_core)
 add_test(NAME boat_determinism_seed COMMAND boat_determinism_seed)
 
 add_executable(boat_hil_smoke hil/test_hil.cpp)
-target_link_libraries(boat_hil_smoke PRIVATE boat_core)
+target_link_libraries(boat_hil_smoke PRIVATE boat_hil)
 add_test(NAME boat_hil_smoke COMMAND boat_hil_smoke)
