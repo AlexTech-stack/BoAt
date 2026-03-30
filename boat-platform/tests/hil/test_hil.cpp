@@ -1,13 +1,14 @@
+#include <catch2/catch_test_macros.hpp>
+
 #include <cstdio>
 #include <cstdlib>
 
 #include "virtual/virtual_can_driver.h"
 
-int main() {
+TEST_CASE("Virtual CAN HIL smoke flow", "[hil]") {
   const char* enabled = std::getenv("BOAT_HIL_ENABLED");
   if (enabled == nullptr || *enabled == '\0') {
-    std::puts("HIL smoke: SKIP (BOAT_HIL_ENABLED not set)");
-    return 0;
+    SKIP("BOAT_HIL_ENABLED not set");
   }
 
   const char* iface_env = std::getenv("BOAT_VCAN_IFACE");
@@ -15,15 +16,8 @@ int main() {
   boat::hil::VirtualCanDriver tx_driver(iface);
   boat::hil::VirtualCanDriver rx_driver(iface);
 
-  if (!tx_driver.Open()) {
-    std::fprintf(stderr, "HIL smoke: FAIL (tx Open failed on %s)\n", iface);
-    return 1;
-  }
-  if (!rx_driver.Open()) {
-    std::fprintf(stderr, "HIL smoke: FAIL (rx Open failed on %s)\n", iface);
-    tx_driver.Close();
-    return 1;
-  }
+  REQUIRE(tx_driver.Open());
+  REQUIRE(rx_driver.Open());
 
   boat::hil::CanFrame frame {};
   frame.can_id = 0x123;
@@ -33,29 +27,13 @@ int main() {
   frame.data[2] = 0xBE;
   frame.data[3] = 0xEF;
   frame.timestamp_ns = 0;
-  if (!tx_driver.WriteFrame(frame)) {
-    std::fprintf(stderr, "HIL smoke: FAIL (WriteFrame failed)\n");
-    tx_driver.Close();
-    rx_driver.Close();
-    return 1;
-  }
+  REQUIRE(tx_driver.WriteFrame(frame));
 
   boat::hil::CanFrame received {};
-  if (!rx_driver.ReadFrame(received)) {
-    std::fprintf(stderr, "HIL smoke: FAIL (ReadFrame failed)\n");
-    tx_driver.Close();
-    rx_driver.Close();
-    return 1;
-  }
-  if (received.can_id != 0x123) {
-    std::fprintf(stderr, "HIL smoke: FAIL (unexpected can_id: 0x%X)\n", received.can_id);
-    tx_driver.Close();
-    rx_driver.Close();
-    return 1;
-  }
+  REQUIRE(rx_driver.ReadFrame(received));
+  REQUIRE(received.can_id == 0x123);
 
   tx_driver.Close();
   rx_driver.Close();
-  std::puts("HIL smoke: PASS");
-  return 0;
+  SUCCEED("HIL smoke: PASS");
 }
