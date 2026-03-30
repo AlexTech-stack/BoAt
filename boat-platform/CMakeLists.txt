@@ -17,6 +17,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(BOAT_ENABLE_PROTO "Enable protobuf generation checks" ON)
 option(BOAT_BUILD_TESTS "Build test targets" ON)
+option(BOAT_HIL_ENABLED "Enable HIL hardware tests" OFF)
 
 set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
@@ -85,6 +86,7 @@ add_subdirectory(gateway)
 add_subdirectory(store)
 add_subdirectory(replay)
 add_subdirectory(ipc)
+add_subdirectory(hil)
 
 if(BOAT_BUILD_TESTS AND BUILD_TESTING)
   add_subdirectory(tests)

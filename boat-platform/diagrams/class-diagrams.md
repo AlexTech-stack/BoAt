@@ -70,3 +70,7 @@ classDiagram
     IHalDriver <|-- VirtualCanDriver
 ```
 
+`HilBridge` owns a `shared_ptr<IHalDriver>` and keeps a reference to `EventBus`.
+CAN frame events use dedicated discriminators: RX `kEventTypeCanFrameRx = 0xCA1F0001`
+and TX `kEventTypeCanFrameTx = 0xCA1F0002`.
+

@@ -68,3 +68,7 @@ FaultEvent
 - `Trace` maps to `traces` table.
 - `Plugin`, `Signal`, and `FaultEvent` are embedded in scenario definitions and/or plugin registry metadata.
 
+## HIL Event Type Registration
+
+- CAN frame events published by `HilBridge` use `BusEvent::type = 0xCA1F0001` (`kEventTypeCanFrame`).
+
