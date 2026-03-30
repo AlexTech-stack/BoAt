@@ -14,6 +14,8 @@
 
 namespace boat::replay {
 
+inline constexpr std::uint32_t kReplayBusEventType = 9001;
+
 enum class ReplaySpeed {
   REAL_TIME = 0,
   ACCELERATED = 1,

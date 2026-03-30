@@ -160,6 +160,13 @@ void ReplayController::ReplayLoop() {
       event.payload = payload;
       event_bus_.Publish(std::move(event));
 
+      boat::core::BusEvent replay_event;
+      replay_event.type = kReplayBusEventType;
+      replay_event.tick = header.tick;
+      replay_event.payload =
+          payload.empty() ? std::string{} : std::string(reinterpret_cast<const char*>(payload.data()), payload.size());
+      event_bus_.Publish(std::move(replay_event));
+
       boat::store::EventRecord record;
       record.id = std::to_string(header.tick) + "_" + std::to_string(header.event_type);
       record.simulation_id = active_config_.trace_id;
