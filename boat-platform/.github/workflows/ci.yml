@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master, "release/*"]
+  pull_request:
+    branches: [main, master, "release/*"]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+      - name: Configure
+        run: cmake --preset release
+      - name: Build
+        run: cmake --build --preset release
+      - name: Test
+        run: ctest --preset release
+      - name: Fail fast when gateway artifact missing
+        run: test -f build/release/gateway/grpc_gateway/boat_gateway
+
+  determinism-check:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+      - name: Configure and build
+        run: cmake --preset release && cmake --build --preset release
+      - name: Run deterministic test
+        run: ctest --preset release -R boat_determinism_seed
+
+  docker-build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build runtime image
+        run: docker build -f Dockerfile.runtime -t boat-platform:ci .

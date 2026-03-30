@@ -1,0 +1,20 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  package:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+      - name: Configure + build
+        run: cmake --preset release && cmake --build --preset release
+      - name: Create package
+        run: cd build/release && cpack -G TGZ
+      - name: Verify package exists
+        run: ls build/release/*.tar.gz

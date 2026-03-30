@@ -1,0 +1,15 @@
+add_executable(boat_unit_smoke unit/test_smoke.cpp)
+target_link_libraries(boat_unit_smoke PRIVATE boat_core)
+add_test(NAME boat_unit_smoke COMMAND boat_unit_smoke)
+
+add_executable(boat_integration_gateway integration/test_gateway.cpp)
+target_link_libraries(boat_integration_gateway PRIVATE boat_core)
+add_test(NAME boat_integration_gateway COMMAND boat_integration_gateway)
+
+add_executable(boat_determinism_seed determinism/test_seed.cpp)
+target_link_libraries(boat_determinism_seed PRIVATE boat_core)
+add_test(NAME boat_determinism_seed COMMAND boat_determinism_seed)
+
+add_executable(boat_hil_smoke hil/test_hil.cpp)
+target_link_libraries(boat_hil_smoke PRIVATE boat_core)
+add_test(NAME boat_hil_smoke COMMAND boat_hil_smoke)

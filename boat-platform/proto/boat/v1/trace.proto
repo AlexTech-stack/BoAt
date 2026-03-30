@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package boat.v1;
+
+import "boat/v1/common.proto";
+
+message GetTraceRequest { string trace_id = 1; }
+message ListTracesRequest { PaginationRequest page = 1; }
+message StreamTraceRequest { string trace_id = 1; }
+
+message TraceEvent {
+  string trace_id = 1;
+  uint64 tick = 2;
+  string category = 3;
+  string payload = 4;
+}
+
+message TraceResponse { repeated TraceEvent events = 1; PaginationResponse page = 2; }
+
+service TraceService {
+  rpc GetTrace(GetTraceRequest) returns (TraceResponse);
+  rpc ListTraces(ListTracesRequest) returns (TraceResponse);
+  rpc StreamTrace(StreamTraceRequest) returns (stream TraceEvent);
+}
