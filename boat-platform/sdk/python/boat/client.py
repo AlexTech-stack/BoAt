@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+from typing import Any
+
+import grpc
+
+
+class BoAtClient:
+    def __init__(self, address: str = "localhost:50051") -> None:
+        self.address = address
+        self.channel = grpc.insecure_channel(address)
+        self._stubs_loaded = False
+
+    def _load_stubs(self) -> None:
+        if self._stubs_loaded:
+            return
+        from boat.v1 import fault_pb2_grpc
+        from boat.v1 import metrics_pb2_grpc
+        from boat.v1 import plugin_pb2_grpc
+        from boat.v1 import replay_pb2_grpc
+        from boat.v1 import scenario_pb2_grpc
+        from boat.v1 import signal_pb2_grpc
+        from boat.v1 import simulation_pb2_grpc
+        from boat.v1 import trace_pb2_grpc
+
+        self._simulation = simulation_pb2_grpc.SimulationServiceStub(self.channel)
+        self._signal = signal_pb2_grpc.SignalServiceStub(self.channel)
+        self._scenario = scenario_pb2_grpc.ScenarioServiceStub(self.channel)
+        self._replay = replay_pb2_grpc.ReplayServiceStub(self.channel)
+        self._plugin = plugin_pb2_grpc.PluginServiceStub(self.channel)
+        self._metrics = metrics_pb2_grpc.MetricsServiceStub(self.channel)
+        self._trace = trace_pb2_grpc.TraceServiceStub(self.channel)
+        self._fault = fault_pb2_grpc.FaultServiceStub(self.channel)
+        self._stubs_loaded = True
+
+    @property
+    def simulation(self) -> Any:
+        self._load_stubs()
+        return self._simulation
+
+    @property
+    def signal(self) -> Any:
+        self._load_stubs()
+        return self._signal
+
+    @property
+    def scenario(self) -> Any:
+        self._load_stubs()
+        return self._scenario
+
+    @property
+    def replay(self) -> Any:
+        self._load_stubs()
+        return self._replay
+
+    @property
+    def plugin(self) -> Any:
+        self._load_stubs()
+        return self._plugin
+
+    @property
+    def metrics(self) -> Any:
+        self._load_stubs()
+        return self._metrics
+
+    @property
+    def trace(self) -> Any:
+        self._load_stubs()
+        return self._trace
+
+    @property
+    def fault(self) -> Any:
+        self._load_stubs()
+        return self._fault
+
+    def close(self) -> None:
+        self.channel.close()

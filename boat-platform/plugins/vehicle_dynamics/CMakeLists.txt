@@ -1,0 +1,2 @@
+add_boat_plugin(vehicle_dynamics vehicle_dynamics_plugin.cpp)
+target_link_libraries(vehicle_dynamics PRIVATE boat_plugin_sdk)

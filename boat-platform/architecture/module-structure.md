@@ -37,8 +37,10 @@ boat-platform/
 │   ├── sensor_model/               # Lidar/Camera/Radar stubs
 │   └── network_sim/                # CAN/LIN/Ethernet simulation
 ├── sdk/
-│   ├── cpp/                        # C++ plugin SDK headers + examples
-│   └── python/                     # boat-py package
+│   ├── cpp/
+│   │   ├── CMakeLists.txt          # INTERFACE target: boat_plugin_sdk
+│   │   └── include/boat/plugin.h   # Stable C ABI for plugins
+│   └── python/                     # boat-py package (ScenarioBuilder + gRPC stubs + pytest fixtures)
 ├── gateway/
 │   └── grpc_gateway/               # gRPC server entry point
 ├── cli/

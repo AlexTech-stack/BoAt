@@ -65,7 +65,6 @@ void PluginManager::Unload(const std::string& name) {
 
 #ifndef _WIN32
   if (it->second.plugin != nullptr) {
-    it->second.plugin->vtable->shutdown(it->second.plugin->ctx);
     it->second.destroy_fn(it->second.plugin);
   }
   if (it->second.dl_handle != nullptr) {

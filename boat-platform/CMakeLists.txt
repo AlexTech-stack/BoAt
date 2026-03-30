@@ -79,6 +79,8 @@ if(BOAT_ENABLE_PROTO)
 endif()
 
 add_subdirectory(core)
+add_subdirectory(sdk/cpp)
+add_subdirectory(plugins)
 add_subdirectory(gateway)
 add_subdirectory(store)
 add_subdirectory(replay)

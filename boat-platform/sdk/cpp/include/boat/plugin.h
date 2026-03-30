@@ -24,6 +24,8 @@ typedef void (*boat_plugin_destroy_fn)(BoatPlugin* plugin);
 typedef uint32_t (*boat_plugin_abi_version_fn)();
 
 BoatPlugin* boat_plugin_create();
+// Ownership contract: `boat_plugin_destroy()` is responsible for full teardown,
+// including invoking `vtable->shutdown(ctx)` exactly once before freeing memory.
 void boat_plugin_destroy(BoatPlugin* plugin);
 uint32_t boat_plugin_abi_version();
 
