@@ -41,6 +41,7 @@ class ITraceStore {
   virtual void WriteTrace(const TraceRecord& meta, std::span<const std::uint8_t> data) = 0;
   virtual std::span<const std::uint8_t> ReadTraceMmap(const std::string& trace_id) = 0;
   virtual std::vector<TraceRecord> ListTraces(const std::string& simulation_id) = 0;
+  virtual std::vector<TraceRecord> ListAllTraces() = 0;
   virtual void UnmapTrace(const std::string& trace_id) = 0;
 };
 
@@ -52,6 +53,7 @@ class FlatFileTraceStore : public ITraceStore {
   void WriteTrace(const TraceRecord& meta, std::span<const std::uint8_t> data) override;
   std::span<const std::uint8_t> ReadTraceMmap(const std::string& trace_id) override;
   std::vector<TraceRecord> ListTraces(const std::string& simulation_id) override;
+  std::vector<TraceRecord> ListAllTraces() override;
   void UnmapTrace(const std::string& trace_id) override;
 
  private:

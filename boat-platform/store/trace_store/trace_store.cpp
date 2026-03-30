@@ -171,4 +171,30 @@ std::vector<TraceRecord> FlatFileTraceStore::ListTraces(const std::string& simul
   return traces;
 }
 
+std::vector<TraceRecord> FlatFileTraceStore::ListAllTraces() {
+  constexpr const char* kSelectSql =
+      "SELECT id, simulation_id, start_tick, end_tick, format, storage_path, size_bytes "
+      "FROM traces;";
+  sqlite3_stmt* stmt = nullptr;
+  if (sqlite3_prepare_v2(db_, kSelectSql, -1, &stmt, nullptr) != SQLITE_OK) {
+    throw std::runtime_error("failed to prepare trace list-all query");
+  }
+
+  std::vector<TraceRecord> traces;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    TraceRecord record;
+    record.id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+    record.simulation_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+    record.start_tick = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 2));
+    record.end_tick = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 3));
+    record.format = static_cast<TraceRecord::Format>(sqlite3_column_int(stmt, 4));
+    record.storage_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+    record.size_bytes = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 6));
+    traces.push_back(std::move(record));
+  }
+
+  sqlite3_finalize(stmt);
+  return traces;
+}
+
 }  // namespace boat::store
