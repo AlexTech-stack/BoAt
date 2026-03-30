@@ -46,7 +46,33 @@ FetchContent_Declare(
   GIT_TAG v0.4.1
 )
 
-FetchContent_MakeAvailable(spdlog protobuf gRPC iceoryx2)
+FetchContent_Declare(
+  sqlite3
+  URL https://www.sqlite.org/2024/sqlite-amalgamation-3460000.zip
+)
+
+FetchContent_Declare(
+  tomlplusplus
+  GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+  GIT_TAG v3.4.0
+)
+
+FetchContent_MakeAvailable(spdlog protobuf gRPC iceoryx2 tomlplusplus)
+
+FetchContent_GetProperties(sqlite3)
+if(NOT sqlite3_POPULATED)
+  FetchContent_Populate(sqlite3)
+endif()
+
+add_library(sqlite3 STATIC "${sqlite3_SOURCE_DIR}/sqlite3.c")
+target_include_directories(sqlite3 PUBLIC "${sqlite3_SOURCE_DIR}")
+target_compile_definitions(sqlite3 PUBLIC SQLITE_THREADSAFE=1 SQLITE_ENABLE_WAL)
+
+if(NOT TARGET tomlplusplus::tomlplusplus)
+  add_library(tomlplusplus INTERFACE)
+  target_include_directories(tomlplusplus INTERFACE "${tomlplusplus_SOURCE_DIR}/include")
+  add_library(tomlplusplus::tomlplusplus ALIAS tomlplusplus)
+endif()
 
 if(BOAT_ENABLE_PROTO)
   boat_register_proto_directory("${CMAKE_CURRENT_SOURCE_DIR}/proto/boat/v1")
@@ -55,6 +81,7 @@ endif()
 add_subdirectory(core)
 add_subdirectory(gateway)
 add_subdirectory(store)
+add_subdirectory(replay)
 add_subdirectory(ipc)
 
 if(BOAT_BUILD_TESTS AND BUILD_TESTING)
