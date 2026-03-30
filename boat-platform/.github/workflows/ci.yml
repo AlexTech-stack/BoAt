@@ -22,6 +22,64 @@ jobs:
       - name: Fail fast when gateway artifact missing
         run: test -f build/release/gateway/grpc_gateway/boat_gateway
 
+  python-tests:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install ./sdk/python[dev]
+          pip install ./cli
+      - name: Run Python tests
+        run: pytest sdk/python/tests/ cli/tests/ -v
+
+  asan-build:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+      - name: Configure and build with ASan
+        run: cmake --preset asan && cmake --build --preset asan
+      - name: Run ASan tests
+        run: ctest --test-dir build/asan --output-on-failure
+
+  coverage:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain and gcovr
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ gcovr
+      - name: Configure and build with coverage
+        run: cmake --preset coverage && cmake --build --preset coverage
+      - name: Run coverage tests
+        run: ctest --test-dir build/coverage
+      - name: Generate coverage report
+        run: gcovr --root . --exclude build/ --xml coverage.xml
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  tsan:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+      - name: Configure and build with TSan
+        run: cmake --preset tsan && cmake --build --preset tsan
+      - name: Run TSan tests
+        run: ctest --test-dir build/tsan --output-on-failure
+
   determinism-check:
     runs-on: ubuntu-22.04
     needs: build-and-test

@@ -1,15 +1,68 @@
-add_executable(boat_unit_smoke unit/test_smoke.cpp)
-target_link_libraries(boat_unit_smoke PRIVATE boat_core)
-add_test(NAME boat_unit_smoke COMMAND boat_unit_smoke)
+FetchContent_Declare(
+  Catch2
+  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+  GIT_TAG v3.6.0
+)
+FetchContent_MakeAvailable(Catch2)
+include(Catch)
 
-add_executable(boat_integration_gateway integration/test_gateway.cpp)
-target_link_libraries(boat_integration_gateway PRIVATE boat_core)
-add_test(NAME boat_integration_gateway COMMAND boat_integration_gateway)
+add_executable(boat_unit_tick_scheduler unit/test_tick_scheduler.cpp)
+target_link_libraries(boat_unit_tick_scheduler PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_tick_scheduler)
+
+add_executable(boat_unit_signal_router unit/test_signal_router.cpp)
+target_link_libraries(boat_unit_signal_router PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_signal_router)
+
+add_executable(boat_unit_event_bus unit/test_event_bus.cpp)
+target_link_libraries(boat_unit_event_bus PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_event_bus)
+
+add_executable(boat_unit_plugin_manager unit/test_plugin_manager.cpp)
+target_link_libraries(boat_unit_plugin_manager PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_plugin_manager)
+
+add_executable(boat_unit_sim_state_machine unit/test_sim_state_machine.cpp)
+target_link_libraries(boat_unit_sim_state_machine PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_sim_state_machine)
+
+add_executable(boat_unit_determinism_engine unit/test_determinism_engine.cpp)
+target_link_libraries(boat_unit_determinism_engine PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_determinism_engine)
+
+add_executable(boat_unit_fault_injector unit/test_fault_injector.cpp)
+target_link_libraries(boat_unit_fault_injector PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_fault_injector)
+
+add_executable(boat_unit_sqlite_event_store unit/test_sqlite_event_store.cpp)
+target_link_libraries(boat_unit_sqlite_event_store PRIVATE boat_core boat_store Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_sqlite_event_store)
+
+add_executable(
+  boat_integration_gateway
+  integration/test_gateway.cpp
+  ../gateway/grpc_gateway/simulation_service_impl.cpp
+  ../gateway/grpc_gateway/scenario_service_impl.cpp
+  ../gateway/grpc_gateway/signal_service_impl.cpp
+)
+target_include_directories(boat_integration_gateway PRIVATE ${CMAKE_SOURCE_DIR} ${BOAT_PROTO_GENERATED_DIR})
+target_link_libraries(
+  boat_integration_gateway
+  PRIVATE
+    boat_core
+    boat_store
+    boat_replay
+    boat_proto_generated
+    grpc++
+    protobuf::libprotobuf
+    Catch2::Catch2WithMain
+)
+catch_discover_tests(boat_integration_gateway)
 
 add_executable(boat_determinism_seed determinism/test_seed.cpp)
-target_link_libraries(boat_determinism_seed PRIVATE boat_core)
-add_test(NAME boat_determinism_seed COMMAND boat_determinism_seed)
+target_link_libraries(boat_determinism_seed PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_determinism_seed)
 
 add_executable(boat_hil_smoke hil/test_hil.cpp)
-target_link_libraries(boat_hil_smoke PRIVATE boat_hil)
-add_test(NAME boat_hil_smoke COMMAND boat_hil_smoke)
+target_link_libraries(boat_hil_smoke PRIVATE boat_hil Catch2::Catch2WithMain)
+catch_discover_tests(boat_hil_smoke)

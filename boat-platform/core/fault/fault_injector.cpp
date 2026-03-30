@@ -30,6 +30,20 @@ FaultInjector::ApplyResult FaultInjector::Apply(SignalEvent& event, std::uint64_
     }
     switch (fault.type) {
       case FaultType::STUCK:
+        if (std::holds_alternative<double>(event.value)) {
+          event.value = fault.magnitude;
+        } else if (std::holds_alternative<std::int64_t>(event.value)) {
+          event.value = static_cast<std::int64_t>(std::llround(fault.magnitude));
+        } else if (std::holds_alternative<bool>(event.value)) {
+          event.value = (std::abs(fault.magnitude) > std::numeric_limits<double>::epsilon());
+        } else if (std::holds_alternative<std::vector<std::uint8_t>>(event.value)) {
+          const auto byte = static_cast<std::uint8_t>(
+              std::clamp<std::int64_t>(static_cast<std::int64_t>(std::llround(fault.magnitude)), 0, 255));
+          auto& bytes = std::get<std::vector<std::uint8_t>>(event.value);
+          std::fill(bytes.begin(), bytes.end(), byte);
+        } else if (std::holds_alternative<std::string>(event.value)) {
+          event.value = std::to_string(fault.magnitude);
+        }
         break;
       case FaultType::NOISE:
         if (std::holds_alternative<double>(event.value)) {
@@ -38,8 +52,7 @@ FaultInjector::ApplyResult FaultInjector::Apply(SignalEvent& event, std::uint64_
         }
         break;
       case FaultType::DROPOUT:
-        event.value = std::int64_t{0};
-        break;
+        return ApplyResult::DROP;
       case FaultType::INVERT:
         if (std::holds_alternative<bool>(event.value)) {
           event.value = !std::get<bool>(event.value);
