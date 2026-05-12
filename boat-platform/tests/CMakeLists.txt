@@ -83,6 +83,16 @@ add_executable(boat_determinism_seed determinism/test_seed.cpp)
 target_link_libraries(boat_determinism_seed PRIVATE boat_core Catch2::Catch2WithMain)
 catch_discover_tests(boat_determinism_seed)
 
+add_executable(boat_unit_ethernet_bus_registry unit/test_ethernet_bus_registry.cpp)
+target_include_directories(boat_unit_ethernet_bus_registry PRIVATE ${CMAKE_SOURCE_DIR}/hil)
+target_link_libraries(boat_unit_ethernet_bus_registry PRIVATE boat_hil Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_ethernet_bus_registry)
+
 add_executable(boat_hil_smoke hil/test_hil.cpp)
 target_link_libraries(boat_hil_smoke PRIVATE boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_hil_smoke)
+
+add_executable(boat_hil_ethernet hil/test_ethernet_hil.cpp)
+target_include_directories(boat_hil_ethernet PRIVATE ${CMAKE_SOURCE_DIR}/hil)
+target_link_libraries(boat_hil_ethernet PRIVATE boat_hil Catch2::Catch2WithMain)
+catch_discover_tests(boat_hil_ethernet)
