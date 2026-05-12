@@ -1,0 +1,126 @@
+#include "ethernet/raw_socket_ethernet_driver.h"
+
+#ifdef __linux__
+
+#include <cerrno>
+#include <cstring>
+#include <ctime>
+#include <utility>
+
+#include <arpa/inet.h>
+#include <linux/if_packet.h>
+#include <net/ethernet.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+// Added in Linux 4.20; define here for older kernel headers.
+#ifndef PACKET_IGNORE_OUTGOING
+#define PACKET_IGNORE_OUTGOING 23
+#endif
+
+namespace boat::hil {
+
+static constexpr std::size_t kEthHdrSize  = 14;          // dst(6)+src(6)+type(2)
+static constexpr std::size_t kMaxPayload  = 1500;
+static constexpr std::size_t kMaxEthFrame = kEthHdrSize + kMaxPayload;
+
+RawSocketEthernetDriver::RawSocketEthernetDriver(std::string iface)
+    : iface_(std::move(iface)) {}
+
+bool RawSocketEthernetDriver::Open() {
+  if (open_.load()) return true;
+
+  sock_ = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+  if (sock_ < 0) return false;
+
+  // Resolve interface index.
+  struct ifreq ifr{};
+  std::strncpy(ifr.ifr_name, iface_.c_str(), IFNAMSIZ - 1);
+  if (ioctl(sock_, SIOCGIFINDEX, &ifr) < 0) {
+    ::close(sock_); sock_ = -1;
+    return false;
+  }
+  if_index_ = ifr.ifr_ifindex;
+
+  // Bind to this interface only so we don't capture frames from other NICs.
+  struct sockaddr_ll sll{};
+  sll.sll_family   = AF_PACKET;
+  sll.sll_protocol = htons(ETH_P_ALL);
+  sll.sll_ifindex  = if_index_;
+  if (bind(sock_, reinterpret_cast<struct sockaddr*>(&sll), sizeof(sll)) < 0) {
+    ::close(sock_); sock_ = -1;
+    return false;
+  }
+
+  // Suppress our own transmitted frames — the registry's SendFrame() already
+  // calls DispatchRx() directly, so socket loopback would double-deliver them.
+  const int ignore_out = 1;
+  (void)setsockopt(sock_, SOL_PACKET, PACKET_IGNORE_OUTGOING,
+                   &ignore_out, sizeof(ignore_out));
+
+  // Receive timeout so the RX thread can check its running_ flag periodically.
+  struct timeval tv{};
+  tv.tv_usec = 100000;  // 100 ms
+  setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+  open_.store(true);
+  return true;
+}
+
+void RawSocketEthernetDriver::Close() {
+  if (open_.exchange(false)) {
+    if (sock_ >= 0) { ::close(sock_); sock_ = -1; }
+  }
+}
+
+bool RawSocketEthernetDriver::ReadFrame(EthernetFrame& out) {
+  if (!open_.load() || sock_ < 0) return false;
+
+  unsigned char buf[kMaxEthFrame];
+  const ssize_t n = recvfrom(sock_, buf, sizeof(buf), 0, nullptr, nullptr);
+  if (n < static_cast<ssize_t>(kEthHdrSize)) return false;
+
+  std::memcpy(out.dst_mac, buf,     6);
+  std::memcpy(out.src_mac, buf + 6, 6);
+  out.ethertype = (static_cast<uint16_t>(buf[12]) << 8) | buf[13];
+  out.payload.assign(buf + kEthHdrSize, buf + n);
+
+  struct timespec ts{};
+  out.timestamp_ns = (clock_gettime(CLOCK_REALTIME, &ts) == 0)
+      ? static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ULL + ts.tv_nsec
+      : 0;
+  return true;
+}
+
+bool RawSocketEthernetDriver::WriteFrame(const EthernetFrame& frame) {
+  if (!open_.load() || sock_ < 0 || if_index_ < 0) return false;
+
+  const std::size_t payload_len = std::min(frame.payload.size(), kMaxPayload);
+  const std::size_t total = kEthHdrSize + payload_len;
+
+  unsigned char buf[kMaxEthFrame]{};
+  std::memcpy(buf,     frame.dst_mac, 6);
+  std::memcpy(buf + 6, frame.src_mac, 6);
+  buf[12] = static_cast<unsigned char>(frame.ethertype >> 8);
+  buf[13] = static_cast<unsigned char>(frame.ethertype & 0xFF);
+  if (payload_len > 0) {
+    std::memcpy(buf + kEthHdrSize, frame.payload.data(), payload_len);
+  }
+
+  struct sockaddr_ll dest{};
+  dest.sll_family  = AF_PACKET;
+  dest.sll_ifindex = if_index_;
+  dest.sll_halen   = 6;
+  std::memcpy(dest.sll_addr, frame.dst_mac, 6);
+
+  const ssize_t sent = sendto(sock_, buf, total, 0,
+                               reinterpret_cast<struct sockaddr*>(&dest),
+                               sizeof(dest));
+  return sent == static_cast<ssize_t>(total);
+}
+
+}  // namespace boat::hil
+
+#endif  // __linux__
