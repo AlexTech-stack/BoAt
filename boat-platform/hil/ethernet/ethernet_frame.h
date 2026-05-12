@@ -8,9 +8,11 @@ namespace boat::hil {
 struct EthernetFrame {
   uint8_t              src_mac[6]{};   // source MAC address
   uint8_t              dst_mac[6]{};   // destination MAC address
-  uint16_t             ethertype{0};   // e.g. 0x0800=IPv4, 0x86DD=IPv6
+  uint16_t             ethertype{0};   // inner ethertype (after VLAN strip); e.g. 0x0800=IPv4
   std::vector<uint8_t> payload;        // frame payload (≤1500 bytes typical)
   uint64_t             timestamp_ns{0};
+  uint16_t             vlan_id{0};     // 802.1Q VID: 0 = untagged, 1-4094 = tagged
+  uint8_t              vlan_pcp{0};    // 802.1Q Priority Code Point (0-7)
 };
 
 class IEthernetDriver {

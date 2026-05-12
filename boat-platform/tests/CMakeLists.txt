@@ -88,6 +88,11 @@ target_include_directories(boat_unit_ethernet_bus_registry PRIVATE ${CMAKE_SOURC
 target_link_libraries(boat_unit_ethernet_bus_registry PRIVATE boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_ethernet_bus_registry)
 
+add_executable(boat_unit_pdu_router unit/test_pdu_router.cpp)
+target_include_directories(boat_unit_pdu_router PRIVATE ${CMAKE_SOURCE_DIR}/hil)
+target_link_libraries(boat_unit_pdu_router PRIVATE boat_hil Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_pdu_router)
+
 add_executable(boat_hil_smoke hil/test_hil.cpp)
 target_link_libraries(boat_hil_smoke PRIVATE boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_hil_smoke)

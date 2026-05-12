@@ -12,10 +12,12 @@
 namespace boat::hil {
 
 // ── Serialisation constants ─────────────────────────────────────────────────
-// Header: [6 src_mac][6 dst_mac][2 ethertype BE][2 payload_len BE] = 16 bytes
-static constexpr std::size_t kHeaderSize = 16;
-static constexpr std::size_t kMaxPayload = 1500;
-static constexpr std::size_t kMaxDgram   = kHeaderSize + kMaxPayload;
+// Untagged header:  [6 src][6 dst][2 ethertype BE][2 payload_len BE]       = 16 bytes
+// 802.1Q header:    [6 src][6 dst][2 0x8100 BE][2 TCI BE][2 etype BE][2 len BE] = 20 bytes
+static constexpr std::size_t kBaseHeaderSize = 16;
+static constexpr std::size_t kVlanHeaderSize = 20;
+static constexpr std::size_t kMaxPayload     = 1500;
+static constexpr std::size_t kMaxDgram       = kVlanHeaderSize + kMaxPayload;
 
 // ── Construction ─────────────────────────────────────────────────────────────
 
@@ -110,19 +112,35 @@ bool VirtualEthernetDriver::ReadFrame(EthernetFrame& out) {
 
   unsigned char buf[kMaxDgram];
   const ssize_t n = recvfrom(sock_, buf, sizeof(buf), 0, nullptr, nullptr);
-  if (n < static_cast<ssize_t>(kHeaderSize)) {
+  if (n < static_cast<ssize_t>(kBaseHeaderSize)) {
     return false;
   }
 
-  std::memcpy(out.src_mac,      buf,     6);
-  std::memcpy(out.dst_mac,      buf + 6, 6);
-  out.ethertype  = (static_cast<uint16_t>(buf[12]) << 8) | buf[13];
-  const uint16_t payload_len =
-      (static_cast<uint16_t>(buf[14]) << 8) | buf[15];
+  std::memcpy(out.src_mac, buf,     6);
+  std::memcpy(out.dst_mac, buf + 6, 6);
 
-  const std::size_t body = static_cast<std::size_t>(n) - kHeaderSize;
+  const uint16_t etype = (static_cast<uint16_t>(buf[12]) << 8) | buf[13];
+  std::size_t hdr = kBaseHeaderSize;
+
+  if (etype == 0x8100) {
+    // 802.1Q tagged — need 4 more bytes for TCI + inner ethertype
+    if (n < static_cast<ssize_t>(kVlanHeaderSize)) return false;
+    const uint16_t tci = (static_cast<uint16_t>(buf[14]) << 8) | buf[15];
+    out.vlan_id  = tci & 0x0FFFu;
+    out.vlan_pcp = static_cast<uint8_t>((tci >> 13) & 0x07u);
+    out.ethertype = (static_cast<uint16_t>(buf[16]) << 8) | buf[17];
+    hdr = kVlanHeaderSize;
+  } else {
+    out.vlan_id  = 0;
+    out.vlan_pcp = 0;
+    out.ethertype = etype;
+  }
+
+  const uint16_t payload_len =
+      (static_cast<uint16_t>(buf[hdr - 2]) << 8) | buf[hdr - 1];
+  const std::size_t body     = static_cast<std::size_t>(n) - hdr;
   const std::size_t copy_len = std::min<std::size_t>(payload_len, body);
-  out.payload.assign(buf + kHeaderSize, buf + kHeaderSize + copy_len);
+  out.payload.assign(buf + hdr, buf + hdr + copy_len);
   out.timestamp_ns = 0;  // filled by the registry
   return true;
 }
@@ -132,18 +150,34 @@ bool VirtualEthernetDriver::WriteFrame(const EthernetFrame& frame) {
     return false;
   }
 
-  const std::size_t payload_len =
-      std::min<std::size_t>(frame.payload.size(), kMaxPayload);
+  const std::size_t payload_len = std::min<std::size_t>(frame.payload.size(), kMaxPayload);
+  const bool        has_vlan    = frame.vlan_id != 0;
+  const std::size_t hdr         = has_vlan ? kVlanHeaderSize : kBaseHeaderSize;
 
-  unsigned char buf[kMaxDgram];
+  unsigned char buf[kMaxDgram]{};
   std::memcpy(buf,     frame.src_mac, 6);
   std::memcpy(buf + 6, frame.dst_mac, 6);
-  buf[12] = static_cast<unsigned char>(frame.ethertype >> 8);
-  buf[13] = static_cast<unsigned char>(frame.ethertype & 0xFF);
-  buf[14] = static_cast<unsigned char>(payload_len >> 8);
-  buf[15] = static_cast<unsigned char>(payload_len & 0xFF);
+
+  if (has_vlan) {
+    buf[12] = 0x81; buf[13] = 0x00;  // TPID
+    const uint16_t tci = static_cast<uint16_t>(
+        (static_cast<uint16_t>(frame.vlan_pcp & 0x07u) << 13) |
+        (frame.vlan_id & 0x0FFFu));
+    buf[14] = static_cast<unsigned char>(tci >> 8);
+    buf[15] = static_cast<unsigned char>(tci & 0xFF);
+    buf[16] = static_cast<unsigned char>(frame.ethertype >> 8);
+    buf[17] = static_cast<unsigned char>(frame.ethertype & 0xFF);
+    buf[18] = static_cast<unsigned char>(payload_len >> 8);
+    buf[19] = static_cast<unsigned char>(payload_len & 0xFF);
+  } else {
+    buf[12] = static_cast<unsigned char>(frame.ethertype >> 8);
+    buf[13] = static_cast<unsigned char>(frame.ethertype & 0xFF);
+    buf[14] = static_cast<unsigned char>(payload_len >> 8);
+    buf[15] = static_cast<unsigned char>(payload_len & 0xFF);
+  }
+
   if (payload_len > 0) {
-    std::memcpy(buf + kHeaderSize, frame.payload.data(), payload_len);
+    std::memcpy(buf + hdr, frame.payload.data(), payload_len);
   }
 
   struct sockaddr_in dest{};
@@ -151,10 +185,10 @@ bool VirtualEthernetDriver::WriteFrame(const EthernetFrame& frame) {
   dest.sin_port   = htons(port_);
   inet_pton(AF_INET, mcast_addr_.c_str(), &dest.sin_addr);
 
-  const ssize_t sent = sendto(sock_, buf, kHeaderSize + payload_len, 0,
+  const ssize_t sent = sendto(sock_, buf, hdr + payload_len, 0,
                                reinterpret_cast<struct sockaddr*>(&dest),
                                sizeof(dest));
-  return sent == static_cast<ssize_t>(kHeaderSize + payload_len);
+  return sent == static_cast<ssize_t>(hdr + payload_len);
 }
 
 }  // namespace boat::hil

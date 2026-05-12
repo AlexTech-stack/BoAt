@@ -5,6 +5,7 @@ add_executable(
   can_service_impl.cpp
   debug_service_impl.cpp
   ethernet_service_impl.cpp
+  pdu_service_impl.cpp
   simulation_service_impl.cpp
   signal_service_impl.cpp
   scenario_service_impl.cpp

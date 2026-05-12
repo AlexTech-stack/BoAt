@@ -25,6 +25,7 @@ class BoAtClient:
         from boat.v1 import scenario_pb2_grpc
         from boat.v1 import signal_pb2_grpc
         from boat.v1 import simulation_pb2_grpc
+        from boat.v1 import pdu_pb2_grpc
         from boat.v1 import trace_pb2_grpc
 
         self._bus = bus_pb2_grpc.BusServiceStub(self.channel)
@@ -38,6 +39,7 @@ class BoAtClient:
         self._trace = trace_pb2_grpc.TraceServiceStub(self.channel)
         self._fault = fault_pb2_grpc.FaultServiceStub(self.channel)
         self._can = can_pb2_grpc.CanServiceStub(self.channel)
+        self._pdu = pdu_pb2_grpc.PduServiceStub(self.channel)
         self._debug = debug_pb2_grpc.DebugServiceStub(self.channel)
         self._stubs_loaded = True
 
@@ -95,6 +97,11 @@ class BoAtClient:
     def can(self) -> Any:
         self._load_stubs()
         return self._can
+
+    @property
+    def pdu(self) -> Any:
+        self._load_stubs()
+        return self._pdu
 
     @property
     def debug(self) -> Any:

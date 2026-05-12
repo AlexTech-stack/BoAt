@@ -7,6 +7,7 @@ add_library(boat_hil STATIC
   ethernet/raw_socket_ethernet_driver.cpp
   ethernet_bus_registry.cpp
   ethernet_hil_bridge.cpp
+  pdu/pdu_router.cpp
 )
 target_include_directories(boat_hil PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(boat_hil PUBLIC cxx_std_20)
