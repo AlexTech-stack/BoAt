@@ -54,10 +54,10 @@ grpc::Status ReplayServiceImpl::StartReplay(grpc::ServerContext*, const boat::v1
     ctx_.replay_controller.Start(config);
     {
       std::lock_guard<std::mutex> lock(replay_mutex_);
-      active_replays_.clear();
       active_replays_[replay_id] = config;
     }
     response->set_accepted(true);
+    response->set_replay_id(replay_id);
     return grpc::Status::OK;
   } catch (const std::exception& ex) {
     return MapReplayException(ex);
@@ -76,6 +76,7 @@ grpc::Status ReplayServiceImpl::SeekReplay(grpc::ServerContext*, const boat::v1:
     }
     ctx_.replay_controller.Seek(request->tick());
     response->set_accepted(true);
+    response->set_replay_id(request->replay_id());
     return grpc::Status::OK;
   } catch (const std::exception& ex) {
     return MapReplayException(ex);

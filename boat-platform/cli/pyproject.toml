@@ -11,6 +11,7 @@ dependencies = [
   "typer[all]>=0.12",
   "rich>=13",
   "boat-py>=0.1.0",
+  "python-can>=4.0.0",
 ]
 
 [project.scripts]

@@ -13,6 +13,8 @@
 #include <iox2/service_name.hpp>
 #include <iox2/service_type.hpp>
 
+#include "ipc/ipc_channel_selector.h"
+
 namespace boat::ipc {
 
 template <typename T>
@@ -21,7 +23,7 @@ class ShmPublisher {
   explicit ShmPublisher(std::string topic_name) : topic_name_(std::move(topic_name)) {}
 
   bool Open() {
-    const std::string service_topic = topic_name_.rfind("boat/", 0) == 0 ? topic_name_ : "boat/" + topic_name_;
+    const std::string service_topic = IpcChannelSelector::ResolveTopicName(topic_name_);
     const auto service_name = iox2::ServiceName::create(service_topic.c_str());
     if (service_name.has_error()) {
       spdlog::error("Failed to create SHM service name for topic {}", service_topic);
@@ -34,7 +36,7 @@ class ShmPublisher {
       return false;
     }
 
-    auto service = node->service_builder(service_name.value().as_view())
+    auto service = node->service_builder(service_name.value())
                        .template publish_subscribe<T>()
                        .open_or_create();
     if (service.has_error()) {
@@ -55,22 +57,16 @@ class ShmPublisher {
     return true;
   }
 
-  auto LoanSample() { return publisher_->loan(); }
-
   void Publish(const T& sample) {
     if (!publisher_.has_value()) {
       return;
     }
 
-    auto loan = LoanSample();
-    if (!loan.has_value()) {
+    auto result = publisher_->send_copy(sample);
+    if (result.has_error()) {
       overflow_count_.fetch_add(1, std::memory_order_relaxed);
       spdlog::warn("SHM publisher overflow on topic {} count={}", topic_name_, overflow_count_.load());
-      return;
     }
-
-    *loan.value() = sample;
-    loan->send();
   }
 
   void Close() {
@@ -80,11 +76,13 @@ class ShmPublisher {
     spdlog::info("Closed SHM publisher on topic {}", topic_name_);
   }
 
+  [[nodiscard]] bool IsOpen() const { return publisher_.has_value(); }
+
  private:
   std::string topic_name_;
   std::optional<iox2::Node<iox2::ServiceType::Ipc>> node_;
-  std::optional<iox2::PortFactoryPublishSubscribe<iox2::ServiceType::Ipc, T>> service_;
-  std::optional<iox2::Publisher<T>> publisher_;
+  std::optional<iox2::PortFactoryPublishSubscribe<iox2::ServiceType::Ipc, T, void>> service_;
+  std::optional<iox2::Publisher<iox2::ServiceType::Ipc, T, void>> publisher_;
   std::atomic<std::uint64_t> overflow_count_{0};
 };
 

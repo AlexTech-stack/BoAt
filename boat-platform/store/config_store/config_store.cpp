@@ -74,7 +74,19 @@ std::optional<std::string> ExtractStringField(const std::string& json, const std
     if (value_end >= json.size()) {
       return std::nullopt;
     }
-    return json.substr(value_start, value_end - value_start);
+    // Unescape the extracted string (reverse of EscapeJsonString: \\ -> \ and \" -> ")
+    std::string result;
+    result.reserve(value_end - value_start);
+    for (auto i = value_start; i < value_end; ) {
+      if (json[i] == '\\' && (i + 1) < value_end) {
+        result.push_back(json[i + 1]);
+        i += 2;
+      } else {
+        result.push_back(json[i]);
+        ++i;
+      }
+    }
+    return result;
   }
   auto value_end = value_start;
   while (value_end < json.size() && json[value_end] != ',' && json[value_end] != '}') {

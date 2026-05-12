@@ -13,7 +13,8 @@ target_include_directories(
 target_link_libraries(
   boat_store
   PUBLIC boat_core
-  PRIVATE sqlite3 tomlplusplus::tomlplusplus spdlog::spdlog
+  PUBLIC tomlplusplus::tomlplusplus
+  PRIVATE sqlite3 spdlog::spdlog
 )
 
 target_compile_features(boat_store PUBLIC cxx_std_20)

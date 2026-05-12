@@ -19,6 +19,9 @@ TEST_CASE("TickScheduler lifecycle and stepping", "[unit][tick_scheduler]") {
   SECTION("Start pause resume stop sequence is callable") {
     scheduler.Start();
     scheduler.Pause();
+    const std::uint64_t tick_before_step = clock.tick();
+    scheduler.Step(3);
+    REQUIRE(clock.tick() == tick_before_step + 3);
     scheduler.Resume();
     scheduler.Stop();
     const std::uint64_t tick_at_stop = clock.tick();

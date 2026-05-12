@@ -50,7 +50,7 @@ Jobs:
     steps:
       - setup-python 3.11
       - install boat-py and test deps
-      - pytest sdk/python cli boat_ai unit suites
+      - pytest sdk/python cli boat_ai unit suites (run `boat_ai/tests` when present)
 
   coverage:
     steps:

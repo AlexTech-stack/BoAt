@@ -13,9 +13,13 @@ scenario_app = typer.Typer()
 
 @scenario_app.command("create")
 def create_scenario(ctx: typer.Context, file: Path = typer.Option(..., "--file")) -> None:
+    import json as _json
     content = file.read_text(encoding="utf-8")
+    parsed = _json.loads(content)
+    scenario_id = parsed.get("id", file.stem)
+    name = parsed.get("name", file.stem)
     req = scenario_pb2.CreateScenarioRequest(
-        scenario=scenario_pb2.Scenario(name=file.stem, content=content)
+        scenario=scenario_pb2.Scenario(scenario_id=scenario_id, name=name, content=content)
     )
     response = ctx.obj["client"].scenario.CreateScenario(req)
     print_table(["scenario_id"], [[response.scenario.scenario_id]], ctx.obj["json_mode"])

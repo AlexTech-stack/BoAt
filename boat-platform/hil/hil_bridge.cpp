@@ -29,6 +29,12 @@ void HilBridge::Start() {
       CanFrame frame {};
       if (driver_ != nullptr && driver_->ReadFrame(frame)) {
         bus_.Publish(boat::core::BusEvent{kEventTypeCanFrameRx, frame, 0});
+        std::function<void(const CanFrame&)> cb;
+        {
+          std::lock_guard<std::mutex> lock(on_receive_mutex_);
+          cb = on_receive_cb_;
+        }
+        if (cb) cb(frame);
       }
     }
   });
@@ -52,6 +58,11 @@ void HilBridge::SendFrame(const CanFrame& frame) {
   if (driver_ != nullptr) {
     driver_->WriteFrame(frame);
   }
+}
+
+void HilBridge::SetOnReceive(std::function<void(const CanFrame&)> cb) {
+  std::lock_guard<std::mutex> lock(on_receive_mutex_);
+  on_receive_cb_ = std::move(cb);
 }
 
 }  // namespace boat::hil

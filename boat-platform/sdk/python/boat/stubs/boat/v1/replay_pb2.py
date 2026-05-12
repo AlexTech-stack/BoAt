@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from boat.v1 import common_pb2 as boat_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14\x62oat/v1/replay.proto\x12\x07\x62oat.v1\x1a\x14\x62oat/v1/common.proto\"=\n\x12StartReplayRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x15\n\rsimulation_id\x18\x02 \x01(\t\"4\n\x11SeekReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\x12\x0c\n\x04tick\x18\x02 \x01(\x04\"(\n\x13StreamReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\"?\n\x0bReplayEvent\x12\x11\n\treplay_id\x18\x01 \x01(\t\x12\x0c\n\x04tick\x18\x02 \x01(\x04\x12\x0f\n\x07payload\x18\x03 \x01(\t\"N\n\x15ReplayControlResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12#\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.boat.v1.ErrorDetail2\xeb\x01\n\rReplayService\x12J\n\x0bStartReplay\x12\x1b.boat.v1.StartReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12H\n\nSeekReplay\x12\x1a.boat.v1.SeekReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12\x44\n\x0cStreamReplay\x12\x1c.boat.v1.StreamReplayRequest\x1a\x14.boat.v1.ReplayEvent0\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14\x62oat/v1/replay.proto\x12\x07\x62oat.v1\x1a\x14\x62oat/v1/common.proto\"=\n\x12StartReplayRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x15\n\rsimulation_id\x18\x02 \x01(\t\"4\n\x11SeekReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\x12\x0c\n\x04tick\x18\x02 \x01(\x04\"(\n\x13StreamReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\"?\n\x0bReplayEvent\x12\x11\n\treplay_id\x18\x01 \x01(\t\x12\x0c\n\x04tick\x18\x02 \x01(\x04\x12\x0f\n\x07payload\x18\x03 \x01(\t\"a\n\x15ReplayControlResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12#\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.boat.v1.ErrorDetail\x12\x11\n\treplay_id\x18\x03 \x01(\t2\xeb\x01\n\rReplayService\x12J\n\x0bStartReplay\x12\x1b.boat.v1.StartReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12H\n\nSeekReplay\x12\x1a.boat.v1.SeekReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12\x44\n\x0cStreamReplay\x12\x1c.boat.v1.StreamReplayRequest\x1a\x14.boat.v1.ReplayEvent0\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -41,7 +41,7 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_REPLAYEVENT']._serialized_start=214
   _globals['_REPLAYEVENT']._serialized_end=277
   _globals['_REPLAYCONTROLRESPONSE']._serialized_start=279
-  _globals['_REPLAYCONTROLRESPONSE']._serialized_end=357
-  _globals['_REPLAYSERVICE']._serialized_start=360
-  _globals['_REPLAYSERVICE']._serialized_end=595
+  _globals['_REPLAYCONTROLRESPONSE']._serialized_end=376
+  _globals['_REPLAYSERVICE']._serialized_start=379
+  _globals['_REPLAYSERVICE']._serialized_end=614
 # @@protoc_insertion_point(module_scope)

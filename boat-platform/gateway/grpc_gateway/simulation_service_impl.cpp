@@ -3,13 +3,18 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <exception>
+#include <memory>
 #include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <variant>
 #include <vector>
+
+#include "can_bus_registry.h"
+#include "core/signal/signal_router.h"
 
 namespace boat::gateway {
 namespace {
@@ -80,10 +85,71 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
       }
       scenario = it->second;
     }
-    if (!ctx_.sim_state_machine.Transition(boat::core::SimState::RUNNING)) {
-      return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "invalid state transition to RUNNING");
+    {
+      const auto current = ctx_.sim_state_machine.Current();
+      if (current == boat::core::SimState::RUNNING) {
+        // Already running — idempotent, nothing to do.
+        FillSimulation(request->simulation_id(), scenario, response->mutable_simulation());
+        return grpc::Status::OK;
+      }
+      // Allow STOPPED → IDLE → RUNNING so callers don't need an explicit reset.
+      if (current == boat::core::SimState::STOPPED) {
+        ctx_.sim_state_machine.Transition(boat::core::SimState::IDLE);
+      }
+      if (!ctx_.sim_state_machine.Transition(boat::core::SimState::RUNNING)) {
+        return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "invalid state transition to RUNNING");
+      }
     }
-    ctx_.tick_scheduler.Start();
+    // Load plugins declared in the scenario (idempotent: unload first if present).
+    ctx_.plugin_manager.ShutdownAll();
+    ctx_.plugin_manager.SetPublisher(
+        [this](const char* signal_id, std::uint64_t tick, double value) {
+          boat::core::SignalEvent ev{};
+          ev.signal_id = static_cast<std::uint64_t>(std::hash<std::string>{}(signal_id));
+          ev.tick      = tick;
+          ev.value     = value;
+          ctx_.signal_router.Publish(ev);
+        });
+    ctx_.plugin_manager.SetCanPublisher(
+        [this](const BoatCanFrame& boat_frame) {
+          boat::hil::CanFrame frame{};
+          frame.can_id = boat_frame.can_id;
+          frame.dlc    = boat_frame.dlc;
+          frame.flags  = boat_frame.flags;
+          std::memset(frame.data, 0, sizeof(frame.data));
+          std::memcpy(frame.data, boat_frame.data, boat_frame.dlc);
+          ctx_.can_bus_registry.SendFrameAll(frame);
+        });
+    // Subscribe to all incoming CAN frames and dispatch them to plugins.
+    if (can_rx_sub_id_.has_value()) {
+      ctx_.can_bus_registry.Unsubscribe(*can_rx_sub_id_);
+    }
+    can_rx_sub_id_ = ctx_.can_bus_registry.Subscribe(
+        "",  // all interfaces
+        [this](const boat::hil::CanFrame& f, const std::string& iface) {
+          BoatCanFrame boat_frame{};
+          boat_frame.can_id = f.can_id;
+          boat_frame.dlc    = f.dlc;
+          boat_frame.flags  = f.flags;
+          std::memset(boat_frame.data, 0, sizeof(boat_frame.data));
+          std::memcpy(boat_frame.data, f.data, f.dlc);
+          ctx_.plugin_manager.DispatchCanFrame(boat_frame, iface);
+        });
+    for (const auto& plugin_ref : scenario.plugins) {
+      try {
+        ctx_.plugin_manager.Load(plugin_ref.so_path, plugin_ref.config_json);
+      } catch (const std::exception& ex) {
+        return grpc::Status(grpc::StatusCode::INTERNAL,
+                            std::string("failed to load plugin: ") + ex.what());
+      }
+    }
+
+    // Wire plugin ticks into the scheduler loop.
+    ctx_.tick_scheduler.SetOnTickHook(
+        [this](std::uint64_t tick) { ctx_.plugin_manager.TickAll(tick); });
+
+    ctx_.tick_scheduler.Start();   // no-op if already running (e.g. PAUSED→RUNNING)
+    ctx_.tick_scheduler.Resume();  // clears paused_ so coordinator loop unblocks
     FillSimulation(request->simulation_id(), scenario, response->mutable_simulation());
     return grpc::Status::OK;
   } catch (const std::exception& ex) {
@@ -180,6 +246,17 @@ grpc::Status SimulationServiceImpl::StopSimulation(grpc::ServerContext*, const b
       }
       scenario = it->second;
     }
+    if (ctx_.sim_state_machine.Current() == boat::core::SimState::STOPPED) {
+      // Already stopped — idempotent.
+      FillSimulation(request->simulation_id(), scenario, response->mutable_simulation());
+      return grpc::Status::OK;
+    }
+    ctx_.tick_scheduler.SetOnTickHook(nullptr);
+    if (can_rx_sub_id_.has_value()) {
+      ctx_.can_bus_registry.Unsubscribe(*can_rx_sub_id_);
+      can_rx_sub_id_.reset();
+    }
+    ctx_.plugin_manager.ShutdownAll();
     ctx_.tick_scheduler.Stop();
     if (!ctx_.sim_state_machine.Transition(boat::core::SimState::STOPPED)) {
       return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "invalid state transition to STOPPED");
@@ -218,23 +295,29 @@ grpc::Status SimulationServiceImpl::GetSimulationState(grpc::ServerContext*,
 grpc::Status SimulationServiceImpl::WatchSimulation(grpc::ServerContext* context,
                                                     const boat::v1::GetSimulationStateRequest* request,
                                                     grpc::ServerWriter<boat::v1::SimulationResponse>* writer) {
-  std::atomic<bool> changed{true};
-  ctx_.sim_state_machine.OnTransition([&changed](boat::core::SimState, boat::core::SimState) { changed = true; });
+  auto changed = std::make_shared<std::atomic<bool>>(true);
+  const auto observer_token = ctx_.sim_state_machine.OnTransition([changed](boat::core::SimState, boat::core::SimState) {
+    changed->store(true, std::memory_order_release);
+  });
+  const auto unregister = [&]() { (void)ctx_.sim_state_machine.RemoveObserver(observer_token); };
 
   while (!context->IsCancelled()) {
-    if (changed.exchange(false)) {
+    if (changed->exchange(false, std::memory_order_acq_rel)) {
       boat::v1::SimulationResponse response;
       GetSimulationState(nullptr, request, &response);
       if (!writer->Write(response)) {
+        unregister();
         break;
       }
       const auto state = ctx_.sim_state_machine.Current();
       if (state == boat::core::SimState::STOPPED || state == boat::core::SimState::ERROR) {
+        unregister();
         break;
       }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
+  unregister();
   return grpc::Status::OK;
 }
 
@@ -279,7 +362,7 @@ void SimulationServiceImpl::FillSimulation(const std::string& simulation_id, con
   out->set_simulation_id(simulation_id);
   out->set_scenario_id(scenario.id);
   out->set_state(ToProtoState(ctx_.sim_state_machine.Current()));
-  out->set_tick(0);
+  out->set_tick(ctx_.sim_clock.tick());
 }
 
 }  // namespace boat::gateway

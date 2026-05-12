@@ -48,6 +48,7 @@ class JsonParser {
     SkipWs();
     if (Match('}')) return obj;
     for (;;) {
+      SkipWs();
       Expect('"');
       const std::string key = ParseString();
       SkipWs();

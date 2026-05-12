@@ -6,8 +6,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <type_traits>
-
 #include <spdlog/spdlog.h>
 
 #include <iox2/node.hpp>
@@ -15,7 +13,7 @@
 #include <iox2/service_name.hpp>
 #include <iox2/service_type.hpp>
 #include <iox2/subscriber.hpp>
-#include <iox2/waitset.hpp>
+#include "ipc/ipc_channel_selector.h"
 
 namespace boat::ipc {
 
@@ -28,7 +26,7 @@ class ShmSubscriber {
       : topic_name_(std::move(topic_name)), on_receive_(std::move(on_receive)) {}
 
   bool Open() {
-    const std::string service_topic = topic_name_.rfind("boat/", 0) == 0 ? topic_name_ : "boat/" + topic_name_;
+    const std::string service_topic = IpcChannelSelector::ResolveTopicName(topic_name_);
     const auto service_name = iox2::ServiceName::create(service_topic.c_str());
     if (service_name.has_error()) {
       spdlog::error("Failed to create SHM service name for topic {}", service_topic);
@@ -41,7 +39,7 @@ class ShmSubscriber {
       return false;
     }
 
-    auto service = node->service_builder(service_name.value().as_view())
+    auto service = node->service_builder(service_name.value())
                        .template publish_subscribe<T>()
                        .open_or_create();
     if (service.has_error()) {
@@ -58,9 +56,6 @@ class ShmSubscriber {
     node_.emplace(std::move(node.value()));
     service_.emplace(std::move(service.value()));
     subscriber_.emplace(std::move(subscriber.value()));
-    if constexpr (std::is_default_constructible_v<iox2::WaitSet>) {
-      wait_set_.emplace();
-    }
 
     running_.store(true);
     poll_thread_ = std::thread(&ShmSubscriber::PollLoop, this);
@@ -73,7 +68,6 @@ class ShmSubscriber {
     if (poll_thread_.joinable()) {
       poll_thread_.join();
     }
-    wait_set_.reset();
     subscriber_.reset();
     service_.reset();
     node_.reset();
@@ -88,17 +82,13 @@ class ShmSubscriber {
         continue;
       }
 
-      if (wait_set_.has_value()) {
-        (void)wait_set_->wait();
-      } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
       while (true) {
         auto sample = subscriber_->receive();
         if (sample.has_error() || !sample->has_value()) {
           break;
         }
-        on_receive_(sample->value().payload());
+        on_receive_(*sample->value());
       }
     }
   }
@@ -106,9 +96,8 @@ class ShmSubscriber {
   std::string topic_name_;
   OnReceive on_receive_;
   std::optional<iox2::Node<iox2::ServiceType::Ipc>> node_;
-  std::optional<iox2::PortFactoryPublishSubscribe<iox2::ServiceType::Ipc, T>> service_;
-  std::optional<iox2::Subscriber<T>> subscriber_;
-  std::optional<iox2::WaitSet> wait_set_;
+  std::optional<iox2::PortFactoryPublishSubscribe<iox2::ServiceType::Ipc, T, void>> service_;
+  std::optional<iox2::Subscriber<iox2::ServiceType::Ipc, T, void>> subscriber_;
   std::atomic<bool> running_{false};
   std::thread poll_thread_;
 };
