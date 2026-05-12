@@ -12,6 +12,8 @@ message EthernetFrame {
   uint64 timestamp_ns = 6;  // wall-clock nanoseconds; set by gateway if 0
   uint32 vlan_id      = 7;  // 802.1Q VID: 0 = untagged, 1-4094 = tagged
   uint32 vlan_pcp     = 8;  // 802.1Q Priority Code Point (0-7)
+  bytes  src_ip       = 9;  // 4 bytes = IPv4, 16 bytes = IPv6, empty = non-IP
+  bytes  dst_ip       = 10; // 4 bytes = IPv4, 16 bytes = IPv6, empty = non-IP
 }
 
 message SendEthernetFrameRequest  { EthernetFrame frame = 1; }
