@@ -4,10 +4,14 @@ import typer
 
 from boat.client import BoAtClient
 
+from .can import can_app
+from .eth import eth_app
+from .gen import gen_app
 from .plugin import plugin_app
 from .replay import replay_app
 from .scenario import scenario_app
 from .sim import sim_app
+from .trace import trace_app
 
 app = typer.Typer()
 
@@ -15,6 +19,10 @@ app.add_typer(sim_app, name="sim")
 app.add_typer(scenario_app, name="scenario")
 app.add_typer(replay_app, name="replay")
 app.add_typer(plugin_app, name="plugin")
+app.add_typer(can_app, name="can")
+app.add_typer(eth_app, name="eth")
+app.add_typer(gen_app, name="gen")
+app.add_typer(trace_app, name="trace")
 
 
 @app.callback()

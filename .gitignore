@@ -1,0 +1,20 @@
+# Build output
+boat-platform/build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# SQLite databases (runtime data)
+*.db
+*.db-shm
+*.db-wal
+
+# Recorded trace files (runtime data)
+boat-platform/traces/
+
+# Generated documentation
+boat-platform/docs/

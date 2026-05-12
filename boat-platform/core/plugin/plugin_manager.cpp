@@ -10,6 +10,14 @@
 
 namespace boat::core {
 
+void PluginManager::SetPublisher(SignalPublishFn fn) {
+  publisher_fn_ = std::move(fn);
+}
+
+void PluginManager::SetCanPublisher(CanPublishFn fn) {
+  can_publisher_fn_ = std::move(fn);
+}
+
 PluginHandle PluginManager::Load(const std::string& so_path, const std::string& config_json) {
 #ifdef _WIN32
   (void)so_path;
@@ -51,6 +59,30 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
     throw std::runtime_error("Plugin initialize() failed");
   }
 
+  // Wire the signal publisher if the plugin supports it.
+  if (plugin->vtable->set_publisher != nullptr && publisher_fn_) {
+    // The trampoline bridges the C callback into our std::function.
+    // We heap-allocate a copy of the function so the lambda is stable.
+    auto* fn_copy = new SignalPublishFn(publisher_fn_);
+    plugin->vtable->set_publisher(
+        plugin->ctx,
+        [](void* pctx, const char* signal_id, uint64_t tick, double value) {
+          (*static_cast<SignalPublishFn*>(pctx))(signal_id, tick, value);
+        },
+        fn_copy);
+  }
+
+  // Wire the CAN publisher if the plugin supports it.
+  if (plugin->vtable->set_can_publisher != nullptr && can_publisher_fn_) {
+    auto* fn_copy = new CanPublishFn(can_publisher_fn_);
+    plugin->vtable->set_can_publisher(
+        plugin->ctx,
+        [](void* pctx, const BoatCanFrame* frame) {
+          if (frame != nullptr) (*static_cast<CanPublishFn*>(pctx))(*frame);
+        },
+        fn_copy);
+  }
+
   PluginHandle handle{dl_handle, plugin, so_path, abi_version, destroy_fn};
   plugins_[handle.name] = handle;
   return handle;
@@ -78,6 +110,15 @@ void PluginManager::TickAll(std::uint64_t tick) {
   for (auto& [name, handle] : plugins_) {
     (void)name;
     handle.plugin->vtable->on_tick(handle.plugin->ctx, tick);
+  }
+}
+
+void PluginManager::DispatchCanFrame(const BoatCanFrame& frame, const std::string& iface) {
+  for (auto& [name, handle] : plugins_) {
+    (void)name;
+    if (handle.plugin->vtable->on_can_frame != nullptr) {
+      handle.plugin->vtable->on_can_frame(handle.plugin->ctx, &frame, iface.c_str());
+    }
   }
 }
 

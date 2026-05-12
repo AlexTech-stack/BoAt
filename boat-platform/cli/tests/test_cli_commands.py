@@ -39,7 +39,23 @@ def _fake_client() -> SimpleNamespace:
         GetPluginInfo=Mock(return_value=SimpleNamespace(plugin=SimpleNamespace(plugin_id="p1", name="plug", version="1.0", loaded=True))),
         UnloadPlugin=Mock(return_value=SimpleNamespace(unloaded=True)),
     )
-    return SimpleNamespace(simulation=simulation, scenario=scenario, replay=replay, plugin=plugin, close=lambda: None)
+    can = SimpleNamespace(
+        ListBuses=Mock(return_value=SimpleNamespace(ifaces=["vcan0"])),
+        SendCanFrame=Mock(return_value=SimpleNamespace(accepted=True)),
+        SubscribeCanFrames=Mock(return_value=[]),
+    )
+    eth_stream = Mock()
+    eth_stream.__iter__ = Mock(return_value=iter([]))
+    eth_stream.cancel = Mock()
+    ethernet = SimpleNamespace(
+        ListInterfaces=Mock(return_value=SimpleNamespace(ifaces=["veth0", "veth1"])),
+        SendFrame=Mock(return_value=SimpleNamespace(accepted=True)),
+        SubscribeFrames=Mock(return_value=eth_stream),
+    )
+    return SimpleNamespace(
+        simulation=simulation, scenario=scenario, replay=replay, plugin=plugin,
+        can=can, ethernet=ethernet, close=lambda: None,
+    )
 
 
 def test_sim_commands_call_expected_methods() -> None:
@@ -101,3 +117,28 @@ def test_replay_and_plugin_commands_call_expected_methods() -> None:
     assert fake_client.plugin.ListPlugins.called
     assert fake_client.plugin.GetPluginInfo.called
     assert fake_client.plugin.UnloadPlugin.called
+
+
+def test_eth_commands_call_expected_methods() -> None:
+    fake_client = _fake_client()
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        assert runner.invoke(app, ["eth", "list-ifaces"]).exit_code == 0
+        assert runner.invoke(app, [
+            "eth", "send",
+            "--iface", "veth0",
+            "--payload", "DEADBEEF",
+        ]).exit_code == 0
+        assert runner.invoke(app, [
+            "eth", "send",
+            "--iface", "veth0",
+            "--src", "AA:BB:CC:DD:EE:FF",
+            "--dst", "11:22:33:44:55:66",
+            "--ethertype", "0x0800",
+            "--payload", "DEADBEEF",
+        ]).exit_code == 0
+        assert runner.invoke(app, ["eth", "subscribe"]).exit_code == 0
+        assert runner.invoke(app, ["eth", "subscribe", "--iface", "veth0", "--ethertype", "0x0800"]).exit_code == 0
+
+    assert fake_client.ethernet.ListInterfaces.called
+    assert fake_client.ethernet.SendFrame.called
+    assert fake_client.ethernet.SubscribeFrames.called

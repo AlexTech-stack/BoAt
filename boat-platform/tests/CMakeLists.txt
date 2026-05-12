@@ -38,6 +38,10 @@ add_executable(boat_unit_sqlite_event_store unit/test_sqlite_event_store.cpp)
 target_link_libraries(boat_unit_sqlite_event_store PRIVATE boat_core boat_store Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_sqlite_event_store)
 
+add_executable(boat_unit_ipc_channel_selector unit/test_ipc_channel_selector.cpp)
+target_link_libraries(boat_unit_ipc_channel_selector PRIVATE boat_ipc Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_ipc_channel_selector)
+
 add_executable(
   boat_integration_gateway
   integration/test_gateway.cpp
@@ -45,11 +49,16 @@ add_executable(
   ../gateway/grpc_gateway/scenario_service_impl.cpp
   ../gateway/grpc_gateway/signal_service_impl.cpp
 )
-target_include_directories(boat_integration_gateway PRIVATE ${CMAKE_SOURCE_DIR} ${BOAT_PROTO_GENERATED_DIR})
+target_include_directories(boat_integration_gateway PRIVATE
+  ${CMAKE_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/hil
+  ${BOAT_PROTO_GENERATED_DIR}
+)
 target_link_libraries(
   boat_integration_gateway
   PRIVATE
     boat_core
+    boat_hil
     boat_store
     boat_replay
     boat_proto_generated
@@ -58,6 +67,17 @@ target_link_libraries(
     Catch2::Catch2WithMain
 )
 catch_discover_tests(boat_integration_gateway)
+
+add_executable(boat_integration_ipc_control_transport integration/test_ipc_control_transport.cpp)
+target_include_directories(boat_integration_ipc_control_transport PRIVATE ${CMAKE_SOURCE_DIR} ${BOAT_PROTO_GENERATED_DIR})
+target_link_libraries(
+  boat_integration_ipc_control_transport
+  PRIVATE
+    boat_ipc
+    boat_proto_generated
+    Catch2::Catch2WithMain
+)
+catch_discover_tests(boat_integration_ipc_control_transport)
 
 add_executable(boat_determinism_seed determinism/test_seed.cpp)
 target_link_libraries(boat_determinism_seed PRIVATE boat_core Catch2::Catch2WithMain)

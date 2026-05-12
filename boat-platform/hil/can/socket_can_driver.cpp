@@ -9,6 +9,7 @@
 
 #include <linux/can.h>
 #include <linux/can/raw.h>
+#include <linux/can/error.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -31,6 +32,14 @@ bool SocketCanDriver::Open() {
     Close();
     return false;
   }
+
+  // Enable CAN FD frames on this socket. Falls back gracefully on classic-only interfaces.
+  const int enable_fd = 1;
+  (void)setsockopt(socket_fd_, SOL_CAN_RAW, CAN_RAW_FD_FRAMES, &enable_fd, sizeof(enable_fd));
+
+  // Do NOT set CAN_RAW_RECV_OWN_MSGS: the gateway dispatches sent frames directly to
+  // subscribers via CanBusRegistry::DispatchRx, so socket loopback is not needed and
+  // would cause every sent frame to be double-delivered.
 
   struct timeval timeout {};
   timeout.tv_sec = 0;
@@ -56,7 +65,8 @@ bool SocketCanDriver::ReadFrame(CanFrame& out_frame) {
     return false;
   }
 
-  struct can_frame raw {};
+  // canfd_frame is large enough to hold both classic and FD frames.
+  struct canfd_frame raw {};
   const ssize_t bytes = read(socket_fd_, &raw, sizeof(raw));
   if (bytes < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -64,14 +74,20 @@ bool SocketCanDriver::ReadFrame(CanFrame& out_frame) {
     }
     return false;
   }
-  if (bytes != static_cast<ssize_t>(sizeof(raw))) {
+  // Accept either a classic frame (sizeof(can_frame)) or an FD frame.
+  if (bytes != static_cast<ssize_t>(sizeof(struct can_frame)) &&
+      bytes != static_cast<ssize_t>(sizeof(struct canfd_frame))) {
     return false;
   }
 
+  const bool is_fd = (bytes == static_cast<ssize_t>(sizeof(struct canfd_frame)));
+  const std::uint8_t data_len = (raw.len <= CANFD_MAX_DLEN) ? raw.len : CANFD_MAX_DLEN;
+
   out_frame.can_id = raw.can_id;
-  out_frame.dlc = raw.can_dlc;
+  out_frame.dlc    = data_len;
+  out_frame.flags  = is_fd ? raw.flags : 0;
   std::memset(out_frame.data, 0, sizeof(out_frame.data));
-  std::memcpy(out_frame.data, raw.data, raw.can_dlc);
+  std::memcpy(out_frame.data, raw.data, data_len);
 
   struct timespec ts {};
   if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
@@ -89,13 +105,24 @@ bool SocketCanDriver::WriteFrame(const CanFrame& frame) {
     return false;
   }
 
-  struct can_frame raw {};
-  raw.can_id = frame.can_id;
-  raw.can_dlc = frame.dlc > 8 ? 8 : frame.dlc;
-  std::memcpy(raw.data, frame.data, raw.can_dlc);
-
-  const ssize_t bytes = write(socket_fd_, &raw, sizeof(raw));
-  return bytes == static_cast<ssize_t>(sizeof(raw));
+  if (frame.flags & kCanFdFlagFdf) {
+    // CAN FD frame
+    struct canfd_frame raw {};
+    raw.can_id = frame.can_id;
+    raw.len    = frame.dlc <= CANFD_MAX_DLEN ? frame.dlc : CANFD_MAX_DLEN;
+    raw.flags  = frame.flags;
+    std::memcpy(raw.data, frame.data, raw.len);
+    const ssize_t bytes = write(socket_fd_, &raw, sizeof(raw));
+    return bytes == static_cast<ssize_t>(sizeof(raw));
+  } else {
+    // Classic CAN frame
+    struct can_frame raw {};
+    raw.can_id  = frame.can_id;
+    raw.can_dlc = frame.dlc <= CAN_MAX_DLEN ? frame.dlc : CAN_MAX_DLEN;
+    std::memcpy(raw.data, frame.data, raw.can_dlc);
+    const ssize_t bytes = write(socket_fd_, &raw, sizeof(raw));
+    return bytes == static_cast<ssize_t>(sizeof(raw));
+  }
 }
 
 void SocketCanDriver::Close() {

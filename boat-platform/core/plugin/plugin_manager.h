@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -17,16 +18,36 @@ struct PluginHandle {
   boat_plugin_destroy_fn destroy_fn;
 };
 
+/* Signature used inside the core layer to route a signal value to wherever
+   the host (gateway, test harness, …) wants to deliver it. */
+using SignalPublishFn =
+    std::function<void(const char* signal_id, uint64_t tick, double value)>;
+
+/* Signature for delivering a raw CAN frame from a plugin to the HIL layer. */
+using CanPublishFn = std::function<void(const BoatCanFrame& frame)>;
+
 class PluginManager {
  public:
+  /* Set before loading plugins.  Every plugin that exposes set_publisher will
+     receive a trampoline that delegates to this function. */
+  void SetPublisher(SignalPublishFn fn);
+
+  /* Set before loading plugins.  Every plugin that exposes set_can_publisher will
+     receive a trampoline that delegates to this function. */
+  void SetCanPublisher(CanPublishFn fn);
+
   PluginHandle Load(const std::string& so_path, const std::string& config_json);
   void Unload(const std::string& name);
   void TickAll(std::uint64_t tick);
+  /* Deliver an incoming CAN frame to every plugin that implements on_can_frame. */
+  void DispatchCanFrame(const BoatCanFrame& frame, const std::string& iface);
   void ShutdownAll();
   [[nodiscard]] std::vector<std::string> List() const;
 
  private:
   std::unordered_map<std::string, PluginHandle> plugins_;
+  SignalPublishFn publisher_fn_;
+  CanPublishFn can_publisher_fn_;
 };
 
 }  // namespace boat::core

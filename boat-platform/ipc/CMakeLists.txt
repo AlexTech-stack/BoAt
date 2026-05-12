@@ -1,4 +1,6 @@
 add_library(boat_ipc STATIC
+  ipc_channel_selector.cpp
+  ipc_payload_dispatch.cpp
   shm/shm_publisher.cpp
   shm/shm_subscriber.cpp
   uds/uds_server.cpp
@@ -26,7 +28,7 @@ target_link_libraries(boat_ipc PUBLIC
   grpc
   protobuf::libprotobuf
   spdlog::spdlog
-  iceoryx2::iceoryx2-cxx
+  iceoryx2-cxx::static-lib-cxx
 )
 
 if(TARGET boat_proto_generated)

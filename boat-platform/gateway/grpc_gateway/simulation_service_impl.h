@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -46,6 +48,7 @@ class SimulationServiceImpl final : public boat::v1::SimulationService::Service 
   std::unordered_map<std::string, boat::core::ScenarioDef> simulations_;
   mutable std::mutex simulations_mutex_;
   boat::store::SqliteTomlConfigStore config_store_{"boat_config.db"};
+  std::optional<std::size_t> can_rx_sub_id_;
 };
 
 }  // namespace boat::gateway

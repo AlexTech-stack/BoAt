@@ -18,6 +18,7 @@
 #include "gateway/grpc_gateway/scenario_service_impl.h"
 #include "gateway/grpc_gateway/signal_service_impl.h"
 #include "gateway/grpc_gateway/simulation_service_impl.h"
+#include "can_bus_registry.h"
 #include "plugin/plugin_manager.h"
 #include "replay_engine/replay_engine.h"
 #include "scenario/scenario_loader.h"
@@ -47,10 +48,12 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   boat::store::SqliteEventStore event_store(event_db_path.string());
   boat::store::FlatFileTraceStore trace_store(trace_db_path.string());
   boat::replay::ReplayController replay_controller(trace_store, event_store, event_bus);
+  boat::hil::CanBusRegistry can_registry;  // no interfaces opened in unit tests
   signal_router.SetFaultInjector(&fault_injector);
 
   boat::gateway::GatewayContext ctx{
       .sim_state_machine = state_machine,
+      .sim_clock = clock,
       .tick_scheduler = scheduler,
       .event_bus = event_bus,
       .signal_router = signal_router,
@@ -60,6 +63,7 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
       .event_store = event_store,
       .trace_store = trace_store,
       .replay_controller = replay_controller,
+      .can_bus_registry = can_registry,
   };
 
   boat::gateway::ScenarioServiceImpl scenario_service(ctx);

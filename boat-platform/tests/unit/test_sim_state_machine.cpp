@@ -7,7 +7,7 @@
 TEST_CASE("SimStateMachine transition rules and observers", "[unit][sim_state_machine]") {
   boat::core::SimStateMachine sm;
   std::vector<std::pair<boat::core::SimState, boat::core::SimState>> observed;
-  sm.OnTransition([&](boat::core::SimState from, boat::core::SimState to) { observed.emplace_back(from, to); });
+  const auto token = sm.OnTransition([&](boat::core::SimState from, boat::core::SimState to) { observed.emplace_back(from, to); });
 
   REQUIRE(sm.Transition(boat::core::SimState::RUNNING));
   REQUIRE(sm.Transition(boat::core::SimState::PAUSED));
@@ -20,4 +20,9 @@ TEST_CASE("SimStateMachine transition rules and observers", "[unit][sim_state_ma
   }
 
   REQUIRE(observed.size() == 4);
+
+  SECTION("Observers can be unregistered") {
+    REQUIRE(sm.RemoveObserver(token));
+    REQUIRE_FALSE(sm.RemoveObserver(token));
+  }
 }

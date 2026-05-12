@@ -48,6 +48,7 @@
 - `StartReplay`
 - `SeekReplay`
 - `StreamReplay` (server streaming)
+- `ReplayControlResponse.replay_id` is returned by `StartReplay` and used as the required session key for `SeekReplay` and `StreamReplay`.
 
 ### `PluginService` (`plugin.proto`)
 

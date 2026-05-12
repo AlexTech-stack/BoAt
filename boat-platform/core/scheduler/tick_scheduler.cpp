@@ -7,6 +7,11 @@
 
 namespace boat::core {
 
+void TickScheduler::SetOnTickHook(std::function<void(std::uint64_t)> hook) {
+  std::lock_guard<std::mutex> lock(on_tick_hook_mutex_);
+  on_tick_hook_ = std::move(hook);
+}
+
 TickScheduler::TickScheduler(SimClock& clock, EventBus& event_bus, DeterminismEngine& determinism,
                              std::size_t thread_count)
     : clock_(clock),
@@ -29,7 +34,11 @@ void TickScheduler::Start() {
   coordinator_ = std::thread(&TickScheduler::CoordinatorLoop, this);
 }
 
-void TickScheduler::Pause() { paused_.store(true, std::memory_order_release); }
+void TickScheduler::Pause() {
+  paused_.store(true, std::memory_order_release);
+  // Wake any ExecuteTick waiting for task completion so it can exit cleanly.
+  pending_cv_.notify_all();
+}
 
 void TickScheduler::Resume() {
   paused_.store(false, std::memory_order_release);
@@ -72,11 +81,14 @@ void TickScheduler::Step(std::uint64_t n) {
 
   if (!running_.load(std::memory_order_acquire)) {
     for (std::uint64_t i = 0; i < n; ++i) {
-      const std::uint64_t tick = clock_.tick() + 1;
-      determinism_.BeforeTick(tick);
-      // Manual stepping keeps the same tick order as coordinator mode.
-      event_bus_.Dispatch();
-      clock_.Step();
+      ExecuteTickSynchronously(clock_.tick() + 1);
+    }
+    return;
+  }
+
+  if (paused_.load(std::memory_order_acquire)) {
+    for (std::uint64_t i = 0; i < n; ++i) {
+      ExecuteTickSynchronously(clock_.tick() + 1);
     }
     return;
   }
@@ -105,24 +117,43 @@ void TickScheduler::ExecuteTick(std::uint64_t tick) {
   if (!running_.load(std::memory_order_acquire)) {
     return;
   }
-  determinism_.BeforeTick(tick);
   if (!EnqueueTask([]() {})) {
     return;
   }
   std::unique_lock<std::mutex> lock(pending_mutex_);
   pending_cv_.wait(lock, [this] {
     return pending_tasks_.load(std::memory_order_acquire) == 0 ||
-           !running_.load(std::memory_order_acquire);
+           !running_.load(std::memory_order_acquire) ||
+           paused_.load(std::memory_order_acquire);
   });
   if (pending_tasks_.load(std::memory_order_acquire) != 0) {
+    // Task not completed (paused or stopped) — abandon without advancing state.
     return;
   }
-  // Order is deterministic: run tick tasks first, then dispatch queued events, then advance clock.
+  // Order is deterministic: seed RNG, dispatch queued events, then advance clock.
+  determinism_.BeforeTick(tick);
   event_bus_.Dispatch();
   clock_.Step();
+  {
+    std::lock_guard<std::mutex> lock(on_tick_hook_mutex_);
+    if (on_tick_hook_) on_tick_hook_(tick);
+  }
+}
+
+void TickScheduler::ExecuteTickSynchronously(std::uint64_t tick) {
+  determinism_.BeforeTick(tick);
+  // Keep manual stepping order aligned with coordinator-driven ticks.
+  event_bus_.Dispatch();
+  clock_.Step();
+  {
+    std::lock_guard<std::mutex> lock(on_tick_hook_mutex_);
+    if (on_tick_hook_) on_tick_hook_(tick);
+  }
 }
 
 void TickScheduler::CoordinatorLoop() {
+  // Each tick represents 10 ms of simulation time; sleep to match real time.
+  constexpr auto kTickInterval = std::chrono::milliseconds(10);
   while (running_.load(std::memory_order_acquire)) {
     {
       std::unique_lock<std::mutex> pause_lock(pause_mutex_);
@@ -133,7 +164,12 @@ void TickScheduler::CoordinatorLoop() {
     if (!running_.load(std::memory_order_acquire)) {
       break;
     }
+    const auto tick_start = std::chrono::steady_clock::now();
     Step(1);
+    const auto elapsed = std::chrono::steady_clock::now() - tick_start;
+    if (elapsed < kTickInterval) {
+      std::this_thread::sleep_for(kTickInterval - elapsed);
+    }
   }
 }
 

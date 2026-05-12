@@ -15,7 +15,19 @@ function(boat_register_proto_directory proto_dir)
     VERBATIM
   )
 
-  if(TARGET protobuf::protoc AND TARGET grpc_cpp_plugin)
+  message(STATUS "BoAtProto: protoc target exists=${TARGET_PROTOC}, grpc_cpp_plugin target exists=${TARGET_GRPC_PLUGIN}")
+  if(TARGET protoc)
+    set(TARGET_PROTOC YES)
+  else()
+    set(TARGET_PROTOC NO)
+  endif()
+  if(TARGET grpc_cpp_plugin)
+    set(TARGET_GRPC_PLUGIN YES)
+  else()
+    set(TARGET_GRPC_PLUGIN NO)
+  endif()
+  message(STATUS "BoAtProto: protoc=${TARGET_PROTOC} grpc_cpp_plugin=${TARGET_GRPC_PLUGIN}")
+  if(TARGET protoc AND TARGET grpc_cpp_plugin)
     set(BOAT_PROTO_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated/proto" CACHE PATH "Generated proto include directory" FORCE)
     file(MAKE_DIRECTORY "${BOAT_PROTO_GENERATED_DIR}")
 
@@ -37,14 +49,13 @@ function(boat_register_proto_directory proto_dir)
 
       add_custom_command(
         OUTPUT "${pb_cc}" "${pb_h}" "${grpc_cc}" "${grpc_h}"
-        COMMAND protobuf::protoc
-        ARGS
+        COMMAND $<TARGET_FILE:protoc>
           "--proto_path=${proto_base_dir}"
           "--cpp_out=${BOAT_PROTO_GENERATED_DIR}"
           "--grpc_out=${BOAT_PROTO_GENERATED_DIR}"
           "--plugin=protoc-gen-grpc=$<TARGET_FILE:grpc_cpp_plugin>"
           "${proto_file}"
-        DEPENDS "${proto_file}" protobuf::protoc grpc_cpp_plugin
+        DEPENDS "${proto_file}" protoc grpc_cpp_plugin
         COMMENT "Generating protobuf/grpc sources for ${proto_file}"
         VERBATIM
       )
@@ -53,9 +64,9 @@ function(boat_register_proto_directory proto_dir)
       list(APPEND generated_h_files "${pb_h}" "${grpc_h}")
     endforeach()
 
-    add_library(boat_proto_generated INTERFACE)
-    target_include_directories(boat_proto_generated INTERFACE "${BOAT_PROTO_GENERATED_DIR}")
-    target_sources(boat_proto_generated INTERFACE ${generated_cc_files} ${generated_h_files})
+    add_library(boat_proto_generated STATIC ${generated_cc_files})
+    target_include_directories(boat_proto_generated PUBLIC "${BOAT_PROTO_GENERATED_DIR}")
+    target_link_libraries(boat_proto_generated PUBLIC protobuf::libprotobuf grpc++)
     add_dependencies(boat_proto_generated boat_proto_contracts)
   endif()
 endfunction()

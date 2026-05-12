@@ -1,5 +1,7 @@
 #include "vehicle_dynamics_plugin.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -30,27 +32,67 @@ int vehicle_initialize(void* ctx, const char* config_json) {
     return -1;
   }
 
-  plugin->position_m = 0.0;
-  plugin->velocity_mps = 0.0;
-  plugin->acceleration_mps2 = 0.0;
-  plugin->mass_kg = 1000.0;
-
   const std::string config = config_json == nullptr ? std::string{} : std::string(config_json);
-  plugin->velocity_mps = parse_double_value(config, "initial_velocity", plugin->velocity_mps);
-  plugin->mass_kg = parse_double_value(config, "mass", plugin->mass_kg);
-  plugin->acceleration_mps2 = parse_double_value(config, "acceleration", plugin->acceleration_mps2);
+  plugin->speed_kmh = parse_double_value(config, "initial_speed_kmh", 0.0);
+  plugin->rpm = parse_double_value(config, "initial_rpm", 800.0);
   return 0;
 }
 
 void vehicle_on_tick(void* ctx, uint64_t tick) {
-  (void)tick;
   auto* plugin = static_cast<VehicleDynamicsPlugin*>(ctx);
   if (plugin == nullptr) {
     return;
   }
-  constexpr double kTickDeltaSeconds = 0.01;
-  plugin->velocity_mps += plugin->acceleration_mps2 * kTickDeltaSeconds;
-  plugin->position_m += plugin->velocity_mps * kTickDeltaSeconds;
+
+  plugin->speed_kmh = std::clamp(plugin->speed_kmh + plugin->speed_delta_dist(plugin->rng),
+                                 0.0, 300.0);
+  plugin->rpm = std::clamp(plugin->rpm + plugin->rpm_delta_dist(plugin->rng),
+                           0.0, 8000.0);
+
+  if (plugin->publish_fn != nullptr) {
+    plugin->publish_fn(plugin->publisher_ctx, "speed", tick, plugin->speed_kmh);
+    plugin->publish_fn(plugin->publisher_ctx, "rpm",   tick, plugin->rpm);
+  }
+
+  // Publish CAN frames:
+  //   0x100 — speed in km/h * 100, 4 bytes little-endian uint32
+  //   0x101 — rpm as integer, 4 bytes little-endian uint32
+  if (plugin->can_publish_fn != nullptr) {
+    const auto speed_raw = static_cast<std::uint32_t>(plugin->speed_kmh * 100.0);
+    const auto rpm_raw   = static_cast<std::uint32_t>(plugin->rpm);
+
+    BoatCanFrame speed_frame{};
+    speed_frame.can_id = 0x100;
+    speed_frame.dlc    = 4;
+    speed_frame.data[0] = static_cast<std::uint8_t>((speed_raw >>  0) & 0xFF);
+    speed_frame.data[1] = static_cast<std::uint8_t>((speed_raw >>  8) & 0xFF);
+    speed_frame.data[2] = static_cast<std::uint8_t>((speed_raw >> 16) & 0xFF);
+    speed_frame.data[3] = static_cast<std::uint8_t>((speed_raw >> 24) & 0xFF);
+    plugin->can_publish_fn(plugin->can_publisher_ctx, &speed_frame);
+
+    BoatCanFrame rpm_frame{};
+    rpm_frame.can_id = 0x101;
+    rpm_frame.dlc    = 4;
+    rpm_frame.data[0] = static_cast<std::uint8_t>((rpm_raw >>  0) & 0xFF);
+    rpm_frame.data[1] = static_cast<std::uint8_t>((rpm_raw >>  8) & 0xFF);
+    rpm_frame.data[2] = static_cast<std::uint8_t>((rpm_raw >> 16) & 0xFF);
+    rpm_frame.data[3] = static_cast<std::uint8_t>((rpm_raw >> 24) & 0xFF);
+    plugin->can_publish_fn(plugin->can_publisher_ctx, &rpm_frame);
+  }
+}
+
+void vehicle_set_publisher(void* ctx, BoatPublishFn fn, void* publisher_ctx) {
+  auto* plugin = static_cast<VehicleDynamicsPlugin*>(ctx);
+  if (plugin == nullptr) return;
+  plugin->publish_fn    = fn;
+  plugin->publisher_ctx = publisher_ctx;
+}
+
+void vehicle_set_can_publisher(void* ctx, BoatCanPublishFn fn, void* publisher_ctx) {
+  auto* plugin = static_cast<VehicleDynamicsPlugin*>(ctx);
+  if (plugin == nullptr) return;
+  plugin->can_publish_fn    = fn;
+  plugin->can_publisher_ctx = publisher_ctx;
 }
 
 void vehicle_shutdown(void* ctx) {
@@ -58,16 +100,16 @@ void vehicle_shutdown(void* ctx) {
   if (plugin == nullptr) {
     return;
   }
-  plugin->position_m = 0.0;
-  plugin->velocity_mps = 0.0;
-  plugin->acceleration_mps2 = 0.0;
-  plugin->mass_kg = 0.0;
+  plugin->speed_kmh = 0.0;
+  plugin->rpm = 0.0;
 }
 
 BoatPluginVTable kVehicleDynamicsVTable = {
     &vehicle_initialize,
     &vehicle_on_tick,
     &vehicle_shutdown,
+    &vehicle_set_publisher,
+    &vehicle_set_can_publisher,
 };
 
 }  // namespace

@@ -12,6 +12,7 @@ add_library(boat_core STATIC
 
 target_include_directories(boat_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_SOURCE_DIR}"
   "${CMAKE_SOURCE_DIR}/sdk/cpp/include"
 )
 target_compile_features(boat_core PUBLIC cxx_std_20)

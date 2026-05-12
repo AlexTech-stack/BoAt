@@ -44,6 +44,11 @@ All protobuf service files are defined under `proto/boat/v1/`.
 | `SeekReplay` | Unary | Jump to tick N |
 | `StreamReplay` | Server-streaming | Stream replayed events |
 
+Replay session identity:
+- `StartReplay` returns `ReplayControlResponse.replay_id`.
+- Clients must persist that `replay_id` and pass it to `SeekReplay` and `StreamReplay`.
+- `replay_id` is stable for the active replay session key (`trace_id` + optional `simulation_id`) and is the canonical chaining identifier for follow-up replay RPCs.
+
 ### `plugin.proto` - `PluginService`
 
 | Method | Type | Description |

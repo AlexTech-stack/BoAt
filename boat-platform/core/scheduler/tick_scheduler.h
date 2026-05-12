@@ -29,11 +29,16 @@ class TickScheduler {
   void Stop();
   void Step(std::uint64_t n = 1);
 
+  /* Optional hook called after every tick (including synchronous steps).
+     Set before Start(); safe to call from any thread. */
+  void SetOnTickHook(std::function<void(std::uint64_t)> hook);
+
  private:
   void WorkerLoop(std::size_t worker_index);
   void CoordinatorLoop();
   bool EnqueueTask(std::function<void()> task);
   void ExecuteTick(std::uint64_t tick);
+  void ExecuteTickSynchronously(std::uint64_t tick);
 
   SimClock& clock_;
   EventBus& event_bus_;
@@ -57,6 +62,9 @@ class TickScheduler {
   std::atomic<std::size_t> pending_tasks_{0};
   std::condition_variable pending_cv_;
   std::mutex pending_mutex_;
+
+  std::function<void(std::uint64_t)> on_tick_hook_;
+  std::mutex on_tick_hook_mutex_;
 };
 
 }  // namespace boat::core

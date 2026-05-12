@@ -1,5 +1,6 @@
 #include "state/sim_state_machine.h"
 
+#include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -27,7 +28,11 @@ bool SimStateMachine::Transition(SimState target) {
       return false;
     }
     current_ = target;
-    observers = observers_;
+    observers.reserve(observers_.size());
+    for (const auto& [token, observer] : observers_) {
+      (void)token;
+      observers.push_back(observer);
+    }
   }
 
   for (const auto& observer : observers) {
@@ -41,9 +46,20 @@ SimState SimStateMachine::Current() const {
   return current_;
 }
 
-void SimStateMachine::OnTransition(Observer observer) {
+SimStateMachine::ObserverToken SimStateMachine::OnTransition(Observer observer) {
   std::lock_guard<std::mutex> lock(mutex_);
-  observers_.push_back(std::move(observer));
+  const ObserverToken token = next_observer_token_++;
+  observers_.emplace_back(token, std::move(observer));
+  return token;
+}
+
+bool SimStateMachine::RemoveObserver(ObserverToken token) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto previous_size = observers_.size();
+  observers_.erase(std::remove_if(observers_.begin(), observers_.end(),
+                                  [token](const auto& registered) { return registered.first == token; }),
+                   observers_.end());
+  return observers_.size() != previous_size;
 }
 
 }  // namespace boat::core

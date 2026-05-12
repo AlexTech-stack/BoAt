@@ -1,9 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "boat/v1/control.pb.h"
+#include "ipc/shm/shm_payload_sample.h"
+#include "ipc/shm/shm_publisher.h"
 #include "ipc/uds/uds_types.h"
 
 namespace boat::ipc {
@@ -20,7 +23,12 @@ class UdsClient {
   void Disconnect();
 
  private:
+  [[nodiscard]] bool EnsureLargePayloadPublisher();
+
   int fd_{-1};
+  std::string resolved_socket_path_;
+  std::string large_payload_shm_topic_;
+  std::optional<ShmPublisher<ShmPayloadSample>> large_payload_publisher_;
 };
 
 }  // namespace boat::ipc
