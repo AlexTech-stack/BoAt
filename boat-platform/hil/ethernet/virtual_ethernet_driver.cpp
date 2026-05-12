@@ -19,6 +19,19 @@ static constexpr std::size_t kVlanHeaderSize = 20;
 static constexpr std::size_t kMaxPayload     = 1500;
 static constexpr std::size_t kMaxDgram       = kVlanHeaderSize + kMaxPayload;
 
+static void ExtractIpAddresses(EthernetFrame& f) {
+  if (f.ethertype == 0x0800 && f.payload.size() >= 20) {
+    f.src_ip.assign(f.payload.begin() + 12, f.payload.begin() + 16);
+    f.dst_ip.assign(f.payload.begin() + 16, f.payload.begin() + 20);
+  } else if (f.ethertype == 0x86DD && f.payload.size() >= 40) {
+    f.src_ip.assign(f.payload.begin() +  8, f.payload.begin() + 24);
+    f.dst_ip.assign(f.payload.begin() + 24, f.payload.begin() + 40);
+  } else {
+    f.src_ip.clear();
+    f.dst_ip.clear();
+  }
+}
+
 // ── Construction ─────────────────────────────────────────────────────────────
 
 VirtualEthernetDriver::VirtualEthernetDriver(std::string   iface,
@@ -142,6 +155,7 @@ bool VirtualEthernetDriver::ReadFrame(EthernetFrame& out) {
   const std::size_t copy_len = std::min<std::size_t>(payload_len, body);
   out.payload.assign(buf + hdr, buf + hdr + copy_len);
   out.timestamp_ns = 0;  // filled by the registry
+  ExtractIpAddresses(out);
   return true;
 }
 

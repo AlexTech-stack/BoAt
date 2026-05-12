@@ -27,6 +27,19 @@ static constexpr std::size_t kVlanHdrSize    = 18;   // + 4-byte 802.1Q tag
 static constexpr std::size_t kMaxPayload     = 1500;
 static constexpr std::size_t kMaxEthFrame    = kVlanHdrSize + kMaxPayload;
 
+static void ExtractIpAddresses(EthernetFrame& f) {
+  if (f.ethertype == 0x0800 && f.payload.size() >= 20) {
+    f.src_ip.assign(f.payload.begin() + 12, f.payload.begin() + 16);
+    f.dst_ip.assign(f.payload.begin() + 16, f.payload.begin() + 20);
+  } else if (f.ethertype == 0x86DD && f.payload.size() >= 40) {
+    f.src_ip.assign(f.payload.begin() +  8, f.payload.begin() + 24);
+    f.dst_ip.assign(f.payload.begin() + 24, f.payload.begin() + 40);
+  } else {
+    f.src_ip.clear();
+    f.dst_ip.clear();
+  }
+}
+
 RawSocketEthernetDriver::RawSocketEthernetDriver(std::string iface)
     : iface_(std::move(iface)) {}
 
@@ -104,6 +117,7 @@ bool RawSocketEthernetDriver::ReadFrame(EthernetFrame& out) {
   out.timestamp_ns = (clock_gettime(CLOCK_REALTIME, &ts) == 0)
       ? static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ULL + ts.tv_nsec
       : 0;
+  ExtractIpAddresses(out);
   return true;
 }
 
