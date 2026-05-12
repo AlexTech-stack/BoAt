@@ -1,10 +1,10 @@
 #include "ethernet_service_impl.h"
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <sstream>
-#include <thread>
 #include <vector>
 
 #include "ethernet_bus_registry.h"
@@ -124,13 +124,14 @@ grpc::Status EthernetServiceImpl::SubscribeFrames(
     ctx_.audit_log.Push(std::move(ev));
   }
 
-  std::mutex                         queue_mutex;
+  std::mutex                           queue_mutex;
+  std::condition_variable              queue_cv;
   std::vector<boat::v1::EthernetFrame> queue;
 
   const auto sub_id = ctx_.ethernet_bus_registry.Subscribe(
       iface_filter, ethertype_filter,
-      [&queue_mutex, &queue](const boat::hil::EthernetFrame& f,
-                             const std::string& iface) {
+      [&queue_mutex, &queue_cv, &queue](const boat::hil::EthernetFrame& f,
+                                        const std::string& iface) {
         boat::v1::EthernetFrame proto;
         proto.set_iface(iface);
         proto.set_src_mac(f.src_mac, 6);
@@ -138,14 +139,19 @@ grpc::Status EthernetServiceImpl::SubscribeFrames(
         proto.set_ethertype(f.ethertype);
         proto.set_payload(f.payload.data(), f.payload.size());
         proto.set_timestamp_ns(f.timestamp_ns);
-        std::lock_guard<std::mutex> lock(queue_mutex);
-        queue.push_back(std::move(proto));
+        {
+          std::lock_guard<std::mutex> lock(queue_mutex);
+          queue.push_back(std::move(proto));
+        }
+        queue_cv.notify_one();
       });
 
   while (!context->IsCancelled()) {
     std::vector<boat::v1::EthernetFrame> pending;
     {
-      std::lock_guard<std::mutex> lock(queue_mutex);
+      std::unique_lock<std::mutex> lock(queue_mutex);
+      queue_cv.wait_for(lock, std::chrono::milliseconds(50),
+                        [&queue] { return !queue.empty(); });
       pending.swap(queue);
     }
     for (const auto& proto : pending) {
@@ -170,7 +176,6 @@ grpc::Status EthernetServiceImpl::SubscribeFrames(
       ev.summary    = EthFrameSummary(raw, proto.iface());
       ctx_.audit_log.Push(std::move(ev));
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
   ctx_.ethernet_bus_registry.Unsubscribe(sub_id);
