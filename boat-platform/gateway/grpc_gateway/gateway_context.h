@@ -18,6 +18,7 @@
 namespace boat::hil {
 class CanBusRegistry;
 class EthernetBusRegistry;
+class PduRouter;
 }  // namespace boat::hil
 
 namespace boat::gateway {
@@ -36,6 +37,7 @@ struct GatewayContext {
   boat::replay::ReplayController& replay_controller;
   boat::hil::CanBusRegistry& can_bus_registry;
   boat::hil::EthernetBusRegistry& ethernet_bus_registry;
+  boat::hil::PduRouter& pdu_router;
   RpcAuditLog& audit_log;
 };
 

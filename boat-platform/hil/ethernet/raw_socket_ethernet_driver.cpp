@@ -22,9 +22,10 @@
 
 namespace boat::hil {
 
-static constexpr std::size_t kEthHdrSize  = 14;          // dst(6)+src(6)+type(2)
-static constexpr std::size_t kMaxPayload  = 1500;
-static constexpr std::size_t kMaxEthFrame = kEthHdrSize + kMaxPayload;
+static constexpr std::size_t kEthHdrSize     = 14;   // dst(6)+src(6)+type(2)
+static constexpr std::size_t kVlanHdrSize    = 18;   // + 4-byte 802.1Q tag
+static constexpr std::size_t kMaxPayload     = 1500;
+static constexpr std::size_t kMaxEthFrame    = kVlanHdrSize + kMaxPayload;
 
 RawSocketEthernetDriver::RawSocketEthernetDriver(std::string iface)
     : iface_(std::move(iface)) {}
@@ -84,8 +85,20 @@ bool RawSocketEthernetDriver::ReadFrame(EthernetFrame& out) {
 
   std::memcpy(out.dst_mac, buf,     6);
   std::memcpy(out.src_mac, buf + 6, 6);
-  out.ethertype = (static_cast<uint16_t>(buf[12]) << 8) | buf[13];
-  out.payload.assign(buf + kEthHdrSize, buf + n);
+
+  const uint16_t etype = (static_cast<uint16_t>(buf[12]) << 8) | buf[13];
+  if (etype == 0x8100 && n >= static_cast<ssize_t>(kVlanHdrSize)) {
+    const uint16_t tci = (static_cast<uint16_t>(buf[14]) << 8) | buf[15];
+    out.vlan_id   = tci & 0x0FFFu;
+    out.vlan_pcp  = static_cast<uint8_t>((tci >> 13) & 0x07u);
+    out.ethertype = (static_cast<uint16_t>(buf[16]) << 8) | buf[17];
+    out.payload.assign(buf + kVlanHdrSize, buf + n);
+  } else {
+    out.vlan_id   = 0;
+    out.vlan_pcp  = 0;
+    out.ethertype = etype;
+    out.payload.assign(buf + kEthHdrSize, buf + n);
+  }
 
   struct timespec ts{};
   out.timestamp_ns = (clock_gettime(CLOCK_REALTIME, &ts) == 0)
@@ -98,15 +111,30 @@ bool RawSocketEthernetDriver::WriteFrame(const EthernetFrame& frame) {
   if (!open_.load() || sock_ < 0 || if_index_ < 0) return false;
 
   const std::size_t payload_len = std::min(frame.payload.size(), kMaxPayload);
-  const std::size_t total = kEthHdrSize + payload_len;
+  const bool        has_vlan    = frame.vlan_id != 0;
+  const std::size_t hdr_size    = has_vlan ? kVlanHdrSize : kEthHdrSize;
+  const std::size_t total       = hdr_size + payload_len;
 
   unsigned char buf[kMaxEthFrame]{};
   std::memcpy(buf,     frame.dst_mac, 6);
   std::memcpy(buf + 6, frame.src_mac, 6);
-  buf[12] = static_cast<unsigned char>(frame.ethertype >> 8);
-  buf[13] = static_cast<unsigned char>(frame.ethertype & 0xFF);
+
+  if (has_vlan) {
+    buf[12] = 0x81; buf[13] = 0x00;
+    const uint16_t tci = static_cast<uint16_t>(
+        (static_cast<uint16_t>(frame.vlan_pcp & 0x07u) << 13) |
+        (frame.vlan_id & 0x0FFFu));
+    buf[14] = static_cast<unsigned char>(tci >> 8);
+    buf[15] = static_cast<unsigned char>(tci & 0xFF);
+    buf[16] = static_cast<unsigned char>(frame.ethertype >> 8);
+    buf[17] = static_cast<unsigned char>(frame.ethertype & 0xFF);
+  } else {
+    buf[12] = static_cast<unsigned char>(frame.ethertype >> 8);
+    buf[13] = static_cast<unsigned char>(frame.ethertype & 0xFF);
+  }
+
   if (payload_len > 0) {
-    std::memcpy(buf + kEthHdrSize, frame.payload.data(), payload_len);
+    std::memcpy(buf + hdr_size, frame.payload.data(), payload_len);
   }
 
   struct sockaddr_ll dest{};

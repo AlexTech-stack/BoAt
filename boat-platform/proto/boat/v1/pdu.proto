@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package boat.v1;
+
+// Transport layer a PDU is routed over.
+enum PduTransport {
+  PDU_TRANSPORT_UNSPECIFIED = 0;
+  PDU_TRANSPORT_CAN         = 1;
+  PDU_TRANSPORT_ETHERNET    = 2;
+}
+
+// Routing rule: maps a PDU ID to a physical interface and transport.
+message PduRoute {
+  uint32       pdu_id    = 1;  // AUTOSAR-style 32-bit PDU identifier
+  PduTransport transport = 2;
+  string       iface     = 3;  // CAN iface (e.g. "vcan0") or Ethernet iface (e.g. "eth0")
+  uint32       vlan_id   = 4;  // 802.1Q VID — 0 = untagged (Ethernet only)
+  uint32       can_id    = 5;  // override CAN frame ID — 0 = use pdu_id (CAN only)
+  uint32       ethertype = 6;  // Ethernet ethertype — 0 = default 0x88B5 (Ethernet only)
+}
+
+// A PDU frame as routed through the platform.
+message PduFrame {
+  uint32       pdu_id       = 1;
+  bytes        payload      = 2;
+  uint64       timestamp_ns = 3;
+  PduTransport source       = 4;  // transport the frame arrived on
+  string       iface        = 5;  // interface the frame arrived on
+}
+
+message SendPduRequest         { PduFrame pdu = 1; }
+message SendPduResponse        { bool accepted = 1; }
+
+// pdu_ids: empty = subscribe to all PDUs.
+message SubscribePdusRequest   { repeated uint32 pdu_ids = 1; }
+
+message ConfigureRouteRequest  { PduRoute route = 1; }
+message ConfigureRouteResponse { bool ok = 1; }
+
+message ListRoutesRequest  {}
+message ListRoutesResponse { repeated PduRoute routes = 1; }
+
+service PduService {
+  rpc SendPdu(SendPduRequest)                   returns (SendPduResponse);
+  rpc SubscribePdus(SubscribePdusRequest)        returns (stream PduFrame);
+  rpc ConfigureRoute(ConfigureRouteRequest)      returns (ConfigureRouteResponse);
+  rpc ListRoutes(ListRoutesRequest)              returns (ListRoutesResponse);
+}

@@ -24,6 +24,8 @@
 #include "gateway_context.h"
 #include "hil/virtual/virtual_can_driver.h"
 #include "hil/ethernet/virtual_ethernet_driver.h"
+#include "pdu/pdu_router.h"
+#include "pdu_service_impl.h"
 #include "metrics_service_impl.h"
 #include "plugin/plugin_manager.h"
 #include "plugin_service_impl.h"
@@ -159,6 +161,8 @@ int main() {
     }
   }
 
+  boat::hil::PduRouter pdu_router(can_registry, eth_registry);
+
   boat::gateway::GatewayContext ctx{
       .sim_state_machine = state_machine,
       .sim_clock = clock,
@@ -173,6 +177,7 @@ int main() {
       .replay_controller = replay_controller,
       .can_bus_registry = can_registry,
       .ethernet_bus_registry = eth_registry,
+      .pdu_router = pdu_router,
       .audit_log = audit_log,
   };
 
@@ -187,6 +192,7 @@ int main() {
   boat::gateway::TraceServiceImpl trace_impl(ctx);
   boat::gateway::FaultServiceImpl fault_impl(ctx);
   boat::gateway::CanServiceImpl can_impl(ctx);
+  boat::gateway::PduServiceImpl pdu_impl(ctx);
   boat::gateway::DebugServiceImpl debug_impl(audit_log);
 
   grpc::ServerBuilder builder;
@@ -209,6 +215,7 @@ int main() {
   builder.RegisterService(&trace_impl);
   builder.RegisterService(&fault_impl);
   builder.RegisterService(&can_impl);
+  builder.RegisterService(&pdu_impl);
   builder.RegisterService(&debug_impl);
 
   g_server = builder.BuildAndStart();

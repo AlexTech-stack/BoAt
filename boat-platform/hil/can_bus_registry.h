@@ -18,6 +18,8 @@ namespace boat::hil {
    Thread-safe: Add/Send/Subscribe/Unsubscribe may be called from any thread. */
 class CanBusRegistry {
  public:
+  ~CanBusRegistry() { StopAll(); }
+
   using RxCallbackId = std::size_t;
   /* Callback receives the frame and the interface it arrived on. */
   using RxCallback = std::function<void(const CanFrame&, const std::string& iface)>;

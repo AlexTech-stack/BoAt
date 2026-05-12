@@ -70,6 +70,8 @@ grpc::Status EthernetServiceImpl::SendFrame(
   frame.ethertype    = static_cast<uint16_t>(pf.ethertype() & 0xFFFF);
   frame.payload.assign(pf.payload().begin(), pf.payload().end());
   frame.timestamp_ns = pf.timestamp_ns();
+  frame.vlan_id      = static_cast<uint16_t>(pf.vlan_id()  & 0x0FFF);
+  frame.vlan_pcp     = static_cast<uint8_t> (pf.vlan_pcp() & 0x07);
 
   const bool accepted = ctx_.ethernet_bus_registry.SendFrame(iface, frame);
   if (!accepted) {
@@ -139,6 +141,8 @@ grpc::Status EthernetServiceImpl::SubscribeFrames(
         proto.set_ethertype(f.ethertype);
         proto.set_payload(f.payload.data(), f.payload.size());
         proto.set_timestamp_ns(f.timestamp_ns);
+        proto.set_vlan_id(f.vlan_id);
+        proto.set_vlan_pcp(f.vlan_pcp);
         {
           std::lock_guard<std::mutex> lock(queue_mutex);
           queue.push_back(std::move(proto));

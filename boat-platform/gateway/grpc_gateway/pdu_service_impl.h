@@ -1,0 +1,34 @@
+#pragma once
+
+#include <grpcpp/grpcpp.h>
+
+#include "boat/v1/pdu.grpc.pb.h"
+#include "gateway_context.h"
+
+namespace boat::gateway {
+
+class PduServiceImpl final : public boat::v1::PduService::Service {
+ public:
+  explicit PduServiceImpl(GatewayContext& ctx);
+
+  grpc::Status SendPdu(grpc::ServerContext* context,
+                       const boat::v1::SendPduRequest* request,
+                       boat::v1::SendPduResponse* response) override;
+
+  grpc::Status SubscribePdus(grpc::ServerContext* context,
+                              const boat::v1::SubscribePdusRequest* request,
+                              grpc::ServerWriter<boat::v1::PduFrame>* writer) override;
+
+  grpc::Status ConfigureRoute(grpc::ServerContext* context,
+                               const boat::v1::ConfigureRouteRequest* request,
+                               boat::v1::ConfigureRouteResponse* response) override;
+
+  grpc::Status ListRoutes(grpc::ServerContext* context,
+                          const boat::v1::ListRoutesRequest* request,
+                          boat::v1::ListRoutesResponse* response) override;
+
+ private:
+  GatewayContext& ctx_;
+};
+
+}  // namespace boat::gateway
