@@ -24,11 +24,16 @@ static uint64_t NowNsPdu() {
 
 static boat::hil::PduRoute ProtoToRoute(const boat::v1::PduRoute& pr) {
   boat::hil::PduRoute r;
-  r.pdu_id = pr.pdu_id();
-  r.iface  = pr.iface();
-  r.vlan_id    = static_cast<uint16_t>(pr.vlan_id()   & 0x0FFF);
-  r.can_id     = pr.can_id();
-  r.ethertype  = static_cast<uint16_t>(pr.ethertype() & 0xFFFF);
+  r.pdu_id    = pr.pdu_id();
+  r.iface     = pr.iface();
+  r.vlan_id   = static_cast<uint16_t>(pr.vlan_id()   & 0x0FFF);
+  r.can_id    = pr.can_id();
+  r.ethertype = static_cast<uint16_t>(pr.ethertype() & 0xFFFF);
+  r.src_ip.assign(pr.src_ip().begin(), pr.src_ip().end());
+  r.dst_ip.assign(pr.dst_ip().begin(), pr.dst_ip().end());
+  r.src_port  = static_cast<uint16_t>(pr.src_port() & 0xFFFF);
+  r.dst_port  = static_cast<uint16_t>(pr.dst_port() & 0xFFFF);
+  r.ttl       = pr.ttl() != 0 ? static_cast<uint8_t>(pr.ttl() & 0xFF) : 64;
   switch (pr.transport()) {
     case boat::v1::PDU_TRANSPORT_CAN:      r.transport = boat::hil::PduTransport::kCan;      break;
     case boat::v1::PDU_TRANSPORT_ETHERNET: r.transport = boat::hil::PduTransport::kEthernet; break;
@@ -43,6 +48,11 @@ static void RouteToProto(const boat::hil::PduRoute& r, boat::v1::PduRoute* pr) {
   pr->set_vlan_id(r.vlan_id);
   pr->set_can_id(r.can_id);
   pr->set_ethertype(r.ethertype);
+  pr->set_src_ip(r.src_ip.data(), r.src_ip.size());
+  pr->set_dst_ip(r.dst_ip.data(), r.dst_ip.size());
+  pr->set_src_port(r.src_port);
+  pr->set_dst_port(r.dst_port);
+  pr->set_ttl(r.ttl);
   switch (r.transport) {
     case boat::hil::PduTransport::kCan:      pr->set_transport(boat::v1::PDU_TRANSPORT_CAN);      break;
     case boat::hil::PduTransport::kEthernet: pr->set_transport(boat::v1::PDU_TRANSPORT_ETHERNET); break;

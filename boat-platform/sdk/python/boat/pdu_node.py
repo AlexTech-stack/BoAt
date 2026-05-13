@@ -81,6 +81,11 @@ class PduNode:
         can_id: int = 0,
         ethertype: int = 0x88B5,
         vlan_id: int = 0,
+        src_ip: bytes = b"",
+        dst_ip: bytes = b"",
+        src_port: int = 0,
+        dst_port: int = 0,
+        ttl: int = 64,
     ) -> bool:
         """Configure a PDU routing rule in the gateway.
 
@@ -90,8 +95,14 @@ class PduNode:
                        ``pdu_pb2.PDU_TRANSPORT_ETHERNET``.
             iface:     Interface name (e.g. ``"vcan0"`` or ``"veth0"``).
             can_id:    CAN frame ID override (0 = use pdu_id).
-            ethertype: EtherType for Ethernet PDUs (default 0x88B5).
+            ethertype: EtherType — only used when dst_ip is empty (sim-only).
             vlan_id:   VLAN ID (0 = untagged).
+            src_ip:    Source IP — 4 bytes (IPv4) or 16 bytes (IPv6).
+                       When set, PDUs are sent as IP/UDP/IpduM frames.
+            dst_ip:    Destination IP — 4 bytes (IPv4) or 16 bytes (IPv6).
+            src_port:  UDP source port.
+            dst_port:  UDP destination port.
+            ttl:       IPv4 TTL / IPv6 Hop Limit (default 64).
 
         Returns:
             True if the gateway accepted the route.
@@ -103,6 +114,11 @@ class PduNode:
             can_id=can_id,
             ethertype=ethertype,
             vlan_id=vlan_id,
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            src_port=src_port,
+            dst_port=dst_port,
+            ttl=ttl,
         )
         try:
             resp = self._client.pdu.ConfigureRoute(

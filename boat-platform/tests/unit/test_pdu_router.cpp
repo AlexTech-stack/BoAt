@@ -11,6 +11,7 @@
 #include "ethernet_bus_registry.h"
 #include "hal/hal_driver.h"
 #include "ethernet/ethernet_frame.h"
+#include "pdu/ipdumcontainer.h"
 #include "pdu/pdu_router.h"
 #include "pdu/pdu_types.h"
 
@@ -247,4 +248,185 @@ TEST_CASE("PduRouter ListRoutes returns all configured routes", "[unit][pdu]") {
 
   const auto routes = f.router.ListRoutes();
   REQUIRE(routes.size() == 2);
+}
+
+// ── IpduM container unit tests ────────────────────────────────────────────────
+
+TEST_CASE("IpduMSerialize / IpduMDeserialize round-trip single PDU", "[unit][ipdumcontainer]") {
+  const IpduMEntry entry{0x00AA0001, {0x01, 0x02, 0x03}};
+  const auto buf = IpduMSerialize({entry});
+
+  // Header: 4 bytes ID + 4 bytes DLC = 8 bytes; payload: 3 bytes
+  REQUIRE(buf.size() == 11);
+  // PDU ID big-endian
+  REQUIRE(buf[0] == 0x00);
+  REQUIRE(buf[1] == 0xAA);
+  REQUIRE(buf[2] == 0x00);
+  REQUIRE(buf[3] == 0x01);
+  // DLC big-endian
+  REQUIRE(buf[4] == 0x00);
+  REQUIRE(buf[5] == 0x00);
+  REQUIRE(buf[6] == 0x00);
+  REQUIRE(buf[7] == 0x03);
+
+  std::vector<IpduMEntry> out;
+  REQUIRE(IpduMDeserialize(buf.data(), buf.size(), out));
+  REQUIRE(out.size() == 1);
+  REQUIRE(out[0].pdu_id == 0x00AA0001);
+  REQUIRE(out[0].payload == std::vector<uint8_t>({0x01, 0x02, 0x03}));
+}
+
+TEST_CASE("IpduMSerialize / IpduMDeserialize round-trip multiple PDUs", "[unit][ipdumcontainer]") {
+  const std::vector<IpduMEntry> entries = {
+      {0x00000001, {0xAA, 0xBB}},
+      {0x00000002, {0xCC}},
+      {0x00000003, {0xDE, 0xAD, 0xBE, 0xEF}},
+  };
+  const auto buf = IpduMSerialize(entries);
+
+  std::vector<IpduMEntry> out;
+  REQUIRE(IpduMDeserialize(buf.data(), buf.size(), out));
+  REQUIRE(out.size() == 3);
+  REQUIRE(out[0].pdu_id == 0x00000001);
+  REQUIRE(out[1].pdu_id == 0x00000002);
+  REQUIRE(out[2].payload == std::vector<uint8_t>({0xDE, 0xAD, 0xBE, 0xEF}));
+}
+
+TEST_CASE("IpduMDeserialize rejects truncated header", "[unit][ipdumcontainer]") {
+  // Only 5 bytes — not enough for an 8-byte header
+  const uint8_t buf[] = {0x00, 0x00, 0x00, 0x01, 0x00};
+  std::vector<IpduMEntry> out;
+  REQUIRE_FALSE(IpduMDeserialize(buf, sizeof(buf), out));
+}
+
+TEST_CASE("IpduMDeserialize rejects truncated payload", "[unit][ipdumcontainer]") {
+  // Header claims DLC=10 but only 2 payload bytes follow
+  const uint8_t buf[] = {
+      0x00, 0x00, 0x00, 0x01,  // PDU ID
+      0x00, 0x00, 0x00, 0x0A,  // DLC = 10
+      0xAA, 0xBB               // only 2 bytes
+  };
+  std::vector<IpduMEntry> out;
+  REQUIRE_FALSE(IpduMDeserialize(buf, sizeof(buf), out));
+}
+
+// ── IP/UDP/IpduM send path tests ──────────────────────────────────────────────
+
+TEST_CASE("PduRouter SendPdu over IPv4/UDP builds correct Ethernet frame", "[unit][pdu][ipdumcontainer]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id    = 0x00AA0001;
+  route.transport = PduTransport::kEthernet;
+  route.iface     = "veth0";
+  route.src_ip    = {10, 0, 0, 1};
+  route.dst_ip    = {10, 0, 0, 2};
+  route.src_port  = 1234;
+  route.dst_port  = 5678;
+  route.ttl       = 64;
+  f.router.AddRoute(route);
+
+  REQUIRE(f.router.SendPdu(0x00AA0001, {0xDE, 0xAD}));
+  REQUIRE(f.mock_eth->written.size() == 1);
+
+  const auto& fr = f.mock_eth->written[0];
+  REQUIRE(fr.ethertype == 0x0800);  // IPv4
+
+  // Parse the IP/UDP/IpduM content
+  uint16_t sp = 0, dp = 0;
+  std::vector<IpduMEntry> entries;
+  REQUIRE(ParseUdpIpPacket(fr.payload.data(), fr.payload.size(), &sp, &dp, entries));
+  REQUIRE(sp == 1234);
+  REQUIRE(dp == 5678);
+  REQUIRE(entries.size() == 1);
+  REQUIRE(entries[0].pdu_id == 0x00AA0001);
+  REQUIRE(entries[0].payload == std::vector<uint8_t>({0xDE, 0xAD}));
+}
+
+TEST_CASE("PduRouter SendPdu over IPv6/UDP builds correct Ethernet frame", "[unit][pdu][ipdumcontainer]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id    = 0x00BB0001;
+  route.transport = PduTransport::kEthernet;
+  route.iface     = "veth0";
+  // ::1 → ::2
+  route.src_ip = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,1};
+  route.dst_ip = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,2};
+  route.src_port = 4000;
+  route.dst_port = 5000;
+  route.ttl      = 128;
+  f.router.AddRoute(route);
+
+  REQUIRE(f.router.SendPdu(0x00BB0001, {0xCA, 0xFE}));
+  REQUIRE(f.mock_eth->written.size() == 1);
+
+  const auto& fr = f.mock_eth->written[0];
+  REQUIRE(fr.ethertype == 0x86DD);  // IPv6
+
+  uint16_t sp = 0, dp = 0;
+  std::vector<IpduMEntry> entries;
+  REQUIRE(ParseUdpIpPacket(fr.payload.data(), fr.payload.size(), &sp, &dp, entries));
+  REQUIRE(sp == 4000);
+  REQUIRE(dp == 5000);
+  REQUIRE(entries.size() == 1);
+  REQUIRE(entries[0].pdu_id == 0x00BB0001);
+  REQUIRE(entries[0].payload == std::vector<uint8_t>({0xCA, 0xFE}));
+}
+
+TEST_CASE("PduRouter receives PDU from IPv4/UDP/IpduM Ethernet frame", "[unit][pdu][ipdumcontainer]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id    = 0x00AA0001;
+  route.transport = PduTransport::kEthernet;
+  route.iface     = "";
+  route.dst_port  = 5678;
+  route.src_ip    = {10, 0, 0, 1};
+  route.dst_ip    = {10, 0, 0, 2};
+  f.router.AddRoute(route);
+
+  std::vector<PduFrame> received;
+  f.router.Subscribe({0x00AA0001}, [&](const PduFrame& p) { received.push_back(p); });
+
+  // Build a real IP/UDP/IpduM frame and inject it
+  const auto container = IpduMSerialize({{0x00AA0001, {0x11, 0x22}}});
+  const uint8_t src4[4] = {10, 0, 0, 1};
+  const uint8_t dst4[4] = {10, 0, 0, 2};
+  const auto ip_pkt = BuildUdpIpv4(src4, dst4, 1234, 5678, 64, container);
+
+  EthernetFrame ef;
+  ef.ethertype = 0x0800;
+  ef.payload   = ip_pkt;
+  f.eth_reg.SendFrame("veth0", ef);
+
+  REQUIRE(received.size() == 1);
+  REQUIRE(received[0].pdu_id == 0x00AA0001);
+  REQUIRE(received[0].payload == std::vector<uint8_t>({0x11, 0x22}));
+}
+
+TEST_CASE("PduRouter receives multiple PDUs from one IpduM container", "[unit][pdu][ipdumcontainer]") {
+  Fixture f;
+  PduRoute r1; r1.pdu_id = 0x01; r1.transport = PduTransport::kEthernet;
+               r1.dst_ip = {10,0,0,2}; r1.dst_port = 9000;
+  PduRoute r2; r2.pdu_id = 0x02; r2.transport = PduTransport::kEthernet;
+               r2.dst_ip = {10,0,0,2}; r2.dst_port = 9000;
+  f.router.AddRoute(r1);
+  f.router.AddRoute(r2);
+
+  std::vector<uint32_t> ids;
+  f.router.Subscribe({}, [&](const PduFrame& p) { ids.push_back(p.pdu_id); });
+
+  // Pack two PDUs into one container
+  const auto container = IpduMSerialize({{0x01, {0xAA}}, {0x02, {0xBB}}});
+  const uint8_t src4[4] = {10,0,0,1};
+  const uint8_t dst4[4] = {10,0,0,2};
+  const auto ip_pkt = BuildUdpIpv4(src4, dst4, 0, 9000, 64, container);
+
+  EthernetFrame ef;
+  ef.ethertype = 0x0800;
+  ef.payload   = ip_pkt;
+  f.eth_reg.SendFrame("veth0", ef);
+
+  REQUIRE(ids.size() == 2);
+  REQUIRE((ids[0] == 0x01 || ids[0] == 0x02));
+  REQUIRE((ids[1] == 0x01 || ids[1] == 0x02));
+  REQUIRE(ids[0] != ids[1]);
 }

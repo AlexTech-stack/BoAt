@@ -3,6 +3,8 @@
 #include <chrono>
 #include <cstring>
 
+#include "pdu/ipdumcontainer.h"
+
 namespace boat::hil {
 
 // ── Construction / destruction ────────────────────────────────────────────────
@@ -70,16 +72,37 @@ bool PduRouter::SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload) {
   }
 
   if (route.transport == PduTransport::kEthernet) {
-    // Framing: [4 bytes PDU ID big-endian] + payload
     EthernetFrame frame;
-    frame.ethertype = route.ethertype;
-    frame.vlan_id   = route.vlan_id;
-    frame.payload.resize(4 + payload.size());
-    frame.payload[0] = static_cast<uint8_t>(pdu_id >> 24);
-    frame.payload[1] = static_cast<uint8_t>(pdu_id >> 16);
-    frame.payload[2] = static_cast<uint8_t>(pdu_id >>  8);
-    frame.payload[3] = static_cast<uint8_t>(pdu_id & 0xFF);
-    std::memcpy(frame.payload.data() + 4, payload.data(), payload.size());
+    frame.vlan_id = route.vlan_id;
+
+    if (!route.dst_ip.empty()) {
+      // IP/UDP/IpduM path
+      const auto container = IpduMSerialize({{pdu_id, payload}});
+      if (route.dst_ip.size() == 4) {
+        frame.ethertype = 0x0800;
+        frame.payload   = BuildUdpIpv4(route.src_ip.data(), route.dst_ip.data(),
+                                        route.src_port, route.dst_port,
+                                        route.ttl, container);
+      } else if (route.dst_ip.size() == 16) {
+        frame.ethertype = 0x86DD;
+        frame.payload   = BuildUdpIpv6(route.src_ip.data(), route.dst_ip.data(),
+                                        route.src_port, route.dst_port,
+                                        route.ttl, container);
+      } else {
+        return false;
+      }
+      frame.src_ip = route.src_ip;
+      frame.dst_ip = route.dst_ip;
+    } else {
+      // Simulation-only path: [4-byte PDU ID big-endian] + payload
+      frame.ethertype = route.ethertype;
+      frame.payload.resize(4 + payload.size());
+      frame.payload[0] = static_cast<uint8_t>(pdu_id >> 24);
+      frame.payload[1] = static_cast<uint8_t>(pdu_id >> 16);
+      frame.payload[2] = static_cast<uint8_t>(pdu_id >>  8);
+      frame.payload[3] = static_cast<uint8_t>(pdu_id & 0xFF);
+      std::memcpy(frame.payload.data() + 4, payload.data(), payload.size());
+    }
     return eth_.SendFrame(route.iface, frame);
   }
 
@@ -139,16 +162,49 @@ void PduRouter::OnCanFrame(const CanFrame& frame, const std::string& iface) {
 
 void PduRouter::OnEthernetFrame(const EthernetFrame& frame,
                                 const std::string& iface) {
+  if (frame.ethertype == 0x0800 || frame.ethertype == 0x86DD) {
+    // IP/UDP/IpduM path
+    uint16_t src_port = 0, dst_port = 0;
+    std::vector<IpduMEntry> entries;
+    if (!ParseUdpIpPacket(frame.payload.data(), frame.payload.size(),
+                          &src_port, &dst_port, entries)) return;
+
+    for (const auto& entry : entries) {
+      bool matched = false;
+      {
+        std::lock_guard<std::mutex> lock(routes_mutex_);
+        const auto it = routes_.find(entry.pdu_id);
+        if (it != routes_.end()) {
+          const PduRoute& r = it->second;
+          if (r.transport == PduTransport::kEthernet &&
+              (r.iface.empty()     || r.iface    == iface)    &&
+              (r.vlan_id == 0      || r.vlan_id  == frame.vlan_id) &&
+              (r.dst_port == 0     || r.dst_port == dst_port)) {
+            matched = true;
+          }
+        }
+      }
+      if (!matched) continue;
+      PduFrame pdu;
+      pdu.pdu_id       = entry.pdu_id;
+      pdu.payload      = entry.payload;
+      pdu.timestamp_ns = frame.timestamp_ns;
+      pdu.source       = PduTransport::kEthernet;
+      pdu.iface        = iface;
+      DispatchPdu(pdu);
+    }
+    return;
+  }
+
+  // Simulation-only path: [4-byte PDU ID big-endian] + payload
   if (frame.payload.size() < 4) return;
 
-  // Extract PDU ID from first 4 bytes (big-endian framing).
   const uint32_t pdu_id =
       (static_cast<uint32_t>(frame.payload[0]) << 24) |
       (static_cast<uint32_t>(frame.payload[1]) << 16) |
       (static_cast<uint32_t>(frame.payload[2]) <<  8) |
        static_cast<uint32_t>(frame.payload[3]);
 
-  // Verify a route exists for this combination.
   bool matched = false;
   {
     std::lock_guard<std::mutex> lock(routes_mutex_);
@@ -166,7 +222,7 @@ void PduRouter::OnEthernetFrame(const EthernetFrame& frame,
   if (!matched) return;
 
   PduFrame pdu;
-  pdu.pdu_id = pdu_id;
+  pdu.pdu_id       = pdu_id;
   pdu.payload.assign(frame.payload.begin() + 4, frame.payload.end());
   pdu.timestamp_ns = frame.timestamp_ns;
   pdu.source       = PduTransport::kEthernet;
