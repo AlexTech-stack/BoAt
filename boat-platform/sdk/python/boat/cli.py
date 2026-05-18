@@ -342,9 +342,25 @@ class BoAtCli:
 
 def main() -> None:
     import argparse
+
+    # Forward to one-shot CLI when a subcommand is present (skip flags first).
+    _SUBCOMMANDS = {"can", "pdu", "eth", "db"}
+    _first_pos = None
+    _skip = False
+    for _a in sys.argv[1:]:
+        if _skip:
+            _skip = False; continue
+        if _a in ("--db", "--gateway"):
+            _skip = True; continue
+        if not _a.startswith("-"):
+            _first_pos = _a; break
+    if _first_pos in _SUBCOMMANDS:
+        from boat.cmd import main as cmd_main
+        sys.exit(cmd_main())
+
     parser = argparse.ArgumentParser(description="BoAt interactive message CLI")
-    parser.add_argument("--db",      default=None,             help="PDU database JSON file to load on startup")
-    parser.add_argument("--gateway", default="localhost:50051", help="Gateway gRPC address (default: localhost:50051)")
+    parser.add_argument("--db",      default=None,              help="PDU database JSON file to load on startup")
+    parser.add_argument("--gateway", default="localhost:50051",  help="Gateway gRPC address (default: localhost:50051)")
     args = parser.parse_args()
 
     cli = BoAtCli(gateway=args.gateway, db_path=args.db)
