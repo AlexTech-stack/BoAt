@@ -24,6 +24,7 @@ Examples
 
 from __future__ import annotations
 
+import glob
 import os
 import re
 import sys
@@ -89,6 +90,77 @@ def _send_message(client: BoAtClient, msg: Message) -> str:
 _ASSIGN_RE = re.compile(
     r"^([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*=\s*(.+)$"
 )
+
+_COMMANDS = [
+    "load", "var", "show", "send", "list", "vars",
+    "connect", "help", "exit", "quit",
+]
+
+
+# ── tab completer ─────────────────────────────────────────────────────────────
+
+class _Completer:
+    """Context-aware readline completer for the BoAt CLI."""
+
+    def __init__(self, cli: "BoAtCli") -> None:
+        self._cli     = cli
+        self._matches: list[str] = []
+
+    def complete(self, text: str, state: int) -> str | None:
+        if state == 0:
+            self._matches = self._completions(text)
+        try:
+            return self._matches[state]
+        except IndexError:
+            return None
+
+    def _completions(self, text: str) -> list[str]:
+        try:
+            import readline
+            line = readline.get_line_buffer()
+        except ImportError:
+            line = text
+
+        stripped = line.lstrip()
+        parts    = stripped.split()
+        # Are we completing the first token or beyond?
+        after_space = line.endswith(" ") or line.endswith("\t")
+
+        # ── varname.Signal  (dot-notation assignment) ──────────────────
+        if "." in text:
+            varname, partial = text.split(".", 1)
+            msg = self._cli._vars.get(varname)
+            if msg is not None:
+                return [f"{varname}.{s}" for s in msg.signal_names()
+                        if s.startswith(partial)]
+            return []
+
+        # ── first token: commands + variable names ─────────────────────
+        if not parts or (len(parts) == 1 and not after_space):
+            candidates = _COMMANDS + list(self._cli._vars)
+            return [c for c in candidates if c.startswith(text)]
+
+        cmd = parts[0].lower()
+
+        # ── show / send → variable names ──────────────────────────────
+        if cmd in ("show", "send"):
+            if len(parts) == 1 or (len(parts) == 2 and not after_space):
+                return [v for v in self._cli._vars if v.startswith(text)]
+
+        # ── var <name> <MessageName> → message names on 3rd token ─────
+        if cmd == "var":
+            on_third = (len(parts) == 2 and after_space) or \
+                       (len(parts) == 3 and not after_space)
+            if on_third and self._cli._db is not None:
+                return [n for n in self._cli._db.names() if n.startswith(text)]
+
+        # ── load → filesystem paths ────────────────────────────────────
+        if cmd == "load":
+            pattern = (text or "") + "*"
+            return glob.glob(pattern) or []
+
+        # ── connect → nothing useful to complete ──────────────────────
+        return []
 
 
 class BoAtCli:
@@ -204,10 +276,26 @@ class BoAtCli:
         print(__doc__)
 
     # ------------------------------------------------------------------
+    # Readline / tab completion
+
+    def _setup_readline(self) -> None:
+        try:
+            import readline
+        except ImportError:
+            return  # Windows without pyreadline — just skip
+
+        completer = _Completer(self)
+        readline.set_completer(completer.complete)
+        # Remove '.' from delimiters so "varname.Signal" arrives as one token.
+        readline.set_completer_delims(" \t\n=")
+        readline.parse_and_bind("tab: complete")
+
+    # ------------------------------------------------------------------
     # Main loop
 
     def run(self) -> None:
         print("BoAt CLI  —  type 'help' for commands, 'exit' to quit.")
+        self._setup_readline()
         while True:
             try:
                 line = input(self.PROMPT).strip()
