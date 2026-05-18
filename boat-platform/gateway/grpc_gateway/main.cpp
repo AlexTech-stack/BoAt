@@ -24,6 +24,7 @@
 #include "gateway_context.h"
 #include "hil/virtual/virtual_can_driver.h"
 #include "hil/ethernet/virtual_ethernet_driver.h"
+#include "hil/ethernet/raw_socket_ethernet_driver.h"
 #include "pdu/pdu_router.h"
 #include "pdu_service_impl.h"
 #include "metrics_service_impl.h"
@@ -88,19 +89,26 @@ int main() {
       while (std::getline(ss, entry, ',')) {
         if (entry.empty()) continue;
         // Parse "name" or "name:mcast_addr:port"
-        std::istringstream es(entry);
-        std::string name, mcast, port_str;
-        std::getline(es, name, ':');
-        std::getline(es, mcast, ':');
-        std::getline(es, port_str);
-        if (mcast.empty() || port_str.empty()) {
-          auto driver = boat::hil::VirtualEthernetDriver::FromIndex(name, index);
+        // "raw:<ifname>" → physical NIC via AF_PACKET; else virtual multicast.
+        if (entry.rfind("raw:", 0) == 0) {
+          const std::string name = entry.substr(4);
+          auto driver = std::make_unique<boat::hil::RawSocketEthernetDriver>(name);
           eth_registry.Add(name, std::move(driver));
         } else {
-          const auto port = static_cast<std::uint16_t>(std::stoul(port_str));
-          auto driver = std::make_unique<boat::hil::VirtualEthernetDriver>(
-              name, mcast, port);
-          eth_registry.Add(name, std::move(driver));
+          std::istringstream es(entry);
+          std::string name, mcast, port_str;
+          std::getline(es, name, ':');
+          std::getline(es, mcast, ':');
+          std::getline(es, port_str);
+          if (mcast.empty() || port_str.empty()) {
+            auto driver = boat::hil::VirtualEthernetDriver::FromIndex(name, index);
+            eth_registry.Add(name, std::move(driver));
+          } else {
+            const auto port = static_cast<std::uint16_t>(std::stoul(port_str));
+            auto driver = std::make_unique<boat::hil::VirtualEthernetDriver>(
+                name, mcast, port);
+            eth_registry.Add(name, std::move(driver));
+          }
         }
         ++index;
       }
