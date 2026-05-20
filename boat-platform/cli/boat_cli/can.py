@@ -65,30 +65,88 @@ def list_buses(ctx: typer.Context) -> None:
 @can_app.command("send")
 def send_frame(
     ctx: typer.Context,
-    sim_id: str = typer.Option("", "--sim", help="Simulation ID (optional)"),
-    can_id: str = typer.Option(..., "--id", help="CAN ID (hex or decimal, e.g. 0x123 or 291)"),
-    data: str = typer.Option(..., "--data", help="Payload hex bytes, e.g. DEADBEEF or DE:AD:BE:EF"),
-    dlc: int = typer.Option(-1, "--dlc", help="Byte-count override (default: inferred from data length); pad with zeros if larger, truncate if smaller"),
-    bus: str = typer.Option("", "--bus", help="CAN interface, e.g. vcan0 (default: all registered)"),
-    fd: bool = typer.Option(False, "--fd", help="Send as CAN FD frame (enables CANFD_FDF flag)"),
-    brs: bool = typer.Option(False, "--brs", help="Bit-rate switch (CAN FD only, sets CANFD_BRS flag)"),
+    sim_id:   str            = typer.Option("",    "--sim",  help="Simulation ID (optional)"),
+    can_id:   str            = typer.Option("",    "--id",   help="CAN ID (hex or decimal). Overrides database value."),
+    data:     str            = typer.Option("",    "--data", help="Raw payload hex. Overrides signal packing."),
+    msg_name: str            = typer.Option("",    "--msg",  help="Message name from PDU database (loads signals from DB)."),
+    sig:      list[str]      = typer.Option([],    "--sig",  help="Set signal physical value: Name=value (repeatable)."),
+    db_path:  str            = typer.Option("pdu_db.json", "--db", help="PDU database JSON file."),
+    dlc:      int            = typer.Option(-1,    "--dlc",  help="Byte-count override; pads or truncates payload."),
+    bus:      str            = typer.Option("",    "--bus",  help="CAN interface, e.g. vcan0 (default: from DB or all)."),
+    fd:       bool           = typer.Option(False, "--fd",   help="Send as CAN FD frame."),
+    brs:      bool           = typer.Option(False, "--brs",  help="Bit-rate switch (CAN FD only)."),
 ) -> None:
-    """Send a raw CAN or CAN FD frame. Use --fd for FD frames (up to 64 bytes)."""
-    try:
-        frame_id = int(can_id, 0)
-    except ValueError:
-        print_error(f"Invalid CAN ID: {can_id}")
-        sys.exit(1)
+    """Send a CAN or CAN FD frame — raw or from the PDU database.
 
-    payload = _parse_data(data, is_fd=fd)
-    payload, actual_dlc = _resolve_payload(payload, dlc, is_fd=fd)
+    \b
+    Raw mode (no --msg):
+      boat can send --id 0x7B --data DEADBEEF --bus vcan0
+
+    Database mode (--msg loads signals, --sig overrides values):
+      boat can send --msg Motor_1 --db pdu_db.json --sig MotorSpeed=100 --sig Clamp15=1
+      boat can send --msg Motor_1 --db pdu_db.json --data DEADBEEF --bus vcan0
+    """
+    import os
+
+    if msg_name:
+        # ── database mode ─────────────────────────────────────────────
+        from boat.message import Message
+        from boat.pdu_db  import PduDatabase
+
+        if not os.path.exists(db_path):
+            print_error(f"Database not found: '{db_path}'. Use --db to specify the path.")
+            sys.exit(1)
+        db  = PduDatabase(db_path)
+        entry = db.by_name(msg_name)
+        if entry is None:
+            print_error(f"Message '{msg_name}' not in database. Use 'boat db list' to see names.")
+            sys.exit(1)
+        if entry["BusType"] not in ("CAN", "CANFD"):
+            print_error(f"'{msg_name}' has BusType={entry['BusType']}, expected CAN or CANFD.")
+            sys.exit(1)
+
+        msg_obj = Message(entry)
+        for item in sig:
+            if "=" not in item:
+                print_error(f"--sig must be Name=value, got '{item}'")
+                sys.exit(1)
+            name, _, val = item.partition("=")
+            try:
+                msg_obj.set(name.strip(), float(val.strip()))
+            except KeyError as e:
+                print_error(str(e))
+                sys.exit(1)
+
+        payload  = bytes.fromhex(data.replace(":", "").replace(" ", "")) if data \
+                   else msg_obj.pack()
+        frame_id = int(can_id, 0) if can_id else entry["Identifier"]
+        iface    = bus or entry["Bus"]
+        is_fd    = fd or (entry["BusType"] == "CANFD")
+    else:
+        # ── raw mode ──────────────────────────────────────────────────
+        if not can_id:
+            print_error("Provide --id (raw mode) or --msg (database mode).")
+            sys.exit(1)
+        if not data:
+            print_error("Provide --data (raw mode) or --msg (database mode).")
+            sys.exit(1)
+        try:
+            frame_id = int(can_id, 0)
+        except ValueError:
+            print_error(f"Invalid CAN ID: {can_id}")
+            sys.exit(1)
+        payload = _parse_data(data, is_fd=fd)
+        iface   = bus
+        is_fd   = fd
+
+    payload, actual_dlc = _resolve_payload(payload, dlc, is_fd=is_fd)
 
     flags = 0
-    if fd:
+    if is_fd:
         flags |= _CANFD_FDF
     if brs:
-        if not fd:
-            print_error("--brs requires --fd")
+        if not is_fd:
+            print_error("--brs requires --fd or a CANFD message")
             sys.exit(1)
         flags |= _CANFD_BRS
 
@@ -96,7 +154,7 @@ def send_frame(
         can_id=frame_id,
         dlc=actual_dlc,
         data=payload,
-        iface=bus,
+        iface=iface,
         flags=flags,
     )
     try:
