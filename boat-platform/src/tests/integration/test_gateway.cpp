@@ -19,7 +19,10 @@
 #include "gateway/grpc_gateway/signal_service_impl.h"
 #include "gateway/grpc_gateway/simulation_service_impl.h"
 #include "can_bus_registry.h"
+#include "ethernet_bus_registry.h"
+#include "pdu/pdu_router.h"
 #include "plugin/plugin_manager.h"
+#include "gateway/grpc_gateway/rpc_audit_log.h"
 #include "replay_engine/replay_engine.h"
 #include "scenario/scenario_loader.h"
 #include "scheduler/sim_clock.h"
@@ -49,6 +52,9 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   boat::store::FlatFileTraceStore trace_store(trace_db_path.string());
   boat::replay::ReplayController replay_controller(trace_store, event_store, event_bus);
   boat::hil::CanBusRegistry can_registry;  // no interfaces opened in unit tests
+  boat::hil::EthernetBusRegistry eth_registry;
+  boat::hil::PduRouter pdu_router(can_registry, eth_registry);
+  boat::gateway::RpcAuditLog audit_log;
   signal_router.SetFaultInjector(&fault_injector);
 
   boat::gateway::GatewayContext ctx{
@@ -64,6 +70,9 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
       .trace_store = trace_store,
       .replay_controller = replay_controller,
       .can_bus_registry = can_registry,
+      .ethernet_bus_registry = eth_registry,
+      .pdu_router = pdu_router,
+      .audit_log = audit_log,
   };
 
   boat::gateway::ScenarioServiceImpl scenario_service(ctx);

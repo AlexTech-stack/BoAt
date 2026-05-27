@@ -7,6 +7,7 @@ import typer
 
 from boat.v1 import ethernet_pb2
 
+from .completions import complete_iface
 from .output import print_error, print_table
 
 eth_app = typer.Typer()
@@ -61,7 +62,7 @@ def list_ifaces(ctx: typer.Context) -> None:
 @eth_app.command("send")
 def send_frame(
     ctx: typer.Context,
-    iface: str = typer.Option(..., "--iface", help="Interface name, e.g. veth0"),
+    iface: str = typer.Option(..., "--iface", help="Interface name, e.g. veth0", autocompletion=complete_iface),
     src: str = typer.Option("", "--src", help="Source MAC, e.g. AA:BB:CC:DD:EE:FF (optional)"),
     dst: str = typer.Option("", "--dst", help="Destination MAC (optional, broadcast if omitted)"),
     ethertype: str = typer.Option("0x0800", "--ethertype", help="Ethertype (hex or decimal, e.g. 0x0800)"),
@@ -97,7 +98,7 @@ def send_frame(
 @eth_app.command("subscribe")
 def subscribe_frames(
     ctx: typer.Context,
-    iface: str = typer.Option("", "--iface", help="Interface to listen on (default: all)"),
+    iface: str = typer.Option("", "--iface", help="Interface to listen on (default: all)", autocompletion=complete_iface),
     ethertype: str = typer.Option("0", "--ethertype", help="Filter by ethertype (0 = all)"),
     count: int = typer.Option(0, "--count", help="Stop after N frames (0 = unlimited)"),
 ) -> None:

@@ -27,6 +27,11 @@ class PduServiceImpl final : public boat::v1::PduService::Service {
                           const boat::v1::ListRoutesRequest* request,
                           boat::v1::ListRoutesResponse* response) override;
 
+  grpc::Status ConfigureContainer(
+      grpc::ServerContext* context,
+      const boat::v1::ConfigureContainerRequest* request,
+      boat::v1::ConfigureContainerResponse* response) override;
+
  private:
   GatewayContext& ctx_;
 };

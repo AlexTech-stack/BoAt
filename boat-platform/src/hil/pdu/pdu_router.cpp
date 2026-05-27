@@ -51,9 +51,75 @@ std::vector<PduRoute> PduRouter::ListRoutes() const {
   return out;
 }
 
+// ── Container management ──────────────────────────────────────────────────────
+
+void PduRouter::AddContainer(const PduContainerDef& def) {
+  std::lock_guard<std::mutex> lock(containers_mutex_);
+  // Remove old pdu_id→container mappings for this container_id if it existed.
+  if (containers_.count(def.container_id)) {
+    for (const auto& slot : containers_.at(def.container_id).slots) {
+      pdu_to_container_.erase(slot.pdu_id);
+    }
+  }
+  ContainerBuffer buf;
+  buf.def = def;
+  for (const uint32_t pid : def.pdu_ids) {
+    buf.slots.push_back({pid, {}});
+    pdu_to_container_[pid] = def.container_id;
+  }
+  containers_[def.container_id] = std::move(buf);
+}
+
+bool PduRouter::SendContainer(const PduContainerDef& def,
+                               const std::vector<IpduMEntry>& entries) {
+  if (entries.empty()) return false;
+  const auto container = IpduMSerialize(entries);
+
+  EthernetFrame frame;
+  frame.vlan_id = def.vlan_id;
+
+  if (def.dst_ip.size() == 4) {
+    frame.ethertype = 0x0800;
+    frame.payload   = BuildUdpIpv4(def.src_ip.data(), def.dst_ip.data(),
+                                    def.src_port, def.dst_port,
+                                    def.ttl, container);
+  } else if (def.dst_ip.size() == 16) {
+    frame.ethertype = 0x86DD;
+    frame.payload   = BuildUdpIpv6(def.src_ip.data(), def.dst_ip.data(),
+                                    def.src_port, def.dst_port,
+                                    def.ttl, container);
+  } else {
+    return false;
+  }
+  frame.src_ip = def.src_ip;
+  frame.dst_ip = def.dst_ip;
+  return eth_.SendFrame(def.iface, frame);
+}
+
 // ── Send ──────────────────────────────────────────────────────────────────────
 
 bool PduRouter::SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload) {
+  // Container path: multiplex with sibling PDUs into one Ethernet frame.
+  {
+    std::unique_lock<std::mutex> lock(containers_mutex_);
+    const auto cit = pdu_to_container_.find(pdu_id);
+    if (cit != pdu_to_container_.end()) {
+      ContainerBuffer& buf = containers_.at(cit->second);
+      for (auto& slot : buf.slots) {
+        if (slot.pdu_id == pdu_id) { slot.payload = payload; break; }
+      }
+      std::vector<IpduMEntry> entries;
+      for (const auto& slot : buf.slots) {
+        if (!slot.payload.empty())
+          entries.push_back({slot.pdu_id, slot.payload});
+      }
+      const PduContainerDef def = buf.def;
+      lock.unlock();
+      return SendContainer(def, entries);
+    }
+  }
+
+  // Per-PDU route path (original behaviour).
   PduRoute route;
   {
     std::lock_guard<std::mutex> lock(routes_mutex_);
@@ -183,6 +249,10 @@ void PduRouter::OnEthernetFrame(const EthernetFrame& frame,
             matched = true;
           }
         }
+      }
+      if (!matched) {
+        std::lock_guard<std::mutex> lock(containers_mutex_);
+        matched = pdu_to_container_.count(entry.pdu_id) > 0;
       }
       if (!matched) continue;
       PduFrame pdu;

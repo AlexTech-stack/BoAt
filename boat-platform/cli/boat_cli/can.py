@@ -7,6 +7,7 @@ import typer
 
 from boat.v1 import can_pb2
 
+from .completions import complete_can_msg_name, complete_iface, complete_json_file
 from .output import print_error, print_table
 
 can_app = typer.Typer()
@@ -68,11 +69,11 @@ def send_frame(
     sim_id:   str            = typer.Option("",    "--sim",  help="Simulation ID (optional)"),
     can_id:   str            = typer.Option("",    "--id",   help="CAN ID (hex or decimal). Overrides database value."),
     data:     str            = typer.Option("",    "--data", help="Raw payload hex. Overrides signal packing."),
-    msg_name: str            = typer.Option("",    "--msg",  help="Message name from PDU database (loads signals from DB)."),
+    msg_name: str            = typer.Option("",    "--msg",  help="Message name from PDU database (loads signals from DB).", autocompletion=complete_can_msg_name),
     sig:      list[str]      = typer.Option([],    "--sig",  help="Set signal physical value: Name=value (repeatable)."),
-    db_path:  str            = typer.Option("pdu_db.json", "--db", help="PDU database JSON file."),
+    db_path:  str            = typer.Option("pdu_db.json", "--db", help="PDU database JSON file.", autocompletion=complete_json_file),
     dlc:      int            = typer.Option(-1,    "--dlc",  help="Byte-count override; pads or truncates payload."),
-    bus:      str            = typer.Option("",    "--bus",  help="CAN interface, e.g. vcan0 (default: from DB or all)."),
+    bus:      str            = typer.Option("",    "--bus",  help="CAN interface, e.g. vcan0 (default: from DB or all).", autocompletion=complete_iface),
     fd:       bool           = typer.Option(False, "--fd",   help="Send as CAN FD frame."),
     brs:      bool           = typer.Option(False, "--brs",  help="Bit-rate switch (CAN FD only)."),
 ) -> None:

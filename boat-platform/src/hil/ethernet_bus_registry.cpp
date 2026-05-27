@@ -1,6 +1,7 @@
 #include "ethernet_bus_registry.h"
 
 #include <chrono>
+#include <cstdio>
 #include <utility>
 
 namespace boat::hil {
@@ -45,19 +46,24 @@ bool EthernetBusRegistry::Add(const std::string& iface,
 
 bool EthernetBusRegistry::SendFrame(const std::string& iface,
                                     const EthernetFrame& frame) {
+  bool written = false;
   {
     std::lock_guard<std::mutex> lock(ifaces_mutex_);
     const auto it = ifaces_.find(iface);
     if (it == ifaces_.end()) {
+      std::fprintf(stderr, "[EthRegistry] SendFrame: iface '%s' not registered\n",
+                   iface.c_str());
       return false;
     }
-    it->second.driver->WriteFrame(frame);
+    written = it->second.driver->WriteFrame(frame);
   }
-  // Dispatch directly so gRPC subscribers see sent frames without multicast
-  // loopback.  Lock must be released first: subscriber callbacks may
-  // re-enter SendFrame/SendFrameAll (e.g. a plugin that reacts and responds).
+  if (!written) {
+    std::fprintf(stderr, "[EthRegistry] WriteFrame failed on '%s'\n", iface.c_str());
+  }
+  // Always dispatch locally so gRPC subscribers receive the frame even when
+  // the physical write fails (simulation mode still needs delivery).
   DispatchRx(frame, iface);
-  return true;
+  return written;
 }
 
 void EthernetBusRegistry::SendFrameAll(const EthernetFrame& frame) {

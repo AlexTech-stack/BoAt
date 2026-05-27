@@ -48,9 +48,27 @@ message ConfigureRouteResponse { bool ok = 1; }
 message ListRoutesRequest  {}
 message ListRoutesResponse { repeated PduRoute routes = 1; }
 
+// Groups several PDU IDs onto a shared Ethernet transport so they are
+// multiplexed into a single IpduM container frame on every send.
+message PduContainerDef {
+  uint32          container_id = 1;  // arbitrary unique ID chosen by the caller
+  string          iface        = 2;
+  bytes           src_ip       = 3;  // 4 bytes IPv4 or 16 bytes IPv6
+  bytes           dst_ip       = 4;
+  uint32          src_port     = 5;
+  uint32          dst_port     = 6;
+  uint32          ttl          = 7;  // IPv4 TTL / IPv6 Hop Limit (default 64)
+  uint32          vlan_id      = 8;
+  repeated uint32 pdu_ids      = 9;  // PDU IDs that share this container
+}
+
+message ConfigureContainerRequest  { PduContainerDef container = 1; }
+message ConfigureContainerResponse { bool ok = 1; }
+
 service PduService {
-  rpc SendPdu(SendPduRequest)                   returns (SendPduResponse);
-  rpc SubscribePdus(SubscribePdusRequest)        returns (stream PduFrame);
-  rpc ConfigureRoute(ConfigureRouteRequest)      returns (ConfigureRouteResponse);
-  rpc ListRoutes(ListRoutesRequest)              returns (ListRoutesResponse);
+  rpc SendPdu(SendPduRequest)                       returns (SendPduResponse);
+  rpc SubscribePdus(SubscribePdusRequest)            returns (stream PduFrame);
+  rpc ConfigureRoute(ConfigureRouteRequest)          returns (ConfigureRouteResponse);
+  rpc ListRoutes(ListRoutesRequest)                  returns (ListRoutesResponse);
+  rpc ConfigureContainer(ConfigureContainerRequest)  returns (ConfigureContainerResponse);
 }

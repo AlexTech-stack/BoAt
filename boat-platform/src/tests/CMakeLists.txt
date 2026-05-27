@@ -50,8 +50,8 @@ add_executable(
   ../gateway/grpc_gateway/signal_service_impl.cpp
 )
 target_include_directories(boat_integration_gateway PRIVATE
-  ${CMAKE_SOURCE_DIR}
-  ${CMAKE_SOURCE_DIR}/hil
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/hil
   ${BOAT_PROTO_GENERATED_DIR}
 )
 target_link_libraries(
@@ -69,7 +69,7 @@ target_link_libraries(
 catch_discover_tests(boat_integration_gateway)
 
 add_executable(boat_integration_ipc_control_transport integration/test_ipc_control_transport.cpp)
-target_include_directories(boat_integration_ipc_control_transport PRIVATE ${CMAKE_SOURCE_DIR} ${BOAT_PROTO_GENERATED_DIR})
+target_include_directories(boat_integration_ipc_control_transport PRIVATE ${CMAKE_SOURCE_DIR}/src ${BOAT_PROTO_GENERATED_DIR})
 target_link_libraries(
   boat_integration_ipc_control_transport
   PRIVATE
@@ -84,12 +84,12 @@ target_link_libraries(boat_determinism_seed PRIVATE boat_core Catch2::Catch2With
 catch_discover_tests(boat_determinism_seed)
 
 add_executable(boat_unit_ethernet_bus_registry unit/test_ethernet_bus_registry.cpp)
-target_include_directories(boat_unit_ethernet_bus_registry PRIVATE ${CMAKE_SOURCE_DIR}/hil)
+target_include_directories(boat_unit_ethernet_bus_registry PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
 target_link_libraries(boat_unit_ethernet_bus_registry PRIVATE boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_ethernet_bus_registry)
 
 add_executable(boat_unit_pdu_router unit/test_pdu_router.cpp)
-target_include_directories(boat_unit_pdu_router PRIVATE ${CMAKE_SOURCE_DIR}/hil)
+target_include_directories(boat_unit_pdu_router PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
 target_link_libraries(boat_unit_pdu_router PRIVATE boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_pdu_router)
 
@@ -98,6 +98,6 @@ target_link_libraries(boat_hil_smoke PRIVATE boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_hil_smoke)
 
 add_executable(boat_hil_ethernet hil/test_ethernet_hil.cpp)
-target_include_directories(boat_hil_ethernet PRIVATE ${CMAKE_SOURCE_DIR}/hil)
+target_include_directories(boat_hil_ethernet PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
 target_link_libraries(boat_hil_ethernet PRIVATE boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_hil_ethernet)
