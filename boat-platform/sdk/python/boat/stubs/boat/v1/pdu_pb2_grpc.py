@@ -54,6 +54,11 @@ class PduServiceStub(object):
                 request_serializer=boat_dot_v1_dot_pdu__pb2.ListRoutesRequest.SerializeToString,
                 response_deserializer=boat_dot_v1_dot_pdu__pb2.ListRoutesResponse.FromString,
                 _registered_method=True)
+        self.ConfigureContainer = channel.unary_unary(
+                '/boat.v1.PduService/ConfigureContainer',
+                request_serializer=boat_dot_v1_dot_pdu__pb2.ConfigureContainerRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_pdu__pb2.ConfigureContainerResponse.FromString,
+                _registered_method=True)
 
 
 class PduServiceServicer(object):
@@ -83,6 +88,12 @@ class PduServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ConfigureContainer(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_PduServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -105,6 +116,11 @@ def add_PduServiceServicer_to_server(servicer, server):
                     servicer.ListRoutes,
                     request_deserializer=boat_dot_v1_dot_pdu__pb2.ListRoutesRequest.FromString,
                     response_serializer=boat_dot_v1_dot_pdu__pb2.ListRoutesResponse.SerializeToString,
+            ),
+            'ConfigureContainer': grpc.unary_unary_rpc_method_handler(
+                    servicer.ConfigureContainer,
+                    request_deserializer=boat_dot_v1_dot_pdu__pb2.ConfigureContainerRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_pdu__pb2.ConfigureContainerResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -215,6 +231,33 @@ class PduService(object):
             '/boat.v1.PduService/ListRoutes',
             boat_dot_v1_dot_pdu__pb2.ListRoutesRequest.SerializeToString,
             boat_dot_v1_dot_pdu__pb2.ListRoutesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ConfigureContainer(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.PduService/ConfigureContainer',
+            boat_dot_v1_dot_pdu__pb2.ConfigureContainerRequest.SerializeToString,
+            boat_dot_v1_dot_pdu__pb2.ConfigureContainerResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -225,6 +225,61 @@ grpc::Status PduServiceImpl::ConfigureRoute(
   return grpc::Status::OK;
 }
 
+grpc::Status PduServiceImpl::ConfigureContainer(
+    grpc::ServerContext* context,
+    const boat::v1::ConfigureContainerRequest* request,
+    boat::v1::ConfigureContainerResponse* response) {
+
+  const auto& c = request->container();
+  if (c.container_id() == 0) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "container_id must be non-zero");
+  }
+  if (c.pdu_ids_size() == 0) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "container must include at least one pdu_id");
+  }
+  if (c.dst_ip().empty()) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "dst_ip is required for container transport");
+  }
+
+  boat::hil::PduContainerDef def;
+  def.container_id = c.container_id();
+  def.iface        = c.iface();
+  def.src_ip.assign(c.src_ip().begin(),  c.src_ip().end());
+  def.dst_ip.assign(c.dst_ip().begin(),  c.dst_ip().end());
+  def.src_port  = static_cast<uint16_t>(c.src_port() & 0xFFFF);
+  def.dst_port  = static_cast<uint16_t>(c.dst_port() & 0xFFFF);
+  def.ttl       = c.ttl() != 0 ? static_cast<uint8_t>(c.ttl() & 0xFF) : 64;
+  def.vlan_id   = static_cast<uint16_t>(c.vlan_id() & 0x0FFF);
+  def.pdu_ids.assign(c.pdu_ids().begin(), c.pdu_ids().end());
+
+  ctx_.pdu_router.AddContainer(def);
+
+  {
+    RpcEvent ev;
+    ev.timestamp_ns = NowNsPdu();
+    ev.method     = "PduService/ConfigureContainer";
+    ev.peer       = context->peer();
+    ev.event_type = "CONFIG";
+    ev.call_type  = "UNARY";
+    std::ostringstream ss;
+    ss << "container_id=" << def.container_id
+       << "  pdu_ids=[";
+    for (std::size_t i = 0; i < def.pdu_ids.size(); ++i) {
+      if (i) ss << ',';
+      ss << "0x" << std::hex << def.pdu_ids[i];
+    }
+    ss << "]  iface=" << def.iface;
+    ev.summary = ss.str();
+    ctx_.audit_log.Push(std::move(ev));
+  }
+
+  response->set_ok(true);
+  return grpc::Status::OK;
+}
+
 grpc::Status PduServiceImpl::ListRoutes(
     grpc::ServerContext*,
     const boat::v1::ListRoutesRequest*,

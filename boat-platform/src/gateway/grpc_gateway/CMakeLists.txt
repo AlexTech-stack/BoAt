@@ -18,7 +18,7 @@ add_executable(
 target_include_directories(boat_gateway PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${BOAT_PROTO_GENERATED_DIR}
-  ${CMAKE_SOURCE_DIR}/hil
+  ${CMAKE_SOURCE_DIR}/src/hil
 )
 target_link_libraries(
   boat_gateway

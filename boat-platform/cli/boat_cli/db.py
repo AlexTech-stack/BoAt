@@ -6,6 +6,7 @@ from typing import Annotated, Optional
 
 import typer
 
+from .completions import complete_json_file, complete_msg_name
 from .output import print_error, print_table
 
 db_app = typer.Typer(help="PDU database inspection commands.")
@@ -23,7 +24,7 @@ def _open_db(db_path: str):
 
 @db_app.command("list")
 def db_list(
-    db: Annotated[str, typer.Option("--db", help="PDU database JSON file.")] = _DEFAULT_DB,
+    db: Annotated[str, typer.Option("--db", help="PDU database JSON file.", autocompletion=complete_json_file)] = _DEFAULT_DB,
 ) -> None:
     """List all messages defined in the PDU database."""
     database = _open_db(db)
@@ -38,8 +39,8 @@ def db_list(
 
 @db_app.command("show")
 def db_show(
-    msg_name: Annotated[str,  typer.Option("--msg", help="Message name.")],
-    db:       Annotated[str,  typer.Option("--db",  help="PDU database JSON file.")] = _DEFAULT_DB,
+    msg_name: Annotated[str,  typer.Option("--msg", help="Message name.", autocompletion=complete_msg_name)],
+    db:       Annotated[str,  typer.Option("--db",  help="PDU database JSON file.", autocompletion=complete_json_file)] = _DEFAULT_DB,
     pack:     Annotated[bool, typer.Option("--pack", help="Show packed InitValue bytes.")] = False,
 ) -> None:
     """Show the full definition of a message including all signals."""
@@ -139,7 +140,7 @@ def db_show(
 
 @db_app.command("signal-routes")
 def db_signal_routes(
-    db: Annotated[str, typer.Option("--db", help="PDU database JSON file.")] = _DEFAULT_DB,
+    db: Annotated[str, typer.Option("--db", help="PDU database JSON file.", autocompletion=complete_json_file)] = _DEFAULT_DB,
 ) -> None:
     """List all signal routing rules defined in the database."""
     database = _open_db(db)

@@ -24,15 +24,15 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11\x62oat/v1/pdu.proto\x12\x07\x62oat.v1\"\xd8\x01\n\x08PduRoute\x12\x0e\n\x06pdu_id\x18\x01 \x01(\r\x12(\n\ttransport\x18\x02 \x01(\x0e\x32\x15.boat.v1.PduTransport\x12\r\n\x05iface\x18\x03 \x01(\t\x12\x0f\n\x07vlan_id\x18\x04 \x01(\r\x12\x0e\n\x06\x63\x61n_id\x18\x05 \x01(\r\x12\x11\n\tethertype\x18\x06 \x01(\r\x12\x0e\n\x06src_ip\x18\x07 \x01(\x0c\x12\x0e\n\x06\x64st_ip\x18\x08 \x01(\x0c\x12\x10\n\x08src_port\x18\t \x01(\r\x12\x10\n\x08\x64st_port\x18\n \x01(\r\x12\x0b\n\x03ttl\x18\x0b \x01(\r\"w\n\x08PduFrame\x12\x0e\n\x06pdu_id\x18\x01 \x01(\r\x12\x0f\n\x07payload\x18\x02 \x01(\x0c\x12\x14\n\x0ctimestamp_ns\x18\x03 \x01(\x04\x12%\n\x06source\x18\x04 \x01(\x0e\x32\x15.boat.v1.PduTransport\x12\r\n\x05iface\x18\x05 \x01(\t\"0\n\x0eSendPduRequest\x12\x1e\n\x03pdu\x18\x01 \x01(\x0b\x32\x11.boat.v1.PduFrame\"#\n\x0fSendPduResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\"\'\n\x14SubscribePdusRequest\x12\x0f\n\x07pdu_ids\x18\x01 \x03(\r\"9\n\x15\x43onfigureRouteRequest\x12 \n\x05route\x18\x01 \x01(\x0b\x32\x11.boat.v1.PduRoute\"$\n\x16\x43onfigureRouteResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\"\x13\n\x11ListRoutesRequest\"7\n\x12ListRoutesResponse\x12!\n\x06routes\x18\x01 \x03(\x0b\x32\x11.boat.v1.PduRoute*`\n\x0cPduTransport\x12\x1d\n\x19PDU_TRANSPORT_UNSPECIFIED\x10\x00\x12\x15\n\x11PDU_TRANSPORT_CAN\x10\x01\x12\x1a\n\x16PDU_TRANSPORT_ETHERNET\x10\x02\x32\xa9\x02\n\nPduService\x12<\n\x07SendPdu\x12\x17.boat.v1.SendPduRequest\x1a\x18.boat.v1.SendPduResponse\x12\x43\n\rSubscribePdus\x12\x1d.boat.v1.SubscribePdusRequest\x1a\x11.boat.v1.PduFrame0\x01\x12Q\n\x0e\x43onfigureRoute\x12\x1e.boat.v1.ConfigureRouteRequest\x1a\x1f.boat.v1.ConfigureRouteResponse\x12\x45\n\nListRoutes\x12\x1a.boat.v1.ListRoutesRequest\x1a\x1b.boat.v1.ListRoutesResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11\x62oat/v1/pdu.proto\x12\x07\x62oat.v1\"\xd8\x01\n\x08PduRoute\x12\x0e\n\x06pdu_id\x18\x01 \x01(\r\x12(\n\ttransport\x18\x02 \x01(\x0e\x32\x15.boat.v1.PduTransport\x12\r\n\x05iface\x18\x03 \x01(\t\x12\x0f\n\x07vlan_id\x18\x04 \x01(\r\x12\x0e\n\x06\x63\x61n_id\x18\x05 \x01(\r\x12\x11\n\tethertype\x18\x06 \x01(\r\x12\x0e\n\x06src_ip\x18\x07 \x01(\x0c\x12\x0e\n\x06\x64st_ip\x18\x08 \x01(\x0c\x12\x10\n\x08src_port\x18\t \x01(\r\x12\x10\n\x08\x64st_port\x18\n \x01(\r\x12\x0b\n\x03ttl\x18\x0b \x01(\r\"w\n\x08PduFrame\x12\x0e\n\x06pdu_id\x18\x01 \x01(\r\x12\x0f\n\x07payload\x18\x02 \x01(\x0c\x12\x14\n\x0ctimestamp_ns\x18\x03 \x01(\x04\x12%\n\x06source\x18\x04 \x01(\x0e\x32\x15.boat.v1.PduTransport\x12\r\n\x05iface\x18\x05 \x01(\t\"0\n\x0eSendPduRequest\x12\x1e\n\x03pdu\x18\x01 \x01(\x0b\x32\x11.boat.v1.PduFrame\"#\n\x0fSendPduResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\"\'\n\x14SubscribePdusRequest\x12\x0f\n\x07pdu_ids\x18\x01 \x03(\r\"9\n\x15\x43onfigureRouteRequest\x12 \n\x05route\x18\x01 \x01(\x0b\x32\x11.boat.v1.PduRoute\"$\n\x16\x43onfigureRouteResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\"\x13\n\x11ListRoutesRequest\"7\n\x12ListRoutesResponse\x12!\n\x06routes\x18\x01 \x03(\x0b\x32\x11.boat.v1.PduRoute\"\xa9\x01\n\x0fPduContainerDef\x12\x14\n\x0c\x63ontainer_id\x18\x01 \x01(\r\x12\r\n\x05iface\x18\x02 \x01(\t\x12\x0e\n\x06src_ip\x18\x03 \x01(\x0c\x12\x0e\n\x06\x64st_ip\x18\x04 \x01(\x0c\x12\x10\n\x08src_port\x18\x05 \x01(\r\x12\x10\n\x08\x64st_port\x18\x06 \x01(\r\x12\x0b\n\x03ttl\x18\x07 \x01(\r\x12\x0f\n\x07vlan_id\x18\x08 \x01(\r\x12\x0f\n\x07pdu_ids\x18\t \x03(\r\"H\n\x19\x43onfigureContainerRequest\x12+\n\tcontainer\x18\x01 \x01(\x0b\x32\x18.boat.v1.PduContainerDef\"(\n\x1a\x43onfigureContainerResponse\x12\n\n\x02ok\x18\x01 \x01(\x08*`\n\x0cPduTransport\x12\x1d\n\x19PDU_TRANSPORT_UNSPECIFIED\x10\x00\x12\x15\n\x11PDU_TRANSPORT_CAN\x10\x01\x12\x1a\n\x16PDU_TRANSPORT_ETHERNET\x10\x02\x32\x88\x03\n\nPduService\x12<\n\x07SendPdu\x12\x17.boat.v1.SendPduRequest\x1a\x18.boat.v1.SendPduResponse\x12\x43\n\rSubscribePdus\x12\x1d.boat.v1.SubscribePdusRequest\x1a\x11.boat.v1.PduFrame0\x01\x12Q\n\x0e\x43onfigureRoute\x12\x1e.boat.v1.ConfigureRouteRequest\x1a\x1f.boat.v1.ConfigureRouteResponse\x12\x45\n\nListRoutes\x12\x1a.boat.v1.ListRoutesRequest\x1a\x1b.boat.v1.ListRoutesResponse\x12]\n\x12\x43onfigureContainer\x12\".boat.v1.ConfigureContainerRequest\x1a#.boat.v1.ConfigureContainerResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boat.v1.pdu_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_PDUTRANSPORT']._serialized_start=673
-  _globals['_PDUTRANSPORT']._serialized_end=769
+  _globals['_PDUTRANSPORT']._serialized_start=961
+  _globals['_PDUTRANSPORT']._serialized_end=1057
   _globals['_PDUROUTE']._serialized_start=31
   _globals['_PDUROUTE']._serialized_end=247
   _globals['_PDUFRAME']._serialized_start=249
@@ -51,6 +51,12 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_LISTROUTESREQUEST']._serialized_end=614
   _globals['_LISTROUTESRESPONSE']._serialized_start=616
   _globals['_LISTROUTESRESPONSE']._serialized_end=671
-  _globals['_PDUSERVICE']._serialized_start=772
-  _globals['_PDUSERVICE']._serialized_end=1069
+  _globals['_PDUCONTAINERDEF']._serialized_start=674
+  _globals['_PDUCONTAINERDEF']._serialized_end=843
+  _globals['_CONFIGURECONTAINERREQUEST']._serialized_start=845
+  _globals['_CONFIGURECONTAINERREQUEST']._serialized_end=917
+  _globals['_CONFIGURECONTAINERRESPONSE']._serialized_start=919
+  _globals['_CONFIGURECONTAINERRESPONSE']._serialized_end=959
+  _globals['_PDUSERVICE']._serialized_start=1060
+  _globals['_PDUSERVICE']._serialized_end=1452
 # @@protoc_insertion_point(module_scope)

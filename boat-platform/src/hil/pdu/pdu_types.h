@@ -26,6 +26,21 @@ struct PduRoute {
   uint8_t              ttl{64};   // IPv4 TTL / IPv6 Hop Limit
 };
 
+// Groups several PDU IDs onto a shared Ethernet transport.
+// When any member PDU is sent, the router flushes the entire container
+// (all slots that have been written at least once) as one Ethernet frame.
+struct PduContainerDef {
+  uint32_t              container_id{0};
+  std::string           iface;
+  std::vector<uint8_t>  src_ip;    // 4=IPv4, 16=IPv6
+  std::vector<uint8_t>  dst_ip;
+  uint16_t              src_port{0};
+  uint16_t              dst_port{0};
+  uint8_t               ttl{64};
+  uint16_t              vlan_id{0};
+  std::vector<uint32_t> pdu_ids;   // member PDU IDs
+};
+
 // A PDU as received or about to be sent.
 struct PduFrame {
   uint32_t             pdu_id{0};

@@ -136,6 +136,56 @@ class PduNode:
         except grpc.RpcError:
             return []
 
+    def configure_container(
+        self,
+        container_id: int,
+        pdu_ids: list,
+        iface: str,
+        src_ip: bytes,
+        dst_ip: bytes,
+        src_port: int = 0,
+        dst_port: int = 0,
+        ttl: int = 64,
+        vlan_id: int = 0,
+    ) -> bool:
+        """Register an IpduM container on the gateway.
+
+        All PDU IDs listed in pdu_ids will be multiplexed into a single
+        Ethernet frame whenever any of them is sent via SendPdu.
+
+        Args:
+            container_id: Arbitrary non-zero integer ID for this container.
+            pdu_ids:      List of 32-bit PDU IDs that share this container.
+            iface:        Ethernet interface name (e.g. "enx28107b9f2016").
+            src_ip:       Source IP — 4 bytes (IPv4) or 16 bytes (IPv6).
+            dst_ip:       Destination IP.
+            src_port:     UDP source port.
+            dst_port:     UDP destination port.
+            ttl:          IPv4 TTL / IPv6 Hop Limit.
+            vlan_id:      VLAN ID (0 = untagged).
+
+        Returns:
+            True if the gateway accepted the container definition.
+        """
+        container = pdu_pb2.PduContainerDef(
+            container_id=container_id,
+            iface=iface,
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            src_port=src_port,
+            dst_port=dst_port,
+            ttl=ttl,
+            vlan_id=vlan_id,
+            pdu_ids=pdu_ids,
+        )
+        try:
+            resp = self._client.pdu.ConfigureContainer(
+                pdu_pb2.ConfigureContainerRequest(container=container)
+            )
+            return bool(resp.ok)
+        except grpc.RpcError:
+            return False
+
     # ------------------------------------------------------------------
     # Send helpers
     # ------------------------------------------------------------------

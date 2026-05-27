@@ -93,7 +93,13 @@ int main() {
         if (entry.rfind("raw:", 0) == 0) {
           const std::string name = entry.substr(4);
           auto driver = std::make_unique<boat::hil::RawSocketEthernetDriver>(name);
-          eth_registry.Add(name, std::move(driver));
+          if (!eth_registry.Add(name, std::move(driver))) {
+            std::fprintf(stderr, "[Gateway] Failed to open raw Ethernet interface '%s' "
+                         "(check permissions / interface name)\n", name.c_str());
+          } else {
+            std::fprintf(stderr, "[Gateway] Registered raw Ethernet interface '%s'\n",
+                         name.c_str());
+          }
         } else {
           std::istringstream es(entry);
           std::string name, mcast, port_str;

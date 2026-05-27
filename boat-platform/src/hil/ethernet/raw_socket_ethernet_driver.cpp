@@ -3,6 +3,7 @@
 #ifdef __linux__
 
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <utility>
@@ -13,6 +14,7 @@
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 // Added in Linux 4.20; define here for older kernel headers.
@@ -47,12 +49,18 @@ bool RawSocketEthernetDriver::Open() {
   if (open_.load()) return true;
 
   sock_ = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-  if (sock_ < 0) return false;
+  if (sock_ < 0) {
+    std::fprintf(stderr, "[RawSocket] socket() failed for %s: %s\n",
+                 iface_.c_str(), std::strerror(errno));
+    return false;
+  }
 
   // Resolve interface index.
   struct ifreq ifr{};
   std::strncpy(ifr.ifr_name, iface_.c_str(), IFNAMSIZ - 1);
   if (ioctl(sock_, SIOCGIFINDEX, &ifr) < 0) {
+    std::fprintf(stderr, "[RawSocket] SIOCGIFINDEX failed for %s: %s\n",
+                 iface_.c_str(), std::strerror(errno));
     ::close(sock_); sock_ = -1;
     return false;
   }
@@ -64,6 +72,8 @@ bool RawSocketEthernetDriver::Open() {
   sll.sll_protocol = htons(ETH_P_ALL);
   sll.sll_ifindex  = if_index_;
   if (bind(sock_, reinterpret_cast<struct sockaddr*>(&sll), sizeof(sll)) < 0) {
+    std::fprintf(stderr, "[RawSocket] bind() failed for %s: %s\n",
+                 iface_.c_str(), std::strerror(errno));
     ::close(sock_); sock_ = -1;
     return false;
   }
@@ -127,11 +137,21 @@ bool RawSocketEthernetDriver::WriteFrame(const EthernetFrame& frame) {
   const std::size_t payload_len = std::min(frame.payload.size(), kMaxPayload);
   const bool        has_vlan    = frame.vlan_id != 0;
   const std::size_t hdr_size    = has_vlan ? kVlanHdrSize : kEthHdrSize;
-  const std::size_t total       = hdr_size + payload_len;
+  // Ethernet minimum payload is 46 bytes; pad to 60-byte minimum frame.
+  const std::size_t eth_payload = std::max(payload_len, std::size_t{46});
+  const std::size_t total       = hdr_size + eth_payload;
 
   unsigned char buf[kMaxEthFrame]{};
-  std::memcpy(buf,     frame.dst_mac, 6);
-  std::memcpy(buf + 6, frame.src_mac, 6);
+
+  // Use broadcast MAC when caller leaves dst_mac as all-zeros (ARP not resolved).
+  const unsigned char* dst = frame.dst_mac;
+  static constexpr unsigned char kBroadcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+  bool all_zero = true;
+  for (int i = 0; i < 6; ++i) { if (frame.dst_mac[i]) { all_zero = false; break; } }
+  if (all_zero) dst = kBroadcast;
+
+  std::memcpy(buf,     dst,            6);
+  std::memcpy(buf + 6, frame.src_mac,  6);
 
   if (has_vlan) {
     buf[12] = 0x81; buf[13] = 0x00;
@@ -150,17 +170,34 @@ bool RawSocketEthernetDriver::WriteFrame(const EthernetFrame& frame) {
   if (payload_len > 0) {
     std::memcpy(buf + hdr_size, frame.payload.data(), payload_len);
   }
+  // Zero-pad to Ethernet minimum (already zero-initialised, just extends total).
 
   struct sockaddr_ll dest{};
   dest.sll_family  = AF_PACKET;
   dest.sll_ifindex = if_index_;
   dest.sll_halen   = 6;
-  std::memcpy(dest.sll_addr, frame.dst_mac, 6);
+  std::memcpy(dest.sll_addr, dst, 6);
 
-  const ssize_t sent = sendto(sock_, buf, total, 0,
-                               reinterpret_cast<struct sockaddr*>(&dest),
-                               sizeof(dest));
-  return sent == static_cast<ssize_t>(total);
+  // Retry on ENOBUFS — USB NICs have small TX rings; a brief pause drains them.
+  ssize_t sent = -1;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    sent = sendto(sock_, buf, total, 0,
+                  reinterpret_cast<struct sockaddr*>(&dest),
+                  sizeof(dest));
+    if (sent >= 0) break;
+    if (errno == ENOBUFS || errno == EAGAIN) {
+      struct timespec ts{0, 2000000};  // 2 ms
+      nanosleep(&ts, nullptr);
+    } else {
+      break;
+    }
+  }
+  if (sent != static_cast<ssize_t>(total)) {
+    std::fprintf(stderr, "[RawSocket] sendto failed on %s (errno %d: %s) frame_len=%zu\n",
+                 iface_.c_str(), errno, std::strerror(errno), total);
+    return false;
+  }
+  return true;
 }
 
 }  // namespace boat::hil
