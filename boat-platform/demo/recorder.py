@@ -2,12 +2,10 @@
 BoAt Platform — Trace Recorder
 Manages recording sessions: subscribes to CAN / Ethernet / Bus streams and writes
 ASC, BLF, or PCAP files plus an optional JSONL sidecar for BoAt bus signals.
-
 Run:  python3 demo/recorder.py
 Open: http://localhost:8083
 """
 from __future__ import annotations
-
 import json
 import os
 import struct
@@ -19,44 +17,31 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-sys.path.insert(0, "/home/testuser/.local/lib/python3.12/site-packages")
-sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
-
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 import grpc
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
-
 from boat.client import BoAtClient
 from boat.v1 import bus_pb2, can_pb2, ethernet_pb2
-
 try:
     import can as python_can
     _HAS_PYTHON_CAN = True
 except ImportError:
     _HAS_PYTHON_CAN = False
-
 # ── Config ─────────────────────────────────────────────────────────────────────
-
 _DEFAULT_GW      = os.environ.get("BOAT_GATEWAY", "localhost:50051")
 _DEFAULT_OUT_DIR = Path(os.environ.get("BOAT_TRACES_DIR", "traces"))
 _PORT            = int(os.environ.get("BOAT_REC_PORT", "8083"))
-
 _DEFAULT_OUT_DIR.mkdir(parents=True, exist_ok=True)
-
 # ── PCAP constants ─────────────────────────────────────────────────────────────
-
 _PCAP_MAGIC   = 0xA1B2C3D4
 _PCAP_SNAPLEN = 65535
 _DLT_CAN_SK   = 227   # DLT_CAN_SOCKETCAN — Wireshark decodes classic + FD by length
 _DLT_ETH      = 1     # DLT_EN10MB
 _CAN_EFF_FLAG = 0x80000000
-
-
 # ── File writers ───────────────────────────────────────────────────────────────
-
 class _PcapBase:
     def __init__(self, path: Path, dlt: int) -> None:
         self._f    = open(path, "wb")
@@ -64,7 +49,6 @@ class _PcapBase:
         self._f.write(struct.pack("<IHHiIII",
             _PCAP_MAGIC, 2, 4, 0, 0, _PCAP_SNAPLEN, dlt))
         self._f.flush()
-
     def _packet(self, ts: float, data: bytes) -> None:
         sec  = int(ts)
         usec = int((ts - sec) * 1_000_000)
@@ -72,17 +56,13 @@ class _PcapBase:
         with self._lock:
             self._f.write(hdr + data)
             self._f.flush()
-
     def close(self) -> None:
         with self._lock:
             try: self._f.close()
             except Exception: pass
-
-
 class PcapCanWriter(_PcapBase):
     def __init__(self, path: Path) -> None:
         super().__init__(path, _DLT_CAN_SK)
-
     def write(self, ts: float, can_id: int, dlc: int, data: bytes, flags: int) -> None:
         # DLT_CAN_SOCKETCAN requires can_id in network byte order (big-endian).
         # Using little-endian causes Wireshark to display wrong IDs (e.g. 0x103 → 0x000).
@@ -96,38 +76,28 @@ class PcapCanWriter(_PcapBase):
             raw = struct.pack(">IBBBB", can_id, dlc, 0, 0, 0) + \
                   (data[:dlc] + b"\x00" * 8)[:8]
         self._packet(ts, raw)
-
-
 class PcapEthWriter(_PcapBase):
     def __init__(self, path: Path) -> None:
         super().__init__(path, _DLT_ETH)
-
     def write(self, ts: float, dst_mac: bytes, src_mac: bytes,
               ethertype: int, payload: bytes) -> None:
         dst = dst_mac if len(dst_mac) == 6 else b"\xff" * 6
         src = src_mac if len(src_mac) == 6 else b"\x00" * 6
         self._packet(ts, dst + src + struct.pack(">H", ethertype) + payload)
-
-
 class JsonlWriter:
     def __init__(self, path: Path) -> None:
         self._f    = open(path, "w", encoding="utf-8", buffering=1)
         self._lock = threading.Lock()
-
     def write(self, ts: float, name: str, vtype: str, value: Any) -> None:
         with self._lock:
             self._f.write(json.dumps(
                 {"ts": ts, "name": name, "type": vtype, "value": value}
             ) + "\n")
-
     def close(self) -> None:
         with self._lock:
             try: self._f.close()
             except Exception: pass
-
-
 # ── Session ────────────────────────────────────────────────────────────────────
-
 @dataclass
 class Session:
     session_id:      str
@@ -138,14 +108,11 @@ class Session:
     include_signals: bool
     gateway:         str
     output_dir:      Path
-
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     stopped_at: Optional[datetime] = None
-
     can_count: int = 0
     eth_count: int = 0
     sig_count: int = 0
-
     # internals
     _stop:        threading.Event   = field(default_factory=threading.Event,  repr=False)
     _threads:     List[threading.Thread] = field(default_factory=list,        repr=False)
@@ -157,11 +124,9 @@ class Session:
     _bus_stream:  Any               = field(default=None,                     repr=False)
     _files:       List[Path]        = field(default_factory=list,             repr=False)
     _channel_map: Dict[str, int]    = field(default_factory=dict,             repr=False)
-
     @property
     def running(self) -> bool:
         return self.stopped_at is None
-
     def to_dict(self) -> dict:
         files = []
         for p in self._files:
@@ -184,31 +149,25 @@ class Session:
             "sig_count":       self.sig_count,
             "files":           files,
         }
-
-
 # ── Session lifecycle ──────────────────────────────────────────────────────────
-
 def _open_writers(session: Session) -> None:
     """Create output files and open writers based on format."""
     base = session.output_dir / session.session_id
     if session.name:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in session.name)
         base = session.output_dir / f"{session.session_id}_{safe}"
-
     if session.fmt == "asc":
         if not _HAS_PYTHON_CAN:
             raise RuntimeError("python-can is required for ASC format")
         p = Path(str(base) + ".asc")
         session._can_writer = python_can.ASCWriter(str(p))
         session._files.append(p)
-
     elif session.fmt == "blf":
         if not _HAS_PYTHON_CAN:
             raise RuntimeError("python-can is required for BLF format")
         p = Path(str(base) + ".blf")
         session._can_writer = python_can.BLFWriter(str(p))
         session._files.append(p)
-
     elif session.fmt == "pcap":
         if session.buses:
             p = Path(str(base) + "_can.pcap")
@@ -218,15 +177,11 @@ def _open_writers(session: Session) -> None:
             p = Path(str(base) + "_eth.pcap")
             session._eth_writer = PcapEthWriter(p)
             session._files.append(p)
-
     if session.include_signals:
         p = Path(str(base) + "_bus.jsonl")
         session._sig_writer = JsonlWriter(p)
         session._files.append(p)
-
     session._channel_map = {iface: idx for idx, iface in enumerate(session.buses)}
-
-
 def _write_can(session: Session, frame: Any, ts: float) -> None:
     w = session._can_writer
     if w is None:
@@ -249,8 +204,6 @@ def _write_can(session: Session, frame: Any, ts: float) -> None:
         w(msg)
     else:
         w.write(ts, frame.can_id, frame.dlc, bytes(frame.data[:frame.dlc]), frame.flags)
-
-
 def _run_can_sub(session: Session) -> None:
     client = stream = None
     try:
@@ -275,8 +228,6 @@ def _run_can_sub(session: Session) -> None:
         if client:
             try: client.close()
             except: pass
-
-
 def _run_eth_sub(session: Session) -> None:
     client = stream = None
     try:
@@ -304,8 +255,6 @@ def _run_eth_sub(session: Session) -> None:
         if client:
             try: client.close()
             except: pass
-
-
 def _run_bus_sub(session: Session) -> None:
     client = stream = None
     try:
@@ -336,8 +285,6 @@ def _run_bus_sub(session: Session) -> None:
         if client:
             try: client.close()
             except: pass
-
-
 def _close_writer(w: Any) -> None:
     if w is None:
         return
@@ -347,13 +294,10 @@ def _close_writer(w: Any) -> None:
             try: fn()
             except: pass
             break
-
-
 def start_session(req_data: dict) -> Session:
     sid = "rec_" + datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:4]
     out = Path(req_data.get("output_dir") or str(_DEFAULT_OUT_DIR))
     out.mkdir(parents=True, exist_ok=True)
-
     session = Session(
         session_id      = sid,
         name            = req_data.get("name", ""),
@@ -364,27 +308,20 @@ def start_session(req_data: dict) -> Session:
         gateway         = req_data.get("gateway", _DEFAULT_GW),
         output_dir      = out,
     )
-
     _open_writers(session)
-
     if session.buses or (session.fmt != "pcap" and session._can_writer):
         t = threading.Thread(target=_run_can_sub, args=(session,), daemon=True)
         session._threads.append(t)
         t.start()
-
     if session.eth_ifaces and session.fmt == "pcap":
         t = threading.Thread(target=_run_eth_sub, args=(session,), daemon=True)
         session._threads.append(t)
         t.start()
-
     if session.include_signals:
         t = threading.Thread(target=_run_bus_sub, args=(session,), daemon=True)
         session._threads.append(t)
         t.start()
-
     return session
-
-
 def stop_session(session: Session) -> None:
     if not session.running:
         return
@@ -400,16 +337,10 @@ def stop_session(session: Session) -> None:
     _close_writer(session._eth_writer)
     _close_writer(session._sig_writer)
     session.stopped_at = datetime.now(timezone.utc)
-
-
 # ── State ──────────────────────────────────────────────────────────────────────
-
 _sessions: Dict[str, Session] = {}
 _sessions_lock = threading.Lock()
-
-
 # ── REST API ───────────────────────────────────────────────────────────────────
-
 class StartRequest(BaseModel):
     gateway:         str       = _DEFAULT_GW
     name:            str       = ""
@@ -418,25 +349,17 @@ class StartRequest(BaseModel):
     eth_ifaces:      List[str] = []
     include_signals: bool      = True
     output_dir:      str       = str(_DEFAULT_OUT_DIR)
-
-
 app = FastAPI()
-
-
 @app.get("/api/sessions")
 def api_sessions():
     with _sessions_lock:
         return [s.to_dict() for s in reversed(list(_sessions.values()))]
-
-
 @app.get("/api/sessions/{session_id}")
 def api_session(session_id: str):
     s = _sessions.get(session_id)
     if not s:
         raise HTTPException(404, "Session not found")
     return s.to_dict()
-
-
 @app.post("/api/sessions")
 def api_start(req: StartRequest):
     fmt = req.format.lower()
@@ -451,8 +374,6 @@ def api_start(req: StartRequest):
     with _sessions_lock:
         _sessions[session.session_id] = session
     return session.to_dict()
-
-
 @app.delete("/api/sessions/{session_id}")
 def api_stop(session_id: str):
     s = _sessions.get(session_id)
@@ -460,8 +381,6 @@ def api_stop(session_id: str):
         raise HTTPException(404, "Session not found")
     stop_session(s)
     return s.to_dict()
-
-
 @app.delete("/api/sessions")
 def api_stop_all():
     stopped = []
@@ -471,8 +390,6 @@ def api_stop_all():
                 stop_session(s)
                 stopped.append(s.session_id)
     return {"stopped": stopped}
-
-
 @app.get("/api/files/{filename}")
 def api_download(filename: str):
     # Security: only serve files from the traces directory, no path traversal
@@ -489,15 +406,10 @@ def api_download(filename: str):
         else:
             raise HTTPException(404, "File not found")
     return FileResponse(str(p), filename=filename)
-
-
 @app.get("/api/gateway")
 def api_gateway():
     return {"address": _DEFAULT_GW}
-
-
 # ── Panel HTML ─────────────────────────────────────────────────────────────────
-
 HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -523,7 +435,6 @@ HTML = r"""<!DOCTYPE html>
   html, body { height: 100%; background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 13px; overflow: hidden; }
-
   header { height: 46px; background: var(--panel);
     border-bottom: 1px solid var(--border); display: flex; align-items: center;
     padding: 0 20px; gap: 14px; flex-shrink: 0; }
@@ -537,29 +448,23 @@ HTML = r"""<!DOCTYPE html>
     border-radius: 4px; padding: 3px 9px; font-size: 12px; font-family: var(--mono);
     width: 200px; outline: none; }
   .gw-input:focus { border-color: var(--blue); }
-
   .layout { display: flex; height: calc(100vh - 78px); overflow: hidden; }
-
   /* left 38% */
   .col-left { flex: 0 0 38%; display: flex; flex-direction: column;
     border-right: 1px solid var(--border); overflow: hidden; }
   /* right 62% */
   .col-right { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-
   .pane-header { height: 36px; padding: 0 14px; display: flex; align-items: center;
     gap: 8px; border-bottom: 1px solid var(--border); background: var(--panel);
     flex-shrink: 0; }
   .pane-title { font-size: 11px; font-weight: 600; text-transform: uppercase;
     letter-spacing: .8px; color: var(--muted); }
   .pane-spacer { flex: 1; }
-
   /* ── New session form ── */
   .form-scroll { overflow-y: auto; flex-shrink: 0; max-height: 50vh; }
   .form-area { padding: 14px; display: flex; flex-direction: column; gap: 9px; }
-
   .field-row { display: grid; grid-template-columns: 100px 1fr; align-items: center; gap: 8px; }
   label.fl { font-size: 11px; color: var(--muted); text-align: right; }
-
   input[type="text"], select {
     background: var(--bg); border: 1px solid var(--border); color: var(--text);
     border-radius: 4px; padding: 4px 8px; font-size: 12px;
@@ -567,27 +472,22 @@ HTML = r"""<!DOCTYPE html>
   input[type="text"]:focus, select:focus { border-color: var(--blue); }
   input::placeholder { color: #3d4450; }
   select option { background: var(--panel); }
-
   .radio-group { display: flex; gap: 14px; }
   .radio-label { display: flex; align-items: center; gap: 5px; font-size: 12px;
     font-family: var(--mono); cursor: pointer; }
   input[type="radio"] { accent-color: var(--blue); cursor: pointer; }
-
   .check-group { display: flex; flex-wrap: wrap; gap: 8px 14px; }
   .check-label { display: flex; align-items: center; gap: 5px; font-size: 12px;
     font-family: var(--mono); cursor: pointer; }
   input[type="checkbox"] { accent-color: var(--blue); width: 13px; height: 13px; cursor: pointer; }
   input:disabled + span { color: var(--muted); }
-
   .section-label { font-size: 10px; font-weight: 600; text-transform: uppercase;
     letter-spacing: .7px; color: var(--muted); margin-top: 4px; }
-
   .btn-start { padding: 7px 0; background: #1c3a5c; color: var(--blue);
     border: 1px solid var(--blue); border-radius: 5px; font-size: 12px; font-weight: 600;
     cursor: pointer; width: 100%; transition: background .15s; }
   .btn-start:hover:not(:disabled) { background: #24497a; }
   .btn-start:disabled { opacity: .4; cursor: not-allowed; }
-
   /* ── Active sessions ── */
   .active-area { flex: 1; overflow-y: auto; padding: 10px 14px;
     display: flex; flex-direction: column; gap: 8px; }
@@ -611,7 +511,6 @@ HTML = r"""<!DOCTYPE html>
   .btn-stop:hover { background: #4a2020; }
   .empty-active { font-size: 12px; color: var(--muted); padding: 20px 0;
     text-align: center; font-style: italic; }
-
   /* ── Sessions history (right) ── */
   .tbl-scroll { flex: 1; overflow-y: auto; min-height: 0; }
   table { width: 100%; border-collapse: collapse; }
@@ -632,7 +531,6 @@ HTML = r"""<!DOCTYPE html>
   .fmt-asc  { background: #1c3a1c; color: var(--green); }
   .fmt-blf  { background: #1c1c3a; color: var(--blue); }
   .fmt-pcap { background: #2d1c3a; color: var(--purple); }
-
   .btn-expand { background: none; border: none; color: var(--blue); cursor: pointer;
     font-size: 11px; padding: 0; font-family: var(--mono); }
   .files-panel { display: none; background: #0a0d12; border-top: 1px solid var(--border);
@@ -643,11 +541,9 @@ HTML = r"""<!DOCTYPE html>
   .file-link a { color: var(--blue); text-decoration: none; }
   .file-link a:hover { text-decoration: underline; }
   .file-size { color: var(--muted); }
-
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
   /* ── Nav bar ── */
   #panel-nav {
     height: 32px; flex-shrink: 0;
@@ -667,7 +563,6 @@ HTML = r"""<!DOCTYPE html>
 </style>
 </head>
 <body>
-
 <header>
   <span class="logo">⛵ BoAt</span>
   <span class="subtitle">Trace Recorder</span>
@@ -675,36 +570,28 @@ HTML = r"""<!DOCTYPE html>
   <input class="gw-input" id="gw-addr" placeholder="localhost:50051"/>
   <span class="gw-badge" id="gw-badge">● :50051</span>
 </header>
-
 <nav id="panel-nav">
+  <a class="nav-link" data-port="8086">Launcher</a>
   <a class="nav-link" data-port="8080">Dashboard</a>
   <a class="nav-link" data-port="8081">Nodes</a>
   <a class="nav-link" data-port="8082">Commander</a>
   <a class="nav-link" data-port="8083">Recorder</a>
-  <a class="nav-link" data-port="8084">Debug</a>
-  <a class="nav-link" data-port="8085">Flow Editor</a>
 </nav>
-
 <div class="layout">
-
   <!-- ══ Left: form + active sessions ══ -->
   <div class="col-left">
-
     <div class="pane-header">
       <span class="pane-title">New Session</span>
       <span class="pane-spacer"></span>
       <button style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px"
               title="Reload buses / interfaces" onclick="loadInterfaces()">↺</button>
     </div>
-
     <div class="form-scroll">
       <div class="form-area">
-
         <div class="field-row">
           <label class="fl" for="rec-name">Name</label>
           <input type="text" id="rec-name" placeholder="optional label"/>
         </div>
-
         <div class="field-row">
           <label class="fl">Format</label>
           <div class="radio-group">
@@ -713,21 +600,18 @@ HTML = r"""<!DOCTYPE html>
             <label class="radio-label"><input type="radio" name="fmt" value="pcap"/><span>PCAP</span></label>
           </div>
         </div>
-
         <div class="field-row" style="align-items:flex-start;margin-top:2px">
           <label class="fl" style="padding-top:2px">CAN buses</label>
           <div class="check-group" id="can-checks">
             <span style="color:var(--muted);font-size:11px;font-style:italic">loading…</span>
           </div>
         </div>
-
         <div class="field-row" style="align-items:flex-start" id="eth-row">
           <label class="fl" style="padding-top:2px">Ethernet</label>
           <div class="check-group" id="eth-checks">
             <span style="color:var(--muted);font-size:11px;font-style:italic">loading…</span>
           </div>
         </div>
-
         <div class="field-row">
           <label class="fl">Bus signals</label>
           <label class="check-label">
@@ -735,32 +619,25 @@ HTML = r"""<!DOCTYPE html>
             <span>Include BoAt bus signals → .jsonl</span>
           </label>
         </div>
-
         <div class="field-row">
           <label class="fl" for="out-dir">Output dir</label>
           <input type="text" id="out-dir" value="traces"/>
         </div>
-
         <div class="field-row">
           <label class="fl"></label>
           <button class="btn-start" id="btn-start" onclick="startRecording()">▶ Start Recording</button>
         </div>
-
       </div>
     </div>
-
     <div class="pane-header" style="border-top: 1px solid var(--border)">
       <span class="pane-title">Active Sessions</span>
       <span class="pane-spacer"></span>
       <span id="active-count" style="font-size:11px;color:var(--muted);font-family:var(--mono)">0</span>
     </div>
-
     <div class="active-area" id="active-area">
       <div class="empty-active">No active recordings</div>
     </div>
-
   </div><!-- col-left -->
-
   <!-- ══ Right: session history ══ -->
   <div class="col-right">
     <div class="pane-header">
@@ -788,16 +665,13 @@ HTML = r"""<!DOCTYPE html>
       </table>
     </div>
   </div>
-
 </div><!-- .layout -->
-
 <script>
 let gateway = 'localhost:50051';
 let recorderBase = window.location.origin;   // same origin
 let knownSessions = {};
 let canIfaces = [];
 let ethIfaces = [];
-
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   const r = await fetch('/api/gateway');
@@ -812,13 +686,11 @@ async function init() {
   document.querySelectorAll('input[name="fmt"]').forEach(r =>
     r.addEventListener('change', updateEthState));
 }
-
 document.getElementById('gw-addr').addEventListener('change', e => {
   gateway = e.target.value.trim() || 'localhost:50051';
   document.getElementById('gw-badge').textContent = '● ' + gateway;
   loadInterfaces();
 });
-
 // ── Interface loader ──────────────────────────────────────────────────────────
 async function loadInterfaces() {
   // CAN
@@ -827,7 +699,6 @@ async function loadInterfaces() {
     canIfaces = (await r.json()).ifaces || [];
   } catch { canIfaces = []; }
   renderCheckGroup('can-checks', canIfaces, 'can_', true);
-
   // Ethernet
   try {
     const r = await fetch(`/api/eth-ifaces?gw=${encodeURIComponent(gateway)}`);
@@ -836,7 +707,6 @@ async function loadInterfaces() {
   renderCheckGroup('eth-checks', ethIfaces, 'eth_', false);
   updateEthState();
 }
-
 function renderCheckGroup(containerId, ifaces, prefix, defaultChecked) {
   const el = document.getElementById(containerId);
   if (!ifaces.length) {
@@ -850,7 +720,6 @@ function renderCheckGroup(containerId, ifaces, prefix, defaultChecked) {
     </label>`
   ).join('');
 }
-
 function updateEthState() {
   const fmt = document.querySelector('input[name="fmt"]:checked')?.value;
   const isPcap = fmt === 'pcap';
@@ -859,7 +728,6 @@ function updateEthState() {
   });
   document.getElementById('eth-row').style.opacity = isPcap ? '1' : '0.45';
 }
-
 // ── Start ─────────────────────────────────────────────────────────────────────
 async function startRecording() {
   const fmt  = document.querySelector('input[name="fmt"]:checked').value;
@@ -871,7 +739,6 @@ async function startRecording() {
     const cb = document.getElementById('eth_' + i);
     return cb && cb.checked && !cb.disabled;
   });
-
   const body = {
     gateway:         gateway,
     name:            document.getElementById('rec-name').value.trim(),
@@ -881,7 +748,6 @@ async function startRecording() {
     include_signals: document.getElementById('inc-signals').checked,
     output_dir:      document.getElementById('out-dir').value.trim() || 'traces',
   };
-
   document.getElementById('btn-start').disabled = true;
   try {
     const r = await fetch('/api/sessions', {
@@ -894,13 +760,11 @@ async function startRecording() {
   } catch(e) { alert('Error: ' + e); }
   document.getElementById('btn-start').disabled = false;
 }
-
 // ── Stop ──────────────────────────────────────────────────────────────────────
 async function stopSession(sid) {
   await fetch(`/api/sessions/${sid}`, {method:'DELETE'});
   await refresh();
 }
-
 // ── Refresh ───────────────────────────────────────────────────────────────────
 async function refresh() {
   let sessions;
@@ -908,17 +772,14 @@ async function refresh() {
     const r = await fetch('/api/sessions');
     sessions = await r.json();
   } catch { return; }
-
   renderActive(sessions.filter(s => s.running));
   renderHistory(sessions);
   document.getElementById('session-count').textContent = sessions.length;
 }
-
 // ── Active sessions ───────────────────────────────────────────────────────────
 function renderActive(active) {
   const el = document.getElementById('active-area');
   document.getElementById('active-count').textContent = active.length;
-
   if (!active.length) {
     el.innerHTML = '<div class="empty-active">No active recordings</div>';
     return;
@@ -943,7 +804,6 @@ function renderActive(active) {
     </div>
   `).join('');
 }
-
 // ── History table ─────────────────────────────────────────────────────────────
 function renderHistory(sessions) {
   const tbody = document.getElementById('history-tbody');
@@ -966,7 +826,6 @@ function renderHistory(sessions) {
         ${s.running ? '● rec' : '✓ done'}
       </td>`;
     tbody.appendChild(tr);
-
     // Files row
     const fr = document.createElement('tr');
     fr.className = 'files-row';
@@ -990,7 +849,6 @@ function renderHistory(sessions) {
     tbody.appendChild(fr);
   }
 }
-
 function toggleFiles(sid) {
   const panel = document.getElementById('files-panel-' + sid);
   const btn   = document.querySelector(`#history-tbody .btn-expand[onclick="toggleFiles('${sid}')"]`);
@@ -998,7 +856,6 @@ function toggleFiles(sid) {
   const open = panel.classList.toggle('open');
   if (btn) btn.textContent = open ? '▴' : '▾';
 }
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function duration(start, stop) {
   const s = new Date(start);
@@ -1008,18 +865,15 @@ function duration(start, stop) {
   if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's';
   return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm';
 }
-
 function fmtSize(bytes) {
   if (!bytes) return '0 B';
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
   return (bytes/1048576).toFixed(2) + ' MB';
 }
-
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
-
 // ── Nav bar ───────────────────────────────────────────────────────────────────
 (function() {
   const h = window.location.hostname;
@@ -1029,16 +883,12 @@ function escHtml(s) {
     if (a.dataset.port === p) a.classList.add('active');
   });
 })();
-
 init();
 </script>
 </body>
 </html>
 """
-
-
 # ── Discovery proxy endpoints (panel JS hits these to avoid CORS) ──────────────
-
 @app.get("/api/can-buses")
 def api_can_buses(gw: str = _DEFAULT_GW):
     try:
@@ -1048,8 +898,6 @@ def api_can_buses(gw: str = _DEFAULT_GW):
         return {"ifaces": list(resp.ifaces)}
     except Exception:
         return {"ifaces": []}
-
-
 @app.get("/api/eth-ifaces")
 def api_eth_ifaces(gw: str = _DEFAULT_GW):
     try:
@@ -1059,15 +907,10 @@ def api_eth_ifaces(gw: str = _DEFAULT_GW):
         return {"ifaces": list(resp.ifaces)}
     except Exception:
         return {"ifaces": []}
-
-
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTMLResponse(HTML)
-
-
 # ── Entry point ────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     print(f"BoAt Trace Recorder  → http://localhost:{_PORT}")
     print(f"Default gateway      : {_DEFAULT_GW}")

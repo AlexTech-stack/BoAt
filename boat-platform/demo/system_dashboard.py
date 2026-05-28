@@ -4,26 +4,18 @@ Run:  python3 demo/system_dashboard.py
 Open: http://localhost:8081
 """
 from __future__ import annotations
-
 import os
 import sys
-
-sys.path.insert(0, "/home/testuser/.local/lib/python3.12/site-packages")
-sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
-
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-
 from boat.client import BoAtClient
 from boat.v1 import can_pb2, simulation_pb2
-
 app = FastAPI()
 client = BoAtClient("localhost:50051")
-
-
 # ── API ────────────────────────────────────────────────────────────────────────
-
 @app.get("/api/system")
 def api_system():
     topology = {
@@ -31,7 +23,6 @@ def api_system():
         "can_buses": [],
         "simulations": [],
     }
-
     # Gateway + CAN buses
     try:
         resp = client.can.ListBuses(can_pb2.ListBusesRequest())
@@ -39,7 +30,6 @@ def api_system():
         topology["gateway"]["connected"] = True
     except Exception:
         pass
-
     # Simulations
     try:
         resp = client.simulation.ListSimulations(simulation_pb2.ListSimulationsRequest())
@@ -56,13 +46,8 @@ def api_system():
         ]
     except Exception:
         pass
-
-
     return topology
-
-
 # ── HTML ───────────────────────────────────────────────────────────────────────
-
 HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -71,7 +56,6 @@ HTML = """<!DOCTYPE html>
 <title>BoAt — System</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
   :root {
     --bg:      #0d1117;
     --panel:   #161b22;
@@ -86,7 +70,6 @@ HTML = """<!DOCTYPE html>
     --orange:  #ffa657;
     --mono:    "SFMono-Regular", Consolas, monospace;
   }
-
   html, body {
     height: 100%;
     background: var(--bg);
@@ -95,7 +78,6 @@ HTML = """<!DOCTYPE html>
     font-size: 13px;
     overflow: hidden;
   }
-
   /* ── Header ── */
   header {
     height: 46px;
@@ -119,7 +101,6 @@ HTML = """<!DOCTYPE html>
     background: #3d0b0b; color: var(--red); border-color: var(--red);
   }
   .poll-ts { font-size: 11px; color: var(--muted); font-family: var(--mono); }
-
   /* ── Diagram area ── */
   #diagram {
     position: relative;
@@ -127,7 +108,6 @@ HTML = """<!DOCTYPE html>
     height: calc(100vh - 46px);
     overflow: hidden;
   }
-
   /* SVG overlay — sits behind cards */
   #svg-layer {
     position: absolute;
@@ -135,7 +115,6 @@ HTML = """<!DOCTYPE html>
     pointer-events: none;
     z-index: 0;
   }
-
   /* ── Columns ── */
   .col-left, .col-center {
     position: absolute;
@@ -147,7 +126,6 @@ HTML = """<!DOCTYPE html>
   }
   .col-left   { left: 0;    width: 25%; }
   .col-center { left: 25%;  width: 75%; }
-
   /* ── Section labels ── */
   .col-label {
     font-size: 10px;
@@ -158,7 +136,6 @@ HTML = """<!DOCTYPE html>
     margin-top: 16px;
     margin-bottom: 10px;
   }
-
   /* ── Cards ── */
   .card {
     background: var(--panel);
@@ -171,7 +148,6 @@ HTML = """<!DOCTYPE html>
     transition: border-color .3s;
   }
   .card:hover { border-color: #58a6ff55; }
-
   .card-title {
     font-size: 10px;
     font-weight: 600;
@@ -195,7 +171,6 @@ HTML = """<!DOCTYPE html>
     font-family: var(--mono);
     margin-top: 3px;
   }
-
   /* Gateway card */
   .card-gateway {
     border-color: #1f6feb;
@@ -205,7 +180,6 @@ HTML = """<!DOCTYPE html>
     text-align: center;
   }
   .card-gateway .card-name { font-size: 16px; color: var(--blue); }
-
   /* Status dot */
   .status-dot {
     display: inline-block;
@@ -218,13 +192,10 @@ HTML = """<!DOCTYPE html>
   .dot-red    { background: var(--red);   box-shadow: 0 0 6px var(--red); }
   .dot-yellow { background: var(--yellow); }
   .dot-muted  { background: var(--muted); }
-
   /* CAN bus cards */
   .card-canbus { border-left: 3px solid var(--blue); }
-
   /* Simulation cards */
   .card-sim { border-left: 3px solid var(--green); }
-
   .state-badge {
     display: inline-block;
     font-size: 10px;
@@ -240,7 +211,6 @@ HTML = """<!DOCTYPE html>
   .state-IDLE    { background: #1c2128; color: var(--muted); }
   .state-UNKNOWN { background: #1c2128; color: var(--muted); }
   .state-ERROR   { background: #3d0b0b; color: var(--red); }
-
   /* Empty state */
   .empty-hint {
     font-size: 11px;
@@ -249,14 +219,12 @@ HTML = """<!DOCTYPE html>
     text-align: center;
     padding: 20px 0;
   }
-
   /* Sim section within center column */
   .center-gateway { flex-shrink: 0; width: 100%; display: flex; justify-content: center; }
   .center-sims    { flex: 1; overflow-y: auto; width: 100%; padding: 0 10px; }
 </style>
 </head>
 <body>
-
 <header>
   <span class="logo">⛵ BoAt</span>
   <span class="subtitle">System Overview</span>
@@ -264,17 +232,14 @@ HTML = """<!DOCTYPE html>
   <span class="poll-ts" id="poll-ts"></span>
   <span class="gw-badge" id="gw-badge">● gateway :50051</span>
 </header>
-
 <div id="diagram">
   <svg id="svg-layer"></svg>
-
   <!-- Left: CAN Buses -->
   <div class="col-left" id="col-canbuses">
     <div class="col-label">CAN Buses</div>
     <div id="canbus-cards" style="width:100%;padding:0 8px;"></div>
     <div class="empty-hint" id="canbus-empty" style="display:none">No buses registered</div>
   </div>
-
   <!-- Center: Gateway + Simulations -->
   <div class="col-center">
     <div class="center-gateway">
@@ -286,24 +251,17 @@ HTML = """<!DOCTYPE html>
         </div>
       </div>
     </div>
-
     <div style="font-size:10px;font-weight:600;text-transform:uppercase;
                 letter-spacing:.9px;color:var(--muted);margin:10px 0 8px;text-align:center;">
       Simulations
     </div>
-
     <div class="center-sims" id="sim-cards"></div>
     <div class="empty-hint" id="sim-empty">No active simulations</div>
   </div>
-
-
 </div><!-- #diagram -->
-
 <script>
 // ── SVG connections ───────────────────────────────────────────────────────────
-
 const svg = document.getElementById('svg-layer');
-
 // Define an arrowhead marker
 function ensureMarkers() {
   if (svg.querySelector('defs')) return;
@@ -320,7 +278,6 @@ function ensureMarkers() {
       </marker>
     </defs>`;
 }
-
 function pt(el, edge) {
   const r  = el.getBoundingClientRect();
   const sr = svg.getBoundingClientRect();
@@ -333,7 +290,6 @@ function pt(el, edge) {
     case 'bottom': return { x: cx, y: r.bottom - sr.top };
   }
 }
-
 function bezier(p1, p2, stroke, dashed, marker) {
   const dx = (p2.x - p1.x) * 0.5;
   const cp1 = { x: p1.x + dx, y: p1.y };
@@ -348,24 +304,20 @@ function bezier(p1, p2, stroke, dashed, marker) {
   if (marker) path.setAttribute('marker-end', `url(#${marker})`);
   svg.appendChild(path);
 }
-
 function drawConnections(data) {
   // Clear old paths (keep defs)
   const defs = svg.querySelector('defs');
   svg.innerHTML = '';
   if (defs) svg.appendChild(defs);
   ensureMarkers();
-
   const gw = document.getElementById('card-gateway');
   if (!gw) return;
-
   // Gateway → CAN buses
   data.can_buses.forEach(b => {
     const el = document.getElementById('card-canbus-' + b.iface);
     if (!el) return;
     bezier(pt(gw, 'left'), pt(el, 'right'), '#58a6ff44', false, 'arrow-blue');
   });
-
   // Gateway → Simulations
   data.simulations.forEach(s => {
     const el = document.getElementById('card-sim-' + s.id);
@@ -373,9 +325,7 @@ function drawConnections(data) {
     bezier(pt(gw, 'bottom'), pt(el, 'top'), '#3fb95044', false, 'arrow-green');
   });
 }
-
 // ── Render ────────────────────────────────────────────────────────────────────
-
 function renderCanbuses(buses) {
   const container = document.getElementById('canbus-cards');
   const empty     = document.getElementById('canbus-empty');
@@ -391,18 +341,15 @@ function renderCanbuses(buses) {
       <div class="card-name">${b.iface}</div>
     </div>`).join('');
 }
-
 function renderSims(sims) {
   const container = document.getElementById('sim-cards');
   const empty     = document.getElementById('sim-empty');
-
   if (!sims.length) {
     container.innerHTML = '';
     empty.style.display = '';
     return;
   }
   empty.style.display = 'none';
-
   container.innerHTML = sims.map(s => `
     <div class="card card-sim" id="card-sim-${s.id}">
       <div class="card-title">Simulation</div>
@@ -416,7 +363,6 @@ function renderSims(sims) {
       </div>
     </div>`).join('');
 }
-
 function renderGateway(gw) {
   const badge  = document.getElementById('gw-badge');
   const status = document.getElementById('gw-status');
@@ -430,9 +376,7 @@ function renderGateway(gw) {
     status.innerHTML = '<span class="status-dot dot-red"></span>unreachable';
   }
 }
-
 // ── Poll ──────────────────────────────────────────────────────────────────────
-
 function poll() {
   fetch('/api/system')
     .then(r => r.json())
@@ -440,10 +384,8 @@ function poll() {
       renderGateway(data.gateway);
       renderCanbuses(data.can_buses);
       renderSims(data.simulations);
-
       // Connections need one frame for layout to settle
       requestAnimationFrame(() => drawConnections(data));
-
       const now = new Date();
       document.getElementById('poll-ts').textContent =
         now.toTimeString().slice(0, 8);
@@ -452,13 +394,11 @@ function poll() {
       document.getElementById('gw-badge').className = 'gw-badge offline';
     });
 }
-
 // Redraw SVG lines whenever window resizes
 window.addEventListener('resize', () => {
   // Re-trigger last poll result — easiest: just poll again
   poll();
 });
-
 ensureMarkers();
 poll();
 setInterval(poll, 2000);
@@ -466,13 +406,9 @@ setInterval(poll, 2000);
 </body>
 </html>
 """
-
-
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTMLResponse(HTML)
-
-
 if __name__ == "__main__":
     port = int(os.environ.get("BOAT_SYSTEM_PORT", "8081"))
     print(f"BoAt System Dashboard → http://localhost:{port}")
