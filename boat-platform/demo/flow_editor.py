@@ -4,7 +4,6 @@ Run:  python3 demo/flow_editor.py
 Open: http://localhost:8085
 """
 from __future__ import annotations
-
 import json
 import subprocess
 import sys
@@ -13,28 +12,21 @@ import uuid
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-
-sys.path.insert(0, "/home/testuser/.local/lib/python3.12/site-packages")
-sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
-
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 import grpc
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from boat.client import BoAtClient
 from boat.v1 import can_pb2, ethernet_pb2
-
 _PORT      = 8085
 _FLOWS_DIR = Path(__file__).parent / "flows"
 _FLOWS_DIR.mkdir(exist_ok=True)
 _EXECUTOR  = Path(__file__).parent / "flow_executor.py"
-
 # ── subprocess registry ───────────────────────────────────────────────────────
 # flow_id → {"proc": Popen, "logs": deque, "seq": int}
 _running: dict[str, dict] = {}
 _reg_lock = threading.Lock()
-
-
 def _start_executor(flow_id: str, flow_file: Path) -> None:
     with _reg_lock:
         entry = _running.get(flow_id)
@@ -46,7 +38,6 @@ def _start_executor(flow_id: str, flow_file: Path) -> None:
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         _running[flow_id] = {"proc": proc, "logs": logs, "seq": 0}
-
     def _reader() -> None:
         for line in proc.stdout:
             with _reg_lock:
@@ -55,25 +46,18 @@ def _start_executor(flow_id: str, flow_file: Path) -> None:
                     entry["logs"].append(line.rstrip())
                     entry["seq"] += 1
     threading.Thread(target=_reader, daemon=True).start()
-
-
 def _stop_executor(flow_id: str) -> None:
     with _reg_lock:
         entry = _running.pop(flow_id, None)
     if entry and entry["proc"].poll() is None:
         entry["proc"].terminate()
-
-
 def _flow_status(flow_id: str) -> str:
     with _reg_lock:
         entry = _running.get(flow_id)
     if not entry:
         return "stopped"
     return "running" if entry["proc"].poll() is None else "stopped"
-
-
 # ── persistence ───────────────────────────────────────────────────────────────
-
 def _list_flows() -> list[dict]:
     out = []
     for f in sorted(_FLOWS_DIR.glob("*.json")):
@@ -87,18 +71,11 @@ def _list_flows() -> list[dict]:
         except Exception:
             pass
     return out
-
-
 # ── FastAPI ───────────────────────────────────────────────────────────────────
-
 app = FastAPI()
-
-
 @app.get("/api/flows")
 def api_list():
     return {"flows": _list_flows()}
-
-
 @app.post("/api/flows")
 def api_create(body: dict):
     flow_id = str(uuid.uuid4())[:8]
@@ -110,8 +87,6 @@ def api_create(body: dict):
     }
     (_FLOWS_DIR / f"{flow_id}.json").write_text(json.dumps(flow, indent=2))
     return {"id": flow_id, "name": name}
-
-
 @app.get("/api/flows/{flow_id}")
 def api_get(flow_id: str):
     f = _FLOWS_DIR / f"{flow_id}.json"
@@ -123,8 +98,6 @@ def api_get(flow_id: str):
     if "drawflow" in df:
         data["drawflow"] = df["drawflow"]
     return JSONResponse(data)
-
-
 @app.put("/api/flows/{flow_id}")
 def api_save(flow_id: str, body: dict):
     f = _FLOWS_DIR / f"{flow_id}.json"
@@ -136,8 +109,6 @@ def api_save(flow_id: str, body: dict):
         existing["meta"]["name"] = body["name"]
     f.write_text(json.dumps(existing, indent=2))
     return {"ok": True}
-
-
 @app.delete("/api/flows/{flow_id}")
 def api_delete(flow_id: str):
     _stop_executor(flow_id)
@@ -145,8 +116,6 @@ def api_delete(flow_id: str):
     if f.exists():
         f.unlink()
     return {"ok": True}
-
-
 @app.post("/api/flows/{flow_id}/deploy")
 def api_deploy(flow_id: str):
     f = _FLOWS_DIR / f"{flow_id}.json"
@@ -154,19 +123,13 @@ def api_deploy(flow_id: str):
         raise HTTPException(404, "Flow not found")
     _start_executor(flow_id, f)
     return {"ok": True, "status": "running"}
-
-
 @app.post("/api/flows/{flow_id}/stop")
 def api_stop(flow_id: str):
     _stop_executor(flow_id)
     return {"ok": True, "status": "stopped"}
-
-
 @app.get("/api/flows/{flow_id}/status")
 def api_status(flow_id: str):
     return {"status": _flow_status(flow_id)}
-
-
 @app.get("/api/flows/{flow_id}/log")
 def api_log(flow_id: str, since: int = 0):
     with _reg_lock:
@@ -177,8 +140,6 @@ def api_log(flow_id: str, since: int = 0):
     total  = entry["seq"]
     offset = max(0, len(logs) - max(0, total - since))
     return {"lines": logs[offset:], "seq": total}
-
-
 @app.get("/api/gateway/can-buses")
 def api_gw_can_buses():
     try:
@@ -187,8 +148,6 @@ def api_gw_can_buses():
         return {"ifaces": list(r.ifaces)}
     except Exception:
         return {"ifaces": []}
-
-
 @app.get("/api/gateway/eth-ifaces")
 def api_gw_eth_ifaces():
     try:
@@ -197,15 +156,10 @@ def api_gw_eth_ifaces():
         return {"ifaces": list(r.ifaces)}
     except Exception:
         return {"ifaces": []}
-
-
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTMLResponse(_HTML)
-
-
 # ── HTML ──────────────────────────────────────────────────────────────────────
-
 _HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -224,7 +178,6 @@ _HTML = r"""<!DOCTYPE html>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; background: var(--bg); color: var(--text);
              font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-
 /* ── layout ── */
 header { height: 46px; background: var(--surface); border-bottom: 1px solid var(--border);
          display: flex; align-items: center; padding: 0 16px; gap: 12px; }
@@ -236,9 +189,7 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
                padding: 3px 11px; border-radius: 4px; transition: background .12s, color .12s; }
 #panel-nav a:hover  { background: #21262d; color: var(--text); }
 #panel-nav a.active { color: var(--blue); background: rgba(88,166,255,.10); font-weight: 600; }
-
 .main-row { display: flex; height: calc(100vh - 46px - 32px); }
-
 /* ── sidebar ── */
 #sidebar { width: 220px; background: var(--surface); border-right: 1px solid var(--border);
            display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
@@ -257,7 +208,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
 .flow-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
 .flow-dot.running { background: var(--green); }
 .flow-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
 #palette { flex: 1; overflow-y: auto; }
 .pal-section { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
                padding: 6px 10px 2px; }
@@ -265,7 +215,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
             border-radius: 3px; margin: 1px 4px; }
 .pal-node:hover { background: rgba(255,255,255,.06); }
 .pal-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-
 /* ── properties panel (right column) ── */
 #props-panel { width: 240px; background: var(--surface); border-left: 1px solid var(--border);
                display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
@@ -294,7 +243,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
 .psv          { font-size: 10px; color: var(--muted); }
 .psp          { font-size: 10px; color: var(--text); }   /* port label */
 .prop-empty   { font-size: 10px; color: var(--muted); padding: 14px 10px; line-height: 1.6; }
-
 /* ── canvas + toolbar ── */
 #canvas-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 #toolbar { height: 38px; background: var(--surface); border-bottom: 1px solid var(--border);
@@ -315,10 +263,8 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
 #status-badge { font-size: 10px; margin-left: auto; }
 .badge-stopped { color: var(--muted); }
 .badge-running { color: var(--green); }
-
 #drawflow-wrap { flex: 1; position: relative; overflow: hidden; }
 #drawflow { width: 100%; height: 100%; background: var(--bg); }
-
 /* ── log pane ── */
 #log-pane { height: 140px; background: var(--bg); border-top: 1px solid var(--border);
             display: flex; flex-direction: column; flex-shrink: 0; }
@@ -330,7 +276,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
 .log-line { white-space: pre; line-height: 1.5; }
 .log-warn  { color: var(--yellow); }
 .log-error { color: var(--red); }
-
 /* ── Drawflow overrides ── */
 .drawflow { background: var(--bg) !important; }
 .drawflow .drawflow-node {
@@ -360,7 +305,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
 .drawflow .connection .main-path { stroke: #444c56 !important; stroke-width: 2px !important; }
 .drawflow .connection .main-path:hover { stroke: var(--blue) !important; }
 .drawflow .connection.selected .main-path { stroke: var(--blue) !important; }
-
 /* ── typed port colours ── */
 .drawflow .drawflow-node .input.port-can_frame,
 .drawflow .drawflow-node .output.port-can_frame  { background: #58a6ff !important; }
@@ -376,7 +320,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
 .drawflow .connection.conn-warn .main-path {
   stroke: #f0883e !important; stroke-dasharray: 6,3 !important;
 }
-
 /* ── boat node cards ── */
 .boat-node { border-radius: 6px; overflow: hidden; }
 .boat-node-hdr {
@@ -398,23 +341,19 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
 </style>
 </head>
 <body>
-
 <header>
   <span class="logo">⛵ BoAt</span>
   <span style="color:var(--muted)">Flow Editor</span>
   <span class="spacer"></span>
 </header>
 <nav id="panel-nav">
+  <a class="nav-link" data-port="8086">Launcher</a>
   <a class="nav-link" data-port="8080">Dashboard</a>
   <a class="nav-link" data-port="8081">Nodes</a>
   <a class="nav-link" data-port="8082">Commander</a>
   <a class="nav-link" data-port="8083">Recorder</a>
-  <a class="nav-link" data-port="8084">Debug</a>
-  <a class="nav-link" data-port="8085">Flow Editor</a>
 </nav>
-
 <div class="main-row">
-
   <!-- ── sidebar ── -->
   <div id="sidebar">
     <div id="flow-list-panel">
@@ -424,7 +363,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
       </div>
       <div id="flow-list"></div>
     </div>
-
     <div id="palette">
       <div class="pal-section">Sources</div>
       <div class="pal-node" draggable="true" ondragstart="drag(event,'can_in')">
@@ -442,7 +380,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
       <div class="pal-node" draggable="true" ondragstart="drag(event,'inject')">
         <span class="pal-dot" style="background:var(--src)"></span>Inject
       </div>
-
       <div class="pal-section">Processing</div>
       <div class="pal-node" draggable="true" ondragstart="drag(event,'filter')">
         <span class="pal-dot" style="background:var(--proc)"></span>Filter
@@ -471,7 +408,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
       <div class="pal-node" draggable="true" ondragstart="drag(event,'switch_node')">
         <span class="pal-dot" style="background:var(--proc)"></span>Switch
       </div>
-
       <div class="pal-section">State</div>
       <div class="pal-node" draggable="true" ondragstart="drag(event,'set_var')">
         <span class="pal-dot" style="background:var(--proc)"></span>Set Variable
@@ -479,7 +415,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
       <div class="pal-node" draggable="true" ondragstart="drag(event,'get_var')">
         <span class="pal-dot" style="background:var(--proc)"></span>Get Variable
       </div>
-
       <div class="pal-section">Convert</div>
       <div class="pal-node" draggable="true" ondragstart="drag(event,'can_to_bytes')">
         <span class="pal-dot" style="background:var(--proc)"></span>CAN → Bytes
@@ -493,7 +428,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
       <div class="pal-node" draggable="true" ondragstart="drag(event,'set_field')">
         <span class="pal-dot" style="background:var(--proc)"></span>Set Field
       </div>
-
       <div class="pal-section">Sinks</div>
       <div class="pal-node" draggable="true" ondragstart="drag(event,'can_out')">
         <span class="pal-dot" style="background:var(--sink)"></span>CAN Out
@@ -508,9 +442,7 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
         <span class="pal-dot" style="background:var(--sink)"></span>Debug
       </div>
     </div>
-
   </div>
-
   <!-- ── canvas column ── -->
   <div id="canvas-col">
     <div id="toolbar">
@@ -522,12 +454,10 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
       <button class="tb-btn red"   id="btn-stop"   onclick="stopFlow()" style="display:none">■ Stop</button>
       <span id="status-badge" class="badge-stopped">● stopped</span>
     </div>
-
     <div id="drawflow-wrap"
          ondrop="drop(event)" ondragover="allowDrop(event)">
       <div id="drawflow"></div>
     </div>
-
     <div id="log-pane">
       <div id="log-pane-hdr">
         Log
@@ -536,7 +466,6 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
       <div id="log-lines"></div>
     </div>
   </div>
-
   <!-- ── properties panel (right) ── -->
   <div id="props-panel">
     <div class="sidebar-hdr">Properties</div>
@@ -544,9 +473,7 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
       <div class="prop-empty">Click a node to see its properties.</div>
     </div>
   </div>
-
 </div>
-
 <!-- shared datalists — populated by loadGatewayData() or static -->
 <datalist id="dl-can-ifaces"></datalist>
 <datalist id="dl-eth-ifaces"></datalist>
@@ -568,14 +495,12 @@ header { height: 46px; background: var(--surface); border-bottom: 1px solid var(
   <option value="ts_ns"/>
   <option value="count"/>
 </datalist>
-
 <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow@0.0.59/dist/drawflow.min.js"></script>
 <script>
 // ── Drawflow init ─────────────────────────────────────────────────────────────
 const editor = new Drawflow(document.getElementById('drawflow'));
 editor.reroute = true;
 editor.start();
-
 // ── Node templates ────────────────────────────────────────────────────────────
 const TEMPLATES = {
   can_in: `<div class="boat-node">
@@ -586,7 +511,6 @@ const TEMPLATES = {
       <div class="boat-field"><label>CAN ID filter (optional)</label>
         <input type="text" df-can_id_filter placeholder="0x123 or empty"/></div>
     </div></div>`,
-
   eth_in: `<div class="boat-node">
     <div class="boat-node-hdr src">Ethernet In</div>
     <div class="boat-node-body">
@@ -595,14 +519,12 @@ const TEMPLATES = {
       <div class="boat-field"><label>EtherType filter (optional)</label>
         <input type="text" df-ethertype_filter placeholder="0x0800 or empty"/></div>
     </div></div>`,
-
   bus_in: `<div class="boat-node">
     <div class="boat-node-hdr src">Bus Signal In</div>
     <div class="boat-node-body">
       <div class="boat-field"><label>Signal name filter (optional)</label>
         <input type="text" df-signal_filter list="dl-bus-signals" placeholder="engine.rpm or empty"/></div>
     </div></div>`,
-
   timer: `<div class="boat-node">
     <div class="boat-node-hdr src">Timer</div>
     <div class="boat-node-body">
@@ -611,7 +533,6 @@ const TEMPLATES = {
       <div class="boat-field"><label>Topic</label>
         <input type="text" df-topic placeholder="timer"/></div>
     </div></div>`,
-
   inject: `<div class="boat-node">
     <div class="boat-node-hdr src">Inject</div>
     <div class="boat-node-body">
@@ -622,7 +543,6 @@ const TEMPLATES = {
       <div class="boat-field"><label>Delay (ms)</label>
         <input type="number" df-delay_ms value="500" min="0"/></div>
     </div></div>`,
-
   filter: `<div class="boat-node">
     <div class="boat-node-hdr proc">Filter</div>
     <div class="boat-node-body">
@@ -639,7 +559,6 @@ const TEMPLATES = {
       <div class="boat-field"><label>Value</label>
         <input type="text" df-value placeholder="0x123"/></div>
     </div></div>`,
-
   transform: `<div class="boat-node">
     <div class="boat-node-hdr proc">Transform</div>
     <div class="boat-node-body">
@@ -648,21 +567,18 @@ const TEMPLATES = {
       <div class="boat-field"><label>Value</label>
         <input type="text" df-value placeholder="0x234"/></div>
     </div></div>`,
-
   counter: `<div class="boat-node">
     <div class="boat-node-hdr proc">Counter</div>
     <div class="boat-node-body">
       <div style="color:var(--muted);font-size:10px;padding:2px 0">
         Adds <code>count</code> field to each message</div>
     </div></div>`,
-
   delay: `<div class="boat-node">
     <div class="boat-node-hdr proc">Delay</div>
     <div class="boat-node-body">
       <div class="boat-field"><label>Delay (ms)</label>
         <input type="number" df-delay_ms value="100" min="0"/></div>
     </div></div>`,
-
   math: `<div class="boat-node">
     <div class="boat-node-hdr proc">Math</div>
     <div class="boat-node-body">
@@ -679,7 +595,6 @@ const TEMPLATES = {
       <div class="boat-field"><label>Operand</label>
         <input type="text" df-value placeholder="10"/></div>
     </div></div>`,
-
   switch_node: `<div class="boat-node">
     <div class="boat-node-hdr proc">Switch</div>
     <div class="boat-node-body">
@@ -693,7 +608,6 @@ const TEMPLATES = {
         <input type="text" df-case3 placeholder="0x300"/></div>
       <div style="color:var(--muted);font-size:10px;margin-top:4px">out 4 = default</div>
     </div></div>`,
-
   change: `<div class="boat-node">
     <div class="boat-node-hdr proc">Change Detector</div>
     <div class="boat-node-body">
@@ -702,14 +616,12 @@ const TEMPLATES = {
       <div style="color:var(--muted);font-size:10px;padding:2px 0">
         Forwards message only when value changes</div>
     </div></div>`,
-
   merge: `<div class="boat-node">
     <div class="boat-node-hdr proc">Merge</div>
     <div class="boat-node-body">
       <div style="color:var(--muted);font-size:10px;padding:2px 0">
         Combines two streams into one output</div>
     </div></div>`,
-
   set_var: `<div class="boat-node">
     <div class="boat-node-hdr proc">Set Variable</div>
     <div class="boat-node-body">
@@ -718,7 +630,6 @@ const TEMPLATES = {
       <div class="boat-field"><label>Read from field (empty = payload)</label>
         <input type="text" df-field list="dl-field-paths" placeholder="payload.value"/></div>
     </div></div>`,
-
   get_var: `<div class="boat-node">
     <div class="boat-node-hdr proc">Get Variable</div>
     <div class="boat-node-body">
@@ -727,7 +638,6 @@ const TEMPLATES = {
       <div class="boat-field"><label>Write to field</label>
         <input type="text" df-field list="dl-field-paths" placeholder="payload.value"/></div>
     </div></div>`,
-
   if_node: `<div class="boat-node">
     <div class="boat-node-hdr proc">If / Else</div>
     <div class="boat-node-body">
@@ -748,7 +658,6 @@ const TEMPLATES = {
         <span style="color:var(--red)">out 2 — ELSE ▲</span>
       </div>
     </div></div>`,
-
   can_out: `<div class="boat-node">
     <div class="boat-node-hdr sink">CAN Out</div>
     <div class="boat-node-body">
@@ -759,7 +668,6 @@ const TEMPLATES = {
       <div class="boat-field"><label>Data hex (overrides msg)</label>
         <input type="text" df-data placeholder="DE AD BE EF or empty"/></div>
     </div></div>`,
-
   eth_out: `<div class="boat-node">
     <div class="boat-node-hdr sink">Ethernet Out</div>
     <div class="boat-node-body">
@@ -772,7 +680,6 @@ const TEMPLATES = {
       <div class="boat-field"><label>Dst MAC (optional)</label>
         <input type="text" df-dst_mac placeholder="FF:FF:FF:FF:FF:FF"/></div>
     </div></div>`,
-
   bus_out: `<div class="boat-node">
     <div class="boat-node-hdr sink">Bus Signal Out</div>
     <div class="boat-node-body">
@@ -786,14 +693,12 @@ const TEMPLATES = {
           <option value="bytes">bytes (hex)</option>
         </select></div>
     </div></div>`,
-
   debug: `<div class="boat-node">
     <div class="boat-node-hdr sink">Debug</div>
     <div class="boat-node-body">
       <div class="boat-field"><label>Label</label>
         <input type="text" df-label placeholder="debug"/></div>
     </div></div>`,
-
   can_to_bytes: `<div class="boat-node">
     <div class="boat-node-hdr proc">CAN → Bytes</div>
     <div class="boat-node-body">
@@ -801,7 +706,6 @@ const TEMPLATES = {
         Packs <code>can_id</code> (4B BE) + <code>dlc</code> (1B) + data<br>
         into a <code>value</code> bytes payload</div>
     </div></div>`,
-
   bytes_to_can: `<div class="boat-node">
     <div class="boat-node-hdr proc">Bytes → CAN</div>
     <div class="boat-node-body">
@@ -810,7 +714,6 @@ const TEMPLATES = {
       <div style="color:var(--muted);font-size:10px;padding:2px 0">
         Unpacks bytes → <code>can_frame</code></div>
     </div></div>`,
-
   extract_field: `<div class="boat-node">
     <div class="boat-node-hdr proc">Extract Field</div>
     <div class="boat-node-body">
@@ -819,7 +722,6 @@ const TEMPLATES = {
       <div style="color:var(--muted);font-size:10px;padding:2px 0">
         Emits a <code>value</code> message with extracted field</div>
     </div></div>`,
-
   set_field: `<div class="boat-node">
     <div class="boat-node-hdr proc">Set Field</div>
     <div class="boat-node-body">
@@ -829,7 +731,6 @@ const TEMPLATES = {
         <input type="text" df-value placeholder="42"/></div>
     </div></div>`,
 };
-
 const NODE_IO = {
   // sources
   can_in:       [0,1], eth_in:    [0,1], bus_in:  [0,1],
@@ -846,7 +747,6 @@ const NODE_IO = {
   // sinks
   can_out:      [1,0], eth_out:   [1,0], bus_out: [1,0], debug: [1,0],
 };
-
 // ── Port type system ──────────────────────────────────────────────────────────
 // in/out arrays list the message type expected/produced on each port (by index).
 const PORT_TYPES = {
@@ -879,9 +779,7 @@ const PORT_TYPES = {
   bus_out:       { in: ['bus_signal'],               out: [] },
   debug:         { in: ['any'],                      out: [] },
 };
-
 const _PORT_CLASSES = ['port-can_frame','port-eth_frame','port-bus_signal','port-value','port-any'];
-
 function colorNodePorts(nodeId) {
   const nodeEl = document.querySelector(`.drawflow-node[id="node-${nodeId}"]`);
   if (!nodeEl) return;
@@ -898,14 +796,12 @@ function colorNodePorts(nodeId) {
     el.classList.add('port-' + (def.out[i] || 'any'));
   });
 }
-
 function _portType(nodeId, kind, idx) {
   const nodeEl = document.querySelector(`.drawflow-node[id="node-${nodeId}"]`);
   if (!nodeEl) return 'any';
   const def = PORT_TYPES[nodeEl.classList[1]];
   return def ? (def[kind][idx] || 'any') : 'any';
 }
-
 function colorConnection(connEl) {
   const cls = Array.from(connEl.classList);
   const outNode = (cls.find(c => c.startsWith('node_out_node-')) || '').replace('node_out_node-', '');
@@ -918,7 +814,6 @@ function colorConnection(connEl) {
   const warn = srcType !== 'any' && dstType !== 'any' && srcType !== dstType;
   connEl.classList.toggle('conn-warn', warn);
 }
-
 function colorAll() {
   document.querySelectorAll('.drawflow-node').forEach(el => {
     const m = el.id.match(/node-(\d+)/);
@@ -926,11 +821,9 @@ function colorAll() {
   });
   document.querySelectorAll('#drawflow .connection').forEach(colorConnection);
 }
-
 editor.on('nodeCreated',       id  => colorNodePorts(id));
 editor.on('connectionCreated', ()  => setTimeout(colorAll, 20));
 editor.on('connectionRemoved', ()  => setTimeout(colorAll, 20));
-
 // ── Node documentation ────────────────────────────────────────────────────────
 // shape rows: [key, type_desc]
 //   keys starting with "payload." are indented under a "payload {" block.
@@ -1035,7 +928,6 @@ const NODE_DOCS = {
       ]
     }]
   },
-
   filter: {
     title: "Filter", cat: "Processing",
     desc: "Passes messages through only when a field condition is true. Messages that don't match are dropped.",
@@ -1134,7 +1026,6 @@ const NODE_DOCS = {
       { port: "Output 4 — default",type: "→ same as input", note: "Forwarded when no case matches." },
     ]
   },
-
   set_var: {
     title: "Set Variable", cat: "State",
     desc: "Stores a value extracted from the message into a named variable. Variables are shared across all nodes in the flow and persist until the flow is stopped. The message passes through unchanged.",
@@ -1155,7 +1046,6 @@ const NODE_DOCS = {
     input:   { type: "any", note: "Any message type" },
     outputs: [{ port: "Output", type: "→ same as input", note: "Same message but with the configured field set to the variable's value." }]
   },
-
   can_to_bytes: {
     title: "CAN → Bytes", cat: "Convert",
     desc: "Packs a can_frame message into a compact byte buffer. Use before sending CAN data over a non-CAN channel.",
@@ -1218,7 +1108,6 @@ const NODE_DOCS = {
     input:   { type: "any", note: "Any message type" },
     outputs: [{ port: "Output", type: "→ same as input", note: "Same message with the configured field overwritten." }]
   },
-
   can_out: {
     title: "CAN Out", cat: "Sink",
     desc: "Sends a CAN frame via the gateway. Config fields override values from the incoming message payload.",
@@ -1285,12 +1174,10 @@ const NODE_DOCS = {
     outputs: null
   },
 };
-
 const _CAT_COLOR = {
   Source: 'var(--src)', Processing: 'var(--proc)', State: 'var(--proc)',
   Convert: 'var(--blue)', Sink: 'var(--sink)',
 };
-
 // Render an array of [key, desc] shape rows into HTML.
 // Keys starting with "payload." are grouped under a "payload {" block.
 function _renderShape(shape) {
@@ -1308,7 +1195,6 @@ function _renderShape(shape) {
   }
   return `<div class="prop-shape">${h}</div>`;
 }
-
 function _typeTag(type) {
   const colors = {
     can_frame: 'var(--src)', eth_frame: 'var(--purple)',
@@ -1320,13 +1206,11 @@ function _typeTag(type) {
   return `<span style="color:${col};font-weight:600">${arrow}</span>`
        + `<span style="color:${col}">${base}</span>`;
 }
-
 function showProps(nodeId) {
   const nd  = editor.getNodeFromId(nodeId);
   if (!nd) return;
   const doc  = NODE_DOCS[nd.name] || { title: nd.name, cat: '—', desc: '', fields: {}, input: null, outputs: null };
   const data = nd.data || {};
-
   // ── config fields ─────────────────────────────────────────────────────────
   const allKeys = new Set([...Object.keys(doc.fields || {}), ...Object.keys(data)]);
   let fieldsHtml = '';
@@ -1340,7 +1224,6 @@ function showProps(nodeId) {
         <div class="prop-val${isEmpty ? ' empty' : ''}">${isEmpty ? 'not set' : String(raw)}</div>
       </div>`;
   }
-
   // ── input section ─────────────────────────────────────────────────────────
   let inputHtml = '';
   if (doc.input) {
@@ -1351,7 +1234,6 @@ function showProps(nodeId) {
                   <div style="padding:3px 10px 0">${tag}</div>
                   ${note}${shp}`;
   }
-
   // ── output section ────────────────────────────────────────────────────────
   let outputHtml = '';
   if (doc.outputs) {
@@ -1364,7 +1246,6 @@ function showProps(nodeId) {
       outputHtml += `${portLabel}<div style="padding:3px 10px 0">${tag}</div>${note}${shp}`;
     }
   }
-
   document.getElementById('props-content').innerHTML = `
     <div class="prop-hdr">
       <span class="prop-title">${doc.title}</span>
@@ -1376,21 +1257,17 @@ function showProps(nodeId) {
     ${outputHtml}
   `;
 }
-
 function clearProps() {
   document.getElementById('props-content').innerHTML =
     '<div class="prop-empty">Click a node to see its properties and message structure.</div>';
 }
-
 editor.on('nodeSelected',    id => showProps(id));
 editor.on('nodeUnselected',  ()  => clearProps());
 editor.on('nodeDataChanged', id  => showProps(id));
-
 // ── State ─────────────────────────────────────────────────────────────────────
 let currentFlowId   = null;
 let logSince        = 0;
 let statusPollTimer = null;
-
 // ── Drag & drop ───────────────────────────────────────────────────────────────
 function drag(ev, type) { ev.dataTransfer.setData('nodeType', type); }
 function allowDrop(ev)  { ev.preventDefault(); }
@@ -1404,7 +1281,6 @@ function drop(ev) {
   const [ins, outs] = NODE_IO[type];
   editor.addNode(type, ins, outs, pos_x, pos_y, type, {}, TEMPLATES[type]);
 }
-
 // ── Flow CRUD ─────────────────────────────────────────────────────────────────
 async function loadFlowList() {
   const r  = await fetch('/api/flows');
@@ -1421,7 +1297,6 @@ async function loadFlowList() {
     el.appendChild(div);
   }
 }
-
 async function newFlow() {
   const name = prompt('Flow name:', 'New Flow');
   if (!name) return;
@@ -1433,7 +1308,6 @@ async function newFlow() {
   await openFlow(d.id);
   await loadFlowList();
 }
-
 async function openFlow(id) {
   if (currentFlowId && id !== currentFlowId) await autoSave();
   clearInterval(statusPollTimer);
@@ -1457,7 +1331,6 @@ async function openFlow(id) {
   pollStatus();
   statusPollTimer = setInterval(pollStatus, 1500);
 }
-
 async function autoSave() {
   if (!currentFlowId) return;
   // editor.export() returns {"drawflow": {"Home": {...}}}
@@ -1468,13 +1341,11 @@ async function autoSave() {
     body: JSON.stringify({drawflow: df.drawflow}),
   });
 }
-
 async function saveFlow() {
   if (!currentFlowId) return;
   await autoSave();
   flashToolbarMsg('Saved');
 }
-
 async function renameFlow(name) {
   if (!currentFlowId) return;
   await fetch('/api/flows/' + currentFlowId, {
@@ -1483,7 +1354,6 @@ async function renameFlow(name) {
   });
   await loadFlowList();
 }
-
 // ── Deploy / stop ─────────────────────────────────────────────────────────────
 async function deployFlow() {
   if (!currentFlowId) return;
@@ -1493,13 +1363,11 @@ async function deployFlow() {
   await fetch('/api/flows/' + currentFlowId + '/deploy', {method:'POST'});
   await pollStatus();
 }
-
 async function stopFlow() {
   if (!currentFlowId) return;
   await fetch('/api/flows/' + currentFlowId + '/stop', {method:'POST'});
   await pollStatus();
 }
-
 async function pollStatus() {
   if (!currentFlowId) return;
   const r  = await fetch('/api/flows/' + currentFlowId + '/status');
@@ -1515,7 +1383,6 @@ async function pollStatus() {
   });
   if (running) fetchLog();
 }
-
 // ── Log ───────────────────────────────────────────────────────────────────────
 let logFetching = false;
 async function fetchLog() {
@@ -1540,12 +1407,10 @@ async function fetchLog() {
     if (atBottom) el.scrollTop = el.scrollHeight;
   } catch { logFetching = false; }
 }
-
 function clearLog() {
   document.getElementById('log-lines').innerHTML = '';
   logSince = 0;
 }
-
 // ── Toolbar flash ─────────────────────────────────────────────────────────────
 function flashToolbarMsg(msg) {
   const badge = document.getElementById('status-badge');
@@ -1553,7 +1418,6 @@ function flashToolbarMsg(msg) {
   badge.textContent = msg;
   setTimeout(() => { badge.textContent = prev; }, 1200);
 }
-
 // ── Nav bar ───────────────────────────────────────────────────────────────────
 (function() {
   const h = window.location.hostname, p = window.location.port;
@@ -1562,7 +1426,6 @@ function flashToolbarMsg(msg) {
     if (a.dataset.port === p) a.classList.add('active');
   });
 })();
-
 // ── Gateway data (populates datalists) ───────────────────────────────────────
 async function loadGatewayData() {
   try {
@@ -1577,7 +1440,6 @@ async function loadGatewayData() {
       ed.ifaces.map(i => `<option value="${i}"/>`).join('');
   } catch {}
 }
-
 // ── Boot ──────────────────────────────────────────────────────────────────────
 setInterval(() => { if (currentFlowId) fetchLog(); }, 600);
 setInterval(loadGatewayData, 5000);   // refresh interface lists every 5 s
@@ -1587,6 +1449,5 @@ loadGatewayData();
 </body>
 </html>
 """
-
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")

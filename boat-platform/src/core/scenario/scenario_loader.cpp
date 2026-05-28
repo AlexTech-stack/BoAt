@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -11,13 +12,16 @@
 namespace boat::core {
 namespace {
 
-struct JsonValue;
-using JsonObject = std::unordered_map<std::string, JsonValue>;
-using JsonArray = std::vector<JsonValue>;
-
+struct JsonMap;
 struct JsonValue {
-  std::variant<std::nullptr_t, bool, double, std::string, JsonArray, JsonObject> value;
+  std::variant<std::nullptr_t, bool, double, std::string, std::vector<JsonValue>, std::unique_ptr<JsonMap> > value;
 };
+struct JsonMap {
+  std::unordered_map<std::string, JsonValue> map;
+};
+
+using JsonObject = JsonMap;
+using JsonArray = std::vector<JsonValue>;
 
 class JsonParser {
  public:
@@ -33,7 +37,7 @@ class JsonParser {
  private:
   JsonValue ParseValue() {
     SkipWs();
-    if (Match('{')) return JsonValue{ParseObject()};
+    if (Match('{')) return JsonValue{std::make_unique<JsonMap>(ParseObject()) };
     if (Match('[')) return JsonValue{ParseArray()};
     if (Match('"')) return JsonValue{ParseString()};
     if (std::isdigit(Peek()) || Peek() == '-') return JsonValue{ParseNumber()};
@@ -43,8 +47,8 @@ class JsonParser {
     throw std::runtime_error("invalid JSON value");
   }
 
-  JsonObject ParseObject() {
-    JsonObject obj;
+  JsonMap ParseObject() {
+    JsonMap obj;
     SkipWs();
     if (Match('}')) return obj;
     for (;;) {
@@ -53,7 +57,7 @@ class JsonParser {
       const std::string key = ParseString();
       SkipWs();
       Expect(':');
-      obj[key] = ParseValue();
+      obj.map[key] = ParseValue();
       SkipWs();
       if (Match('}')) break;
       Expect(',');
@@ -129,8 +133,8 @@ class JsonParser {
   std::size_t pos_{0};
 };
 
-const JsonObject& AsObject(const JsonValue& value) {
-  return std::get<JsonObject>(value.value);
+const std::unordered_map<std::string, JsonValue>& AsObject(const JsonValue& value) {
+  return std::get<std::unique_ptr<JsonMap> >(value.value)->map;
 }
 const JsonArray& AsArray(const JsonValue& value) {
   return std::get<JsonArray>(value.value);
@@ -145,7 +149,7 @@ double AsDouble(const JsonValue& value) {
   return std::get<double>(value.value);
 }
 
-ScenarioDef ParseScenarioFromObject(const JsonObject& root) {
+ScenarioDef ParseScenarioFromObject(const std::unordered_map<std::string, JsonValue>& root) {
   ScenarioDef scenario;
   scenario.id = AsString(root.at("id"));
   scenario.name = AsString(root.at("name"));

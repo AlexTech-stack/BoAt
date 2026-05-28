@@ -5,7 +5,6 @@ Runs a single visual flow JSON as a gateway node subprocess.
 Usage: python3 demo/flow_executor.py <flow.json>
 """
 from __future__ import annotations
-
 import copy
 import json
 import signal
@@ -15,25 +14,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
-sys.path.insert(0, "/home/testuser/.local/lib/python3.12/site-packages")
-sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
-
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 import grpc
 from boat.client import BoAtClient
 from boat.v1 import bus_pb2, can_pb2, ethernet_pb2
-
 _GW = "localhost:50051"
-
-
 # ── helpers ───────────────────────────────────────────────────────────────────
-
 def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S.%f")[:-3]
-
 def log(msg: str) -> None:
     print(f"{_ts()}  {msg}", flush=True)
-
 def parse_value(v: Any) -> Any:
     """Try hex int, decimal int, float, bool, else string."""
     if isinstance(v, (int, float, bool)):
@@ -49,14 +39,12 @@ def parse_value(v: Any) -> Any:
     try:   return float(s)
     except ValueError: pass
     return s
-
 def get_field(obj: Any, path: str) -> Any:
     for part in path.split("."):
         if not isinstance(obj, dict):
             return None
         obj = obj.get(part)
     return obj
-
 def set_field(obj: dict, path: str, value: Any) -> None:
     parts = path.split(".")
     for part in parts[:-1]:
@@ -64,7 +52,6 @@ def set_field(obj: dict, path: str, value: Any) -> None:
             obj[part] = {}
         obj = obj[part]
     obj[parts[-1]] = value
-
 def compare(actual: Any, op: str, expected: Any) -> bool:
     try:
         if op == "==":       return actual == expected or str(actual) == str(expected)
@@ -75,10 +62,7 @@ def compare(actual: Any, op: str, expected: Any) -> bool:
     except Exception:
         return False
     return False
-
-
 # ── node base ─────────────────────────────────────────────────────────────────
-
 class Node:
     def __init__(self, node_id: str, config: dict) -> None:
         self.id = node_id
@@ -86,7 +70,6 @@ class Node:
         # successors[output_index] = [NodeA, NodeB, ...]
         # Single-output nodes only use index 0.
         self.successors: list[list["Node"]] = []
-
     def process(self, msg: dict) -> "dict | tuple | None":
         """
         Return values:
@@ -95,19 +78,14 @@ class Node:
           None           → drop message
         """
         return msg
-
     def start(self, client: BoAtClient, graph: "Graph") -> None:
         pass
-
-
 # ── source nodes ──────────────────────────────────────────────────────────────
-
 class CanInNode(Node):
     def start(self, client: BoAtClient, graph: "Graph") -> None:
         iface      = self.config.get("iface", "")
         id_flt     = self.config.get("can_id_filter", "").strip()
         expected_id = parse_value(id_flt) if id_flt else None
-
         def _run() -> None:
             while True:
                 try:
@@ -133,14 +111,11 @@ class CanInNode(Node):
                 except grpc.RpcError:
                     time.sleep(2)
         threading.Thread(target=_run, daemon=True).start()
-
-
 class EthInNode(Node):
     def start(self, client: BoAtClient, graph: "Graph") -> None:
         iface      = self.config.get("iface", "")
         et_flt     = self.config.get("ethertype_filter", "").strip()
         expected_et = parse_value(et_flt) if et_flt else 0
-
         def _run() -> None:
             while True:
                 try:
@@ -167,13 +142,10 @@ class EthInNode(Node):
                 except grpc.RpcError:
                     time.sleep(2)
         threading.Thread(target=_run, daemon=True).start()
-
-
 class BusInNode(Node):
     def start(self, client: BoAtClient, graph: "Graph") -> None:
         sig_filter = self.config.get("signal_filter", "").strip()
         names      = [sig_filter] if sig_filter else []
-
         def _run() -> None:
             while True:
                 try:
@@ -201,13 +173,10 @@ class BusInNode(Node):
                 except grpc.RpcError:
                     time.sleep(2)
         threading.Thread(target=_run, daemon=True).start()
-
-
 class TimerNode(Node):
     def start(self, client: BoAtClient, graph: "Graph") -> None:
         interval_ms = float(self.config.get("interval_ms", 1000))
         topic       = self.config.get("topic", "timer") or "timer"
-
         def _run() -> None:
             count = 0
             while True:
@@ -220,22 +189,17 @@ class TimerNode(Node):
                 })
                 count += 1
         threading.Thread(target=_run, daemon=True).start()
-
-
 class InjectNode(Node):
     """Fire a single configurable message shortly after flow start.
-
     Config:
       topic      — message topic
       payload    — JSON object string OR a scalar value (e.g. "42" or "hello")
       delay_ms   — ms to wait before firing (default 500)
     """
-
     def start(self, client: BoAtClient, graph: "Graph") -> None:
         delay_ms    = float(self.config.get("delay_ms", 500) or 500)
         topic       = self.config.get("topic", "inject") or "inject"
         payload_raw = (self.config.get("payload", "") or "").strip()
-
         if payload_raw.startswith("{"):
             try:
                 payload = json.loads(payload_raw)
@@ -245,7 +209,6 @@ class InjectNode(Node):
             payload = {"value": parse_value(payload_raw)}
         else:
             payload = {}
-
         def _run() -> None:
             time.sleep(delay_ms / 1000.0)
             log(f"[Inject] firing → {topic}")
@@ -256,10 +219,7 @@ class InjectNode(Node):
                 "ts_ns":   time.time_ns(),
             })
         threading.Thread(target=_run, daemon=True).start()
-
-
 # ── processing nodes ──────────────────────────────────────────────────────────
-
 class FilterNode(Node):
     def process(self, msg: dict) -> dict | None:
         field    = self.config.get("field", "topic") or "topic"
@@ -270,8 +230,6 @@ class FilterNode(Node):
             log(f"[Filter] PASS  {field} {op} {expected}")
             return msg
         return None
-
-
 class TransformNode(Node):
     def process(self, msg: dict) -> dict | None:
         field = self.config.get("field", "topic") or "topic"
@@ -280,38 +238,29 @@ class TransformNode(Node):
         set_field(out, field, value)
         log(f"[Transform] {field} = {value}")
         return out
-
-
 class CounterNode(Node):
     def __init__(self, node_id: str, config: dict) -> None:
         super().__init__(node_id, config)
         self._count = 0
         self._lock  = threading.Lock()
-
     def process(self, msg: dict) -> dict | None:
         out = copy.deepcopy(msg)
         with self._lock:
             out["count"] = self._count
             self._count += 1
         return out
-
-
 class DelayNode(Node):
     def process(self, msg: dict) -> dict | None:
         delay_ms = float(self.config.get("delay_ms", 100) or 100)
         time.sleep(delay_ms / 1000.0)
         return msg
-
-
 class MathNode(Node):
     """Apply an arithmetic operation to a numeric field.
-
     Config:
       field  — dotted path to the field to operate on (e.g. "payload.value")
       op     — one of  +  -  *  /  %
       value  — right-hand operand (numeric literal)
     """
-
     def process(self, msg: dict) -> dict | None:
         field   = self.config.get("field", "payload.value") or "payload.value"
         op      = self.config.get("op", "+") or "+"
@@ -336,22 +285,17 @@ class MathNode(Node):
         set_field(out, field, result)
         log(f"[Math] {field} {op} {operand} = {result}")
         return out
-
-
 class SwitchNode(Node):
     """Route a message to one of four output ports by matching a field value.
-
     Outputs:
       0 — case 1 matches
       1 — case 2 matches
       2 — case 3 matches
       3 — default (no case matched)
-
     Config:
       field        — dotted path to inspect
       case1/2/3    — expected values (hex strings like "0x1F" are parsed)
     """
-
     def process(self, msg: dict) -> tuple:
         field  = self.config.get("field", "topic") or "topic"
         actual = get_field(msg, field)
@@ -362,20 +306,15 @@ class SwitchNode(Node):
                 return (i, msg)
         log(f"[Switch] default")
         return (3, msg)
-
-
 class ChangeNode(Node):
     """Forward a message only when a field's value changes.
-
     Config:
       field — dotted path to watch (e.g. "payload.value")
     """
-
     def __init__(self, node_id: str, config: dict) -> None:
         super().__init__(node_id, config)
         self._last = object()   # sentinel — never equal to any real value
         self._lock = threading.Lock()
-
     def process(self, msg: dict) -> dict | None:
         field   = self.config.get("field", "payload.value") or "payload.value"
         current = get_field(msg, field)
@@ -385,31 +324,20 @@ class ChangeNode(Node):
             self._last = current
         log(f"[Change] {field} → {current!r}")
         return msg
-
-
 class MergeNode(Node):
     """Two-input merge — passes any message from either input through unchanged."""
-
     def process(self, msg: dict) -> dict | None:
         return msg
-
-
 # ── shared variable store (per-flow-process) ──────────────────────────────────
-
 _VARS: dict[str, Any] = {}
 _VARS_LOCK = threading.Lock()
-
-
 class SetVarNode(Node):
     """Store a named value extracted from an incoming message.
-
     Config:
       name   — variable name to write
       field  — dotted path to read from (empty = whole payload)
-
     Passes the message through unchanged.
     """
-
     def process(self, msg: dict) -> dict | None:
         name  = self.config.get("name", "").strip()
         field = self.config.get("field", "").strip()
@@ -420,16 +348,12 @@ class SetVarNode(Node):
             _VARS[name] = value
         log(f"[SetVar] {name} ← {value!r}")
         return msg
-
-
 class GetVarNode(Node):
     """Inject a stored variable's value into an outgoing message.
-
     Config:
       name   — variable name to read
       field  — dotted path to write the value into (e.g. "payload.value")
     """
-
     def process(self, msg: dict) -> dict | None:
         name  = self.config.get("name", "").strip()
         field = self.config.get("field", "payload.value") or "payload.value"
@@ -441,37 +365,28 @@ class GetVarNode(Node):
         set_field(out, field, value)
         log(f"[GetVar] {name} → {field} = {value!r}")
         return out
-
-
 class IfNode(Node):
     """Two-output conditional node.
-
     Evaluates a condition on the incoming message:
       - output 0 (IF)   — condition is True
       - output 1 (ELSE) — condition is False
-
     Config fields (same as FilterNode):
       field  — dotted path into msg, e.g. "payload.can_id"
       op     — ==  !=  >  <  contains
       value  — expected value (hex strings like "0x123" are parsed automatically)
     """
-
     def process(self, msg: dict) -> tuple:
         field    = self.config.get("field", "topic") or "topic"
         op       = self.config.get("op", "==") or "=="
         expected = parse_value(self.config.get("value", ""))
         actual   = get_field(msg, field)
-
         if compare(actual, op, expected):
             log(f"[If] TRUE  → {field} {op} {expected}")
             return (0, msg)   # output_1 → IF branch
         else:
             log(f"[If] FALSE → {field} {op} {expected}")
             return (1, msg)   # output_2 → ELSE branch
-
-
 # ── sink nodes ────────────────────────────────────────────────────────────────
-
 def _hex_bytes(s: Any) -> bytes:
     if isinstance(s, (bytes, bytearray)):
         return bytes(s)
@@ -481,13 +396,10 @@ def _hex_bytes(s: Any) -> bytes:
         return bytes.fromhex(str(s).replace(":", "").replace(" ", ""))
     except ValueError:
         return b""
-
-
 class CanOutNode(Node):
     def __init__(self, node_id: str, config: dict, client: BoAtClient) -> None:
         super().__init__(node_id, config)
         self._client = client
-
     def process(self, msg: dict) -> None:
         t = msg.get("_type")
         if t and t not in ("can_frame", "any"):
@@ -504,13 +416,10 @@ class CanOutNode(Node):
         except grpc.RpcError as e:
             log(f"[CAN Out] ERROR {e.code().name}")
         return None
-
-
 class EthOutNode(Node):
     def __init__(self, node_id: str, config: dict, client: BoAtClient) -> None:
         super().__init__(node_id, config)
         self._client = client
-
     def process(self, msg: dict) -> None:
         t = msg.get("_type")
         if t and t not in ("eth_frame", "any"):
@@ -532,13 +441,10 @@ class EthOutNode(Node):
         except grpc.RpcError as e:
             log(f"[Eth Out] ERROR {e.code().name}")
         return None
-
-
 class BusOutNode(Node):
     def __init__(self, node_id: str, config: dict, client: BoAtClient) -> None:
         super().__init__(node_id, config)
         self._client = client
-
     def process(self, msg: dict) -> None:
         t = msg.get("_type")
         if t and t not in ("bus_signal", "any"):
@@ -558,20 +464,14 @@ class BusOutNode(Node):
         except grpc.RpcError as e:
             log(f"[Bus Out] ERROR {e.code().name}")
         return None
-
-
 class DebugNode(Node):
     def process(self, msg: dict) -> None:
         label = self.config.get("label", "debug") or "debug"
         log(f"[{label}] {msg.get('payload', msg)}")
         return None
-
-
 # ── conversion nodes ──────────────────────────────────────────────────────────
-
 class CanToBytesNode(Node):
     """Pack a can_frame message into a value (bytes): 4B can_id BE + 1B dlc + data."""
-
     def process(self, msg: dict) -> dict | None:
         t = msg.get("_type")
         if t and t not in ("can_frame", "any"):
@@ -586,11 +486,8 @@ class CanToBytesNode(Node):
         out["payload"] = {"value": packed, "name": "can_bytes"}
         log(f"[CAN→Bytes] packed {len(packed)}B (can_id=0x{can_id:X})")
         return out
-
-
 class BytesToCanNode(Node):
     """Unpack a value (bytes) back into a can_frame: 4B can_id BE + 1B dlc + data."""
-
     def process(self, msg: dict) -> dict | None:
         t = msg.get("_type")
         if t and t not in ("value", "any"):
@@ -611,11 +508,8 @@ class BytesToCanNode(Node):
         out["topic"]   = f"can/{iface}/0x{can_id:X}"
         log(f"[Bytes→CAN] can_id=0x{can_id:X} dlc={dlc}")
         return out
-
-
 class ExtractFieldNode(Node):
     """Extract a single field from any message and emit it as a value."""
-
     def process(self, msg: dict) -> dict | None:
         field = self.config.get("field", "payload.value") or "payload.value"
         val   = get_field(msg, field)
@@ -624,11 +518,8 @@ class ExtractFieldNode(Node):
         out["payload"] = {"value": val, "name": field}
         log(f"[Extract] {field} = {val}")
         return out
-
-
 class SetFieldNode(Node):
     """Set a field to a configured value and pass the message through."""
-
     def process(self, msg: dict) -> dict | None:
         field = self.config.get("field", "") or ""
         value = parse_value(self.config.get("value", ""))
@@ -638,10 +529,7 @@ class SetFieldNode(Node):
         set_field(out, field, value)
         log(f"[Set] {field} = {value}")
         return out
-
-
 # ── graph ─────────────────────────────────────────────────────────────────────
-
 _SOURCE_TYPES: dict[str, type] = {
     "can_in": CanInNode, "eth_in": EthInNode,
     "bus_in": BusInNode, "timer":  TimerNode,
@@ -662,12 +550,9 @@ _SINK_TYPES: dict[str, type] = {
     "bus_out": BusOutNode, "debug":   DebugNode,
 }
 _CLIENT_SINKS = {"can_out", "eth_out", "bus_out"}
-
-
 class Graph:
     def __init__(self) -> None:
         self.nodes: dict[str, Node] = {}
-
     def dispatch(self, from_id: str, msg: dict, output_idx: int = 0) -> None:
         node = self.nodes.get(from_id)
         if not node or output_idx >= len(node.successors):
@@ -681,8 +566,6 @@ class Graph:
                 self.dispatch(succ.id, next_msg, next_out)
             else:
                 self.dispatch(succ.id, result, 0)
-
-
 def build_graph(flow_json: dict, client: BoAtClient) -> Graph:
     graph = Graph()
     df = flow_json["drawflow"]
@@ -691,7 +574,6 @@ def build_graph(flow_json: dict, client: BoAtClient) -> Graph:
     if "drawflow" in df:
         df = df["drawflow"]
     raw   = df["Home"]["data"]
-
     for nid, nd in raw.items():
         name   = nd["name"]
         config = nd.get("data", {})
@@ -705,7 +587,6 @@ def build_graph(flow_json: dict, client: BoAtClient) -> Graph:
             graph.nodes[nid] = DebugNode(nid, config)
         else:
             log(f"[WARN] unknown node type '{name}' — skipped")
-
     for nid, nd in raw.items():
         if nid not in graph.nodes:
             continue
@@ -722,37 +603,26 @@ def build_graph(flow_json: dict, client: BoAtClient) -> Graph:
                 to_id = str(conn["node"])
                 if to_id in graph.nodes:
                     graph.nodes[nid].successors[out_idx].append(graph.nodes[to_id])
-
     return graph
-
-
 # ── entry point ───────────────────────────────────────────────────────────────
-
 def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: flow_executor.py <flow.json>", file=sys.stderr)
         sys.exit(1)
-
     flow_json = json.loads(Path(sys.argv[1]).read_text())
     name      = flow_json.get("meta", {}).get("name", Path(sys.argv[1]).stem)
-
     log(f"Flow '{name}' starting — connecting to {_GW}")
     client = BoAtClient(_GW)
     graph  = build_graph(flow_json, client)
-
     sources = [n for n in graph.nodes.values() if isinstance(n, tuple(_SOURCE_TYPES.values()))]
     log(f"Graph: {len(graph.nodes)} nodes, {len(sources)} sources")
-
     for node in sources:
         node.start(client, graph)
-
     log("Running — send SIGTERM to stop")
     stop = threading.Event()
     signal.signal(signal.SIGINT,  lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     stop.wait()
     log("Stopped.")
-
-
 if __name__ == "__main__":
     main()

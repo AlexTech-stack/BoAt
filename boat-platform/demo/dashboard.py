@@ -4,31 +4,23 @@ Run:  python3 demo/dashboard.py
 Open: http://localhost:8080
 """
 from __future__ import annotations
-
 import sys
+from pathlib import Path
 import threading
 from datetime import datetime
 from typing import List
-
-sys.path.insert(0, "/home/testuser/.local/lib/python3.12/site-packages")
-sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
-
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 import grpc
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-
 from boat.client import BoAtClient
 from boat.v1 import bus_pb2, can_pb2, ethernet_pb2
-
 # ── State ──────────────────────────────────────────────────────────────────────
-
 MAX_CAN_FRAMES   = 500
 MAX_ETH_FRAMES   = 500
 MAX_BUS_SIGNALS  = 500
 MAX_LOG_ENTRIES  = 300
-
-
 class DashboardState:
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -42,14 +34,12 @@ class DashboardState:
         self._can_thread: threading.Thread | None = None
         self._eth_thread: threading.Thread | None = None
         self._bus_thread: threading.Thread | None = None
-
     def log(self, msg: str, level: str = "info") -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         with self.lock:
             self.event_log.append({"ts": ts, "msg": msg, "level": level})
             if len(self.event_log) > MAX_LOG_ENTRIES:
                 self.event_log.pop(0)
-
     def push_can_frame(self, frame) -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         hex_data = frame.data.hex(":").upper() if frame.data else ""
@@ -63,7 +53,6 @@ class DashboardState:
             })
             if len(self.can_frames) > MAX_CAN_FRAMES:
                 self.can_frames.pop(0)
-
     def push_eth_frame(self, frame) -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         src = frame.src_mac.hex(":") if frame.src_mac else "—"
@@ -80,7 +69,6 @@ class DashboardState:
             })
             if len(self.eth_frames) > MAX_ETH_FRAMES:
                 self.eth_frames.pop(0)
-
     def push_bus_signal(self, sig) -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         kind = sig.WhichOneof("value")
@@ -109,11 +97,9 @@ class DashboardState:
             })
             if len(self.bus_signals) > MAX_BUS_SIGNALS:
                 self.bus_signals.pop(0)
-
     def start_can_subscribe(self, client: BoAtClient) -> None:
         if self._can_thread and self._can_thread.is_alive():
             return
-
         def _worker() -> None:
             self.log("CAN subscription started")
             while True:
@@ -131,14 +117,11 @@ class DashboardState:
                 except Exception as e:
                     self.log(f"CAN error: {e}", "error")
                     import time; time.sleep(2)
-
         self._can_thread = threading.Thread(target=_worker, daemon=True, name="can-sub")
         self._can_thread.start()
-
     def start_eth_subscribe(self, client: BoAtClient) -> None:
         if self._eth_thread and self._eth_thread.is_alive():
             return
-
         def _worker() -> None:
             self.log("Ethernet subscription started")
             while True:
@@ -156,14 +139,11 @@ class DashboardState:
                 except Exception as e:
                     self.log(f"Ethernet error: {e}", "error")
                     import time; time.sleep(2)
-
         self._eth_thread = threading.Thread(target=_worker, daemon=True, name="eth-sub")
         self._eth_thread.start()
-
     def start_bus_subscribe(self, client: BoAtClient) -> None:
         if self._bus_thread and self._bus_thread.is_alive():
             return
-
         def _worker() -> None:
             self.log("Bus signal subscription started")
             while True:
@@ -181,85 +161,61 @@ class DashboardState:
                 except Exception as e:
                     self.log(f"Bus error: {e}", "error")
                     import time; time.sleep(2)
-
         self._bus_thread = threading.Thread(target=_worker, daemon=True, name="bus-sub")
         self._bus_thread.start()
-
-
 dash = DashboardState()
 client = BoAtClient("localhost:50051")
 app = FastAPI()
-
 # Start subscribing immediately at boot
 dash.start_can_subscribe(client)
 dash.start_eth_subscribe(client)
 dash.start_bus_subscribe(client)
-
 # ── REST API ──────────────────────────────────────────────────────────────────
-
-
 @app.get("/api/can")
 def api_can(since: int = 0):
     """Return CAN frames newer than index `since`."""
     with dash.lock:
         frames = list(dash.can_frames)
     return {"frames": frames[since:], "total": len(frames)}
-
-
 @app.post("/api/can/clear")
 def api_can_clear():
     with dash.lock:
         dash.can_frames.clear()
     return {"ok": True}
-
-
 @app.get("/api/eth")
 def api_eth(since: int = 0):
     with dash.lock:
         frames = list(dash.eth_frames)
     return {"frames": frames[since:], "total": len(frames)}
-
-
 @app.post("/api/eth/clear")
 def api_eth_clear():
     with dash.lock:
         dash.eth_frames.clear()
     return {"ok": True}
-
-
 @app.get("/api/bus")
 def api_bus(since: int = 0):
     with dash.lock:
         sigs = list(dash.bus_signals)
     return {"signals": sigs[since:], "total": len(sigs)}
-
-
 @app.post("/api/bus/clear")
 def api_bus_clear():
     with dash.lock:
         dash.bus_signals.clear()
     return {"ok": True}
-
-
 @app.get("/api/log")
 def api_log(since: int = 0):
     with dash.lock:
         entries = list(dash.event_log)
     return {"entries": entries[since:], "total": len(entries)}
-
-
 # ── HTML ──────────────────────────────────────────────────────────────────────
-
 HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>BoAt — Live Monitor</title>
-
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
   :root {
     --bg:     #0d1117;
     --panel:  #161b22;
@@ -274,7 +230,6 @@ HTML = """<!DOCTYPE html>
     --orange: #ffa657;
     --mono:   "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   }
-
   html, body {
     height: 100%;
     background: var(--bg);
@@ -283,7 +238,6 @@ HTML = """<!DOCTYPE html>
     font-size: 13px;
     overflow: hidden;
   }
-
   header {
     height: 46px;
     background: var(--panel);
@@ -301,14 +255,12 @@ HTML = """<!DOCTYPE html>
     font-size: 11px; padding: 2px 10px; border-radius: 12px;
     background: #1f3a1f; color: var(--green); border: 1px solid #2ea043;
   }
-
   /* ── Main layout: three columns ── */
   .layout {
     display: flex;
     height: calc(100vh - 78px);
     overflow: hidden;
   }
-
   /* Left column: CAN trace */
   .col-left {
     flex: 0 0 35%;
@@ -317,7 +269,6 @@ HTML = """<!DOCTYPE html>
     border-right: 1px solid var(--border);
     min-height: 0;
   }
-
   /* Middle column: Ethernet trace */
   .col-mid {
     flex: 0 0 35%;
@@ -326,7 +277,6 @@ HTML = """<!DOCTYPE html>
     border-right: 1px solid var(--border);
     min-height: 0;
   }
-
   /* Right column: Bus signals (top) + Event log (bottom) */
   .col-right {
     flex: 1;
@@ -334,7 +284,6 @@ HTML = """<!DOCTYPE html>
     flex-direction: column;
     min-height: 0;
   }
-
   /* ── Shared pane chrome ── */
   .pane {
     display: flex;
@@ -364,7 +313,6 @@ HTML = """<!DOCTYPE html>
   }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
   .pane-spacer { flex: 1; }
-
   .filter-input {
     background: var(--bg);
     border: 1px solid var(--border);
@@ -378,21 +326,18 @@ HTML = """<!DOCTYPE html>
   }
   .filter-input:focus { border-color: var(--blue); }
   .frame-count { font-size: 11px; color: var(--muted); font-family: var(--mono); }
-
   .btn-small {
     font-size: 11px; padding: 2px 8px;
     background: var(--bg); border: 1px solid var(--border);
     color: var(--muted); border-radius: 4px; cursor: pointer;
   }
   .btn-small:hover { background: #21262d; color: var(--text); }
-
   /* scrollable table area */
   .tbl-scroll {
     flex: 1;
     overflow-y: auto;
     min-height: 0;
   }
-
   table { width: 100%; border-collapse: collapse; }
   thead th {
     position: sticky; top: 0;
@@ -418,41 +363,34 @@ HTML = """<!DOCTYPE html>
     text-overflow: ellipsis;
     max-width: 220px;
   }
-
   /* CAN columns */
   .td-ts    { color: var(--muted); width: 84px; }
   .td-iface { width: 68px; }
   .td-id    { width: 68px; }
   .td-dlc   { width: 36px; color: var(--muted); text-align: center; }
   .td-data  { color: var(--green); letter-spacing: .5px; }
-
   /* Bus signal columns */
   .td-name  { color: var(--blue); }
   .td-pub   { color: var(--muted); width: 120px; }
   .td-type  { width: 54px; }
   .td-val   { }
-
   .iface-pill {
     display: inline-block; padding: 1px 7px;
     border-radius: 10px; font-size: 10px; font-weight: 600;
   }
-
   /* value type badges */
   .type-number  { color: var(--blue); }
   .type-string  { color: var(--green); }
   .type-bool    { color: var(--yellow); }
   .type-bytes   { color: var(--purple); }
   .type-unknown { color: var(--muted); }
-
   @keyframes rowIn {
     from { background: rgba(88,166,255,.12); }
     to   { background: transparent; }
   }
   .row-new { animation: rowIn .8s ease-out forwards; }
-
   /* ── Bus pane — top half of right col ── */
   .bus-pane { flex: 1; border-bottom: 1px solid var(--border); }
-
   /* ── Event log pane ── */
   .log-pane { height: 180px; flex-shrink: 0; background: var(--panel); }
   .log-scroll {
@@ -466,11 +404,9 @@ HTML = """<!DOCTYPE html>
   .log-info  { color: var(--text); }
   .log-warn  { color: var(--yellow); }
   .log-error { color: var(--red); }
-
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
   /* ── Nav bar ── */
   #panel-nav {
     height: 32px; flex-shrink: 0;
@@ -487,7 +423,6 @@ HTML = """<!DOCTYPE html>
   }
   #panel-nav a:hover { background: #21262d; color: var(--text); }
   #panel-nav a.active { color: var(--blue); background: rgba(88,166,255,.10); font-weight: 600; }
-
   /* ── Bus signal live-view ── */
   @keyframes flashVal {
     0%   { background: rgba(88,166,255,.25); }
@@ -498,25 +433,20 @@ HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-
 <header>
   <span class="logo">⛵ BoAt</span>
   <span class="subtitle">Live Monitor</span>
   <span class="spacer"></span>
   <span class="gw-badge">● gateway :50051</span>
 </header>
-
 <nav id="panel-nav">
+  <a class="nav-link" data-port="8086">Launcher</a>
   <a class="nav-link" data-port="8080">Dashboard</a>
   <a class="nav-link" data-port="8081">Nodes</a>
   <a class="nav-link" data-port="8082">Commander</a>
   <a class="nav-link" data-port="8083">Recorder</a>
-  <a class="nav-link" data-port="8084">Debug</a>
-  <a class="nav-link" data-port="8085">Flow Editor</a>
 </nav>
-
 <div class="layout">
-
   <!-- ══ LEFT — CAN trace ══ -->
   <div class="col-left pane">
     <div class="pane-header">
@@ -544,7 +474,6 @@ HTML = """<!DOCTYPE html>
       </table>
     </div>
   </div>
-
   <!-- ══ MIDDLE — Ethernet trace ══ -->
   <div class="col-mid pane">
     <div class="pane-header">
@@ -572,10 +501,8 @@ HTML = """<!DOCTYPE html>
       </table>
     </div>
   </div>
-
   <!-- ══ RIGHT column ══ -->
   <div class="col-right">
-
     <!-- ── Bus signal log ── -->
     <div class="pane bus-pane">
       <div class="pane-header">
@@ -619,7 +546,6 @@ HTML = """<!DOCTYPE html>
         </table>
       </div>
     </div>
-
     <!-- ── Event log ── -->
     <div class="pane log-pane">
       <div class="pane-header">
@@ -630,10 +556,8 @@ HTML = """<!DOCTYPE html>
       </div>
       <div class="log-scroll" id="log-scroll"></div>
     </div>
-
   </div><!-- end col-right -->
 </div><!-- end layout -->
-
 <script>
 // ── CAN state ─────────────────────────────────────────────────────────────────
 let allFrames   = [];
@@ -641,15 +565,12 @@ let canSince    = 0;
 let canPaused   = false;
 let filterIdStr = "";
 let filterIface = "";
-
 // ── Bus state ─────────────────────────────────────────────────────────────────
 let allSignals   = [];
 let busSince     = 0;
 let busPaused    = false;
 let filterBusName = "";
-
 let logSince = 0;
-
 // ── iface colour palette ──────────────────────────────────────────────────────
 const IFACE_COLORS = [
   { bg: "#1c3a5c", fg: "#58a6ff" },
@@ -664,7 +585,6 @@ function ifaceColor(iface) {
   if (!(iface in ifaceColorIdx)) ifaceColorIdx[iface] = nextIfaceColor++ % IFACE_COLORS.length;
   return IFACE_COLORS[ifaceColorIdx[iface]];
 }
-
 // ── CAN ───────────────────────────────────────────────────────────────────────
 let canFetching = false;
 function fetchCan() {
@@ -681,13 +601,11 @@ function fetchCan() {
       if (!canPaused) renderCanFrames(d.frames);
     }).catch(() => { canFetching = false; });
 }
-
 function matchesCanFilter(f) {
   if (filterIdStr && f.can_id.toLowerCase().indexOf(filterIdStr) === -1) return false;
   if (filterIface && f.iface.toLowerCase().indexOf(filterIface) === -1)   return false;
   return true;
 }
-
 function renderCanFrames(frames) {
   const tbody  = document.getElementById('can-tbody');
   const scroll = document.getElementById('can-scroll');
@@ -709,14 +627,12 @@ function renderCanFrames(frames) {
   document.getElementById('frame-count').textContent = allFrames.length;
   if (atBottom) scroll.scrollTop = scroll.scrollHeight;
 }
-
 function applyCanFilter() {
   filterIdStr = document.getElementById('filter-id').value.trim().toLowerCase();
   filterIface = document.getElementById('filter-iface').value.trim().toLowerCase();
   document.getElementById('can-tbody').innerHTML = '';
   renderCanFrames(allFrames.filter(matchesCanFilter));
 }
-
 function clearFrames() {
   fetch('/api/can/clear', { method: 'POST' }).then(() => {
     allFrames = []; canSince = 0;
@@ -724,7 +640,6 @@ function clearFrames() {
     document.getElementById('frame-count').textContent = '0';
   }).catch(() => {});
 }
-
 function togglePause() {
   canPaused = !canPaused;
   document.getElementById('btn-pause').textContent = canPaused ? '▶ Resume' : '⏸ Pause';
@@ -733,14 +648,12 @@ function togglePause() {
     renderCanFrames(allFrames);
   }
 }
-
 // ── Ethernet frames ───────────────────────────────────────────────────────────
 let allEthFrames   = [];
 let ethSince       = 0;
 let ethPaused      = false;
 let filterEthIface = "";
 let filterEthType  = "";
-
 let ethFetching = false;
 function fetchEth() {
   if (ethFetching) return;
@@ -756,13 +669,11 @@ function fetchEth() {
       if (!ethPaused) renderEthFrames(d.frames);
     }).catch(() => { ethFetching = false; });
 }
-
 function matchesEthFilter(f) {
   if (filterEthIface && f.iface.toLowerCase().indexOf(filterEthIface) === -1) return false;
   if (filterEthType  && f.ethertype.toLowerCase().indexOf(filterEthType) === -1) return false;
   return true;
 }
-
 function renderEthFrames(frames) {
   const tbody  = document.getElementById('eth-tbody');
   const scroll = document.getElementById('eth-scroll');
@@ -784,14 +695,12 @@ function renderEthFrames(frames) {
   document.getElementById('eth-count').textContent = allEthFrames.length;
   if (atBottom) scroll.scrollTop = scroll.scrollHeight;
 }
-
 function applyEthFilter() {
   filterEthIface = document.getElementById('filter-eth-iface').value.trim().toLowerCase();
   filterEthType  = document.getElementById('filter-eth-ethertype').value.trim().toLowerCase();
   document.getElementById('eth-tbody').innerHTML = '';
   renderEthFrames(allEthFrames.filter(matchesEthFilter));
 }
-
 function clearEth() {
   fetch('/api/eth/clear', { method: 'POST' }).then(() => {
     allEthFrames = []; ethSince = 0;
@@ -799,7 +708,6 @@ function clearEth() {
     document.getElementById('eth-count').textContent = '0';
   }).catch(() => {});
 }
-
 function toggleEthPause() {
   ethPaused = !ethPaused;
   document.getElementById('btn-eth-pause').textContent = ethPaused ? '▶ Resume' : '⏸ Pause';
@@ -808,11 +716,9 @@ function toggleEthPause() {
     renderEthFrames(allEthFrames);
   }
 }
-
 // ── Bus signals ───────────────────────────────────────────────────────────────
 let busLiveView = false;
 const busLiveMap = {};   // name → {type, value, publisher, ts, rowEl, valEl}
-
 let busFetching = false;
 function fetchBus() {
   if (busFetching) return;
@@ -831,12 +737,10 @@ function fetchBus() {
       }
     }).catch(() => { busFetching = false; });
 }
-
 function matchesBusFilter(s) {
   if (filterBusName && s.name.toLowerCase().indexOf(filterBusName) === -1) return false;
   return true;
 }
-
 function renderBusSignals(signals) {
   const tbody  = document.getElementById('bus-tbody');
   const scroll = document.getElementById('bus-scroll');
@@ -857,7 +761,6 @@ function renderBusSignals(signals) {
   document.getElementById('bus-count').textContent = allSignals.length;
   if (atBottom) scroll.scrollTop = scroll.scrollHeight;
 }
-
 function updateBusLiveView(signals) {
   const tbody = document.getElementById('bus-live-tbody');
   for (const s of signals) {
@@ -901,7 +804,6 @@ function updateBusLiveView(signals) {
   }
   document.getElementById('bus-count').textContent = Object.keys(busLiveMap).length;
 }
-
 function toggleBusLiveView() {
   busLiveView = !busLiveView;
   const btn = document.getElementById('btn-bus-liveview');
@@ -923,7 +825,6 @@ function toggleBusLiveView() {
     feed.style.display = '';
   }
 }
-
 function applyBusFilter() {
   filterBusName = document.getElementById('filter-bus-name').value.trim().toLowerCase();
   if (busLiveView) {
@@ -935,7 +836,6 @@ function applyBusFilter() {
     renderBusSignals(allSignals.filter(matchesBusFilter));
   }
 }
-
 function clearBus() {
   fetch('/api/bus/clear', { method: 'POST' }).then(() => {
     allSignals = []; busSince = 0;
@@ -945,7 +845,6 @@ function clearBus() {
     document.getElementById('bus-count').textContent = '0';
   }).catch(() => {});
 }
-
 function toggleBusPause() {
   busPaused = !busPaused;
   document.getElementById('btn-bus-pause').textContent = busPaused ? '▶ Resume' : '⏸ Pause';
@@ -956,7 +855,6 @@ function toggleBusPause() {
     }
   }
 }
-
 // ── Event log ─────────────────────────────────────────────────────────────────
 let logFetching = false;
 function fetchLog() {
@@ -971,7 +869,6 @@ function fetchLog() {
       appendLog(d.entries);
     }).catch(() => { logFetching = false; });
 }
-
 function appendLog(entries) {
   const el = document.getElementById('log-scroll');
   const atBottom = el.scrollHeight - el.clientHeight - el.scrollTop < 40;
@@ -984,12 +881,10 @@ function appendLog(entries) {
   while (el.children.length > 200) el.removeChild(el.firstChild);
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
-
 function clearLog() {
   document.getElementById('log-scroll').innerHTML = '';
   logSince = 0;
 }
-
 // ── Nav bar ───────────────────────────────────────────────────────────────────
 (function() {
   const h = window.location.hostname;
@@ -999,7 +894,6 @@ function clearLog() {
     if (a.dataset.port === p) a.classList.add('active');
   });
 })();
-
 // ── boot ──────────────────────────────────────────────────────────────────────
 setInterval(fetchCan, 150);
 setInterval(fetchEth, 150);
@@ -1010,13 +904,9 @@ fetchCan(); fetchEth(); fetchBus(); fetchLog();
 </body>
 </html>
 """
-
-
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTMLResponse(HTML)
-
-
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("BOAT_DASH_PORT", "8080"))

@@ -2,7 +2,6 @@
 BoAt Platform — Gateway gRPC Traffic Inspector
 Run:  python3 demo/debug.py
 Open: http://localhost:8084
-
 Subscribes to the gateway's DebugService.StreamEvents gRPC stream and shows
 every internal RPC call in real time:
   - which method was called  (/boat.v1.CanService/SendCanFrame)
@@ -13,39 +12,28 @@ every internal RPC call in real time:
   - round-trip duration and gRPC status code
 """
 from __future__ import annotations
-
 import sys
+from pathlib import Path
 import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
-
-sys.path.insert(0, "/home/testuser/.local/lib/python3.12/site-packages")
-sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
-
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 import grpc
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
-
 from urllib.parse import unquote
-
 from boat.client import BoAtClient
 from boat.v1 import debug_pb2
-
 # ── Config ─────────────────────────────────────────────────────────────────────
-
 _GW   = "localhost:50051"
 _PORT = 8084
 _MAX  = 5000
-
 # ── Ring buffer ────────────────────────────────────────────────────────────────
-
 _lock    = threading.Lock()
 _entries: deque = deque(maxlen=_MAX)
 _seq     = 0
-
-
 def _add(ev: debug_pb2.RpcEvent) -> None:
     global _seq
     ts_ns = ev.timestamp_ns
@@ -54,14 +42,12 @@ def _add(ev: debug_pb2.RpcEvent) -> None:
         ts_str = dt.strftime("%H:%M:%S.%f")[:-3]
     else:
         ts_str = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-
     # Strip the package prefix: "/boat.v1.CanService/SendCanFrame" → "CanService/SendCanFrame"
     method = ev.method
     for prefix in ("/boat.v1.", "/boat."):
         if method.startswith(prefix):
             method = method[len(prefix):]
             break
-
     # Decode URL-encoded peer: "ipv6:%5B::1%5D:46320" → "[::1]:46320"
     peer = unquote(ev.peer)
     # Strip transport prefix (ipv4:, ipv6:) for brevity
@@ -69,7 +55,6 @@ def _add(ev: debug_pb2.RpcEvent) -> None:
         if peer.startswith(pfx):
             peer = peer[len(pfx):]
             break
-
     entry = {
         "seq":          0,
         "ts":           ts_str,
@@ -83,15 +68,11 @@ def _add(ev: debug_pb2.RpcEvent) -> None:
         "status_code":  ev.status_code,
         "status_msg":   ev.status_message,
     }
-
     with _lock:
         _seq += 1
         entry["seq"] = _seq
         _entries.append(entry)
-
-
 # ── gRPC subscriber ────────────────────────────────────────────────────────────
-
 def _run_subscriber() -> None:
     while True:
         try:
@@ -105,20 +86,13 @@ def _run_subscriber() -> None:
             time.sleep(2)
         except Exception:
             time.sleep(2)
-
-
 # ── FastAPI ────────────────────────────────────────────────────────────────────
-
 app = FastAPI()
-
-
 @app.get("/api/events")
 def api_events(after: int = 0):
     with _lock:
         out = [e for e in _entries if e["seq"] > after]
     return JSONResponse({"events": out})
-
-
 @app.get("/api/clear")
 def api_clear():
     global _seq
@@ -126,15 +100,10 @@ def api_clear():
         _entries.clear()
         _seq = 0
     return {"ok": True}
-
-
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTMLResponse(_HTML)
-
-
 # ── HTML ───────────────────────────────────────────────────────────────────────
-
 _HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -180,7 +149,6 @@ _HTML = r"""<!DOCTYPE html>
   }
   #panel-nav a:hover  { background: #21262d; color: var(--text); }
   #panel-nav a.active { color: var(--blue); background: rgba(88,166,255,.10); font-weight: 600; }
-
   /* ── Toolbar ── */
   .toolbar {
     height: 40px; display: flex; align-items: center; gap: 8px;
@@ -213,7 +181,6 @@ _HTML = r"""<!DOCTYPE html>
                font-size: 11px; font-family: inherit; transition: all .12s; }
   .pause-btn.paused { border-color: var(--yellow); color: var(--yellow); background: rgba(210,153,34,.10); }
   #count { font-size: 11px; color: var(--muted); margin-left: auto; }
-
   /* ── Table ── */
   .log-wrap { height: calc(100vh - 46px - 32px - 40px); overflow-y: auto; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -232,7 +199,6 @@ _HTML = r"""<!DOCTYPE html>
   tbody tr { border-bottom: 1px solid rgba(48,54,61,.4); }
   tbody tr:hover { background: rgba(255,255,255,.03); }
   td { padding: 3px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
   /* event-type colours */
   .ev-DATA           { color: var(--blue); }
   .ev-SUBSCRIBE_OPEN { color: var(--cyan); }
@@ -240,37 +206,31 @@ _HTML = r"""<!DOCTYPE html>
   .ev-MSG_RECV       { color: var(--muted); }
   .ev-MSG_SEND       { color: var(--muted); }
   .ev-CALL_END       { color: var(--purple);}
-
   .meth { color: var(--text); }
   .peer { color: var(--muted); font-size: 11px; }
   .sum  { color: var(--text); font-family: ui-monospace, monospace; }
   .dur  { color: var(--yellow); text-align: right; }
   .st-ok  { color: var(--muted); }
   .st-err { color: var(--red); }
-
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 </style>
 </head>
 <body>
-
 <header>
   <span class="logo">⛵ BoAt</span>
   <span class="subtitle">gRPC Traffic Inspector</span>
   <span class="spacer"></span>
   <span class="gw-badge" id="gw-badge">● gateway :50051</span>
 </header>
-
 <nav id="panel-nav">
+  <a class="nav-link" data-port="8086">Launcher</a>
   <a class="nav-link" data-port="8080">Dashboard</a>
   <a class="nav-link" data-port="8081">Nodes</a>
   <a class="nav-link" data-port="8082">Commander</a>
   <a class="nav-link" data-port="8083">Recorder</a>
-  <a class="nav-link" data-port="8084">Debug</a>
-  <a class="nav-link" data-port="8085">Flow Editor</a>
 </nav>
-
 <div class="toolbar">
   <label>Show:</label>
   <button class="tog data-on"  id="tog-data"  onclick="toggle('DATA')">DATA</button>
@@ -284,7 +244,6 @@ _HTML = r"""<!DOCTYPE html>
   <button class="ctrl-btn"  onclick="clearLog()">Clear</button>
   <span id="count">0 events</span>
 </div>
-
 <div class="log-wrap" id="log-wrap">
   <table>
     <colgroup>
@@ -305,7 +264,6 @@ _HTML = r"""<!DOCTYPE html>
     <tbody id="tbody"></tbody>
   </table>
 </div>
-
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
 let all        = [];
@@ -314,7 +272,6 @@ let paused     = false;
 let autoScroll = true;
 // DATA and SUBSCRIBE_OPEN on by default; raw lifecycle events off by default
 const show = { DATA: true, SUBSCRIBE_OPEN: true, CALL_START: false, MSG_RECV: false, MSG_SEND: false, CALL_END: false };
-
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 async function fetchEvents() {
   if (paused) return;
@@ -329,31 +286,26 @@ async function fetchEvents() {
     }
   } catch {}
 }
-
 // ── Render ────────────────────────────────────────────────────────────────────
 function render() {
   const kw = document.getElementById('kw').value.toLowerCase();
   const tbody = document.getElementById('tbody');
   const rows = [];
   let shown = 0;
-
   for (const e of all) {
     if (!show[e.event_type]) continue;
     if (kw && !matchEvent(e, kw)) continue;
     rows.push(rowHTML(e));
     shown++;
   }
-
   tbody.innerHTML = rows.join('');
   document.getElementById('count').textContent =
       shown + ' / ' + all.length + ' events';
-
   if (autoScroll) {
     const w = document.getElementById('log-wrap');
     w.scrollTop = w.scrollHeight;
   }
 }
-
 function matchEvent(e, kw) {
   return e.method.toLowerCase().includes(kw)     ||
          e.peer.toLowerCase().includes(kw)        ||
@@ -361,12 +313,9 @@ function matchEvent(e, kw) {
          e.call_type.toLowerCase().includes(kw)   ||
          (e.summary && e.summary.toLowerCase().includes(kw));
 }
-
 function rowHTML(e) {
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
-
   const dur = e.duration_us ? e.duration_us.toLocaleString() + ' µs' : '';
-
   let stClass = 'st-ok', stText = '';
   if (e.event_type === 'CALL_END') {
     stClass = e.status_code === 0 ? 'st-ok' : 'st-err';
@@ -374,11 +323,9 @@ function rowHTML(e) {
         ? 'OK'
         : 'ERR ' + e.status_code + (e.status_msg ? ': ' + e.status_msg : '');
   }
-
   // Content column: summary if present, else msg_bytes hint
   let content = e.summary || '';
   if (!content && e.msg_bytes) content = e.msg_bytes + ' B';
-
   return `<tr>
     <td>${esc(e.ts)}</td>
     <td class="ev-${e.event_type}">${e.event_type}</td>
@@ -389,7 +336,6 @@ function rowHTML(e) {
     <td class="${stClass}">${esc(stText)}</td>
   </tr>`;
 }
-
 // ── Controls ──────────────────────────────────────────────────────────────────
 const togClass = {
   DATA: 'data-on', SUBSCRIBE_OPEN: 'sub-on',
@@ -399,13 +345,11 @@ const togId = {
   DATA: 'tog-data', SUBSCRIBE_OPEN: 'tog-sub',
   CALL_START: 'tog-start', CALL_END: 'tog-end'
 };
-
 function toggle(ev) {
   show[ev] = !show[ev];
   document.getElementById(togId[ev]).classList.toggle(togClass[ev], show[ev]);
   render();
 }
-
 function togglePause() {
   paused = !paused;
   const btn = document.getElementById('btn-pause');
@@ -413,17 +357,14 @@ function togglePause() {
   btn.classList.toggle('paused', paused);
   if (!paused) fetchEvents();
 }
-
 async function clearLog() {
   all = []; lastSeq = 0;
   await fetch('/api/clear');
   render();
 }
-
 document.getElementById('log-wrap').addEventListener('scroll', function() {
   autoScroll = (this.scrollTop + this.clientHeight >= this.scrollHeight - 8);
 });
-
 // ── Nav bar ───────────────────────────────────────────────────────────────────
 (function() {
   const h = window.location.hostname, p = window.location.port;
@@ -432,7 +373,6 @@ document.getElementById('log-wrap').addEventListener('scroll', function() {
     if (a.dataset.port === p) a.classList.add('active');
   });
 })();
-
 // ── Boot ──────────────────────────────────────────────────────────────────────
 setInterval(fetchEvents, 200);
 fetchEvents();
@@ -440,10 +380,7 @@ fetchEvents();
 </body>
 </html>
 """
-
-
 # ── Entry point ────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     t = threading.Thread(target=_run_subscriber, daemon=True)
     t.start()

@@ -4,7 +4,6 @@ Run:  python3 demo/control_panel.py
 Open: http://localhost:8081
 """
 from __future__ import annotations
-
 import os
 import re
 import subprocess
@@ -15,24 +14,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
-
-sys.path.insert(0, "/home/testuser/.local/lib/python3.12/site-packages")
-sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
-
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-
 # ── Configuration ──────────────────────────────────────────────────────────────
-
 _NODES_DIR   = Path(__file__).parent.parent / "nodes"
 _SDK_PATH    = Path(__file__).parent.parent / "sdk" / "python"
 _DEFAULT_GW  = os.environ.get("BOAT_GATEWAY", "localhost:50051")
 _LOG_LINES   = 120   # rolling log lines kept per node
 _PORT        = int(os.environ.get("BOAT_CP_PORT", "8081"))
-
 # ── Node state ─────────────────────────────────────────────────────────────────
-
 @dataclass
 class NodeInfo:
     name: str                    # filename without .py
@@ -44,26 +36,20 @@ class NodeInfo:
     _log: deque                  = field(default_factory=lambda: deque(maxlen=_LOG_LINES))
     _lock: threading.Lock        = field(default_factory=threading.Lock)
     _log_thread: Optional[threading.Thread] = field(default=None, repr=False)
-
     # ── log access ────────────────────────────────────────────────────────────
-
     def append_log(self, line: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         with self._lock:
             self._log.append({"ts": ts, "text": line.rstrip()})
-
     def get_log(self) -> List[dict]:
         with self._lock:
             return list(self._log)
-
     # ── status ────────────────────────────────────────────────────────────────
-
     @property
     def running(self) -> bool:
         if self.process is None:
             return False
         return self.process.poll() is None
-
     @property
     def status(self) -> str:
         if self.process is None:
@@ -72,21 +58,17 @@ class NodeInfo:
             return "running"
         code = self.process.poll()
         return "stopped" if code == 0 else f"exited:{code}"
-
     def pid(self) -> Optional[int]:
         if self.running and self.process is not None:
             return self.process.pid
         return None
-
     # ── lifecycle ─────────────────────────────────────────────────────────────
-
     def start(self, gateway: str) -> None:
         if self.running:
             return
         env = os.environ.copy()
         paths = [str(_SDK_PATH)] + env.get("PYTHONPATH", "").split(":")
         env["PYTHONPATH"] = ":".join(p for p in paths if p)
-
         cmd = [sys.executable, str(self.path), "--address", gateway]
         self.exit_code = None
         self.process = subprocess.Popen(
@@ -104,7 +86,6 @@ class NodeInfo:
             name=f"log-{self.name}"
         )
         self._log_thread.start()
-
     def stop(self) -> None:
         if not self.running or self.process is None:
             return
@@ -118,17 +99,13 @@ class NodeInfo:
             self.process.wait()
         self.exit_code = self.process.returncode
         self.append_log(f"[control-panel] exited with code {self.exit_code}")
-
     def _drain_output(self) -> None:
         assert self.process is not None
         assert self.process.stdout is not None
         for line in self.process.stdout:
             self.append_log(line)
         self.exit_code = self.process.wait()
-
-
 # ── Node discovery ─────────────────────────────────────────────────────────────
-
 def _extract_docstring(path: Path) -> str:
     """Return the first docstring line from a Python file, or ''."""
     try:
@@ -140,15 +117,11 @@ def _extract_docstring(path: Path) -> str:
     except Exception:
         pass
     return ""
-
-
 def _is_interactive(path: Path) -> bool:
     try:
         return "input(" in path.read_text(encoding="utf-8")
     except Exception:
         return False
-
-
 def _discover_nodes() -> Dict[str, NodeInfo]:
     nodes: Dict[str, NodeInfo] = {}
     for py in sorted(_NODES_DIR.glob("*.py")):
@@ -162,15 +135,9 @@ def _discover_nodes() -> Dict[str, NodeInfo]:
             interactive=_is_interactive(py),
         )
     return nodes
-
-
 _nodes: Dict[str, NodeInfo] = _discover_nodes()
-
 # ── REST API ───────────────────────────────────────────────────────────────────
-
 app = FastAPI()
-
-
 @app.get("/api/nodes")
 def api_list_nodes():
     out = []
@@ -183,8 +150,6 @@ def api_list_nodes():
             "pid":         n.pid(),
         })
     return {"nodes": out}
-
-
 @app.post("/api/nodes/{name}/start")
 def api_start(name: str, address: str = _DEFAULT_GW):
     if name not in _nodes:
@@ -194,30 +159,21 @@ def api_start(name: str, address: str = _DEFAULT_GW):
         raise HTTPException(status_code=400, detail="Node requires interactive terminal")
     n.start(address)
     return {"ok": True, "pid": n.pid()}
-
-
 @app.post("/api/nodes/{name}/stop")
 def api_stop(name: str):
     if name not in _nodes:
         raise HTTPException(status_code=404, detail="Node not found")
     _nodes[name].stop()
     return {"ok": True}
-
-
 @app.get("/api/nodes/{name}/log")
 def api_log(name: str):
     if name not in _nodes:
         raise HTTPException(status_code=404, detail="Node not found")
     return {"log": _nodes[name].get_log()}
-
-
 @app.get("/api/gateway")
 def api_gateway():
     return {"address": _DEFAULT_GW}
-
-
 # ── HTML ───────────────────────────────────────────────────────────────────────
-
 HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -226,7 +182,6 @@ HTML = r"""<!DOCTYPE html>
 <title>BoAt — Node Control Panel</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
   :root {
     --bg:     #0d1117;
     --panel:  #161b22;
@@ -241,7 +196,6 @@ HTML = r"""<!DOCTYPE html>
     --orange: #ffa657;
     --mono:   "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   }
-
   html, body {
     min-height: 100%;
     background: var(--bg);
@@ -249,7 +203,6 @@ HTML = r"""<!DOCTYPE html>
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 13px;
   }
-
   /* ── header ── */
   header {
     height: 46px;
@@ -281,7 +234,6 @@ HTML = r"""<!DOCTYPE html>
     outline: none;
   }
   .gw-input:focus { border-color: var(--blue); }
-
   /* ── main grid ── */
   .grid {
     display: grid;
@@ -289,7 +241,6 @@ HTML = r"""<!DOCTYPE html>
     gap: 16px;
     padding: 20px;
   }
-
   /* ── node card ── */
   .card {
     background: var(--panel);
@@ -314,7 +265,6 @@ HTML = r"""<!DOCTYPE html>
   .status-dot.running  { background: var(--green); animation: pulse 2s infinite; }
   .status-dot.exited   { background: var(--red); }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-
   .card-name {
     font-family: var(--mono);
     font-size: 13px;
@@ -337,7 +287,6 @@ HTML = r"""<!DOCTYPE html>
     border-radius: 10px; background: #2d2200; color: var(--yellow);
     border: 1px solid #6e4c00; flex-shrink: 0;
   }
-
   .card-doc {
     padding: 8px 14px;
     font-size: 12px;
@@ -346,7 +295,6 @@ HTML = r"""<!DOCTYPE html>
     border-bottom: 1px solid var(--border);
     min-height: 34px;
   }
-
   .card-controls {
     display: flex;
     align-items: center;
@@ -361,7 +309,6 @@ HTML = r"""<!DOCTYPE html>
   .status-text.running { color: var(--green); }
   .status-text.stopped { color: var(--muted); }
   .status-text.error   { color: var(--red); }
-
   .btn {
     font-size: 11px; padding: 4px 14px;
     border-radius: 5px; cursor: pointer;
@@ -381,7 +328,6 @@ HTML = r"""<!DOCTYPE html>
     background: var(--bg); color: var(--muted); border-color: var(--border);
   }
   .btn-log:hover { background: #1c2128; color: var(--text); }
-
   /* ── log panel ── */
   .card-log {
     display: none;
@@ -401,7 +347,6 @@ HTML = r"""<!DOCTYPE html>
   .log-ts   { color: #555; flex-shrink: 0; width: 78px; }
   .log-text { color: #b0c4d8; word-break: break-all; }
   .log-text.control { color: var(--muted); font-style: italic; }
-
   /* ── empty state ── */
   .empty {
     grid-column: 1 / -1;
@@ -410,11 +355,9 @@ HTML = r"""<!DOCTYPE html>
     color: var(--muted);
     font-size: 14px;
   }
-
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
   /* ── Nav bar ── */
   #panel-nav {
     height: 32px; position: sticky; top: 46px; z-index: 9;
@@ -434,7 +377,6 @@ HTML = r"""<!DOCTYPE html>
 </style>
 </head>
 <body>
-
 <header>
   <span class="logo">⛵ BoAt</span>
   <span class="subtitle">Node Control Panel</span>
@@ -442,25 +384,20 @@ HTML = r"""<!DOCTYPE html>
   <input class="gw-input" id="gw-input" placeholder="gateway address" title="Gateway gRPC address"/>
   <span class="gw-badge" id="gw-badge">● :50051</span>
 </header>
-
 <nav id="panel-nav">
+  <a class="nav-link" data-port="8086">Launcher</a>
   <a class="nav-link" data-port="8080">Dashboard</a>
   <a class="nav-link" data-port="8081">Nodes</a>
   <a class="nav-link" data-port="8082">Commander</a>
   <a class="nav-link" data-port="8083">Recorder</a>
-  <a class="nav-link" data-port="8084">Debug</a>
-  <a class="nav-link" data-port="8085">Flow Editor</a>
 </nav>
-
 <div class="grid" id="grid">
   <div class="empty">Loading nodes…</div>
 </div>
-
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
 const nodeState = {};   // name → {status, pid, logOpen, logData}
 let gateway = "localhost:50051";
-
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   const r = await fetch('/api/gateway');
@@ -471,30 +408,25 @@ async function init() {
   await renderNodes();
   setInterval(poll, 1000);
 }
-
 document.getElementById('gw-input').addEventListener('change', e => {
   gateway = e.target.value.trim() || 'localhost:50051';
   document.getElementById('gw-badge').textContent = '● ' + gateway;
 });
-
 // ── First render ──────────────────────────────────────────────────────────────
 async function renderNodes() {
   const r = await fetch('/api/nodes');
   const d = await r.json();
   const grid = document.getElementById('grid');
-
   if (!d.nodes.length) {
     grid.innerHTML = '<div class="empty">No nodes found in nodes/ directory.</div>';
     return;
   }
-
   grid.innerHTML = '';
   for (const n of d.nodes) {
     nodeState[n.name] = { status: n.status, pid: n.pid, logOpen: false, logData: [] };
     grid.appendChild(buildCard(n));
   }
 }
-
 // ── Build card DOM ────────────────────────────────────────────────────────────
 function buildCard(n) {
   const div = document.createElement('div');
@@ -503,13 +435,11 @@ function buildCard(n) {
   div.innerHTML = cardHTML(n);
   return div;
 }
-
 function statusClass(status) {
   if (status === 'running') return 'running';
   if (status.startsWith('exited:') && status !== 'exited:0') return 'error';
   return 'stopped';
 }
-
 function statusLabel(status) {
   if (status === 'running') return 'running';
   if (status === 'stopped') return 'stopped';
@@ -519,7 +449,6 @@ function statusLabel(status) {
   }
   return status;
 }
-
 function cardHTML(n) {
   const sc    = statusClass(n.status);
   const isRun = n.status === 'running';
@@ -528,7 +457,6 @@ function cardHTML(n) {
     ? '<span class="interactive-badge">interactive</span>' : '';
   const startDis = isRun || n.interactive ? 'disabled' : '';
   const stopDis  = isRun ? '' : 'disabled';
-
   return `
     <div class="card-header">
       <div class="status-dot ${sc}"></div>
@@ -549,7 +477,6 @@ function cardHTML(n) {
       <div class="log-scroll" id="log-${n.name}"></div>
     </div>`;
 }
-
 // ── Poll ──────────────────────────────────────────────────────────────────────
 async function poll() {
   let r, d;
@@ -557,7 +484,6 @@ async function poll() {
     r = await fetch('/api/nodes');
     d = await r.json();
   } catch { return; }
-
   for (const n of d.nodes) {
     const prev = nodeState[n.name];
     if (!prev) continue;
@@ -572,17 +498,14 @@ async function poll() {
     }
   }
 }
-
 function refreshCard(n) {
   const card = document.getElementById('card-' + n.name);
   if (!card) return;
   const sc    = statusClass(n.status);
   const isRun = n.status === 'running';
-
   card.querySelector('.status-dot').className = 'status-dot ' + sc;
   card.querySelector('.status-text').className = 'status-text ' + sc;
   card.querySelector('.status-text').textContent = statusLabel(n.status);
-
   const pb = card.querySelector('.pid-badge');
   if (n.pid) {
     if (pb) { pb.textContent = 'PID\u00a0' + n.pid; }
@@ -593,13 +516,11 @@ function refreshCard(n) {
       card.querySelector('.card-name').after(badge);
     }
   } else if (pb) { pb.remove(); }
-
   const startBtn = document.getElementById('btn-start-' + n.name);
   const stopBtn  = document.getElementById('btn-stop-'  + n.name);
   if (startBtn) startBtn.disabled = isRun || nodeState[n.name].interactive;
   if (stopBtn)  stopBtn.disabled  = !isRun;
 }
-
 // ── Log ───────────────────────────────────────────────────────────────────────
 async function fetchLog(name) {
   let r, d;
@@ -607,21 +528,16 @@ async function fetchLog(name) {
     r = await fetch('/api/nodes/' + name + '/log');
     d = await r.json();
   } catch { return; }
-
   const el = document.getElementById('log-' + name);
   if (!el) return;
-
   const newLines = d.log;
   const state    = nodeState[name];
   if (!state) return;
-
   const prevLen = state.logData.length;
   if (newLines.length === prevLen) return;
-
   state.logData = newLines;
   el.innerHTML  = '';
   const atBottom = el.scrollHeight - el.clientHeight - el.scrollTop < 40;
-
   for (const line of newLines) {
     el.appendChild(logLineEl(line));
   }
@@ -629,7 +545,6 @@ async function fetchLog(name) {
     el.scrollTop = el.scrollHeight;
   }
 }
-
 function logLineEl(line) {
   const row  = document.createElement('div');
   row.className = 'log-line';
@@ -639,7 +554,6 @@ function logLineEl(line) {
     `<span class="log-text${isControl ? ' control' : ''}">${escHtml(line.text)}</span>`;
   return row;
 }
-
 function toggleLog(name) {
   const panel = document.getElementById('log-panel-' + name);
   const state = nodeState[name];
@@ -650,7 +564,6 @@ function toggleLog(name) {
   if (btn) btn.textContent = state.logOpen ? 'Log ▴' : 'Log ▾';
   if (state.logOpen) fetchLog(name);
 }
-
 // ── Actions ───────────────────────────────────────────────────────────────────
 async function startNode(name) {
   document.getElementById('btn-start-' + name).disabled = true;
@@ -663,14 +576,12 @@ async function startNode(name) {
     }
   } catch (e) { alert('Error: ' + e); }
 }
-
 async function stopNode(name) {
   document.getElementById('btn-stop-' + name).disabled = true;
   try {
     await fetch(`/api/nodes/${name}/stop`, { method: 'POST' });
   } catch (e) { alert('Error: ' + e); }
 }
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function escHtml(s) {
   return String(s)
@@ -679,7 +590,6 @@ function escHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
-
 // ── Nav bar ───────────────────────────────────────────────────────────────────
 (function() {
   const h = window.location.hostname;
@@ -689,19 +599,14 @@ function escHtml(s) {
     if (a.dataset.port === p) a.classList.add('active');
   });
 })();
-
 init();
 </script>
 </body>
 </html>
 """
-
-
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTMLResponse(HTML)
-
-
 if __name__ == "__main__":
     print(f"BoAt Node Control Panel → http://localhost:{_PORT}")
     print(f"Nodes directory : {_NODES_DIR}")
