@@ -16,10 +16,6 @@
       "CycleTime": 100,
       "CycleTimeFast": 0,
       "NrOfRepetitions": 0,
-      "Identifier": 256,
-      "FrameType": 0,
-      "Length": 8,
-      "BRS": false,
       "signalcount": 1,
       "signals": [
         {
@@ -32,14 +28,18 @@
           "SigSendType": false,
           "Repetitions": 0,
           "InitValue": 0,
-          "Factor": 0.01,
-          "Offset": 0.0,
-          "Min": 0.0,
-          "Max": 300.0,
+          "Factor": 0.1,
+          "Offset": 0,
+          "Min": 0,
+          "Max": 300,
           "Unit": "km/h",
           "EnumValues": null
         }
-      ]
+      ],
+      "Identifier": 256,
+      "FrameType": 0,
+      "Length": 8,
+      "BRS": false
     },
     {
       "DbId": 2,
@@ -56,30 +56,12 @@
       "CycleTime": 500,
       "CycleTimeFast": 0,
       "NrOfRepetitions": 0,
+      "signalcount": 0,
+      "signals": [],
       "Identifier": 257,
       "FrameType": 0,
       "Length": 8,
-      "BRS": false,
-      "signalcount": 1,
-      "signals": [
-        {
-          "id": 1,
-          "SignalName": "EngineRPM",
-          "Length": 16,
-          "StartPos": 0,
-          "ByteOrder": 0,
-          "ValueType": "Unsigned",
-          "SigSendType": false,
-          "Repetitions": 0,
-          "InitValue": 0,
-          "Factor": 0.125,
-          "Offset": 0.0,
-          "Min": 0.0,
-          "Max": 8000.0,
-          "Unit": "rpm",
-          "EnumValues": null
-        }
-      ]
+      "BRS": false
     },
     {
       "DbId": 3,
@@ -848,10 +830,10 @@
           "SigSendType": false,
           "Repetitions": 0,
           "InitValue": 0,
-          "Factor": 0.01,
-          "Offset": 0.0,
-          "Min": 0.0,
-          "Max": 300.0,
+          "Factor": 0.1,
+          "Offset": 0,
+          "Min": 0,
+          "Max": 300,
           "Unit": "km/h",
           "EnumValues": null
         }
@@ -3305,10 +3287,10 @@
       "DstPort": 5001,
       "TTL": 64,
       "IpduMEntries": [
-        11272193,
-        11272194,
-        11272195,
-        11272196
+        82,
+        83,
+        84,
+        85
       ],
       "signalcount": 0,
       "signals": []
@@ -3343,10 +3325,10 @@
           "SigSendType": false,
           "Repetitions": 0,
           "InitValue": 0,
-          "Factor": 0.01,
-          "Offset": 0.0,
-          "Min": 0.0,
-          "Max": 300.0,
+          "Factor": 0.1,
+          "Offset": 0,
+          "Min": 0,
+          "Max": 300,
           "Unit": "km/h",
           "EnumValues": null
         }
@@ -3494,10 +3476,10 @@
       "DstPort": 5001,
       "TTL": 64,
       "IpduMEntries": [
-        11272197,
-        11272198,
-        11272199,
-        11272200
+        87,
+        88,
+        89,
+        90
       ],
       "signalcount": 0,
       "signals": []
@@ -3683,10 +3665,10 @@
       "DstPort": 5001,
       "TTL": 64,
       "IpduMEntries": [
-        11272201,
-        11272202,
-        11272203,
-        11272204
+        92,
+        93,
+        94,
+        95
       ],
       "signalcount": 0,
       "signals": []
@@ -3877,10 +3859,10 @@
       "DstPort": 5001,
       "TTL": 64,
       "IpduMEntries": [
-        11272205,
-        11272206,
-        11272207,
-        11272208
+        97,
+        98,
+        99,
+        100
       ],
       "signalcount": 0,
       "signals": []
@@ -4066,10 +4048,10 @@
       "DstPort": 5101,
       "TTL": 64,
       "IpduMEntries": [
-        11272449,
-        11272450,
-        11272451,
-        11272452
+        102,
+        103,
+        104,
+        105
       ],
       "signalcount": 0,
       "signals": []
@@ -4077,7 +4059,7 @@
     {
       "DbId": 102,
       "MessageName": "DiagReq_PDU",
-      "Bus": "Diagnostic_ETH",
+      "Bus": "Diag_ETH",
       "BusType": "ETH_PDU",
       "MessageType": 0,
       "Direction": 0,
@@ -4255,10 +4237,10 @@
       "DstPort": 5101,
       "TTL": 64,
       "IpduMEntries": [
-        11272453,
-        11272454,
-        11272455,
-        11272456
+        107,
+        108,
+        109,
+        110
       ],
       "signalcount": 0,
       "signals": []
@@ -4266,7 +4248,7 @@
     {
       "DbId": 107,
       "MessageName": "DiagReq_PDU",
-      "Bus": "Diagnostic_ETH",
+      "Bus": "Flash_ETH",
       "BusType": "ETH_PDU",
       "MessageType": 0,
       "Direction": 0,
@@ -4444,10 +4426,10 @@
       "DstPort": 5101,
       "TTL": 64,
       "IpduMEntries": [
-        11272457,
-        11272458,
-        11272459,
-        11272460
+        112,
+        113,
+        114,
+        115
       ],
       "signalcount": 0,
       "signals": []
@@ -4455,7 +4437,7 @@
     {
       "DbId": 112,
       "MessageName": "VIN_PDU",
-      "Bus": "Diagnostic_ETH",
+      "Bus": "EOL_ETH",
       "BusType": "ETH_PDU",
       "MessageType": 0,
       "Direction": 0,
@@ -4633,10 +4615,10 @@
       "DstPort": 5101,
       "TTL": 64,
       "IpduMEntries": [
-        11272461,
-        11272462,
-        11272463,
-        11272464
+        117,
+        118,
+        119,
+        120
       ],
       "signalcount": 0,
       "signals": []
@@ -4644,7 +4626,7 @@
     {
       "DbId": 117,
       "MessageName": "ECUSerial_PDU",
-      "Bus": "Diagnostic_ETH",
+      "Bus": "Config_ETH",
       "BusType": "ETH_PDU",
       "MessageType": 0,
       "Direction": 0,
