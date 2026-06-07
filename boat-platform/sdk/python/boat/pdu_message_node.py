@@ -72,7 +72,14 @@ class PduMessageNode:
                 )
 
             elif bus_type == "ETH":
-                pdu_ids = msg.get("IpduMEntries", [])
+                db_ids = msg.get("IpduMEntries", [])
+                pdu_ids = []
+                for db_id in db_ids:
+                    pdu_msg = self._db.by_id(db_id)
+                    if pdu_msg:
+                        pdu_ids.append(pdu_msg.get("PduId", db_id))
+                    else:
+                        pdu_ids.append(db_id)
                 dst_ip_str = msg.get("DstIP", "")
                 if pdu_ids and dst_ip_str:
                     self._pdu.configure_container(
