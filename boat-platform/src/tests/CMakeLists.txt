@@ -22,6 +22,10 @@ add_executable(boat_unit_plugin_manager unit/test_plugin_manager.cpp)
 target_link_libraries(boat_unit_plugin_manager PRIVATE boat_core Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_plugin_manager)
 
+add_executable(boat_unit_signal_bus unit/test_signal_bus.cpp)
+target_link_libraries(boat_unit_signal_bus PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_signal_bus)
+
 add_executable(boat_unit_sim_state_machine unit/test_sim_state_machine.cpp)
 target_link_libraries(boat_unit_sim_state_machine PRIVATE boat_core Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_sim_state_machine)

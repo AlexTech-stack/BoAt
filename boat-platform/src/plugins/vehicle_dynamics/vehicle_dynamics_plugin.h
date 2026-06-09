@@ -16,6 +16,12 @@ struct VehicleDynamicsPlugin {
   /* CAN publishing — wired in by PluginManager after initialize(). */
   BoatCanPublishFn can_publish_fn{nullptr};
   void* can_publisher_ctx{nullptr};
+  /* Ethernet publishing — wired in by PluginManager after initialize(). */
+  BoatEthPublishFn eth_publish_fn{nullptr};
+  void* eth_publisher_ctx{nullptr};
+  /* Bus-signal publishing — wired in by PluginManager after initialize(). */
+  BoatBusPublishFn bus_publish_fn{nullptr};
+  void* bus_publisher_ctx{nullptr};
 };
 
 extern "C" BoatPlugin* boat_plugin_create();

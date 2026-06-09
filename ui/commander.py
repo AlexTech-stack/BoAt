@@ -115,8 +115,11 @@ def _cyclic_can_sender(db_id: int, gateway: str, msg: dict, cycle_ms: int) -> No
     flags = _CANFD_FDF if is_fd else 0
     if brs and is_fd:
         flags |= _CANFD_BRS
+    cycle_s = cycle_ms / 1000.0
     client = None
-    while not _CYCLIC_STOP.get(db_id, threading.Event()).is_set():
+    deadline = _time_module.monotonic() + cycle_s
+    stop_event = _CYCLIC_STOP.get(db_id, threading.Event())
+    while not stop_event.is_set():
         try:
             data = _build_frame_data(msg, db_id=db_id)
             dlc = len(data)
@@ -141,8 +144,13 @@ def _cyclic_can_sender(db_id: int, gateway: str, msg: dict, cycle_ms: int) -> No
             except Exception: pass
             client = None
             _time_module.sleep(0.5)
+            deadline = _time_module.monotonic() + cycle_s
+            stop_event = _CYCLIC_STOP.get(db_id, threading.Event())
             continue
-        _time_module.sleep(cycle_ms / 1000.0)
+        now = _time_module.monotonic()
+        if deadline > now:
+            _time_module.sleep(deadline - now)
+        deadline += cycle_s
     if client:
         try: client.close()
         except Exception: pass
@@ -154,8 +162,11 @@ def _cyclic_eth_sender(db_id: int, gateway: str, msg: dict, cycle_ms: int) -> No
     dst_mac_raw = msg.get("DstMAC", "")
     src_mac = _parse_hex_bytes(src_mac_raw) if src_mac_raw else b""
     dst_mac = _parse_hex_bytes(dst_mac_raw) if dst_mac_raw else b""
+    cycle_s = cycle_ms / 1000.0
     client = None
-    while not _CYCLIC_STOP.get(db_id, threading.Event()).is_set():
+    deadline = _time_module.monotonic() + cycle_s
+    stop_event = _CYCLIC_STOP.get(db_id, threading.Event())
+    while not stop_event.is_set():
         try:
             data = _build_frame_data(msg, db_id=db_id)
             if client is None:
@@ -179,8 +190,13 @@ def _cyclic_eth_sender(db_id: int, gateway: str, msg: dict, cycle_ms: int) -> No
             except Exception: pass
             client = None
             _time_module.sleep(0.5)
+            deadline = _time_module.monotonic() + cycle_s
+            stop_event = _CYCLIC_STOP.get(db_id, threading.Event())
             continue
-        _time_module.sleep(cycle_ms / 1000.0)
+        now = _time_module.monotonic()
+        if deadline > now:
+            _time_module.sleep(deadline - now)
+        deadline += cycle_s
     if client:
         try: client.close()
         except Exception: pass
