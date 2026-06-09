@@ -1,3 +1,4 @@
+#include <atomic>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -5,6 +6,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <grpcpp/grpcpp.h>
@@ -36,6 +38,7 @@
 #include "scenario_service_impl.h"
 #include "scheduler/sim_clock.h"
 #include "scheduler/tick_scheduler.h"
+#include "signal/signal_bus.h"
 #include "signal/signal_router.h"
 #include "signal_service_impl.h"
 #include "simulation_service_impl.h"
@@ -47,6 +50,7 @@
 namespace {
 std::shared_ptr<grpc::Server> g_server;
 boat::core::TickScheduler* g_scheduler = nullptr;
+std::atomic<bool> g_node_tick_running{false};
 constexpr std::uint64_t kGatewayDeterminismSeed = 777;
 
 void HandleSignal(int) {
@@ -66,6 +70,7 @@ int main() {
   boat::core::DeterminismEngine determinism(kGatewayDeterminismSeed);
   boat::core::EventBus event_bus;
   boat::core::SignalRouter signal_router;
+  boat::core::SignalBus signal_bus;
   boat::core::FaultInjector fault_injector(determinism);
   boat::core::SimStateMachine state_machine;
   boat::core::PluginManager plugin_manager;
@@ -139,8 +144,8 @@ int main() {
   }
 
   // Node manager: loads permanent always-on plugins from BOAT_NODE_PLUGINS
-  // (comma-separated .so paths). These are wired to the CAN bus at startup
-  // and run independently of any simulation lifecycle.
+  // (comma-separated .so paths). These are wired to the CAN/Ethernet bus at
+  // startup and run independently of any simulation lifecycle.
   boat::core::PluginManager node_manager;
   {
     node_manager.SetCanPublisher([&can_registry](const BoatCanFrame& f) {
@@ -159,19 +164,55 @@ int main() {
       std::memcpy(bf.data, f.data, f.dlc);
       node_manager.DispatchCanFrame(bf, iface);
     });
-    const char* nodes_env = std::getenv("BOAT_NODE_PLUGINS");
-    if (nodes_env != nullptr) {
-      std::istringstream ss(nodes_env);
-      std::string so_path;
-      while (std::getline(ss, so_path, ',')) {
-        if (so_path.empty()) continue;
-        try {
-          node_manager.Load(so_path, "{}");
-        } catch (const std::exception& ex) {
-          // Log and continue — a missing node plugin should not crash the gateway.
-          (void)ex;
+    // Dispatch incoming Ethernet frames to all loaded nodes.
+    eth_registry.Subscribe("", 0, [&node_manager](const boat::hil::EthernetFrame& f,
+                                                  const std::string& iface) {
+      BoatEthFrame bf{};
+      std::memcpy(bf.dst_mac, f.dst_mac, 6);
+      std::memcpy(bf.src_mac, f.src_mac, 6);
+      bf.ethertype   = f.ethertype;
+      bf.payload     = const_cast<uint8_t*>(f.payload.data());
+      bf.payload_len = f.payload.size();
+      node_manager.DispatchEthFrame(bf, iface);
+    });
+    // Wire the always-on bus-signal publisher for node plugins.
+    node_manager.SetBusPublisher([&signal_bus](const char* name, double value) {
+      signal_bus.Publish(name, value);
+    });
+    // Load node plugins from BOAT_NODE_PLUGINS env var.
+    {
+      const char* nodes_env = std::getenv("BOAT_NODE_PLUGINS");
+      if (nodes_env != nullptr) {
+        std::istringstream ss(nodes_env);
+        std::string so_path;
+        while (std::getline(ss, so_path, ',')) {
+          if (so_path.empty()) continue;
+          try {
+            node_manager.Load(so_path, "{}");
+          } catch (const std::exception& ex) {
+            (void)ex;
+          }
         }
       }
+    }
+    // Start a background tick thread for node plugins (not simulation-bound).
+    // Interval defaults to 100ms; override via BOAT_NODE_TICK_MS env var.
+    {
+      std::uint64_t tick_ms = 100;
+      const char* env = std::getenv("BOAT_NODE_TICK_MS");
+      if (env != nullptr) {
+        char* end = nullptr;
+        auto val = std::strtoul(env, &end, 10);
+        if (end != env && val > 0) tick_ms = val;
+      }
+      g_node_tick_running.store(true, std::memory_order_release);
+      std::thread([&node_manager, tick_ms]() {
+        std::uint64_t tick = 0;
+        while (g_node_tick_running.load(std::memory_order_acquire)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(tick_ms));
+          node_manager.TickAll(tick++);
+        }
+      }).detach();
     }
   }
 
@@ -195,7 +236,7 @@ int main() {
       .audit_log = audit_log,
   };
 
-  boat::gateway::BusServiceImpl      bus_impl(audit_log);
+  boat::gateway::BusServiceImpl      bus_impl(audit_log, signal_bus);
   boat::gateway::EthernetServiceImpl ethernet_impl(ctx);
   boat::gateway::SimulationServiceImpl simulation_impl(ctx);
   boat::gateway::SignalServiceImpl signal_impl(ctx);
@@ -241,6 +282,7 @@ int main() {
     g_server->Wait();
   }
   scheduler.Stop();
+  g_node_tick_running.store(false, std::memory_order_release);
   node_manager.ShutdownAll();
   eth_registry.StopAll();
   return 0;

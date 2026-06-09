@@ -18,6 +18,14 @@ void PluginManager::SetCanPublisher(CanPublishFn fn) {
   can_publisher_fn_ = std::move(fn);
 }
 
+void PluginManager::SetEthPublisher(EthPublishFn fn) {
+  eth_publisher_fn_ = std::move(fn);
+}
+
+void PluginManager::SetBusPublisher(BusPublishFn fn) {
+  bus_publisher_fn_ = std::move(fn);
+}
+
 PluginHandle PluginManager::Load(const std::string& so_path, const std::string& config_json) {
 #ifdef _WIN32
   (void)so_path;
@@ -83,6 +91,28 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
         fn_copy);
   }
 
+  // Wire the Ethernet publisher if the plugin supports it.
+  if (plugin->vtable->set_eth_publisher != nullptr && eth_publisher_fn_) {
+    auto* fn_copy = new EthPublishFn(eth_publisher_fn_);
+    plugin->vtable->set_eth_publisher(
+        plugin->ctx,
+        [](void* pctx, const BoatEthFrame* frame) {
+          if (frame != nullptr) (*static_cast<EthPublishFn*>(pctx))(*frame);
+        },
+        fn_copy);
+  }
+
+  // Wire the bus-signal publisher if the plugin supports it.
+  if (plugin->vtable->set_bus_publisher != nullptr && bus_publisher_fn_) {
+    auto* fn_copy = new BusPublishFn(bus_publisher_fn_);
+    plugin->vtable->set_bus_publisher(
+        plugin->ctx,
+        [](void* pctx, const char* name, double value) {
+          (*static_cast<BusPublishFn*>(pctx))(name, value);
+        },
+        fn_copy);
+  }
+
   PluginHandle handle{dl_handle, plugin, so_path, abi_version, destroy_fn};
   plugins_[handle.name] = handle;
   return handle;
@@ -118,6 +148,15 @@ void PluginManager::DispatchCanFrame(const BoatCanFrame& frame, const std::strin
     (void)name;
     if (handle.plugin->vtable->on_can_frame != nullptr) {
       handle.plugin->vtable->on_can_frame(handle.plugin->ctx, &frame, iface.c_str());
+    }
+  }
+}
+
+void PluginManager::DispatchEthFrame(const BoatEthFrame& frame, const std::string& iface) {
+  for (auto& [name, handle] : plugins_) {
+    (void)name;
+    if (handle.plugin->vtable->on_eth_frame != nullptr) {
+      handle.plugin->vtable->on_eth_frame(handle.plugin->ctx, &frame, iface.c_str());
     }
   }
 }

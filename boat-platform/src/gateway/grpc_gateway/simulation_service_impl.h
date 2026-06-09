@@ -49,6 +49,7 @@ class SimulationServiceImpl final : public boat::v1::SimulationService::Service 
   mutable std::mutex simulations_mutex_;
   boat::store::SqliteTomlConfigStore config_store_{"boat_config.db"};
   std::optional<std::size_t> can_rx_sub_id_;
+  std::optional<std::size_t> eth_rx_sub_id_;
 };
 
 }  // namespace boat::gateway

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -79,6 +80,37 @@ void vehicle_on_tick(void* ctx, uint64_t tick) {
     rpm_frame.data[3] = static_cast<std::uint8_t>((rpm_raw >> 24) & 0xFF);
     plugin->can_publish_fn(plugin->can_publisher_ctx, &rpm_frame);
   }
+
+  // Publish Ethernet frames:
+  //   ethertype 0x0800 (IPv4), payload = 8 bytes: speed_kmh*100 (4 LE) + rpm (4 LE)
+  if (plugin->eth_publish_fn != nullptr) {
+    const auto speed_raw = static_cast<std::uint32_t>(plugin->speed_kmh * 100.0);
+    const auto rpm_raw   = static_cast<std::uint32_t>(plugin->rpm);
+    std::vector<std::uint8_t> payload(8);
+    payload[0] = static_cast<std::uint8_t>((speed_raw >>  0) & 0xFF);
+    payload[1] = static_cast<std::uint8_t>((speed_raw >>  8) & 0xFF);
+    payload[2] = static_cast<std::uint8_t>((speed_raw >> 16) & 0xFF);
+    payload[3] = static_cast<std::uint8_t>((speed_raw >> 24) & 0xFF);
+    payload[4] = static_cast<std::uint8_t>((rpm_raw   >>  0) & 0xFF);
+    payload[5] = static_cast<std::uint8_t>((rpm_raw   >>  8) & 0xFF);
+    payload[6] = static_cast<std::uint8_t>((rpm_raw   >> 16) & 0xFF);
+    payload[7] = static_cast<std::uint8_t>((rpm_raw   >> 24) & 0xFF);
+
+    // Broadcast MAC
+    BoatEthFrame eth_frame{};
+    std::memset(eth_frame.dst_mac, 0xFF, 6);
+    std::memset(eth_frame.src_mac, 0x02, 6);
+    eth_frame.ethertype   = 0x0800;
+    eth_frame.payload     = payload.data();
+    eth_frame.payload_len = payload.size();
+    plugin->eth_publish_fn(plugin->eth_publisher_ctx, &eth_frame);
+  }
+
+  // Publish bus signals (always-on, simulation-independent).
+  if (plugin->bus_publish_fn != nullptr) {
+    plugin->bus_publish_fn(plugin->bus_publisher_ctx, "vehicle.speed", plugin->speed_kmh);
+    plugin->bus_publish_fn(plugin->bus_publisher_ctx, "vehicle.rpm",   plugin->rpm);
+  }
 }
 
 void vehicle_set_publisher(void* ctx, BoatPublishFn fn, void* publisher_ctx) {
@@ -93,6 +125,20 @@ void vehicle_set_can_publisher(void* ctx, BoatCanPublishFn fn, void* publisher_c
   if (plugin == nullptr) return;
   plugin->can_publish_fn    = fn;
   plugin->can_publisher_ctx = publisher_ctx;
+}
+
+void vehicle_set_eth_publisher(void* ctx, BoatEthPublishFn fn, void* publisher_ctx) {
+  auto* plugin = static_cast<VehicleDynamicsPlugin*>(ctx);
+  if (plugin == nullptr) return;
+  plugin->eth_publish_fn    = fn;
+  plugin->eth_publisher_ctx = publisher_ctx;
+}
+
+void vehicle_set_bus_publisher(void* ctx, BoatBusPublishFn fn, void* publisher_ctx) {
+  auto* plugin = static_cast<VehicleDynamicsPlugin*>(ctx);
+  if (plugin == nullptr) return;
+  plugin->bus_publish_fn    = fn;
+  plugin->bus_publisher_ctx = publisher_ctx;
 }
 
 void vehicle_shutdown(void* ctx) {
@@ -110,6 +156,10 @@ BoatPluginVTable kVehicleDynamicsVTable = {
     &vehicle_shutdown,
     &vehicle_set_publisher,
     &vehicle_set_can_publisher,
+    /* on_can_frame */ nullptr,
+    &vehicle_set_eth_publisher,
+    /* on_eth_frame */ nullptr,
+    &vehicle_set_bus_publisher,
 };
 
 }  // namespace

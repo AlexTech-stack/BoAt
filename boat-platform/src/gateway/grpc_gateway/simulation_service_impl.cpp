@@ -15,6 +15,7 @@
 
 #include "can_bus_registry.h"
 #include "core/signal/signal_router.h"
+#include "ethernet_bus_registry.h"
 
 namespace boat::gateway {
 namespace {
@@ -120,6 +121,15 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
           std::memcpy(frame.data, boat_frame.data, boat_frame.dlc);
           ctx_.can_bus_registry.SendFrameAll(frame);
         });
+    ctx_.plugin_manager.SetEthPublisher(
+        [this](const BoatEthFrame& boat_frame) {
+          boat::hil::EthernetFrame frame{};
+          std::memcpy(frame.dst_mac, boat_frame.dst_mac, 6);
+          std::memcpy(frame.src_mac, boat_frame.src_mac, 6);
+          frame.ethertype = boat_frame.ethertype;
+          frame.payload.assign(boat_frame.payload, boat_frame.payload + boat_frame.payload_len);
+          ctx_.ethernet_bus_registry.SendFrameAll(frame);
+        });
     // Subscribe to all incoming CAN frames and dispatch them to plugins.
     if (can_rx_sub_id_.has_value()) {
       ctx_.can_bus_registry.Unsubscribe(*can_rx_sub_id_);
@@ -134,6 +144,22 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
           std::memset(boat_frame.data, 0, sizeof(boat_frame.data));
           std::memcpy(boat_frame.data, f.data, f.dlc);
           ctx_.plugin_manager.DispatchCanFrame(boat_frame, iface);
+        });
+    // Subscribe to all incoming Ethernet frames and dispatch them to plugins.
+    if (eth_rx_sub_id_.has_value()) {
+      ctx_.ethernet_bus_registry.Unsubscribe(*eth_rx_sub_id_);
+    }
+    eth_rx_sub_id_ = ctx_.ethernet_bus_registry.Subscribe(
+        "",  // all interfaces
+        0,   // all ethertypes
+        [this](const boat::hil::EthernetFrame& f, const std::string& iface) {
+          BoatEthFrame boat_frame{};
+          std::memcpy(boat_frame.dst_mac, f.dst_mac, 6);
+          std::memcpy(boat_frame.src_mac, f.src_mac, 6);
+          boat_frame.ethertype   = f.ethertype;
+          boat_frame.payload     = const_cast<uint8_t*>(f.payload.data());
+          boat_frame.payload_len = f.payload.size();
+          ctx_.plugin_manager.DispatchEthFrame(boat_frame, iface);
         });
     for (const auto& plugin_ref : scenario.plugins) {
       try {
@@ -255,6 +281,10 @@ grpc::Status SimulationServiceImpl::StopSimulation(grpc::ServerContext*, const b
     if (can_rx_sub_id_.has_value()) {
       ctx_.can_bus_registry.Unsubscribe(*can_rx_sub_id_);
       can_rx_sub_id_.reset();
+    }
+    if (eth_rx_sub_id_.has_value()) {
+      ctx_.ethernet_bus_registry.Unsubscribe(*eth_rx_sub_id_);
+      eth_rx_sub_id_.reset();
     }
     ctx_.plugin_manager.ShutdownAll();
     ctx_.tick_scheduler.Stop();

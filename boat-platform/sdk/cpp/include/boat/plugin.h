@@ -1,8 +1,9 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
-#define BOAT_PLUGIN_ABI_VERSION 4
+#define BOAT_PLUGIN_ABI_VERSION 5
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +29,26 @@ typedef void (*BoatCanPublishFn)(void* publisher_ctx, const BoatCanFrame* frame)
    iface is the name of the interface the frame was received on (e.g. "vcan1"). */
 typedef void (*BoatCanReceiveFn)(void* ctx, const BoatCanFrame* frame, const char* iface);
 
+/* Ethernet frame type used by the plugin Ethernet-publish callback. */
+typedef struct BoatEthFrame {
+  uint8_t  dst_mac[6];
+  uint8_t  src_mac[6];
+  uint16_t ethertype;
+  uint8_t* payload;
+  size_t   payload_len;
+} BoatEthFrame;
+
+/* Callback a plugin calls to publish an Ethernet frame onto the HIL bus. */
+typedef void (*BoatEthPublishFn)(void* publisher_ctx, const BoatEthFrame* frame);
+
+/* Callback the host calls on a plugin to deliver an incoming Ethernet frame.
+   iface is the name of the interface the frame was received on (e.g. "veth0"). */
+typedef void (*BoatEthReceiveFn)(void* ctx, const BoatEthFrame* frame, const char* iface);
+
+/* Callback a plugin calls to publish a named value on the always-on signal bus.
+   The bus is independent of any simulation lifecycle. */
+typedef void (*BoatBusPublishFn)(void* publisher_ctx, const char* name, double value);
+
 typedef struct BoatPluginVTable {
   int (*initialize)(void* ctx, const char* config_json);
   void (*on_tick)(void* ctx, uint64_t tick);
@@ -40,6 +61,12 @@ typedef struct BoatPluginVTable {
   /* Optional — set to NULL if the plugin does not react to incoming CAN frames.
      The host calls this function directly to deliver each received frame. */
   BoatCanReceiveFn on_can_frame;
+  /* Optional — set to NULL if the plugin does not publish Ethernet frames. */
+  void (*set_eth_publisher)(void* ctx, BoatEthPublishFn fn, void* publisher_ctx);
+  /* Optional — set to NULL if the plugin does not react to incoming Ethernet frames. */
+  BoatEthReceiveFn on_eth_frame;
+  /* Optional — set to NULL if the plugin does not publish bus signals. */
+  void (*set_bus_publisher)(void* ctx, BoatBusPublishFn fn, void* publisher_ctx);
 } BoatPluginVTable;
 
 typedef struct BoatPlugin {

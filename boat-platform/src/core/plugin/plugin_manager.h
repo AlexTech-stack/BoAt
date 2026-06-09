@@ -26,6 +26,12 @@ using SignalPublishFn =
 /* Signature for delivering a raw CAN frame from a plugin to the HIL layer. */
 using CanPublishFn = std::function<void(const BoatCanFrame& frame)>;
 
+/* Signature for delivering an Ethernet frame from a plugin to the HIL layer. */
+using EthPublishFn = std::function<void(const BoatEthFrame& frame)>;
+
+/* Signature for publishing a named value to the always-on signal bus. */
+using BusPublishFn = std::function<void(const char* name, double value)>;
+
 class PluginManager {
  public:
   /* Set before loading plugins.  Every plugin that exposes set_publisher will
@@ -36,11 +42,21 @@ class PluginManager {
      receive a trampoline that delegates to this function. */
   void SetCanPublisher(CanPublishFn fn);
 
+  /* Set before loading plugins.  Every plugin that exposes set_eth_publisher will
+     receive a trampoline that delegates to this function. */
+  void SetEthPublisher(EthPublishFn fn);
+
+  /* Set before loading plugins.  Every plugin that exposes set_bus_publisher will
+     receive a trampoline that delegates to this function. */
+  void SetBusPublisher(BusPublishFn fn);
+
   PluginHandle Load(const std::string& so_path, const std::string& config_json);
   void Unload(const std::string& name);
   void TickAll(std::uint64_t tick);
   /* Deliver an incoming CAN frame to every plugin that implements on_can_frame. */
   void DispatchCanFrame(const BoatCanFrame& frame, const std::string& iface);
+  /* Deliver an incoming Ethernet frame to every plugin that implements on_eth_frame. */
+  void DispatchEthFrame(const BoatEthFrame& frame, const std::string& iface);
   void ShutdownAll();
   [[nodiscard]] std::vector<std::string> List() const;
 
@@ -48,6 +64,8 @@ class PluginManager {
   std::unordered_map<std::string, PluginHandle> plugins_;
   SignalPublishFn publisher_fn_;
   CanPublishFn can_publisher_fn_;
+  EthPublishFn eth_publisher_fn_;
+  BusPublishFn bus_publisher_fn_;
 };
 
 }  // namespace boat::core

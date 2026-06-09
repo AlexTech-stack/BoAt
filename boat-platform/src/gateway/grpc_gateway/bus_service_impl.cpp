@@ -9,45 +9,7 @@
 
 namespace boat::gateway {
 
-// ── Internal registry ─────────────────────────────────────────────────────────
-
-BusServiceImpl::SubId BusServiceImpl::Subscribe(std::vector<std::string> names,
-                                                 Callback cb) {
-  std::lock_guard<std::mutex> lock(subs_mutex_);
-  const SubId id = next_id_++;
-  subscriptions_[id] = Subscription{std::move(names), std::move(cb)};
-  return id;
-}
-
-void BusServiceImpl::Unsubscribe(SubId id) {
-  std::lock_guard<std::mutex> lock(subs_mutex_);
-  subscriptions_.erase(id);
-}
-
-void BusServiceImpl::Dispatch(const boat::v1::BusSignal& signal) {
-  // Snapshot to avoid holding the lock during callbacks.
-  std::vector<Callback> to_call;
-  {
-    std::lock_guard<std::mutex> lock(subs_mutex_);
-    for (const auto& [id, sub] : subscriptions_) {
-      if (sub.names.empty()) {
-        to_call.push_back(sub.cb);
-        continue;
-      }
-      for (const auto& n : sub.names) {
-        if (n == signal.name()) {
-          to_call.push_back(sub.cb);
-          break;
-        }
-      }
-    }
-  }
-  for (const auto& cb : to_call) {
-    cb(signal);
-  }
-}
-
-// ── RPC handlers ──────────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 static uint64_t NowNsBus() {
   return static_cast<uint64_t>(
@@ -80,6 +42,42 @@ static std::string SignalSummary(const boat::v1::BusSignal& sig) {
   return ss.str();
 }
 
+static boat::core::BusSignalValue BusValueFromProto(const boat::v1::BusSignal& sig) {
+  using VC = boat::v1::BusSignal::ValueCase;
+  switch (sig.value_case()) {
+    case VC::kNumberValue: return sig.number_value();
+    case VC::kBoolValue:   return sig.bool_value();
+    case VC::kBytesValue: {
+      const auto& b = sig.bytes_value();
+      return std::vector<std::uint8_t>(b.begin(), b.end());
+    }
+    case VC::kStringValue: return sig.string_value();
+    default:               return 0.0;
+  }
+}
+
+static void ProtoFromBusSignal(const boat::core::BusSignal& core_sig,
+                               boat::v1::BusSignal& out) {
+  out.set_name(core_sig.name);
+  out.set_timestamp_ns(NowNsBus());
+  std::visit([&](const auto& v) {
+    using T = std::decay_t<decltype(v)>;
+    if constexpr (std::is_same_v<T, double>) {
+      out.set_number_value(v);
+    } else if constexpr (std::is_same_v<T, std::int64_t>) {
+      out.set_number_value(static_cast<double>(v));
+    } else if constexpr (std::is_same_v<T, bool>) {
+      out.set_bool_value(v);
+    } else if constexpr (std::is_same_v<T, std::vector<std::uint8_t>>) {
+      out.set_bytes_value(v.data(), v.size());
+    } else if constexpr (std::is_same_v<T, std::string>) {
+      out.set_string_value(v);
+    }
+  }, core_sig.value);
+}
+
+// ── RPC handlers ─────────────────────────────────────────────────────────────
+
 grpc::Status BusServiceImpl::Publish(grpc::ServerContext* context,
                                      const boat::v1::BusPublishRequest* request,
                                      boat::v1::BusPublishResponse* response) {
@@ -88,15 +86,12 @@ grpc::Status BusServiceImpl::Publish(grpc::ServerContext* context,
   }
 
   // Stamp wall-clock time if the publisher didn't set one.
-  boat::v1::BusSignal signal = request->signal();
+  auto signal = request->signal();
   if (signal.timestamp_ns() == 0) {
-    signal.set_timestamp_ns(static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count()));
+    signal.set_timestamp_ns(NowNsBus());
   }
 
-  Dispatch(signal);
+  signal_bus_.Publish(signal.name(), BusValueFromProto(signal));
 
   RpcEvent ev;
   ev.timestamp_ns = NowNsBus();
@@ -144,11 +139,13 @@ grpc::Status BusServiceImpl::Subscribe(
   std::mutex queue_mutex;
   std::vector<boat::v1::BusSignal> queue;
 
-  const SubId sub_id = Subscribe(
+  const auto sub_id = signal_bus_.Subscribe(
       names,
-      [&queue_mutex, &queue](const boat::v1::BusSignal& sig) {
+      [&queue_mutex, &queue](const boat::core::BusSignal& core_sig) {
+        boat::v1::BusSignal proto_sig;
+        ProtoFromBusSignal(core_sig, proto_sig);
         std::lock_guard<std::mutex> lock(queue_mutex);
-        queue.push_back(sig);
+        queue.push_back(std::move(proto_sig));
       });
 
   while (!context->IsCancelled()) {
@@ -159,7 +156,7 @@ grpc::Status BusServiceImpl::Subscribe(
     }
     for (const auto& sig : pending) {
       if (!writer->Write(sig)) {
-        Unsubscribe(sub_id);
+        signal_bus_.Unsubscribe(sub_id);
         return grpc::Status::OK;
       }
       RpcEvent ev;
@@ -174,7 +171,7 @@ grpc::Status BusServiceImpl::Subscribe(
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
-  Unsubscribe(sub_id);
+  signal_bus_.Unsubscribe(sub_id);
   return grpc::Status::OK;
 }
 

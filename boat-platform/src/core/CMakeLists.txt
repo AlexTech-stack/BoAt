@@ -2,6 +2,7 @@ add_library(boat_core STATIC
   scheduler/sim_clock.cpp
   scheduler/tick_scheduler.cpp
   signal/signal_router.cpp
+  signal/signal_bus.cpp
   event/event_bus.cpp
   plugin/plugin_manager.cpp
   state/sim_state_machine.cpp
