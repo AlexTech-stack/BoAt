@@ -16,3 +16,6 @@ __pycache__/
 # Recorded trace files (runtime data)
 boat-platform/traces/
 boat-platform/demo/traces/
+
+# Local specification references (gitignored — symlink or copy your specs here)
+spec/
