@@ -42,6 +42,10 @@ add_executable(boat_unit_sqlite_event_store unit/test_sqlite_event_store.cpp)
 target_link_libraries(boat_unit_sqlite_event_store PRIVATE boat_core boat_store Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_sqlite_event_store)
 
+add_executable(boat_unit_com_signal unit/test_com_signal.cpp)
+target_link_libraries(boat_unit_com_signal PRIVATE boat_hil Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_com_signal)
+
 add_executable(boat_unit_ipc_channel_selector unit/test_ipc_channel_selector.cpp)
 target_link_libraries(boat_unit_ipc_channel_selector PRIVATE boat_ipc Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_ipc_channel_selector)
@@ -49,6 +53,7 @@ catch_discover_tests(boat_unit_ipc_channel_selector)
 add_executable(
   boat_integration_gateway
   integration/test_gateway.cpp
+  ../gateway/grpc_gateway/pdu_service_impl.cpp
   ../gateway/grpc_gateway/simulation_service_impl.cpp
   ../gateway/grpc_gateway/scenario_service_impl.cpp
   ../gateway/grpc_gateway/signal_service_impl.cpp

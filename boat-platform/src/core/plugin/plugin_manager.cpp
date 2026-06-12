@@ -26,6 +26,10 @@ void PluginManager::SetBusPublisher(BusPublishFn fn) {
   bus_publisher_fn_ = std::move(fn);
 }
 
+void PluginManager::SetPduPublisher(PduPublishFn fn) {
+  pdu_publisher_fn_ = std::move(fn);
+}
+
 PluginHandle PluginManager::Load(const std::string& so_path, const std::string& config_json) {
 #ifdef _WIN32
   (void)so_path;
@@ -69,8 +73,6 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
 
   // Wire the signal publisher if the plugin supports it.
   if (plugin->vtable->set_publisher != nullptr && publisher_fn_) {
-    // The trampoline bridges the C callback into our std::function.
-    // We heap-allocate a copy of the function so the lambda is stable.
     auto* fn_copy = new SignalPublishFn(publisher_fn_);
     plugin->vtable->set_publisher(
         plugin->ctx,
@@ -109,6 +111,17 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
         plugin->ctx,
         [](void* pctx, const char* name, double value) {
           (*static_cast<BusPublishFn*>(pctx))(name, value);
+        },
+        fn_copy);
+  }
+
+  // Wire the PDU publisher if the plugin supports it.
+  if (plugin->vtable->set_pdu_publisher != nullptr && pdu_publisher_fn_) {
+    auto* fn_copy = new PduPublishFn(pdu_publisher_fn_);
+    plugin->vtable->set_pdu_publisher(
+        plugin->ctx,
+        [](void* pctx, const BoatPduFrame* frame) {
+          if (frame != nullptr) (*static_cast<PduPublishFn*>(pctx))(*frame);
         },
         fn_copy);
   }

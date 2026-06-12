@@ -430,3 +430,251 @@ TEST_CASE("PduRouter receives multiple PDUs from one IpduM container", "[unit][p
   REQUIRE((ids[1] == 0x01 || ids[1] == 0x02));
   REQUIRE(ids[0] != ids[1]);
 }
+
+// ── I-PDU Group tests ──────────────────────────────────────────────────────────
+
+TEST_CASE("PduRouter AddGroup stores and ListGroups returns groups", "[unit][pdu][group]") {
+  Fixture f;
+  PduGroup g;
+  g.group_id = 1;
+  g.name     = "TestGroup";
+  g.pdu_ids  = {0x100, 0x200};
+  g.enabled  = true;
+  f.router.AddGroup(g);
+
+  const auto groups = f.router.ListGroups();
+  REQUIRE(groups.size() == 1);
+  REQUIRE(groups[0].group_id == 1);
+  REQUIRE(groups[0].name == "TestGroup");
+  REQUIRE(groups[0].enabled);
+}
+
+TEST_CASE("PduRouter AddGroup replaces existing group with same ID", "[unit][pdu][group]") {
+  Fixture f;
+  PduGroup g1; g1.group_id = 1; g1.pdu_ids = {0x100};
+  PduGroup g2; g2.group_id = 1; g2.pdu_ids = {0x200};
+  f.router.AddGroup(g1);
+  f.router.AddGroup(g2);
+
+  const auto groups = f.router.ListGroups();
+  REQUIRE(groups.size() == 1);
+  REQUIRE(groups[0].pdu_ids.size() == 1);
+  REQUIRE(groups[0].pdu_ids[0] == 0x200);
+}
+
+TEST_CASE("PduRouter EnableGroup / DisableGroup toggles group", "[unit][pdu][group]") {
+  Fixture f;
+  PduGroup g; g.group_id = 1; g.pdu_ids = {0x100}; g.enabled = false;
+  f.router.AddGroup(g);
+  REQUIRE_FALSE(f.router.IsGroupEnabled(1));
+
+  f.router.EnableGroup(1);
+  REQUIRE(f.router.IsGroupEnabled(1));
+
+  f.router.DisableGroup(1);
+  REQUIRE_FALSE(f.router.IsGroupEnabled(1));
+}
+
+TEST_CASE("PduRouter SendPdu is blocked by disabled group", "[unit][pdu][group]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id    = 0x100;
+  route.transport = PduTransport::kCan;
+  route.iface     = "vcan0";
+  f.router.AddRoute(route);
+
+  // Send before group — should work
+  REQUIRE(f.router.SendPdu(0x100, {0x01}));
+
+  // Add disabled group containing 0x100
+  PduGroup g; g.group_id = 1; g.pdu_ids = {0x100}; g.enabled = false;
+  f.router.AddGroup(g);
+
+  // Send while group disabled — should be gated
+  REQUIRE_FALSE(f.router.SendPdu(0x100, {0x02}));
+
+  // Re-enable — should work again
+  f.router.EnableGroup(1);
+  REQUIRE(f.router.SendPdu(0x100, {0x03}));
+}
+
+TEST_CASE("PduRouter disabled group blocks receive dispatch", "[unit][pdu][group]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id    = 0x100;
+  route.transport = PduTransport::kCan;
+  route.iface     = "vcan0";
+  f.router.AddRoute(route);
+
+  std::vector<PduFrame> received;
+  f.router.Subscribe({0x100}, [&](const PduFrame& p) { received.push_back(p); });
+
+  CanFrame cf{}; cf.can_id = 0x100; cf.dlc = 1;
+  f.can_reg.SendFrame("vcan0", cf);
+  REQUIRE(received.size() == 1);
+
+  // Disable group, inject again
+  PduGroup g; g.group_id = 1; g.pdu_ids = {0x100}; g.enabled = false;
+  f.router.AddGroup(g);
+  f.can_reg.SendFrame("vcan0", cf);
+  REQUIRE(received.size() == 1);  // no new delivery
+}
+
+TEST_CASE("PduRouter PDUs not in any group are unaffected by group disable", "[unit][pdu][group]") {
+  Fixture f;
+  PduRoute r1; r1.pdu_id = 0x100; r1.transport = PduTransport::kCan; r1.iface = "vcan0";
+  PduRoute r2; r2.pdu_id = 0x200; r2.transport = PduTransport::kCan; r2.iface = "vcan0";
+  f.router.AddRoute(r1);
+  f.router.AddRoute(r2);
+
+  PduGroup g; g.group_id = 1; g.pdu_ids = {0x100}; g.enabled = false;
+  f.router.AddGroup(g);
+
+  // 0x100 is gated, 0x200 is not in any group → should work
+  REQUIRE_FALSE(f.router.SendPdu(0x100, {0x01}));
+  REQUIRE(f.router.SendPdu(0x200, {0x01}));
+}
+
+// ── Transmission Engine tests ──────────────────────────────────────────────────
+
+TEST_CASE("TransmissionEngine schedules cyclic send", "[unit][pdu][txengine]") {
+  PduSchedule sched;
+  sched.send_type = SendType::kCyclic;
+  sched.cycle_ms  = 100;
+
+  int send_count = 0;
+  uint32_t last_id = 0;
+  TransmissionEngine engine([&](uint32_t pid, const std::vector<uint8_t>&) {
+    ++send_count;
+    last_id = pid;
+    return true;
+  });
+
+  engine.ConfigureSchedule(42, sched);
+  engine.UpdatePayload(42, {0xAA});
+
+  // No tick yet → nothing sent
+  REQUIRE(send_count == 0);
+
+  // Tick at t=100 → should fire
+  engine.OnTick(100);
+  REQUIRE(send_count == 1);
+  REQUIRE(last_id == 42);
+
+  // Tick at t=199 → before next period → should not fire
+  engine.OnTick(199);
+  REQUIRE(send_count == 1);
+
+  // Tick at t=200 → next period → should fire
+  engine.OnTick(200);
+  REQUIRE(send_count == 2);
+}
+
+TEST_CASE("TransmissionEngine OnChange sends on payload change", "[unit][pdu][txengine]") {
+  PduSchedule sched;
+  sched.send_type = SendType::kOnChange;
+
+  int send_count = 0;
+  TransmissionEngine engine([&](uint32_t, const std::vector<uint8_t>&) {
+    ++send_count;
+    return true;
+  });
+
+  engine.ConfigureSchedule(42, sched);
+  engine.UpdatePayload(42, {0xAA});  // first set → fires
+  REQUIRE(send_count == 1);
+
+  engine.UpdatePayload(42, {0xAA});  // same payload → no fire
+  REQUIRE(send_count == 1);
+
+  engine.UpdatePayload(42, {0xBB});  // changed → fires
+  REQUIRE(send_count == 2);
+}
+
+TEST_CASE("TransmissionEngine OnChange fires n-times repetitions", "[unit][pdu][txengine]") {
+  PduSchedule sched;
+  sched.send_type = SendType::kOnChange;
+  sched.fast_ms    = 10;
+  sched.repetitions = 3;
+
+  int send_count = 0;
+  TransmissionEngine engine([&](uint32_t, const std::vector<uint8_t>&) {
+    ++send_count;
+    return true;
+  });
+
+  engine.ConfigureSchedule(42, sched);
+  engine.UpdatePayload(42, {0xAA});  // immediate send
+
+  // Tick x3 for repetitions
+  engine.OnTick(10);  // rep 1
+  engine.OnTick(20);  // rep 2
+  engine.OnTick(30);  // rep 3
+
+  REQUIRE(send_count == 4);  // 1 immediate + 3 reps
+}
+
+TEST_CASE("TransmissionEngine Mixed mode sends cyclic + OnChange", "[unit][pdu][txengine]") {
+  PduSchedule sched;
+  sched.send_type = SendType::kMixed;
+  sched.cycle_ms   = 100;
+  sched.fast_ms    = 10;
+  sched.repetitions = 2;
+
+  int send_count = 0;
+  TransmissionEngine engine([&](uint32_t, const std::vector<uint8_t>&) {
+    ++send_count;
+    return true;
+  });
+
+  engine.ConfigureSchedule(42, sched);
+  engine.UpdatePayload(42, {0xAA});  // no OnChange yet since first payload
+
+  // Cyclic tick
+  engine.OnTick(100);
+  REQUIRE(send_count >= 1);
+
+  // Change payload → immediate + reps
+  engine.UpdatePayload(42, {0xBB});
+  // immediate send, now tick reps
+  engine.OnTick(110);
+  engine.OnTick(120);
+  // count: 1(first UpdatePayload, initial change) + 1(cyclic 100) + 1(OnChange resend) + 2(reps) = 5
+  REQUIRE(send_count == 5);
+}
+
+TEST_CASE("TransmissionEngine RemoveSchedule stops sending", "[unit][pdu][txengine]") {
+  PduSchedule sched;
+  sched.send_type = SendType::kCyclic;
+  sched.cycle_ms  = 50;
+
+  int send_count = 0;
+  TransmissionEngine engine([&](uint32_t, const std::vector<uint8_t>&) {
+    ++send_count;
+    return true;
+  });
+
+  engine.ConfigureSchedule(42, sched);
+  engine.UpdatePayload(42, {0x01});
+  engine.RemoveSchedule(42);
+
+  engine.OnTick(50);
+  REQUIRE(send_count == 0);
+}
+
+TEST_CASE("PduRouter OnTick triggers cyclic send from configured route", "[unit][pdu][txengine]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id     = 0x100;
+  route.transport  = PduTransport::kCan;
+  route.iface      = "vcan0";
+  route.schedule.send_type = SendType::kCyclic;
+  route.schedule.cycle_ms  = 50;
+  f.router.AddRoute(route);
+
+  // Manually send to set the payload for the engine
+  REQUIRE(f.router.SendPdu(0x100, {0xAA}));
+
+  f.router.OnTick(50);
+  REQUIRE(f.mock_can->written.size() >= 2);  // initial send + tick
+}

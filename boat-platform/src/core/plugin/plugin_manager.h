@@ -32,6 +32,9 @@ using EthPublishFn = std::function<void(const BoatEthFrame& frame)>;
 /* Signature for publishing a named value to the always-on signal bus. */
 using BusPublishFn = std::function<void(const char* name, double value)>;
 
+/* Signature for delivering a PDU frame from a plugin to the PduRouter. */
+using PduPublishFn = std::function<void(const BoatPduFrame& frame)>;
+
 class PluginManager {
  public:
   /* Set before loading plugins.  Every plugin that exposes set_publisher will
@@ -50,6 +53,10 @@ class PluginManager {
      receive a trampoline that delegates to this function. */
   void SetBusPublisher(BusPublishFn fn);
 
+  /* Set before loading plugins.  Every plugin that exposes set_pdu_publisher will
+     receive a trampoline that delegates to this function. */
+  void SetPduPublisher(PduPublishFn fn);
+
   PluginHandle Load(const std::string& so_path, const std::string& config_json);
   void Unload(const std::string& name);
   void TickAll(std::uint64_t tick);
@@ -66,6 +73,7 @@ class PluginManager {
   CanPublishFn can_publisher_fn_;
   EthPublishFn eth_publisher_fn_;
   BusPublishFn bus_publisher_fn_;
+  PduPublishFn pdu_publisher_fn_;
 };
 
 }  // namespace boat::core

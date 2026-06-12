@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define BOAT_PLUGIN_ABI_VERSION 5
+#define BOAT_PLUGIN_ABI_VERSION 6
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,6 +49,18 @@ typedef void (*BoatEthReceiveFn)(void* ctx, const BoatEthFrame* frame, const cha
    The bus is independent of any simulation lifecycle. */
 typedef void (*BoatBusPublishFn)(void* publisher_ctx, const char* name, double value);
 
+/* PDU frame type used by the PDU-publish callback.
+   This is the mechanism for CanTp to deliver reassembled I-PDUs. */
+typedef struct BoatPduFrame {
+  uint32_t    pdu_id;
+  uint8_t*    payload;
+  size_t      payload_len;
+  const char* iface;  /* interface the frame arrived on */
+} BoatPduFrame;
+
+/* Callback a plugin calls to publish a fully-formed PDU into the PduRouter. */
+typedef void (*BoatPduPublishFn)(void* publisher_ctx, const BoatPduFrame* frame);
+
 typedef struct BoatPluginVTable {
   int (*initialize)(void* ctx, const char* config_json);
   void (*on_tick)(void* ctx, uint64_t tick);
@@ -67,6 +79,9 @@ typedef struct BoatPluginVTable {
   BoatEthReceiveFn on_eth_frame;
   /* Optional — set to NULL if the plugin does not publish bus signals. */
   void (*set_bus_publisher)(void* ctx, BoatBusPublishFn fn, void* publisher_ctx);
+  /* Optional (v6) — set to NULL if the plugin does not publish PDU frames.
+     The host wires this to PduRouter::SendPdu(). */
+  void (*set_pdu_publisher)(void* ctx, BoatPduPublishFn fn, void* publisher_ctx);
 } BoatPluginVTable;
 
 typedef struct BoatPlugin {
