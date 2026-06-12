@@ -219,6 +219,11 @@ uint32_t crc32 = E2eCrc32(data, len);
 
 ISO 15765-2 segmentation/reassembly for PDUs larger than 8 bytes. Operates as a `BOAT_NODE_PLUGINS` node plugin with its own C API.
 
+Each connection represents a session between `source_addr` (this node) and
+`target_addr` (peer node).  Both IDs must be configured so that the plugin
+can correctly associate frames and distinguish ISO-TP traffic from regular
+signal frames on the bus.
+
 ```bash
 # Build plugin
 cmake --build --preset debug
@@ -228,8 +233,11 @@ BOAT_NODE_PLUGINS=./build/debug/src/plugins/can_tp/can_tp.so \
   BOAT_CAN_INTERFACES=vcan0 \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 
+# Configure a session (dual-ID, tester→ECU)
+boat can-tp configure --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 --bs 0 --stmin 0
+
 # Send large PDU via CanTp CLI (--dlc 8 for classic CAN, --dlc 64 for CAN-FD)
-boat can-tp send --nsdu-id 0x7E0 --dlc 8 --data 0123456789ABCDEF...
+boat can-tp send --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 --dlc 8 --data 0123456789ABCDEF...
 ```
 
 Programmatic (C API):
@@ -238,12 +246,13 @@ Programmatic (C API):
 
 CanTpConfig cfg;
 cfg.nsdu_id = 0x7E0;
+cfg.source_addr = 0x7E0;
+cfg.target_addr = 0x7E8;
 cfg.rx_buffer_size = 4095;
 cfg.block_size = 0;      // unlimited CF per FC
 cfg.st_min = 0;          // no min separation
 cfg.can_dlc = 8;
 cfg.extended_addressing = false;
-cfg.is_rx = false;       // false = send+receive, true = receive-only
 can_tp_configure(plugin_ctx, &cfg);
 
 uint8_t data[] = {0x01, 0x02, ..., 0xFF};  // 255 bytes

@@ -624,17 +624,44 @@ boat can subscribe --count 10</code></pre>
 
 <!-- ═══ CLI CAN-TP ═══ -->
 <h2 id="cli-can-tp">CLI — <code>boat can-tp</code></h2>
-<p>CAN Transport Protocol (ISO 15765-2) — segments large PDUs across multiple CAN frames. Requires the <code>can_tp.so</code> node plugin to be loaded in the gateway.</p>
+<p>CAN Transport Protocol (ISO 15765-2) — segments large PDUs across multiple CAN frames
+with Flow Control (BS/STmin) support. Requires the <code>can_tp.so</code> node plugin to be
+loaded in the gateway.</p>
+
+<h3>boat can-tp configure</h3>
+<p>Configure an N-SDU session between two CAN IDs (source = this node, target = peer).
+Both <code>--source-addr</code> and <code>--target-addr</code> default to <code>--nsdu-id</code> for
+single-ID backward compatibility.</p>
+<table>
+  <tr><th>Option</th><th>Tag</th><th>Description</th></tr>
+  <tr><td><code>--nsdu-id &lt;hex|dec&gt;</code></td><td><span class="tag req">req</span></td><td>Logical session identifier</td></tr>
+  <tr><td><code>--source-addr &lt;hex|dec&gt;</code></td><td><span class="tag opt">opt</span></td><td>CAN ID of this node (default: nsdu_id)</td></tr>
+  <tr><td><code>--target-addr &lt;hex|dec&gt;</code></td><td><span class="tag opt">opt</span></td><td>CAN ID of the peer node (default: nsdu_id)</td></tr>
+  <tr><td><code>--bs &lt;N&gt;</code></td><td><span class="tag def">0</span></td><td>Block Size to advertise in Flow Control (0 = unlimited)</td></tr>
+  <tr><td><code>--stmin &lt;N&gt;</code></td><td><span class="tag def">0</span></td><td>Separation Time in ms to advertise in FC (0–127)</td></tr>
+  <tr><td><code>--dlc &lt;N&gt;</code></td><td><span class="tag def">8</span></td><td>CAN DLC: 8 for classic CAN, 64 for CAN FD</td></tr>
+  <tr><td><code>--rx-buffer &lt;N&gt;</code></td><td><span class="tag def">4095</span></td><td>RX reassembly buffer size</td></tr>
+</table>
+<pre><code><span class="cm"># Dual-ID session: tester (0x7E0) → ECU (0x7E8)</span>
+boat can-tp configure --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 --bs 0 --stmin 0
+
+<span class="cm"># Single-ID (backward compat)</span>
+boat can-tp configure --nsdu-id 0x7E0</code></pre>
 
 <h3>boat can-tp send</h3>
 <table>
   <tr><th>Option</th><th>Tag</th><th>Description</th></tr>
-  <tr><td><code>--nsdu-id &lt;hex|dec&gt;</code></td><td><span class="tag req">req</span></td><td>N-SDU ID (typically the CAN ID)</td></tr>
+  <tr><td><code>--nsdu-id &lt;hex|dec&gt;</code></td><td><span class="tag req">req</span></td><td>N-SDU ID of the previously configured session</td></tr>
   <tr><td><code>--data &lt;hex&gt;</code></td><td><span class="tag req">req</span></td><td>Payload hex bytes (will be segmented)</td></tr>
+  <tr><td><code>--source-addr &lt;hex|dec&gt;</code></td><td><span class="tag opt">opt</span></td><td>Override source CAN ID for this send</td></tr>
+  <tr><td><code>--target-addr &lt;hex|dec&gt;</code></td><td><span class="tag opt">opt</span></td><td>Override target CAN ID for this send</td></tr>
+  <tr><td><code>--bs &lt;N&gt;</code></td><td><span class="tag def">0</span></td><td>Block Size for the session (0 = unlimited)</td></tr>
+  <tr><td><code>--stmin &lt;N&gt;</code></td><td><span class="tag def">0</span></td><td>Separation Time in ms</td></tr>
   <tr><td><code>--dlc &lt;N&gt;</code></td><td><span class="tag def">8</span></td><td>CAN DLC: 8 for classic CAN, 64 for CAN FD</td></tr>
 </table>
-<pre><code><span class="cm"># Send 255 bytes via CanTp segmentation</span>
-boat can-tp send --nsdu-id 0x7E0 --data 0123456789ABCDEF...
+<pre><code><span class="cm"># Send 255 bytes via CanTp segmentation (dual-ID)</span>
+boat can-tp send --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 \
+  --data 0123456789ABCDEF...
 
 <span class="cm"># CAN FD mode</span>
 boat can-tp send --nsdu-id 0x7E0 --dlc 64 --data ...
@@ -1569,12 +1596,13 @@ uint32_t crc32 = E2eCrc32(data, len);</code></pre>
 
 CanTpConfig cfg;
 cfg.nsdu_id            = <span class="nm">0x7E0</span>;
+cfg.source_addr        = <span class="nm">0x7E0</span>;  <span class="cm">// this node's CAN ID</span>
+cfg.target_addr        = <span class="nm">0x7E8</span>;  <span class="cm">// peer node's CAN ID</span>
+cfg.block_size         = <span class="nm">0</span>;     <span class="cm">// BS = unlimited</span>
+cfg.st_min             = <span class="nm">0</span>;     <span class="cm">// no separation time</span>
 cfg.rx_buffer_size     = <span class="nm">4095</span>;
-cfg.block_size         = <span class="nm">0</span>;     <span class="cm">// unlimited CF per FC</span>
-cfg.st_min             = <span class="nm">0</span>;     <span class="cm">// no min separation</span>
 cfg.can_dlc            = <span class="nm">8</span>;
 cfg.extended_addressing = <span class="kw">false</span>;
-cfg.is_rx              = <span class="kw">false</span>; <span class="cm">// false = send+rx, true = rx-only</span>
 can_tp_configure(plugin_ctx, &amp;cfg);
 
 uint8_t data[] = {<span class="nm">0x01</span>, <span class="nm">0x02</span>, <span class="cm">/* ... */</span>, <span class="nm">0xFF</span>};  <span class="cm">// 255 bytes</span>
