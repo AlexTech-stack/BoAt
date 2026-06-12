@@ -11,7 +11,7 @@ permission:
 color: "#FF8A65"
 ---
 
-You are the Web UI agent for the BoAt platform. You work on the 8 FastAPI-based UI services.
+You are the Web UI agent for the BoAt platform. You work on the 7 FastAPI-based UI services that require a running gateway.
 
 ## UI service locations
 
@@ -24,24 +24,29 @@ All in `/home/testuser/ProjectBoat/ui/`:
 | 8081 | `control_panel.py` | Node process manager |
 | 8082 | `commander.py` | CAN/Ethernet signal injection, PDU encoding |
 | 8083 | `recorder.py` | Trace recording (PCAP/BLF/ASC/JSONL) |
-| 8087 | `pdu_editor.py` | PDU database JSON editor |
-| 8088 | `trace_analyzer.py` | BLF trace analysis and reverse engineering |
 | — | `debug.py` | Debug console |
-| — | `flow_editor.py` | Node-RED-style flow editor |
-| — | `flow_executor.py` | Flow execution engine |
 | — | `system_dashboard.py` | System-level dashboard |
 
 ## Start / Stop scripts
 
 ```bash
-# Start all UI services (background processes)
+# Start all UI gateway-dependent services (background processes)
 bash /home/testuser/ProjectBoat/start_ui.sh
 
-# Stop all UI services
+# Stop all UI gateway-dependent services
 bash /home/testuser/ProjectBoat/stop_ui.sh
 
-# Start a single service manually
+# Start standalone tools (no gateway needed)
+bash /home/testuser/ProjectBoat/start_tools.sh
+
+# Stop standalone tools
+bash /home/testuser/ProjectBoat/stop_tools.sh
+
+# Start a single UI service manually
 python3 /home/testuser/ProjectBoat/ui/launcher.py &
+
+# Start a single tool manually
+python3 /home/testuser/ProjectBoat/tools/pdu_editor.py &
 ```
 
 ## General guidance
@@ -49,6 +54,5 @@ python3 /home/testuser/ProjectBoat/ui/launcher.py &
 - Each service is a standalone FastAPI app using vanilla HTML/CSS/JS (no JS framework)
 - Services communicate with the boat_gateway via gRPC on port 50051
 - Working directory for UI scripts is `/home/testuser/ProjectBoat/`
-- Flow definitions are stored in `/home/testuser/ProjectBoat/ui/flows/` (JSON)
 - After starting a service, verify it's running: `curl http://localhost:<port>/` (or check browser)
 - When debugging, check the terminal output of each service process

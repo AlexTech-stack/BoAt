@@ -401,6 +401,7 @@ def api_health():
 # ── PDU database import ─────────────────────────────────────────────────────
 
 _CONFIG_DIR = _PROJECT_ROOT / "config"
+_LAST_IMPORT_FILE = _CONFIG_DIR / ".last_import"
 
 
 @app.get("/api/pdu/list")
@@ -410,6 +411,14 @@ def api_pdu_list():
     files = sorted(f.name for f in _CONFIG_DIR.iterdir()
                    if f.suffix == ".json" and f.name != "pdu_db.schema.json")
     return {"files": files}
+
+
+@app.get("/api/pdu/last-import")
+def api_pdu_last_import():
+    if _LAST_IMPORT_FILE.is_file():
+        fn = _LAST_IMPORT_FILE.read_text().strip()
+        return {"filename": fn if fn else None}
+    return {"filename": None}
 
 
 @app.post("/api/pdu/import")
@@ -463,6 +472,8 @@ def api_pdu_import(filename: str):
         if iface_name not in _virtual_eth_ifaces:
             created_eth.append(iface_name)
         _virtual_eth_ifaces.add(iface_name)
+
+    _LAST_IMPORT_FILE.write_text(filename)
 
     return {
         "ok": True,
@@ -1069,7 +1080,17 @@ async function init() {
   setInterval(fetchGatewayStatus, 1000);
   setInterval(fetchSimState, 2000);
   pollLog();
-  fetchPduFiles();
+  await fetchPduFiles();
+  // Auto-import last used PDU DB so it persists across page reloads
+  try {
+    const r = await fetch('/api/pdu/last-import');
+    const d = await r.json();
+    if (d.filename) {
+      const sel = document.getElementById('pdu-file-select');
+      sel.value = d.filename;
+      await importPduDb();
+    }
+  } catch {}
   setupNav();
 }
 

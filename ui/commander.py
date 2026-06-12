@@ -24,6 +24,7 @@ _CANFD_BRS = 0x01
 _DEFAULT_GW = os.environ.get("BOAT_GATEWAY", "localhost:50051")
 _PORT       = int(os.environ.get("BOAT_CMD_PORT", "8082"))
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "config"
+_LAST_IMPORT_FILE = _CONFIG_DIR / ".last_import"
 _PDU_DB: Optional[PduDatabase] = None
 _PDU_FILENAME: Optional[str] = None
 # ── gRPC client cache (one channel per address) ────────────────────────────────
@@ -375,6 +376,13 @@ def api_pdu_list():
                    if f.suffix == ".json" and f.name != "pdu_db.schema.json")
     return {"files": files}
 
+@app.get("/api/pdu/last-import")
+def api_pdu_last_import():
+    if _LAST_IMPORT_FILE.is_file():
+        fn = _LAST_IMPORT_FILE.read_text().strip()
+        return {"filename": fn if fn else None}
+    return {"filename": None}
+
 @app.post("/api/pdu/import")
 def api_pdu_import(filename: str):
     global _PDU_DB, _PDU_FILENAME
@@ -384,6 +392,7 @@ def api_pdu_import(filename: str):
     try:
         _PDU_DB = PduDatabase(str(path))
         _PDU_FILENAME = filename
+        _LAST_IMPORT_FILE.write_text(filename)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to parse PDU DB: {e}")
     messages = []
@@ -1665,7 +1674,17 @@ pollGatewayHealth();
   loadCanBuses();
   loadEthIfaces();
   loadSignals();
-  fetchPduFiles();
+  await fetchPduFiles();
+  // Auto-import last used PDU DB so it persists across page reloads
+  try {
+    const r = await fetch('/api/pdu/last-import');
+    const d = await r.json();
+    if (d.filename) {
+      const sel = document.getElementById('pdu-file-select');
+      sel.value = d.filename;
+      await importPduDb();
+    }
+  } catch {}
 })();
 </script>
 </body>

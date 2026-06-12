@@ -17,5 +17,8 @@ __pycache__/
 boat-platform/traces/
 boat-platform/demo/traces/
 
+# Runtime state files
+.last_import
+
 # Local specification references (gitignored — symlink or copy your specs here)
 spec/

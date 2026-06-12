@@ -1,7 +1,7 @@
 """
 BoAt Platform — Trace Analyzer
 Read BLF trace files, analyze CAN messages, derive PDU database JSON.
-Run:  python3 ui/trace_analyzer.py
+Run:  python3 tools/trace_analyzer.py
 Open: http://localhost:8088
 """
 from __future__ import annotations
