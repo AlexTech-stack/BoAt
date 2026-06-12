@@ -45,6 +45,10 @@ class CanBusRegistry {
   std::vector<std::string> Interfaces() const;
   bool Has(const std::string& iface) const;
 
+  /* Retrieve metadata for a registered interface.
+     Returns default-constructed CanInterfaceInfo if iface is unknown. */
+  CanInterfaceInfo GetInterfaceInfo(const std::string& iface) const;
+
   void StopAll();
 
  private:
@@ -53,6 +57,7 @@ class CanBusRegistry {
   struct BridgeEntry {
     std::string iface;
     std::unique_ptr<HilBridge> bridge;
+    CanInterfaceInfo info;
   };
 
   struct Subscription {

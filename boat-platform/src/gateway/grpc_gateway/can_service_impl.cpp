@@ -171,7 +171,13 @@ grpc::Status CanServiceImpl::ListBuses(grpc::ServerContext*,
                                        const boat::v1::ListBusesRequest*,
                                        boat::v1::ListBusesResponse* response) {
   for (const auto& iface : ctx_.can_bus_registry.Interfaces()) {
-    response->add_ifaces(iface);
+    const auto& info = ctx_.can_bus_registry.GetInterfaceInfo(iface);
+    auto* proto = response->add_buses();
+    proto->set_iface(iface);
+    proto->set_driver(info.driver_name);
+    proto->set_state(info.state);
+    proto->set_fd_support(info.fd_support);
+    proto->set_bitrate(info.bitrate);
   }
   return grpc::Status::OK;
 }

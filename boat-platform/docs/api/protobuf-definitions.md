@@ -73,6 +73,28 @@
 - `InjectFault`
 - `ListFaults`
 
+### `CanService` (`can.proto`)
+
+- `SendCanFrame`
+- `SubscribeCanFrames` (server streaming)
+- `ListBuses` — returns `CanBusInfo` per interface (driver, state, FD support, bitrate)
+
+```protobuf
+message CanBusInfo {
+  string iface      = 1;
+  string driver     = 2;  // e.g. "peak_usb", "vcan"
+  string state      = 3;  // "up", "down", "unknown"
+  bool   fd_support = 4;
+  uint32 bitrate    = 5;
+}
+```
+
+### `EthernetService` (`ethernet.proto`)
+
+- `SendFrame`
+- `SubscribeFrames` (server streaming)
+- `ListInterfaces`
+
 ## Shared Message Patterns
 
 - Common identifiers use UUID strings.

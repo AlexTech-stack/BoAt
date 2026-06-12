@@ -23,8 +23,16 @@ message SubscribeCanFramesRequest {
   string iface         = 2;  // empty = all registered interfaces
 }
 
-message ListBusesRequest  {}
-message ListBusesResponse { repeated string ifaces = 1; }
+message CanBusInfo {
+  string iface      = 1;  // interface name, e.g. "can0", "vcan0"
+  string driver     = 2;  // kernel driver, e.g. "peak_usb", "vcan", "socketcan"
+  string state      = 3;  // "up", "down", "unknown"
+  bool   fd_support = 4;  // CAN FD capable (mtu >= 72)
+  uint32 bitrate    = 5;  // nominal bitrate in bit/s, 0 if unknown
+}
+
+message ListBusesRequest {}
+message ListBusesResponse { repeated CanBusInfo buses = 1; }
 
 service CanService {
   rpc SendCanFrame(SendCanFrameRequest)             returns (SendCanFrameResponse);

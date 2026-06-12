@@ -40,7 +40,10 @@ def _fake_client() -> SimpleNamespace:
         UnloadPlugin=Mock(return_value=SimpleNamespace(unloaded=True)),
     )
     can = SimpleNamespace(
-        ListBuses=Mock(return_value=SimpleNamespace(ifaces=["vcan0"])),
+        ListBuses=Mock(return_value=SimpleNamespace(
+            buses=[SimpleNamespace(iface="vcan0", driver="vcan",
+                                   state="unknown", fd_support=False, bitrate=0)]
+        )),
         SendCanFrame=Mock(return_value=SimpleNamespace(accepted=True)),
         SubscribeCanFrames=Mock(return_value=[]),
     )

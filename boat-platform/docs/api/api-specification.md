@@ -80,6 +80,22 @@ Replay session identity:
 | `InjectFault` | Unary | Schedule fault injection for simulation |
 | `ListFaults` | Unary | Paginated fault event listing |
 
+### `can.proto` - `CanService`
+
+| Method | Type | Description |
+|---|---|---|
+| `SendCanFrame` | Unary | Transmit a CAN/CAN FD frame on a registered interface |
+| `SubscribeCanFrames` | Server-streaming | Stream incoming CAN frames (with optional interface filter) |
+| `ListBuses` | Unary | List registered CAN interfaces with metadata (driver, state, FD support, bitrate) |
+
+### `ethernet.proto` - `EthernetService`
+
+| Method | Type | Description |
+|---|---|---|
+| `SendFrame` | Unary | Transmit an Ethernet frame |
+| `SubscribeFrames` | Server-streaming | Stream incoming Ethernet frames |
+| `ListInterfaces` | Unary | List registered Ethernet interfaces |
+
 ## API Versioning Strategy
 
 - Package versions follow `boat.v1`, `boat.v2`, where breaking changes increment major.

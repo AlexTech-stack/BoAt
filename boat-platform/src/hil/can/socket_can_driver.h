@@ -14,6 +14,7 @@ class SocketCanDriver : public IHalDriver {
   bool ReadFrame(CanFrame& out_frame) override;
   bool WriteFrame(const CanFrame& frame) override;
   void Close() override;
+  CanInterfaceInfo GetInfo() const override;
 
  private:
   int socket_fd_{-1};
