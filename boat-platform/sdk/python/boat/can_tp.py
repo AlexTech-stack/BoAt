@@ -22,15 +22,18 @@ from typing import Optional
 
 
 class CanTpConfig(ctypes.Structure):
-    """Mirrors the C struct CanTpConfig from boat/can_tp.h."""
+    """Mirrors the C struct CanTpConfig from boat/can_tp.h.
+    A connection represents one session between source_addr (this node)
+    and target_addr (peer node)."""
     _fields_ = [
         ("nsdu_id", ctypes.c_uint32),
+        ("source_addr", ctypes.c_uint32),
+        ("target_addr", ctypes.c_uint32),
         ("rx_buffer_size", ctypes.c_uint32),
         ("block_size", ctypes.c_uint8),
         ("st_min", ctypes.c_uint8),
         ("can_dlc", ctypes.c_uint8),
         ("extended_addressing", ctypes.c_bool),
-        ("is_rx", ctypes.c_bool),
     ]
 
 
@@ -72,21 +75,28 @@ class CanTpHandle:
         """Configure an N-SDU connection.
 
         Args:
-            nsdu_id: N-SDU identifier (typically CAN ID).
-            **kwargs: Override CanTpConfig fields (rx_buffer_size, block_size,
-                      st_min, can_dlc, extended_addressing, is_rx).
+            nsdu_id: N-SDU identifier.
+            **kwargs: Override CanTpConfig fields (source_addr, target_addr,
+                      rx_buffer_size, block_size, st_min, can_dlc,
+                      extended_addressing).
 
         Returns:
             True if configured successfully.
         """
+        source_addr = kwargs.get("source_addr", 0)
+        target_addr = kwargs.get("target_addr", 0)
+        if source_addr == 0 and target_addr == 0:
+            source_addr = nsdu_id
+            target_addr = nsdu_id
         config = CanTpConfig(
             nsdu_id=nsdu_id,
+            source_addr=source_addr,
+            target_addr=target_addr,
             rx_buffer_size=kwargs.get("rx_buffer_size", 4095),
             block_size=kwargs.get("block_size", 0),
             st_min=kwargs.get("st_min", 0),
             can_dlc=kwargs.get("can_dlc", 8),
             extended_addressing=kwargs.get("extended_addressing", False),
-            is_rx=kwargs.get("is_rx", False),
         )
         result = self._lib.can_tp_configure(None, ctypes.byref(config))
         return result == 0
