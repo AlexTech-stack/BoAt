@@ -59,6 +59,31 @@ class PduServiceStub(object):
                 request_serializer=boat_dot_v1_dot_pdu__pb2.ConfigureContainerRequest.SerializeToString,
                 response_deserializer=boat_dot_v1_dot_pdu__pb2.ConfigureContainerResponse.FromString,
                 _registered_method=True)
+        self.ConfigureGroup = channel.unary_unary(
+                '/boat.v1.PduService/ConfigureGroup',
+                request_serializer=boat_dot_v1_dot_pdu__pb2.ConfigureGroupRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_pdu__pb2.ConfigureGroupResponse.FromString,
+                _registered_method=True)
+        self.EnableGroup = channel.unary_unary(
+                '/boat.v1.PduService/EnableGroup',
+                request_serializer=boat_dot_v1_dot_pdu__pb2.EnableGroupRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_pdu__pb2.EnableGroupResponse.FromString,
+                _registered_method=True)
+        self.DisableGroup = channel.unary_unary(
+                '/boat.v1.PduService/DisableGroup',
+                request_serializer=boat_dot_v1_dot_pdu__pb2.DisableGroupRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_pdu__pb2.DisableGroupResponse.FromString,
+                _registered_method=True)
+        self.ListGroups = channel.unary_unary(
+                '/boat.v1.PduService/ListGroups',
+                request_serializer=boat_dot_v1_dot_pdu__pb2.ListGroupsRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_pdu__pb2.ListGroupsResponse.FromString,
+                _registered_method=True)
+        self.RemoveRoute = channel.unary_unary(
+                '/boat.v1.PduService/RemoveRoute',
+                request_serializer=boat_dot_v1_dot_pdu__pb2.RemoveRouteRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_pdu__pb2.RemoveRouteResponse.FromString,
+                _registered_method=True)
 
 
 class PduServiceServicer(object):
@@ -94,6 +119,36 @@ class PduServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ConfigureGroup(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def EnableGroup(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DisableGroup(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListGroups(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RemoveRoute(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_PduServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -121,6 +176,31 @@ def add_PduServiceServicer_to_server(servicer, server):
                     servicer.ConfigureContainer,
                     request_deserializer=boat_dot_v1_dot_pdu__pb2.ConfigureContainerRequest.FromString,
                     response_serializer=boat_dot_v1_dot_pdu__pb2.ConfigureContainerResponse.SerializeToString,
+            ),
+            'ConfigureGroup': grpc.unary_unary_rpc_method_handler(
+                    servicer.ConfigureGroup,
+                    request_deserializer=boat_dot_v1_dot_pdu__pb2.ConfigureGroupRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_pdu__pb2.ConfigureGroupResponse.SerializeToString,
+            ),
+            'EnableGroup': grpc.unary_unary_rpc_method_handler(
+                    servicer.EnableGroup,
+                    request_deserializer=boat_dot_v1_dot_pdu__pb2.EnableGroupRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_pdu__pb2.EnableGroupResponse.SerializeToString,
+            ),
+            'DisableGroup': grpc.unary_unary_rpc_method_handler(
+                    servicer.DisableGroup,
+                    request_deserializer=boat_dot_v1_dot_pdu__pb2.DisableGroupRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_pdu__pb2.DisableGroupResponse.SerializeToString,
+            ),
+            'ListGroups': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListGroups,
+                    request_deserializer=boat_dot_v1_dot_pdu__pb2.ListGroupsRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_pdu__pb2.ListGroupsResponse.SerializeToString,
+            ),
+            'RemoveRoute': grpc.unary_unary_rpc_method_handler(
+                    servicer.RemoveRoute,
+                    request_deserializer=boat_dot_v1_dot_pdu__pb2.RemoveRouteRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_pdu__pb2.RemoveRouteResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -258,6 +338,141 @@ class PduService(object):
             '/boat.v1.PduService/ConfigureContainer',
             boat_dot_v1_dot_pdu__pb2.ConfigureContainerRequest.SerializeToString,
             boat_dot_v1_dot_pdu__pb2.ConfigureContainerResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ConfigureGroup(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.PduService/ConfigureGroup',
+            boat_dot_v1_dot_pdu__pb2.ConfigureGroupRequest.SerializeToString,
+            boat_dot_v1_dot_pdu__pb2.ConfigureGroupResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def EnableGroup(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.PduService/EnableGroup',
+            boat_dot_v1_dot_pdu__pb2.EnableGroupRequest.SerializeToString,
+            boat_dot_v1_dot_pdu__pb2.EnableGroupResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DisableGroup(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.PduService/DisableGroup',
+            boat_dot_v1_dot_pdu__pb2.DisableGroupRequest.SerializeToString,
+            boat_dot_v1_dot_pdu__pb2.DisableGroupResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListGroups(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.PduService/ListGroups',
+            boat_dot_v1_dot_pdu__pb2.ListGroupsRequest.SerializeToString,
+            boat_dot_v1_dot_pdu__pb2.ListGroupsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RemoveRoute(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.PduService/RemoveRoute',
+            boat_dot_v1_dot_pdu__pb2.RemoveRouteRequest.SerializeToString,
+            boat_dot_v1_dot_pdu__pb2.RemoveRouteResponse.FromString,
             options,
             channel_credentials,
             insecure,

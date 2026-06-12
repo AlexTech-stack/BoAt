@@ -28,6 +28,7 @@
 #include "hil/ethernet/virtual_ethernet_driver.h"
 #include "hil/ethernet/raw_socket_ethernet_driver.h"
 #include "pdu/pdu_router.h"
+#include "pdu/tick_timer.h"
 #include "pdu_service_impl.h"
 #include "metrics_service_impl.h"
 #include "plugin/plugin_manager.h"
@@ -195,28 +196,61 @@ int main() {
         }
       }
     }
-    // Start a background tick thread for node plugins (not simulation-bound).
-    // Interval defaults to 100ms; override via BOAT_NODE_TICK_MS env var.
-    {
-      std::uint64_t tick_ms = 100;
-      const char* env = std::getenv("BOAT_NODE_TICK_MS");
-      if (env != nullptr) {
-        char* end = nullptr;
-        auto val = std::strtoul(env, &end, 10);
-        if (end != env && val > 0) tick_ms = val;
-      }
-      g_node_tick_running.store(true, std::memory_order_release);
-      std::thread([&node_manager, tick_ms]() {
-        std::uint64_t tick = 0;
-        while (g_node_tick_running.load(std::memory_order_acquire)) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(tick_ms));
-          node_manager.TickAll(tick++);
-        }
-      }).detach();
-    }
   }
 
+  // PduRouter must be created before the node tick thread so it can be
+  // captured for OnTick() calls and PDU publisher wiring.
   boat::hil::PduRouter pdu_router(can_registry, eth_registry);
+
+  // Wire the PDU publisher so plugins (e.g. CanTp) can deliver reassembled
+  // I-PDUs into the PduRouter.
+  node_manager.SetPduPublisher([&pdu_router](const BoatPduFrame& f) {
+    if (f.payload == nullptr) return;
+    std::vector<uint8_t> payload(f.payload, f.payload + f.payload_len);
+    pdu_router.SendPdu(f.pdu_id, payload);
+  });
+
+  // Start a background tick thread for node plugins and PDU transmission engine.
+  // The tick interval sets the minimum achievable PDU cycle time.
+  //   BOAT_NODE_TICK_MS=N   — set tick in ms (default 10, min 1, >=1ms range uses SleepTickTimer)
+  //   BOAT_NODE_TICK_US=N   — set tick in μs (high-precision mode, uses TimerfdTickTimer)
+  //   BOAT_NODE_TICK_US takes precedence over BOAT_NODE_TICK_MS when both are set.
+  {
+    using namespace std::chrono_literals;
+    std::chrono::nanoseconds tick_ns = 10ms;  // default
+
+    const char* us_env = std::getenv("BOAT_NODE_TICK_US");
+    if (us_env != nullptr) {
+      char* end = nullptr;
+      auto val = std::strtoul(us_env, &end, 10);
+      if (end != us_env && val > 0) {
+        tick_ns = std::chrono::microseconds(val);
+      }
+    } else {
+      const char* ms_env = std::getenv("BOAT_NODE_TICK_MS");
+      if (ms_env != nullptr) {
+        char* end = nullptr;
+        auto val = std::strtoul(ms_env, &end, 10);
+        if (end != ms_env && val > 0) {
+          tick_ns = std::chrono::milliseconds(val);
+        }
+      }
+    }
+
+    auto timer = boat::hil::TickTimer::Create(tick_ns);
+    g_node_tick_running.store(true, std::memory_order_release);
+    std::thread([&node_manager, &pdu_router, timer = std::move(timer)]() {
+      std::uint64_t tick = 0;
+      while (g_node_tick_running.load(std::memory_order_acquire)) {
+        if (!timer->WaitForNextTick()) break;
+        node_manager.TickAll(tick++);
+        // Drive the PDU transmission engine with monotonic ms for schedule timing
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            timer->Elapsed()).count();
+        pdu_router.OnTick(static_cast<std::uint64_t>(elapsed));
+      }
+    }).detach();
+  }
 
   boat::gateway::GatewayContext ctx{
       .sim_state_machine = state_machine,

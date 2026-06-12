@@ -309,6 +309,7 @@
     <li class="section-head"><a href="#">CLI Reference</a></li>
     <li><a href="#cli-global">Global Options</a></li>
     <li><a href="#cli-can">boat can</a></li>
+    <li><a href="#cli-can-tp">boat can-tp</a></li>
     <li><a href="#cli-eth">boat eth</a></li>
     <li><a href="#cli-pdu">boat pdu</a></li>
     <li><a href="#cli-db">boat db</a></li>
@@ -338,6 +339,7 @@
     <li><a href="#howto-pdu">Send a PDU over IP</a></li>
     <li><a href="#howto-container">IpduM Container</a></li>
     <li><a href="#howto-subscribe">Subscribe to Frames</a></li>
+    <li><a href="#howto-pdu-features">PDU Features</a></li>
     <li><a href="#howto-hweth">Physical Ethernet</a></li>
     <li><a href="#howto-signals">Signal Routing</a></li>
     <li><a href="#howto-trace">Record a Trace</a></li>
@@ -512,6 +514,16 @@ sudo ./boat_gateway</code></pre>
     <td>Comma-separated paths to always-on plugin .so files loaded at startup.</td>
   </tr>
   <tr>
+    <td><code>BOAT_NODE_TICK_MS</code></td>
+    <td><code>10</code></td>
+    <td>Node tick interval in milliseconds. Minimum achievable PDU cycle time. Lower = more precise cycles, higher CPU. Uses <code>sleep_for</code> backend.</td>
+  </tr>
+  <tr>
+    <td><code>BOAT_NODE_TICK_US</code></td>
+    <td>(none)</td>
+    <td>Node tick interval in microseconds. Overrides <code>BOAT_NODE_TICK_MS</code>&nbsp;when set. Uses high-precision timerfd backend (Linux only). Example: <code>100</code> for 100&nbsp;μs ticks.</td>
+  </tr>
+  <tr>
     <td><code>BOAT_AI_API_KEY</code></td>
     <td>(none)</td>
     <td>Bearer token for LLM endpoints used by <code>boat gen plugin</code>.</td>
@@ -610,6 +622,30 @@ boat can subscribe --bus vcan0
 <span class="cm"># Capture 10 frames then exit</span>
 boat can subscribe --count 10</code></pre>
 
+<!-- ═══ CLI CAN-TP ═══ -->
+<h2 id="cli-can-tp">CLI — <code>boat can-tp</code></h2>
+<p>CAN Transport Protocol (ISO 15765-2) — segments large PDUs across multiple CAN frames. Requires the <code>can_tp.so</code> node plugin to be loaded in the gateway.</p>
+
+<h3>boat can-tp send</h3>
+<table>
+  <tr><th>Option</th><th>Tag</th><th>Description</th></tr>
+  <tr><td><code>--nsdu-id &lt;hex|dec&gt;</code></td><td><span class="tag req">req</span></td><td>N-SDU ID (typically the CAN ID)</td></tr>
+  <tr><td><code>--data &lt;hex&gt;</code></td><td><span class="tag req">req</span></td><td>Payload hex bytes (will be segmented)</td></tr>
+  <tr><td><code>--dlc &lt;N&gt;</code></td><td><span class="tag def">8</span></td><td>CAN DLC: 8 for classic CAN, 64 for CAN FD</td></tr>
+</table>
+<pre><code><span class="cm"># Send 255 bytes via CanTp segmentation</span>
+boat can-tp send --nsdu-id 0x7E0 --data 0123456789ABCDEF...
+
+<span class="cm"># CAN FD mode</span>
+boat can-tp send --nsdu-id 0x7E0 --dlc 64 --data ...
+</code></pre>
+
+<div class="callout">
+  <strong>Plugin required</strong>
+  Start the gateway with <code>BOAT_NODE_PLUGINS=./build/debug/src/plugins/can_tp/can_tp.so</code>
+  for CanTp commands to work.
+</div>
+
 <!-- ═══ CLI ETH ═══ -->
 <h2 id="cli-eth">CLI — <code>boat eth</code></h2>
 
@@ -658,10 +694,26 @@ boat can subscribe --count 10</code></pre>
   <tr><td><code>--ttl &lt;N&gt;</code></td><td><span class="tag def">64</span></td><td>IPv4 TTL / IPv6 Hop Limit</td></tr>
   <tr><td><code>--ethertype &lt;hex&gt;</code></td><td><span class="tag def">0x88B5</span></td><td>Simulation-only EtherType (used when <code>--dst-ip</code> is not set)</td></tr>
   <tr><td><code>--vlan &lt;ID&gt;</code></td><td><span class="tag def">0</span></td><td>802.1Q VLAN ID (0 = untagged)</td></tr>
+  <tr><td><code>--send-type &lt;mode&gt;</code></td><td><span class="tag def">none</span></td><td>Transmission schedule: <code>none</code> | <code>cyclic</code> | <code>onchange</code> | <code>mixed</code>. Requires <code>--cycle-ms</code> etc.</td></tr>
+  <tr><td><code>--cycle-ms &lt;N&gt;</code></td><td><span class="tag def">0</span></td><td>Base cycle in ms for cyclic/mixed modes.</td></tr>
+  <tr><td><code>--fast-ms &lt;N&gt;</code></td><td><span class="tag def">0</span></td><td>Fast repetition period in ms for OnChange or Mixed modes.</td></tr>
+  <tr><td><code>--reps &lt;N&gt;</code></td><td><span class="tag def">0</span></td><td>Number of fast repetitions per change event.</td></tr>
 </table>
 
 <pre><code><span class="cm"># Route a PDU over CAN</span>
 boat pdu route --id 0x00AC0001 --transport can --iface vcan0
+
+<span class="cm"># Cyclic schedule: send every 100ms</span>
+boat pdu route --id 0x00AC0001 --transport can --iface vcan0 \
+               --send-type cyclic --cycle-ms 100
+
+<span class="cm"># OnChange schedule: send on change with 3 fast reps at 10ms</span>
+boat pdu route --id 0x00AC0002 --transport can --iface vcan0 \
+               --send-type onchange --fast-ms 10 --reps 3
+
+<span class="cm"># Mixed: cyclic at 200ms + OnChange with 2 fast reps at 20ms</span>
+boat pdu route --id 0x00AC0003 --transport can --iface vcan0 \
+               --send-type mixed --cycle-ms 200 --fast-ms 20 --reps 2
 
 <span class="cm"># Route over UDP/IPv4 — real IP/UDP Ethernet frame</span>
 boat pdu route --id 0x00AC0001 --transport eth --iface enx28107b9f2016 \
@@ -671,6 +723,21 @@ boat pdu route --id 0x00AC0001 --transport eth --iface enx28107b9f2016 \
 <span class="cm"># Simulation-only: bare Ethernet with custom EtherType (no IP)</span>
 boat pdu route --id 0x00AC0001 --transport eth --iface veth0 \
                --ethertype 0x88B5</code></pre>
+
+<h3>boat pdu remove-route</h3>
+<p>Removes a PDU routing rule and its transmission schedule entirely.</p>
+<table>
+  <tr><th>Option</th><th>Tag</th><th>Description</th></tr>
+  <tr><td><code>--id &lt;hex|dec&gt;</code></td><td><span class="tag req">req</span></td><td>32-bit PDU ID to remove</td></tr>
+</table>
+<pre><code>boat pdu remove-route --id 0x00AC0001</code></pre>
+
+<div class="callout tip">
+  <strong>Stopping a schedule</strong><br>
+  Three options: (1) <code>--send-type none</code> keeps the route but stops auto-sends,
+  (2) <code>remove-route</code> deletes the route and schedule entirely,
+  (3) use an I-PDU group to silence the PDU while keeping configuration.
+</div>
 
 <div class="callout">
   <strong>IP mode vs simulation mode</strong><br>
@@ -731,6 +798,25 @@ boat pdu container --msg Motor_PDU_Container \
                    --iface enx28107b9f2016 \
                    --src-ip 50.50.0.1 --dst-ip 50.50.0.2 \
                    --src-port 5000 --dst-port 5001</code></pre>
+
+<h3>boat pdu group</h3>
+<p>Creates or updates an I-PDU group. PDUs in a disabled group are silently dropped on send and receive.</p>
+<table>
+  <tr><th>Option</th><th>Tag</th><th>Description</th></tr>
+  <tr><td><code>--id &lt;hex|dec&gt;</code></td><td><span class="tag req">req</span></td><td>Group ID (non-zero)</td></tr>
+  <tr><td><code>--name &lt;text&gt;</code></td><td><span class="tag opt">opt</span></td><td>Human-readable name</td></tr>
+  <tr><td><code>--pdu &lt;hex&gt;</code></td><td><span class="tag opt">opt</span></td><td>PDU ID to add (repeatable)</td></tr>
+  <tr><td><code>--enabled/--disabled</code></td><td><span class="tag def">enabled</span></td><td>Toggle pair: start enabled or disabled</td></tr>
+</table>
+<pre><code><span class="cm"># Create a group with two PDUs, disabled</span>
+boat pdu group --id 1 --name "Safety" --pdu 0x100 --pdu 0x200 --disabled
+
+<span class="cm"># Enable/disable at runtime</span>
+boat pdu enable-group --id 1
+boat pdu disable-group --id 1
+
+<span class="cm"># List groups</span>
+boat pdu list-groups</code></pre>
 
 <h3>boat pdu subscribe</h3>
 <table>
@@ -1220,7 +1306,7 @@ c.can.SendCanFrame(can_pb2.SendCanFrameRequest(
 <!-- ═══ HOW-TO PDU ═══ -->
 <h2 id="howto-pdu">How-To: Send a PDU over IP/UDP</h2>
 
-<p>Sending a PDU over a real Ethernet link requires three steps: configure a route, then send.</p>
+<p>Sending a PDU over a real Ethernet link requires two steps: first configure a route, then send.</p>
 
 <ol class="steps">
   <li>
@@ -1391,6 +1477,125 @@ signal value is automatically copied into the <em>MotorSpeed_ETH</em> signal of 
 <pre><code><span class="cm"># Inspect configured routes</span>
 boat db signal-routes --db config/pdu_db_example.json</code></pre>
 
+<!-- ═══ HOW-TO PDU FEATURES ═══ -->
+<h2 id="howto-pdu-features">PDU Features Reference</h2>
+
+<h3>I-PDU Groups</h3>
+<p>
+  Groups enable or disable sets of PDUs at runtime. PDUs in a disabled group
+  are silently dropped — no send, no dispatch to subscribers. Useful for
+  simulating bus-off conditions, silent modes, or domain gating.
+</p>
+<pre><code><span class="cm"># CLI</span>
+boat pdu group --id 1 --name "Safety" --pdu 0x100 --pdu 0x200 --disabled
+boat pdu enable-group --id 1
+boat pdu disable-group --id 1
+boat pdu list-groups
+
+<span class="cm"># Python SDK</span>
+<span class="kw">from</span> boat.pdu_node <span class="kw">import</span> PduNode
+node = PduNode()
+node.configure_group(group_id=<span class="nm">1</span>, name=<span class="st">"Safety"</span>,
+                     pdu_ids=[<span class="nm">0x100</span>, <span class="nm">0x200</span>], enabled=<span class="kw">False</span>)
+node.enable_group(<span class="nm">1</span>)
+node.disable_group(<span class="nm">1</span>)
+groups = node.list_groups()</code></pre>
+
+<h3>Transmission Schedules</h3>
+<p>
+  Routes can specify automatic sending behavior. The transmission engine
+  is driven by the gateway's tick timer (default 10ms). The tick interval
+  is the minimum achievable cycle time.
+</p>
+<table>
+  <tr><th>Mode</th><th>CLI value</th><th>Behavior</th></tr>
+  <tr><td>Cyclic</td><td><code>--send-type cyclic --cycle-ms N</code></td><td>Send every N ms</td></tr>
+  <tr><td>OnChange</td><td><code>--send-type onchange --fast-ms N --reps M</code></td><td>Send on payload change, then M fast repetitions at N ms intervals</td></tr>
+  <tr><td>Mixed</td><td><code>--send-type mixed --cycle-ms N --fast-ms M --reps R</code></td><td>Cyclic at N ms + OnChange with R fast reps at M ms</td></tr>
+</table>
+<pre><code><span class="cm"># Cyclic: every 100ms</span>
+boat pdu route --id 0x100 --transport can --iface vcan0 \
+               --send-type cyclic --cycle-ms 100
+
+<span class="cm"># OnChange: send on change + 3 fast reps at 10ms</span>
+boat pdu route --id 0x200 --transport can --iface vcan0 \
+               --send-type onchange --fast-ms 10 --reps 3
+
+<span class="cm"># Mixed: cyclic at 200ms + change trigger + 2 reps at 20ms</span>
+boat pdu route --id 0x300 --transport can --iface vcan0 \
+               --send-type mixed --cycle-ms 200 --fast-ms 20 --reps 2
+
+<span class="cm"># Seed the payload (first send), then engine drives the rest</span>
+boat pdu send --id 0x100 --data 010203
+
+<span class="cm"># Stop the schedule</span>
+boat pdu route --id 0x100 --transport can --iface vcan0 --send-type none</code></pre>
+
+<h3>COM Signal Library (C++)</h3>
+<p>
+  Bit-level signal packing with Intel/Motorola byte order, physical-to-raw
+  conversion, and AUTOSAR E2E CRC. All functions are in
+  <code>src/hil/pdu/com/com_signal.h</code>.
+</p>
+<pre><code><span class="pn">#include</span> <span class="st">"pdu/com/com_signal.h"</span>
+<span class="kw">using namespace</span> boat::hil::com;
+
+MessageDef msg;
+msg.length_bytes = <span class="nm">8</span>;
+SignalDef sig;
+sig.name       = <span class="st">"Speed"</span>;
+sig.bit_length = <span class="nm">16</span>;
+sig.start_pos  = <span class="nm">0</span>;
+sig.factor     = <span class="nm">0.5</span>;
+sig.offset     = <span class="nm">0.0</span>;
+
+<span class="kw">auto</span> packed = PackSignals(msg, {{<span class="st">"Speed"</span>, <span class="nm">100.0</span>}});
+<span class="kw">auto</span> unpacked = UnpackSignals(msg, packed.data(), packed.size());
+
+<span class="cm">// E2E CRC</span>
+uint8_t  crc8  = E2eCrc8(data, len);
+uint16_t crc16 = E2eCrc16(data, len);
+uint32_t crc32 = E2eCrc32(data, len);</code></pre>
+
+<h3>CanTp Plugin (ISO 15765-2)</h3>
+<p>
+  Segments large PDUs into multiple CAN frames. Load as a node plugin:
+</p>
+<pre><code>BOAT_NODE_PLUGINS=./build/debug/src/plugins/can_tp/can_tp.so \
+  BOAT_CAN_INTERFACES=vcan0 \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
+<p>Programmatic C API (standalone, not part of the plugin vtable):</p>
+<pre><code><span class="pn">#include</span> <span class="st">&lt;boat/can_tp.h&gt;</span>
+
+CanTpConfig cfg;
+cfg.nsdu_id            = <span class="nm">0x7E0</span>;
+cfg.rx_buffer_size     = <span class="nm">4095</span>;
+cfg.block_size         = <span class="nm">0</span>;     <span class="cm">// unlimited CF per FC</span>
+cfg.st_min             = <span class="nm">0</span>;     <span class="cm">// no min separation</span>
+cfg.can_dlc            = <span class="nm">8</span>;
+cfg.extended_addressing = <span class="kw">false</span>;
+cfg.is_rx              = <span class="kw">false</span>; <span class="cm">// false = send+rx, true = rx-only</span>
+can_tp_configure(plugin_ctx, &amp;cfg);
+
+uint8_t data[] = {<span class="nm">0x01</span>, <span class="nm">0x02</span>, <span class="cm">/* ... */</span>, <span class="nm">0xFF</span>};  <span class="cm">// 255 bytes</span>
+can_tp_send(plugin_ctx, <span class="nm">0x7E0</span>, data, <span class="nm">255</span>);</code></pre>
+
+<h3>SOME/IP Plugin</h3>
+<p>
+  Lightweight SOME/IP middleware for Ethernet UDP. Listens on the configured
+  SD port, responds to REQUEST messages with RESPONSE echoes.
+</p>
+<pre><code>BOAT_NODE_PLUGINS=./build/debug/src/plugins/someip/someip.so \
+  BOAT_ETH_INTERFACES=veth0 \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
+<p>Config via JSON (passed as <code>config_json</code> to <code>initialize</code>):</p>
+<pre><code>{"sd_port": 30490}</code></pre>
+<p>
+  Offered services registered internally respond to incoming SOME/IP REQUEST
+  messages. Service Discovery (FIND→OFFER) and SUBSCRIBE→SUBSCRIBE_ACK are
+  supported in simplified form.
+</p>
+
 <!-- ═══ HOW-TO TRACE ═══ -->
 <h2 id="howto-trace">How-To: Record and Replay a Trace</h2>
 
@@ -1423,7 +1628,7 @@ boat trace replay traces/motor_test_*.asc --buses vcan0 --speed 2.0</code></pre>
   <tr><th>Service</th><th>Proto file</th><th>Key RPCs</th></tr>
   <tr><td>CanService</td><td>can.proto</td><td>SendCanFrame, SubscribeCanFrames, ListBuses</td></tr>
   <tr><td>EthernetService</td><td>ethernet.proto</td><td>SendFrame, SubscribeFrames, ListInterfaces</td></tr>
-  <tr><td>PduService</td><td>pdu.proto</td><td>SendPdu, SubscribePdus, ConfigureRoute, ListRoutes, ConfigureContainer</td></tr>
+  <tr><td>PduService</td><td>pdu.proto</td><td>SendPdu, SubscribePdus, ConfigureRoute, ListRoutes, ConfigureContainer, ConfigureGroup, EnableGroup, DisableGroup, ListGroups, RemoveRoute</td></tr>
   <tr><td>SimulationService</td><td>simulation.proto</td><td>Create/Start/Pause/Step/Reset/Stop/GetState/Watch/ListSimulations</td></tr>
   <tr><td>SignalService</td><td>signal.proto</td><td>InjectSignal, SubscribeSignals, GetSignalHistory</td></tr>
   <tr><td>BusService</td><td>bus.proto</td><td>Publish, Subscribe (always-on signal bus)</td></tr>

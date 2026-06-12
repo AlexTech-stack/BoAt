@@ -2,12 +2,14 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
 
 #include "pdu/ipdumcontainer.h"
 #include "pdu/pdu_types.h"
+#include "pdu/transmission_engine.h"
 #include "can_bus_registry.h"
 #include "ethernet_bus_registry.h"
 
@@ -35,12 +37,16 @@ class PduRouter {
   // Add or replace a per-PDU routing rule.
   void AddRoute(const PduRoute& route);
 
+  // Remove a per-PDU routing rule and its schedule.
+  void RemoveRoute(uint32_t pdu_id);
+
   // Register a container: all member PDU IDs will be multiplexed into one
   // IpduM Ethernet frame whenever any of them is sent.
   void AddContainer(const PduContainerDef& def);
 
   // Send a PDU; looks up the route (or container) and forwards.
-  // Returns false if no route/container is configured or the send fails.
+  // Returns false if no route/container is configured, the PDU's group is
+  // disabled, or the send fails.
   bool SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload);
 
   using RxCallback = std::function<void(const PduFrame&)>;
@@ -54,6 +60,20 @@ class PduRouter {
 
   void Stop();
 
+  // ── I-PDU group management ──────────────────────────────────────────
+  void AddGroup(const PduGroup& group);
+  void EnableGroup(uint32_t group_id);
+  void DisableGroup(uint32_t group_id);
+  bool IsGroupEnabled(uint32_t group_id) const;
+  std::vector<PduGroup> ListGroups() const;
+
+  // ── Transmission engine ─────────────────────────────────────────────
+  // Called by the external scheduler (TickScheduler or node tick thread).
+  void OnTick(uint64_t tick_ms);
+
+  // ── Deadline monitoring ─────────────────────────────────────────────
+  void ConfigureDeadline(uint32_t pdu_id, const PduDeadlineConfig& cfg);
+
  private:
   void OnCanFrame(const CanFrame& frame, const std::string& iface);
   void OnEthernetFrame(const EthernetFrame& frame, const std::string& iface);
@@ -61,6 +81,9 @@ class PduRouter {
 
   bool SendContainer(const PduContainerDef& def,
                      const std::vector<IpduMEntry>& entries);
+
+  // Returns false if the PDU belongs to a disabled group.
+  bool IsPduGated(uint32_t pdu_id) const;
 
   CanBusRegistry&      can_;
   EthernetBusRegistry& eth_;
@@ -78,8 +101,8 @@ class PduRouter {
     std::vector<ContainerSlot> slots;
   };
   mutable std::mutex containers_mutex_;
-  std::unordered_map<uint32_t, ContainerBuffer> containers_;   // container_id → buf
-  std::unordered_map<uint32_t, uint32_t>        pdu_to_container_;  // pdu_id → cid
+  std::unordered_map<uint32_t, ContainerBuffer> containers_;   // container_id buf
+  std::unordered_map<uint32_t, uint32_t>        pdu_to_container_;  // pdu_id cid
 
   std::mutex subs_mutex_;
   struct Subscription {
@@ -92,6 +115,23 @@ class PduRouter {
   CanBusRegistry::RxCallbackId      can_sub_id_{0};
   EthernetBusRegistry::RxCallbackId eth_sub_id_{0};
   bool                               subscribed_{false};
+
+  // ── I-PDU groups ────────────────────────────────────────────────────
+  mutable std::mutex groups_mutex_;
+  std::unordered_map<uint32_t, PduGroup> groups_;             // group_id group
+  std::unordered_map<uint32_t, uint32_t> pdu_to_group_;       // pdu_id group_id
+
+  // ── Transmission engine ─────────────────────────────────────────────
+  std::unique_ptr<TransmissionEngine> tx_engine_;
+
+  // ── Deadline monitoring ─────────────────────────────────────────────
+  struct DeadlineState {
+    PduDeadlineConfig cfg;
+    uint64_t last_rx_tick_ms{0};
+    bool     timeout_fired{false};
+  };
+  mutable std::mutex deadline_mutex_;
+  std::unordered_map<uint32_t, DeadlineState> deadlines_;
 };
 
 }  // namespace boat::hil

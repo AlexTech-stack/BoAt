@@ -7,30 +7,6 @@ then call run() or run_background().
 PDUs are AUTOSAR-style protocol data units routed over CAN or Ethernet.
 On the Ethernet transport the gateway frames PDUs as:
   [4 bytes PDU ID big-endian] + payload (EtherType defaults to 0x88B5).
-
-Example::
-
-    class MyNode(PduNode):
-        def on_pdu(self, pdu) -> None:
-            print(f"PDU 0x{pdu.pdu_id:08X}  payload={pdu.payload.hex(':')}")
-
-    node = MyNode(pdu_ids=[0x00AA0001, 0x00AA0002])
-    node.run()
-
-Sending a PDU::
-
-    node = PduNode()
-    node.send(pdu_id=0x00AA0001, payload=bytes([0x01, 0x02, 0x03]))
-
-Configuring a route::
-
-    from boat.v1 import pdu_pb2
-    node.configure_route(
-        pdu_id=0x00AA0001,
-        transport=pdu_pb2.PDU_TRANSPORT_ETHERNET,
-        iface="veth0",
-        ethertype=0x88B5,
-    )
 """
 
 from __future__ import annotations
@@ -66,7 +42,7 @@ class PduNode:
     # Override in subclass
     # ------------------------------------------------------------------
 
-    def on_pdu(self, pdu: Any) -> None:  # noqa: B027
+    def on_pdu(self, pdu: Any) -> None:
         """Called for every received PduFrame.  Override in subclass."""
 
     # ------------------------------------------------------------------
@@ -86,6 +62,10 @@ class PduNode:
         src_port: int = 0,
         dst_port: int = 0,
         ttl: int = 64,
+        send_type: int = pdu_pb2.SEND_TYPE_NONE,
+        cycle_ms: int = 0,
+        fast_ms: int = 0,
+        repetitions: int = 0,
     ) -> bool:
         """Configure a PDU routing rule in the gateway.
 
@@ -103,10 +83,20 @@ class PduNode:
             src_port:  UDP source port.
             dst_port:  UDP destination port.
             ttl:       IPv4 TTL / IPv6 Hop Limit (default 64).
+            send_type: ``pdu_pb2.SEND_TYPE_CYCLIC``, ``_ON_CHANGE``, ``_MIXED``, or ``_NONE``.
+            cycle_ms:  Base cycle in ms for cyclic/mixed modes.
+            fast_ms:   Fast period in ms for n-times repetitions.
+            repetitions: Number of fast repetitions per change event.
 
         Returns:
             True if the gateway accepted the route.
         """
+        schedule = pdu_pb2.PduSchedule(
+            send_type=send_type,
+            cycle_ms=cycle_ms,
+            fast_ms=fast_ms,
+            repetitions=repetitions,
+        )
         route = pdu_pb2.PduRoute(
             pdu_id=pdu_id,
             transport=transport,
@@ -119,10 +109,21 @@ class PduNode:
             src_port=src_port,
             dst_port=dst_port,
             ttl=ttl,
+            schedule=schedule,
         )
         try:
             resp = self._client.pdu.ConfigureRoute(
                 pdu_pb2.ConfigureRouteRequest(route=route)
+            )
+            return bool(resp.ok)
+        except grpc.RpcError:
+            return False
+
+    def remove_route(self, pdu_id: int) -> bool:
+        """Remove a PDU routing rule and its transmission schedule."""
+        try:
+            resp = self._client.pdu.RemoveRoute(
+                pdu_pb2.RemoveRouteRequest(pdu_id=pdu_id)
             )
             return bool(resp.ok)
         except grpc.RpcError:
@@ -187,6 +188,70 @@ class PduNode:
             return False
 
     # ------------------------------------------------------------------
+    # I-PDU Group management
+    # ------------------------------------------------------------------
+
+    def configure_group(
+        self,
+        group_id: int,
+        name: str = "",
+        pdu_ids: list | None = None,
+        enabled: bool = True,
+    ) -> bool:
+        """Configure an I-PDU group.
+
+        Args:
+            group_id: Unique group identifier (non-zero).
+            name:     Optional human-readable name.
+            pdu_ids:  List of PDU IDs to include in the group.
+            enabled:  Whether the group is enabled at creation.
+
+        Returns:
+            True if the gateway accepted the group.
+        """
+        group = pdu_pb2.PduGroup(
+            group_id=group_id,
+            name=name,
+            pdu_ids=pdu_ids or [],
+            enabled=enabled,
+        )
+        try:
+            resp = self._client.pdu.ConfigureGroup(
+                pdu_pb2.ConfigureGroupRequest(group=group)
+            )
+            return bool(resp.ok)
+        except grpc.RpcError:
+            return False
+
+    def enable_group(self, group_id: int) -> bool:
+        """Enable an I-PDU group."""
+        try:
+            resp = self._client.pdu.EnableGroup(
+                pdu_pb2.EnableGroupRequest(group_id=group_id)
+            )
+            return bool(resp.ok)
+        except grpc.RpcError:
+            return False
+
+    def disable_group(self, group_id: int) -> bool:
+        """Disable an I-PDU group."""
+        try:
+            resp = self._client.pdu.DisableGroup(
+                pdu_pb2.DisableGroupRequest(group_id=group_id)
+            )
+            return bool(resp.ok)
+        except grpc.RpcError:
+            return False
+
+    def list_groups(self) -> list:
+        """Return all configured I-PDU groups."""
+        try:
+            resp = self._client.pdu.ListGroups(pdu_pb2.ListGroupsRequest())
+            return list(resp.groups)
+        except grpc.RpcError:
+            return []
+
+    # ------------------------------------------------------------------
     # Send helpers
     # ------------------------------------------------------------------
 
@@ -225,7 +290,8 @@ class PduNode:
         except grpc.RpcError:
             pass
         finally:
-            self._stream.cancel()
+            if self._stream is not None:
+                self._stream.cancel()
             self._client.close()
 
     def run_background(self) -> threading.Thread:

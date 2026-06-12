@@ -10,7 +10,11 @@ namespace boat::hil {
 // ── Construction / destruction ────────────────────────────────────────────────
 
 PduRouter::PduRouter(CanBusRegistry& can, EthernetBusRegistry& eth)
-    : can_(can), eth_(eth) {
+    : can_(can), eth_(eth),
+      tx_engine_(std::make_unique<TransmissionEngine>(
+          [this](uint32_t pid, const std::vector<uint8_t>& pl) {
+            return SendPdu(pid, pl);
+          })) {
   // Subscribe to all frames on both registries; PDU matching is done internally.
   can_sub_id_ = can_.Subscribe(
       "",
@@ -38,6 +42,21 @@ void PduRouter::AddRoute(const PduRoute& route) {
   if (routes_[route.pdu_id].ethertype == 0) {
     routes_[route.pdu_id].ethertype = 0x88B5;
   }
+
+  // Configure or remove transmission schedule.
+  if (route.schedule.send_type != SendType::kNone) {
+    tx_engine_->ConfigureSchedule(route.pdu_id, route.schedule);
+  } else {
+    tx_engine_->RemoveSchedule(route.pdu_id);
+  }
+}
+
+void PduRouter::RemoveRoute(uint32_t pdu_id) {
+  {
+    std::lock_guard<std::mutex> lock(routes_mutex_);
+    routes_.erase(pdu_id);
+  }
+  tx_engine_->RemoveSchedule(pdu_id);
 }
 
 std::vector<PduRoute> PduRouter::ListRoutes() const {
@@ -55,7 +74,7 @@ std::vector<PduRoute> PduRouter::ListRoutes() const {
 
 void PduRouter::AddContainer(const PduContainerDef& def) {
   std::lock_guard<std::mutex> lock(containers_mutex_);
-  // Remove old pdu_id→container mappings for this container_id if it existed.
+  // Remove old pdu_idcontainer mappings for this container_id if it existed.
   if (containers_.count(def.container_id)) {
     for (const auto& slot : containers_.at(def.container_id).slots) {
       pdu_to_container_.erase(slot.pdu_id);
@@ -99,6 +118,9 @@ bool PduRouter::SendContainer(const PduContainerDef& def,
 // ── Send ──────────────────────────────────────────────────────────────────────
 
 bool PduRouter::SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload) {
+  // I-PDU group gate: PDUs in disabled groups are silently dropped.
+  if (IsPduGated(pdu_id)) return false;
+
   // Container path: multiplex with sibling PDUs into one Ethernet frame.
   {
     std::unique_lock<std::mutex> lock(containers_mutex_);
@@ -128,16 +150,16 @@ bool PduRouter::SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload) {
     route = it->second;
   }
 
+  bool sent = false;
+
   if (route.transport == PduTransport::kCan) {
     const uint32_t can_id = route.can_id != 0 ? route.can_id : pdu_id;
     CanFrame frame{};
     frame.can_id = can_id;
     frame.dlc    = static_cast<uint8_t>(std::min(payload.size(), std::size_t{64}));
     std::memcpy(frame.data, payload.data(), frame.dlc);
-    return can_.SendFrame(route.iface, frame);
-  }
-
-  if (route.transport == PduTransport::kEthernet) {
+    sent = can_.SendFrame(route.iface, frame);
+  } else if (route.transport == PduTransport::kEthernet) {
     EthernetFrame frame;
     frame.vlan_id = route.vlan_id;
 
@@ -169,16 +191,22 @@ bool PduRouter::SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload) {
       frame.payload[3] = static_cast<uint8_t>(pdu_id & 0xFF);
       std::memcpy(frame.payload.data() + 4, payload.data(), payload.size());
     }
-    return eth_.SendFrame(route.iface, frame);
+    sent = eth_.SendFrame(route.iface, frame);
   }
 
-  return false;
+  // Notify transmission engine after a successful send so OnChange
+  // detection can compare payloads.
+  if (sent) {
+    tx_engine_->UpdatePayload(pdu_id, payload);
+  }
+
+  return sent;
 }
 
 // ── Subscribe / Unsubscribe ───────────────────────────────────────────────────
 
 PduRouter::SubId PduRouter::Subscribe(std::vector<uint32_t> pdu_ids,
-                                      RxCallback cb) {
+                                       RxCallback cb) {
   std::lock_guard<std::mutex> lock(subs_mutex_);
   const SubId id = next_sub_id_++;
   subscriptions_[id] = Subscription{std::move(pdu_ids), std::move(cb)};
@@ -200,6 +228,88 @@ void PduRouter::Stop() {
   }
 }
 
+// ── I-PDU group management ───────────────────────────────────────────────────
+
+void PduRouter::AddGroup(const PduGroup& group) {
+  std::lock_guard<std::mutex> lock(groups_mutex_);
+  // Remove old reverse mappings for this group_id if it existed.
+  if (groups_.count(group.group_id)) {
+    for (auto pid : groups_[group.group_id].pdu_ids)
+      pdu_to_group_.erase(pid);
+  }
+  groups_[group.group_id] = group;
+  for (auto pid : group.pdu_ids)
+    pdu_to_group_[pid] = group.group_id;
+}
+
+void PduRouter::EnableGroup(uint32_t group_id) {
+  std::lock_guard<std::mutex> lock(groups_mutex_);
+  auto it = groups_.find(group_id);
+  if (it != groups_.end()) it->second.enabled = true;
+}
+
+void PduRouter::DisableGroup(uint32_t group_id) {
+  std::lock_guard<std::mutex> lock(groups_mutex_);
+  auto it = groups_.find(group_id);
+  if (it != groups_.end()) it->second.enabled = false;
+}
+
+bool PduRouter::IsGroupEnabled(uint32_t group_id) const {
+  std::lock_guard<std::mutex> lock(groups_mutex_);
+  auto it = groups_.find(group_id);
+  return it != groups_.end() && it->second.enabled;
+}
+
+std::vector<PduGroup> PduRouter::ListGroups() const {
+  std::lock_guard<std::mutex> lock(groups_mutex_);
+  std::vector<PduGroup> out;
+  out.reserve(groups_.size());
+  for (const auto& [id, g] : groups_) {
+    (void)id;
+    out.push_back(g);
+  }
+  return out;
+}
+
+bool PduRouter::IsPduGated(uint32_t pdu_id) const {
+  std::lock_guard<std::mutex> lock(groups_mutex_);
+  auto pit = pdu_to_group_.find(pdu_id);
+  if (pit == pdu_to_group_.end()) return false;  // not in any group
+  auto git = groups_.find(pit->second);
+  return git != groups_.end() && !git->second.enabled;
+}
+
+// ── Transmission engine ──────────────────────────────────────────────────────
+
+void PduRouter::OnTick(uint64_t tick_ms) {
+  tx_engine_->OnTick(tick_ms);
+
+  // Check deadline timers.
+  std::lock_guard<std::mutex> lock(deadline_mutex_);
+  for (auto& [pdu_id, ds] : deadlines_) {
+    (void)pdu_id;
+    if (ds.cfg.cycle_time_ms == 0) continue;
+    const uint64_t deadline = ds.last_rx_tick_ms +
+        ds.cfg.cycle_time_ms * ds.cfg.timeout_factor;
+    if (tick_ms > deadline && !ds.timeout_fired) {
+      ds.timeout_fired = true;
+      // TODO: push timeout event to EventBus when available in scope
+    }
+  }
+}
+
+// ── Deadline monitoring ──────────────────────────────────────────────────────
+
+void PduRouter::ConfigureDeadline(uint32_t pdu_id,
+                                   const PduDeadlineConfig& cfg) {
+  std::lock_guard<std::mutex> lock(deadline_mutex_);
+  if (cfg.cycle_time_ms == 0) {
+    deadlines_.erase(pdu_id);
+  } else {
+    deadlines_[pdu_id] = DeadlineState{cfg, 0, false};
+  }
+}
+
 // ── Internal frame handlers ───────────────────────────────────────────────────
 
 void PduRouter::OnCanFrame(const CanFrame& frame, const std::string& iface) {
@@ -216,6 +326,7 @@ void PduRouter::OnCanFrame(const CanFrame& frame, const std::string& iface) {
     }
   }
   for (const auto& r : matches) {
+    if (IsPduGated(r.pdu_id)) continue;
     PduFrame pdu;
     pdu.pdu_id       = r.pdu_id;
     pdu.payload.assign(frame.data, frame.data + frame.dlc);
@@ -233,7 +344,7 @@ void PduRouter::OnEthernetFrame(const EthernetFrame& frame,
     uint16_t src_port = 0, dst_port = 0;
     std::vector<IpduMEntry> entries;
     if (!ParseUdpIpPacket(frame.payload.data(), frame.payload.size(),
-                          &src_port, &dst_port, entries)) return;
+                           &src_port, &dst_port, entries)) return;
 
     for (const auto& entry : entries) {
       bool matched = false;
@@ -255,6 +366,7 @@ void PduRouter::OnEthernetFrame(const EthernetFrame& frame,
         matched = pdu_to_container_.count(entry.pdu_id) > 0;
       }
       if (!matched) continue;
+      if (IsPduGated(entry.pdu_id)) continue;
       PduFrame pdu;
       pdu.pdu_id       = entry.pdu_id;
       pdu.payload      = entry.payload;
@@ -290,6 +402,7 @@ void PduRouter::OnEthernetFrame(const EthernetFrame& frame,
     }
   }
   if (!matched) return;
+  if (IsPduGated(pdu_id)) return;
 
   PduFrame pdu;
   pdu.pdu_id       = pdu_id;
@@ -301,6 +414,17 @@ void PduRouter::OnEthernetFrame(const EthernetFrame& frame,
 }
 
 void PduRouter::DispatchPdu(const PduFrame& pdu) {
+  // Update deadline monitoring for received PDUs.
+  {
+    std::lock_guard<std::mutex> lock(deadline_mutex_);
+    auto dit = deadlines_.find(pdu.pdu_id);
+    if (dit != deadlines_.end()) {
+      dit->second.last_rx_tick_ms =
+          static_cast<uint64_t>(pdu.timestamp_ns / 1000000);
+      dit->second.timeout_fired = false;
+    }
+  }
+
   std::vector<RxCallback> to_call;
   {
     std::lock_guard<std::mutex> lock(subs_mutex_);

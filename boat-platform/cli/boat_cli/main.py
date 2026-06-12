@@ -5,6 +5,7 @@ import typer
 from boat.client import BoAtClient
 
 from .can import can_app
+from .can_tp import can_tp_app
 from .db import db_app
 from .eth import eth_app
 from .gen import gen_app
@@ -22,6 +23,7 @@ app.add_typer(scenario_app, name="scenario")
 app.add_typer(replay_app,   name="replay")
 app.add_typer(plugin_app,   name="plugin")
 app.add_typer(can_app,      name="can")
+app.add_typer(can_tp_app,   name="can-tp")
 app.add_typer(eth_app,      name="eth")
 app.add_typer(pdu_app,      name="pdu",  help="PDU routing and transmission.")
 app.add_typer(db_app,       name="db",   help="PDU database inspection.")

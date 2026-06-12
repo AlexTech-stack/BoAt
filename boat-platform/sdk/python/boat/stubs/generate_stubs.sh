@@ -20,6 +20,7 @@ python3 -m grpc_tools.protoc \
   "${PROTO_DIR}/boat/v1/ethernet.proto" \
   "${PROTO_DIR}/boat/v1/fault.proto" \
   "${PROTO_DIR}/boat/v1/metrics.proto" \
+  "${PROTO_DIR}/boat/v1/pdu.proto" \
   "${PROTO_DIR}/boat/v1/plugin.proto" \
   "${PROTO_DIR}/boat/v1/replay.proto" \
   "${PROTO_DIR}/boat/v1/scenario.proto" \

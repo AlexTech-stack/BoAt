@@ -22,6 +22,32 @@ static uint64_t NowNsPdu() {
           std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
+static boat::hil::SendType ProtoToSendType(boat::v1::SendType st) {
+  switch (st) {
+    case boat::v1::SEND_TYPE_CYCLIC:     return boat::hil::SendType::kCyclic;
+    case boat::v1::SEND_TYPE_ON_CHANGE:  return boat::hil::SendType::kOnChange;
+    case boat::v1::SEND_TYPE_MIXED:      return boat::hil::SendType::kMixed;
+    default:                             return boat::hil::SendType::kNone;
+  }
+}
+
+static boat::v1::SendType SendTypeToProto(boat::hil::SendType st) {
+  switch (st) {
+    case boat::hil::SendType::kCyclic:    return boat::v1::SEND_TYPE_CYCLIC;
+    case boat::hil::SendType::kOnChange:  return boat::v1::SEND_TYPE_ON_CHANGE;
+    case boat::hil::SendType::kMixed:     return boat::v1::SEND_TYPE_MIXED;
+    default:                              return boat::v1::SEND_TYPE_NONE;
+  }
+}
+
+static void ScheduleToProto(const boat::hil::PduSchedule& s,
+                             boat::v1::PduSchedule* ps) {
+  ps->set_send_type(SendTypeToProto(s.send_type));
+  ps->set_cycle_ms(s.cycle_ms);
+  ps->set_fast_ms(s.fast_ms);
+  ps->set_repetitions(s.repetitions);
+}
+
 static boat::hil::PduRoute ProtoToRoute(const boat::v1::PduRoute& pr) {
   boat::hil::PduRoute r;
   r.pdu_id    = pr.pdu_id();
@@ -38,6 +64,12 @@ static boat::hil::PduRoute ProtoToRoute(const boat::v1::PduRoute& pr) {
     case boat::v1::PDU_TRANSPORT_CAN:      r.transport = boat::hil::PduTransport::kCan;      break;
     case boat::v1::PDU_TRANSPORT_ETHERNET: r.transport = boat::hil::PduTransport::kEthernet; break;
     default:                               r.transport = boat::hil::PduTransport::kUnspecified; break;
+  }
+  if (pr.has_schedule()) {
+    r.schedule.send_type  = ProtoToSendType(pr.schedule().send_type());
+    r.schedule.cycle_ms   = pr.schedule().cycle_ms();
+    r.schedule.fast_ms    = pr.schedule().fast_ms();
+    r.schedule.repetitions = pr.schedule().repetitions();
   }
   return r;
 }
@@ -58,6 +90,9 @@ static void RouteToProto(const boat::hil::PduRoute& r, boat::v1::PduRoute* pr) {
     case boat::hil::PduTransport::kEthernet: pr->set_transport(boat::v1::PDU_TRANSPORT_ETHERNET); break;
     default:                                 pr->set_transport(boat::v1::PDU_TRANSPORT_UNSPECIFIED); break;
   }
+  if (r.schedule.send_type != boat::hil::SendType::kNone) {
+    ScheduleToProto(r.schedule, pr->mutable_schedule());
+  }
 }
 
 static void PduFrameToProto(const boat::hil::PduFrame& f, boat::v1::PduFrame* pf) {
@@ -70,6 +105,22 @@ static void PduFrameToProto(const boat::hil::PduFrame& f, boat::v1::PduFrame* pf
     case boat::hil::PduTransport::kEthernet: pf->set_source(boat::v1::PDU_TRANSPORT_ETHERNET); break;
     default:                                 pf->set_source(boat::v1::PDU_TRANSPORT_UNSPECIFIED); break;
   }
+}
+
+static boat::hil::PduGroup ProtoToGroup(const boat::v1::PduGroup& pg) {
+  boat::hil::PduGroup g;
+  g.group_id = pg.group_id();
+  g.name     = pg.name();
+  g.enabled  = pg.enabled();
+  g.pdu_ids.assign(pg.pdu_ids().begin(), pg.pdu_ids().end());
+  return g;
+}
+
+static void GroupToProto(const boat::hil::PduGroup& g, boat::v1::PduGroup* pg) {
+  pg->set_group_id(g.group_id);
+  pg->set_name(g.name);
+  pg->set_enabled(g.enabled);
+  for (auto pid : g.pdu_ids) pg->add_pdu_ids(pid);
 }
 
 // ── handlers ──────────────────────────────────────────────────────────────────
@@ -97,7 +148,7 @@ grpc::Status PduServiceImpl::SendPdu(
     std::ostringstream ss;
     ss << "pdu_id=0x" << std::hex << pf.pdu_id()
        << std::dec << "  len=" << payload.size()
-       << (accepted ? "" : "  [no route]");
+       << (accepted ? "" : "  [no route or gated]");
     ev.summary = ss.str();
     ctx_.audit_log.Push(std::move(ev));
   }
@@ -217,6 +268,15 @@ grpc::Status PduServiceImpl::ConfigureRoute(
     ss << "pdu_id=0x" << std::hex << route.pdu_id
        << "  transport=" << (route.transport == boat::hil::PduTransport::kCan ? "CAN" : "ETH")
        << "  iface=" << route.iface;
+    if (route.schedule.send_type != boat::hil::SendType::kNone) {
+      ss << "  schedule=";
+      switch (route.schedule.send_type) {
+        case boat::hil::SendType::kCyclic:    ss << "cyclic:" << route.schedule.cycle_ms << "ms"; break;
+        case boat::hil::SendType::kOnChange:  ss << "onchange"; break;
+        case boat::hil::SendType::kMixed:     ss << "mixed:" << route.schedule.cycle_ms << "ms"; break;
+        default: break;
+      }
+    }
     ev.summary = ss.str();
     ctx_.audit_log.Push(std::move(ev));
   }
@@ -287,6 +347,132 @@ grpc::Status PduServiceImpl::ListRoutes(
 
   for (const auto& r : ctx_.pdu_router.ListRoutes()) {
     RouteToProto(r, response->add_routes());
+  }
+  return grpc::Status::OK;
+}
+
+// ── RemoveRoute handler ──────────────────────────────────────────────────────
+
+grpc::Status PduServiceImpl::RemoveRoute(
+    grpc::ServerContext* context,
+    const boat::v1::RemoveRouteRequest* request,
+    boat::v1::RemoveRouteResponse* response) {
+
+  ctx_.pdu_router.RemoveRoute(request->pdu_id());
+
+  {
+    RpcEvent ev;
+    ev.timestamp_ns = NowNsPdu();
+    ev.method     = "PduService/RemoveRoute";
+    ev.peer       = context->peer();
+    ev.event_type = "CONFIG";
+    ev.call_type  = "UNARY";
+    std::ostringstream ss;
+    ss << "pdu_id=0x" << std::hex << request->pdu_id();
+    ev.summary = ss.str();
+    ctx_.audit_log.Push(std::move(ev));
+  }
+
+  response->set_ok(true);
+  return grpc::Status::OK;
+}
+
+// ── Group handlers ────────────────────────────────────────────────────────────
+
+grpc::Status PduServiceImpl::ConfigureGroup(
+    grpc::ServerContext* context,
+    const boat::v1::ConfigureGroupRequest* request,
+    boat::v1::ConfigureGroupResponse* response) {
+
+  const auto& pg = request->group();
+  if (pg.group_id() == 0) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "group_id must be non-zero");
+  }
+  if (pg.pdu_ids_size() == 0) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "group must include at least one pdu_id");
+  }
+
+  ctx_.pdu_router.AddGroup(ProtoToGroup(pg));
+
+  {
+    RpcEvent ev;
+    ev.timestamp_ns = NowNsPdu();
+    ev.method     = "PduService/ConfigureGroup";
+    ev.peer       = context->peer();
+    ev.event_type = "CONFIG";
+    ev.call_type  = "UNARY";
+    std::ostringstream ss;
+    ss << "group_id=" << pg.group_id() << "  pdu_ids=[";
+    for (int i = 0; i < pg.pdu_ids_size(); ++i) {
+      if (i) ss << ',';
+      ss << "0x" << std::hex << pg.pdu_ids(i);
+    }
+    ss << "]";
+    ev.summary = ss.str();
+    ctx_.audit_log.Push(std::move(ev));
+  }
+
+  response->set_ok(true);
+  return grpc::Status::OK;
+}
+
+grpc::Status PduServiceImpl::EnableGroup(
+    grpc::ServerContext* context,
+    const boat::v1::EnableGroupRequest* request,
+    boat::v1::EnableGroupResponse* response) {
+
+  ctx_.pdu_router.EnableGroup(request->group_id());
+
+  {
+    RpcEvent ev;
+    ev.timestamp_ns = NowNsPdu();
+    ev.method     = "PduService/EnableGroup";
+    ev.peer       = context->peer();
+    ev.event_type = "CONFIG";
+    ev.call_type  = "UNARY";
+    std::ostringstream ss;
+    ss << "group_id=" << request->group_id();
+    ev.summary = ss.str();
+    ctx_.audit_log.Push(std::move(ev));
+  }
+
+  response->set_ok(true);
+  return grpc::Status::OK;
+}
+
+grpc::Status PduServiceImpl::DisableGroup(
+    grpc::ServerContext* context,
+    const boat::v1::DisableGroupRequest* request,
+    boat::v1::DisableGroupResponse* response) {
+
+  ctx_.pdu_router.DisableGroup(request->group_id());
+
+  {
+    RpcEvent ev;
+    ev.timestamp_ns = NowNsPdu();
+    ev.method     = "PduService/DisableGroup";
+    ev.peer       = context->peer();
+    ev.event_type = "CONFIG";
+    ev.call_type  = "UNARY";
+    std::ostringstream ss;
+    ss << "group_id=" << request->group_id();
+    ev.summary = ss.str();
+    ctx_.audit_log.Push(std::move(ev));
+  }
+
+  response->set_ok(true);
+  return grpc::Status::OK;
+}
+
+grpc::Status PduServiceImpl::ListGroups(
+    grpc::ServerContext*,
+    const boat::v1::ListGroupsRequest*,
+    boat::v1::ListGroupsResponse* response) {
+
+  for (const auto& g : ctx_.pdu_router.ListGroups()) {
+    GroupToProto(g, response->add_groups());
   }
   return grpc::Status::OK;
 }

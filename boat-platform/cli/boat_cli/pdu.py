@@ -16,7 +16,7 @@ from .completions import (
 )
 from .output import print_error, print_table
 
-pdu_app = typer.Typer(help="PDU routing and transmission commands.")
+pdu_app = typer.Typer(help="PDU routing, transmission and group commands.")
 
 
 def _rpc_error(ex: grpc.RpcError) -> None:
@@ -25,7 +25,6 @@ def _rpc_error(ex: grpc.RpcError) -> None:
 
 
 def _load_msg(db_path: str, msg_name: str):
-    """Load a message entry from the PDU database. Returns the raw dict."""
     import os
     from boat.pdu_db import PduDatabase
     if not os.path.exists(db_path):
@@ -40,7 +39,6 @@ def _load_msg(db_path: str, msg_name: str):
 
 
 def _apply_sigs(msg, sig_list: list[str]) -> None:
-    """Parse 'Name=value' pairs and set them on a Message instance."""
     for item in sig_list:
         if "=" not in item:
             print_error(f"--sig must be Name=value, got '{item}'")
@@ -53,6 +51,32 @@ def _apply_sigs(msg, sig_list: list[str]) -> None:
             sys.exit(1)
 
 
+def _send_type_from_str(s: str) -> int:
+    m = {
+        "none": pdu_pb2.SEND_TYPE_NONE,
+        "cyclic": pdu_pb2.SEND_TYPE_CYCLIC,
+        "onchange": pdu_pb2.SEND_TYPE_ON_CHANGE,
+        "mixed": pdu_pb2.SEND_TYPE_MIXED,
+    }
+    val = m.get(s.lower())
+    if val is None:
+        print_error(f"Unknown send type '{s}'. Choose: none, cyclic, onchange, mixed.")
+        sys.exit(1)
+    return val
+
+
+def _send_type_to_str(st: int) -> str:
+    m = {
+        pdu_pb2.SEND_TYPE_NONE: "none",
+        pdu_pb2.SEND_TYPE_CYCLIC: "cyclic",
+        pdu_pb2.SEND_TYPE_ON_CHANGE: "onchange",
+        pdu_pb2.SEND_TYPE_MIXED: "mixed",
+    }
+    return m.get(st, "?")
+
+
+# ── PDU send ────────────────────────────────────────────────────────────────────
+
 @pdu_app.command("send")
 def send_pdu(
     ctx: typer.Context,
@@ -62,15 +86,7 @@ def send_pdu(
     sig: Annotated[Optional[List[str]], typer.Option("--sig", help="Set signal physical value: Name=value (repeatable).")] = None,
     db: Annotated[str, typer.Option("--db", help="PDU database JSON file.", autocompletion=complete_json_file)] = "pdu_db.json",
 ) -> None:
-    """Send a PDU via the gateway.
-
-    Load a message from the database with --msg, optionally override individual
-    signals with --sig, or bypass packing entirely with --data.
-
-    Examples\b
-      boat pdu send --msg MotorSpeed_PDU --sig MotorSpeed=100
-      boat pdu send --id 0x00AC0001 --data DEADBEEF
-    """
+    """Send a PDU via the gateway."""
     if not msg_name and not pdu_id:
         print_error("Provide --msg (database lookup) or --id with --data.")
         sys.exit(1)
@@ -102,6 +118,8 @@ def send_pdu(
         _rpc_error(ex)
 
 
+# ── Route management ────────────────────────────────────────────────────────────
+
 @pdu_app.command("route")
 def configure_route(
     ctx: typer.Context,
@@ -116,8 +134,17 @@ def configure_route(
     dst_port: Annotated[int, typer.Option("--dst-port")] = 0,
     ttl:      Annotated[int, typer.Option("--ttl")] = 64,
     vlan_id:  Annotated[int, typer.Option("--vlan")] = 0,
+    send_type:Annotated[str, typer.Option("--send-type", help="Transmission schedule: none, cyclic, onchange, mixed.")] = "none",
+    cycle_ms: Annotated[int, typer.Option("--cycle-ms",  help="Base cycle in ms for cyclic/mixed modes.")] = 0,
+    fast_ms:  Annotated[int, typer.Option("--fast-ms",   help="Fast period in ms for n-times repetitions.")] = 0,
+    reps:     Annotated[int, typer.Option("--reps",      help="Number of fast repetitions per change event.")] = 0,
 ) -> None:
-    """Configure a PDU routing rule on the gateway."""
+    """Configure a PDU routing rule on the gateway.
+
+    Use --send-type none to remove an existing transmission schedule
+    without changing the route.  Use 'boat pdu remove-route --id X' to
+    delete the route entirely.
+    """
     import socket
 
     resolved_id = int(pdu_id, 0)
@@ -137,6 +164,12 @@ def configure_route(
         except OSError:
             return socket.inet_pton(socket.AF_INET6, addr)
 
+    schedule = pdu_pb2.PduSchedule(
+        send_type=_send_type_from_str(send_type),
+        cycle_ms=cycle_ms,
+        fast_ms=fast_ms,
+        repetitions=reps,
+    )
     route = pdu_pb2.PduRoute(
         pdu_id=resolved_id,
         transport=t,
@@ -149,11 +182,32 @@ def configure_route(
         src_port=src_port,
         dst_port=dst_port,
         ttl=ttl,
+        schedule=schedule,
     )
     try:
         resp = ctx.obj["client"].pdu.ConfigureRoute(pdu_pb2.ConfigureRouteRequest(route=route))
-        print_table(["pdu_id", "iface", "transport", "ok"],
-                    [[f"0x{resolved_id:08X}", iface, transport.upper(), resp.ok]],
+        print_table(["pdu_id", "iface", "transport", "schedule", "ok"],
+                    [[f"0x{resolved_id:08X}", iface, transport.upper(),
+                      f"{send_type}({cycle_ms}ms/{fast_ms}ms/{reps}x)" if send_type != "none" else "-",
+                      resp.ok]],
+                    ctx.obj["json_mode"])
+    except grpc.RpcError as ex:
+        _rpc_error(ex)
+
+
+@pdu_app.command("remove-route")
+def remove_route(
+    ctx: typer.Context,
+    pdu_id: Annotated[str, typer.Option("--id", help="32-bit PDU ID (hex or decimal) to remove.")],
+) -> None:
+    """Remove a PDU routing rule and its transmission schedule."""
+    resolved_id = int(pdu_id, 0)
+    try:
+        resp = ctx.obj["client"].pdu.RemoveRoute(
+            pdu_pb2.RemoveRouteRequest(pdu_id=resolved_id)
+        )
+        print_table(["pdu_id", "ok"],
+                    [[f"0x{resolved_id:08X}", resp.ok]],
                     ctx.obj["json_mode"])
     except grpc.RpcError as ex:
         _rpc_error(ex)
@@ -168,14 +222,25 @@ def list_routes(ctx: typer.Context) -> None:
         for r in resp.routes:
             t = {pdu_pb2.PDU_TRANSPORT_CAN: "CAN",
                  pdu_pb2.PDU_TRANSPORT_ETHERNET: "ETH"}.get(r.transport, "?")
+            sched = "none"
+            if r.HasField("schedule") and r.schedule.send_type != pdu_pb2.SEND_TYPE_NONE:
+                st = _send_type_to_str(r.schedule.send_type)
+                if r.schedule.send_type == pdu_pb2.SEND_TYPE_CYCLIC:
+                    sched = f"cyclic@{r.schedule.cycle_ms}ms"
+                elif r.schedule.send_type == pdu_pb2.SEND_TYPE_ON_CHANGE:
+                    sched = f"onchange({r.schedule.repetitions}x@{r.schedule.fast_ms}ms)"
+                elif r.schedule.send_type == pdu_pb2.SEND_TYPE_MIXED:
+                    sched = f"mixed@{r.schedule.cycle_ms}ms+onchange({r.schedule.repetitions}x@{r.schedule.fast_ms}ms)"
             rows.append([f"0x{r.pdu_id:08X}", t, r.iface,
                          f"0x{r.can_id:X}" if r.can_id else "-",
-                         f"0x{r.ethertype:04X}"])
-        print_table(["pdu_id", "transport", "iface", "can_id", "ethertype"],
+                         f"0x{r.ethertype:04X}", sched])
+        print_table(["pdu_id", "transport", "iface", "can_id", "ethertype", "schedule"],
                     rows, ctx.obj["json_mode"])
     except grpc.RpcError as ex:
         _rpc_error(ex)
 
+
+# ── Container management ────────────────────────────────────────────────────────
 
 @pdu_app.command("container")
 def configure_container(
@@ -191,20 +256,7 @@ def configure_container(
     vlan_id:  Annotated[int,  typer.Option("--vlan")]     = 0,
     db:       Annotated[str,  typer.Option("--db",       help="PDU database JSON file.", autocompletion=complete_json_file)] = "pdu_db.json",
 ) -> None:
-    """Register an IpduM container on the gateway.
-
-    All PDU IDs in the container share one Ethernet frame: whenever any member
-    PDU is sent, the router flushes all currently known payloads as one frame.
-
-    \b
-    From database (reads IpduMEntries, IP, ports automatically):
-      boat pdu container --msg Motor_PDU_Container --db config/pdu_db_example.json
-
-    Override specific fields:
-      boat pdu container --msg Motor_PDU_Container --db config/pdu_db_example.json \\
-        --iface enx28107b9f2016 --src-ip 50.50.0.1 --dst-ip 50.50.0.2 \\
-        --src-port 5000 --dst-port 5001
-    """
+    """Register an IpduM container on the gateway."""
     import os, socket
     from boat.v1 import pdu_pb2
 
@@ -219,7 +271,6 @@ def configure_container(
         if entry["BusType"] != "ETH":
             print_error(f"'{msg_name}' has BusType={entry['BusType']}, expected ETH.")
             sys.exit(1)
-        # Load the member PDU IDs from the IpduMEntries list in the database
         from boat.pdu_db import PduDatabase
         database = PduDatabase(db)
         pdu_ids = []
@@ -250,7 +301,7 @@ def configure_container(
         resolved_dst_port = dst_port
         resolved_ttl      = ttl or 64
         resolved_vlan     = vlan_id
-        pdu_ids           = []  # caller must use manual --msg-less mode only for testing
+        pdu_ids           = []
 
     container = pdu_pb2.PduContainerDef(
         container_id=resolved_cid,
@@ -276,6 +327,90 @@ def configure_container(
     except grpc.RpcError as ex:
         _rpc_error(ex)
 
+
+# ── Group management ────────────────────────────────────────────────────────────
+
+@pdu_app.command("group")
+def configure_group(
+    ctx: typer.Context,
+    group_id: Annotated[str,  typer.Option("--id",     help="Group ID (hex or decimal).")],
+    name:     Annotated[str,  typer.Option("--name",   help="Human-readable group name.")] = "",
+    pdu_ids:  Annotated[List[str], typer.Option("--pdu", help="PDU ID to add to group (repeatable).")] = [],
+    enabled:  Annotated[bool,  typer.Option("--enabled/--disabled", help="Start enabled?")] = True,
+) -> None:
+    """Create or update an I-PDU group.
+
+    PDUs in a disabled group are silently dropped on send and receive.
+    """
+    resolved_id = int(group_id, 0)
+    resolved_pdu_ids = [int(p, 0) for p in pdu_ids]
+
+    group = pdu_pb2.PduGroup(
+        group_id=resolved_id,
+        name=name,
+        pdu_ids=resolved_pdu_ids,
+        enabled=enabled,
+    )
+    try:
+        resp = ctx.obj["client"].pdu.ConfigureGroup(
+            pdu_pb2.ConfigureGroupRequest(group=group)
+        )
+        print_table(["group_id", "name", "pdu_ids", "enabled", "ok"],
+                    [[f"0x{resolved_id:X}", name,
+                      str([f"0x{p:08X}" for p in resolved_pdu_ids]),
+                      str(enabled), resp.ok]],
+                    ctx.obj["json_mode"])
+    except grpc.RpcError as ex:
+        _rpc_error(ex)
+
+
+@pdu_app.command("enable-group")
+def enable_group(
+    ctx: typer.Context,
+    group_id: Annotated[str, typer.Option("--id", help="Group ID (hex or decimal).")],
+) -> None:
+    """Enable an I-PDU group, allowing its PDUs to be sent/received."""
+    resolved_id = int(group_id, 0)
+    try:
+        resp = ctx.obj["client"].pdu.EnableGroup(
+            pdu_pb2.EnableGroupRequest(group_id=resolved_id)
+        )
+        print_table(["group_id", "ok"], [[f"0x{resolved_id:X}", resp.ok]], ctx.obj["json_mode"])
+    except grpc.RpcError as ex:
+        _rpc_error(ex)
+
+
+@pdu_app.command("disable-group")
+def disable_group(
+    ctx: typer.Context,
+    group_id: Annotated[str, typer.Option("--id", help="Group ID (hex or decimal).")],
+) -> None:
+    """Disable an I-PDU group, silently dropping its PDUs."""
+    resolved_id = int(group_id, 0)
+    try:
+        resp = ctx.obj["client"].pdu.DisableGroup(
+            pdu_pb2.DisableGroupRequest(group_id=resolved_id)
+        )
+        print_table(["group_id", "ok"], [[f"0x{resolved_id:X}", resp.ok]], ctx.obj["json_mode"])
+    except grpc.RpcError as ex:
+        _rpc_error(ex)
+
+
+@pdu_app.command("list-groups")
+def list_groups(ctx: typer.Context) -> None:
+    """List all configured I-PDU groups."""
+    try:
+        resp = ctx.obj["client"].pdu.ListGroups(pdu_pb2.ListGroupsRequest())
+        rows = []
+        for g in resp.groups:
+            pids = ", ".join(f"0x{p:08X}" for p in g.pdu_ids)
+            rows.append([f"0x{g.group_id:X}", g.name, pids, "yes" if g.enabled else "no"])
+        print_table(["group_id", "name", "pdu_ids", "enabled"], rows, ctx.obj["json_mode"])
+    except grpc.RpcError as ex:
+        _rpc_error(ex)
+
+
+# ── Subscribe ───────────────────────────────────────────────────────────────────
 
 @pdu_app.command("subscribe")
 def subscribe_pdus(

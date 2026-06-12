@@ -8,6 +8,20 @@ namespace boat::hil {
 
 enum class PduTransport { kUnspecified = 0, kCan = 1, kEthernet = 2 };
 
+enum class SendType {
+  kNone       = 0,
+  kCyclic     = 1,
+  kOnChange   = 2,
+  kMixed      = 3,
+};
+
+struct PduSchedule {
+  SendType send_type{SendType::kNone};
+  uint32_t cycle_ms{0};        // base period in ms
+  uint32_t fast_ms{0};         // fast period for n-times reps in ms
+  uint32_t repetitions{0};     // number of fast reps per change event
+};
+
 // Routing rule: maps a PDU ID to a transport interface.
 struct PduRoute {
   uint32_t     pdu_id{0};
@@ -24,6 +38,8 @@ struct PduRoute {
   uint16_t             src_port{0};
   uint16_t             dst_port{0};
   uint8_t              ttl{64};   // IPv4 TTL / IPv6 Hop Limit
+
+  PduSchedule          schedule;  // transmission schedule (optional)
 };
 
 // Groups several PDU IDs onto a shared Ethernet transport.
@@ -48,6 +64,19 @@ struct PduFrame {
   uint64_t             timestamp_ns{0};
   PduTransport         source{PduTransport::kUnspecified};
   std::string          iface;
+};
+
+// I-PDU Group — a set of PDUs that can be enabled/disabled at runtime.
+struct PduGroup {
+  uint32_t              group_id{0};
+  std::string           name;
+  std::vector<uint32_t> pdu_ids;
+  bool                  enabled{true};
+};
+
+struct PduDeadlineConfig {
+  uint32_t cycle_time_ms{0};     // expected receive interval
+  uint32_t timeout_factor{3};    // deadline = cycle_time x timeout_factor
 };
 
 }  // namespace boat::hil
