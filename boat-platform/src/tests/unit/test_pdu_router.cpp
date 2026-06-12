@@ -31,6 +31,9 @@ class MockCanDriver : public IHalDriver {
     written.push_back(f);
     return true;
   }
+  CanInterfaceInfo GetInfo() const override {
+    return {};
+  }
   std::vector<CanFrame> written;
 };
 

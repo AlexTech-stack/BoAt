@@ -86,7 +86,7 @@ def _query_gateway(host: str) -> dict[str, Any]:
         client = BoAtClient(address=host)
         try:
             resp = client.can.ListBuses(can_pb2.ListBusesRequest())
-            result["can_ifaces"] = list(resp.ifaces)
+            result["can_ifaces"] = [b.iface for b in resp.buses]
         except Exception:
             pass
         try:

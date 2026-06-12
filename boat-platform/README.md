@@ -37,13 +37,34 @@ The gateway binary is at `build/{preset}/src/gateway/grpc_gateway/boat_gateway`.
 sudo modprobe vcan
 sudo ip link add vcan0 type vcan && sudo ip link set vcan0 up
 
-# Start the gateway
+# Start the gateway with virtual CAN
 BOAT_CAN_INTERFACES=vcan0 \
   BOAT_ETH_INTERFACES=veth0 \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway
+
+# Start the gateway with physical CAN (e.g. PEAK PCAN-USB Pro FD)
+# Interfaces must be brought up manually (see CAN Hardware section)
+BOAT_CAN_INTERFACES=can0,can1,vcan0 \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
 The gRPC server listens on `0.0.0.0:50051`.
+
+## CAN Hardware
+
+Physical CAN interfaces (e.g. PEAK, Kvaser, gs_usb) are supported via `PhysicalCanDriver` which reads hardware metadata from sysfs. The gateway auto-selects the driver: `vcan*` interfaces use `VirtualCanDriver`, all others use `PhysicalCanDriver`.
+
+```bash
+# Bring up a physical CAN interface (adjust bitrate to your setup)
+sudo ip link set can0 up type can bitrate 500000
+
+# The `boat can detect` command scans available CAN hardware (no gateway needed)
+boat can detect
+
+# List registered interfaces with metadata (requires active gateway)
+boat can list-buses
+boat --json can list-buses
+```
 
 ## Known issues
 

@@ -5,6 +5,8 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <fstream>
+#include <string>
 #include <utility>
 
 #include <linux/can.h>
@@ -130,6 +132,52 @@ void SocketCanDriver::Close() {
     close(socket_fd_);
     socket_fd_ = -1;
   }
+}
+
+CanInterfaceInfo SocketCanDriver::GetInfo() const {
+  CanInterfaceInfo info{};
+  info.driver_name = "socketcan";
+  info.bitrate = 0;
+
+  const std::string base = "/sys/class/net/" + iface_ + "/";
+
+  // MTU determines CAN FD capability (72 = FD, 16 = classic).
+  std::ifstream mtu_file(base + "mtu");
+  unsigned mtu = 0;
+  if (mtu_file >> mtu) {
+    info.fd_support = (mtu >= 72);
+  }
+
+  // Operational state: "up", "down", "unknown".
+  std::ifstream state_file(base + "operstate");
+  std::string state;
+  if (state_file >> state) {
+    info.state = state;
+  } else {
+    info.state = "unknown";
+  }
+
+  // Attempt to read the kernel driver name from the device's driver symlink.
+  // Virtual interfaces (vcan) do not have a device/ subdirectory.
+  std::string driver_link = base + "device/driver";
+  std::ifstream driver_file(driver_link);
+  if (driver_file) {
+    // The symlink target looks like "../../../../../../bus/usb/drivers/peak_usb"
+    // so we resolve it with readlink.
+    char linkbuf[256] = {};
+    const ssize_t len = readlink(driver_link.c_str(), linkbuf, sizeof(linkbuf) - 1);
+    if (len > 0) {
+      linkbuf[len] = '\0';
+      std::string resolved(linkbuf);
+      // Extract the last component (the driver name).
+      const auto pos = resolved.rfind('/');
+      if (pos != std::string::npos && pos + 1 < resolved.size()) {
+        info.driver_name = resolved.substr(pos + 1);
+      }
+    }
+  }
+
+  return info;
 }
 
 }  // namespace boat::hil

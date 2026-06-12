@@ -10,6 +10,9 @@ bool CanBusRegistry::Add(const std::string& iface, std::shared_ptr<IHalDriver> d
     return false;
   }
 
+  // Capture interface metadata before the driver is moved into the bridge.
+  auto info = driver->GetInfo();
+
   auto bridge = std::make_unique<HilBridge>(std::move(driver), bus);
 
   // Capture iface by value so the lambda stays valid after Add() returns.
@@ -20,7 +23,7 @@ bool CanBusRegistry::Add(const std::string& iface, std::shared_ptr<IHalDriver> d
   bridge->Start();
 
   std::lock_guard<std::mutex> lock(bridges_mutex_);
-  bridges_[iface] = BridgeEntry{iface, std::move(bridge)};
+  bridges_[iface] = BridgeEntry{iface, std::move(bridge), std::move(info)};
   return true;
 }
 
@@ -89,6 +92,15 @@ void CanBusRegistry::StopAll() {
     (void)name;
     entry.bridge->Stop();
   }
+}
+
+CanInterfaceInfo CanBusRegistry::GetInterfaceInfo(const std::string& iface) const {
+  std::lock_guard<std::mutex> lock(bridges_mutex_);
+  const auto it = bridges_.find(iface);
+  if (it == bridges_.end()) {
+    return {};
+  }
+  return it->second.info;
 }
 
 void CanBusRegistry::DispatchRx(const CanFrame& frame, const std::string& iface) {

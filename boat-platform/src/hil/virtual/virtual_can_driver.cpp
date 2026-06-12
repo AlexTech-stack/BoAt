@@ -15,4 +15,10 @@ bool VirtualCanDriver::WriteFrame(const CanFrame& frame) { return driver_.WriteF
 
 void VirtualCanDriver::Close() { driver_.Close(); }
 
+CanInterfaceInfo VirtualCanDriver::GetInfo() const {
+  auto info = driver_.GetInfo();
+  info.driver_name = "vcan";
+  return info;
+}
+
 }  // namespace boat::hil

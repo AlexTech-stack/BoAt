@@ -25,6 +25,7 @@
 #include "fault_service_impl.h"
 #include "gateway_context.h"
 #include "hil/virtual/virtual_can_driver.h"
+#include "hil/can/physical_can_driver.h"
 #include "hil/ethernet/virtual_ethernet_driver.h"
 #include "hil/ethernet/raw_socket_ethernet_driver.h"
 #include "pdu/pdu_router.h"
@@ -128,6 +129,9 @@ int main() {
   }
 
   // Build CAN bus registry from BOAT_CAN_INTERFACES (comma-separated, default "vcan0").
+  // Interfaces named "vcan*" use VirtualCanDriver; all others use PhysicalCanDriver
+  // (which reads sysfs for driver metadata and works with any SocketCAN-compatible
+  // hardware, including PEAK PCAN, Kvaser, gs_usb, etc.).
   boat::hil::CanBusRegistry can_registry;
   {
     const char* env = std::getenv("BOAT_CAN_INTERFACES");
@@ -136,11 +140,27 @@ int main() {
     std::string iface;
     while (std::getline(ss, iface, ',')) {
       if (iface.empty()) continue;
-      auto driver = std::make_shared<boat::hil::VirtualCanDriver>(iface);
-      if (can_registry.Add(iface, std::move(driver), event_bus)) {
-        // opened successfully — logged implicitly
+
+      std::shared_ptr<boat::hil::IHalDriver> driver;
+      if (iface.size() >= 4 && iface.compare(0, 4, "vcan") == 0) {
+        driver = std::make_shared<boat::hil::VirtualCanDriver>(iface);
+      } else {
+        driver = std::make_shared<boat::hil::PhysicalCanDriver>(iface);
       }
-      // silently skip interfaces that fail to open (vcan may not exist in all envs)
+
+      // Capture info before driver is moved into the registry.
+      auto info = driver->GetInfo();
+      if (can_registry.Add(iface, std::move(driver), event_bus)) {
+        std::fprintf(stderr, "[Gateway] Registered CAN interface '%s' "
+                     "(driver=%s, fd=%s, state=%s)\n",
+                     iface.c_str(),
+                     info.driver_name.c_str(),
+                     info.fd_support ? "yes" : "no",
+                     info.state.c_str());
+      } else {
+        std::fprintf(stderr, "[Gateway] Failed to open CAN interface '%s' "
+                     "(check interface name / permissions)\n", iface.c_str());
+      }
     }
   }
 

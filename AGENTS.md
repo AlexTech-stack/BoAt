@@ -6,6 +6,8 @@
   - `src/core/` — Simulation engine (scheduler, signal router, determinism, plugin mgr)
   - `src/gateway/grpc_gateway/` — gRPC server → `boat_gateway` binary, listens on `0.0.0.0:50051`
   - `src/hil/` — HIL bridge (CAN/Ethernet drivers, PDU router, bus registries)
+    - `can/` — `SocketCanDriver` (raw AF_CAN/SOCK_RAW), `PhysicalCanDriver` (sysfs-probing physical HW)
+    - `virtual/` — `VirtualCanDriver` (SocketCan wrapper for vcan*)
     - `pdu/com/` — COM signal library (bit pack/unpack, E2E CRC, Intel/Motorola)
     - `pdu/transmission_engine.h/.cpp` — Cyclic/OnChange/Mixed transmission scheduler
     - `pdu/tick_timer.h/.cpp` — Dual-backend tick timer (sleep_for / timerfd)
@@ -50,7 +52,40 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 sudo modprobe vcan
 sudo ip link add vcan0 type vcan && sudo ip link set vcan0 up
 BOAT_CAN_INTERFACES=vcan0 ./build/debug/src/gateway/grpc_gateway/boat_gateway
+
+# Run gateway with physical CAN (e.g. PEAK PCAN-USB Pro FD)
+sudo ip link set can0 up type can bitrate 500000
+sudo ip link set can1 up type can bitrate 500000
+BOAT_CAN_INTERFACES=can0,can1,vcan0 ./build/debug/src/gateway/grpc_gateway/boat_gateway
+
+# Enable CAN FD (optional, requires FD-capable hardware)
+sudo ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on
 ```
+
+## CAN Hardware Integration
+
+The gateway distinguishes between virtual (`vcan*`) and physical CAN interfaces at startup:
+- `vcan*` → `VirtualCanDriver` (wraps SocketCAN)
+- all others → `PhysicalCanDriver` (reads sysfs for driver metadata, e.g. `peak_usb`)
+
+The `ListBuses` gRPC response now returns per-interface metadata (driver name, state, FD support, bitrate).
+
+### CLI CAN commands
+
+```bash
+# List registered interfaces with metadata (requires gateway)
+boat can list-buses
+boat --json can list-buses
+
+# Detect available CAN hardware on the host (no gateway required)
+boat can detect
+boat --json can detect
+```
+
+The `boat can detect` command scans `/sys/class/net/` for CAN interfaces and identifies:
+- Physical hardware (PEAK PCAN-USB Pro FD via USB ID `0c72:0011`, other USB devices)
+- Virtual CAN interfaces
+- Driver name, FD capability, link state
 
 ## Test
 

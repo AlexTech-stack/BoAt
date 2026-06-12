@@ -57,10 +57,78 @@ def list_buses(ctx: typer.Context) -> None:
     """List all registered CAN interfaces on the gateway."""
     try:
         response = ctx.obj["client"].can.ListBuses(can_pb2.ListBusesRequest())
-        rows = [[iface] for iface in response.ifaces]
-        print_table(["iface"], rows, ctx.obj["json_mode"])
+        rows = [[b.iface, b.driver, b.state, "✓" if b.fd_support else "—", b.bitrate or "—"]
+                for b in response.buses]
+        print_table(["iface", "driver", "state", "fd", "bitrate"], rows,
+                     ctx.obj["json_mode"])
     except grpc.RpcError as ex:
         _rpc_error(ex)
+
+
+@can_app.command("detect")
+def detect(ctx: typer.Context) -> None:
+    """Detect available CAN hardware on this host (no gateway required)."""
+    import os
+    import glob as _glob
+
+    net_sys = "/sys/class/net"
+    entries = sorted(os.listdir(net_sys)) if os.path.isdir(net_sys) else []
+
+    rows = []
+    for name in entries:
+        iface_type = _read_sysfs(os.path.join(net_sys, name, "type"))
+        if iface_type != "280":          # ARPHRD_CAN
+            continue
+
+        mtu_s = _read_sysfs(os.path.join(net_sys, name, "mtu"))
+        fd = "✓" if mtu_s and int(mtu_s) >= 72 else "—"
+
+        operstate = _read_sysfs(os.path.join(net_sys, name, "operstate")) or "unknown"
+
+        # Determine driver: physical interfaces have device/driver symlink.
+        driver_link = os.path.join(net_sys, name, "device", "driver")
+        if os.path.islink(driver_link):
+            driver = os.path.basename(os.readlink(driver_link))
+        else:
+            driver = "vcan"
+
+        # For USB devices, try to read the USB vendor/product ID.
+        usb_id = ""
+        uevent = os.path.join(net_sys, name, "device", "uevent")
+        if os.path.isfile(uevent):
+            with open(uevent) as f:
+                for line in f:
+                    if line.startswith("PRODUCT="):
+                        parts = line.strip().split("=")[1].split("/")
+                        if len(parts) >= 2:
+                            usb_id = f"{parts[0]}:{parts[1]}"
+                        break
+
+        # Attempt to name the device from USB ID.
+        device_name = driver
+        if usb_id == "c72:11":
+            device_name = "PEAK System PCAN-USB Pro FD"
+        elif usb_id:
+            device_name = f"USB device {usb_id}"
+
+        rows.append([device_name, driver, name, fd, operstate])
+
+    if not rows:
+        print_table(["device", "driver", "iface", "fd", "state"],
+                     [["(no CAN interfaces found)", "", "", "", ""]],
+                     ctx.obj["json_mode"])
+    else:
+        print_table(["device", "driver", "iface", "fd", "state"], rows,
+                     ctx.obj["json_mode"])
+
+
+def _read_sysfs(path: str) -> str | None:
+    """Read a sysfs file and return its contents stripped, or None."""
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
 
 
 @can_app.command("send")
