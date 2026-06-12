@@ -1,12 +1,12 @@
 # BoAt — Board of Things
 
-A production-grade, deterministic automotive simulation and testing platform for Software-in-the-Loop, Hardware-in-the-Loop, and CI/CD validation pipelines.
+A deterministic automotive simulation and testing platform for Software-in-the-Loop, Hardware-in-the-Loop, and CI/CD validation pipe1lines.
 
 ---
 
 ## What is BoAt?
 
-BoAt is a tick-based simulation gateway that bridges virtual and physical CAN/Ethernet networks. It provides a deterministic simulation engine, a plugin SDK for custom node logic, a gRPC API surface, and a Python CLI/SDK — all designed for OEM engineers and Tier-1 suppliers who need repeatable, hardware-integrated testing.
+BoAt is a tick-based simulation gateway that bridges virtual and physical CAN/Ethernet networks. It provides a deterministic simulation engine, a plugin SDK for custom node logic, a gRPC API surface, and a Python CLI/SDK.
 
 ## Key capabilities
 
