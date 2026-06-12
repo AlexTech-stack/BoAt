@@ -29,8 +29,9 @@
     - `someip.h` — SOME/IP protocol constants
   - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|can|eth|pdu|can-tp|...`)
   - `config/` — PDU database JSON files
-  - `demo/` — Demo scripts mirroring UI services
-- **`ui/`** — 10 standalone FastAPI/uvicorn web services (launcher:8086, dashboard:8080, commander:8082, recorder:8083, control_panel, pdu_editor, trace_analyzer, flow_editor, debug, system_dashboard)
+  - `demo/` — Demo node scripts (not web UI)
+- **`ui/`** — 7 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, recorder:8083, control_panel, debug, system_dashboard)
+- **`tools/`** — 2 standalone tools (pdu_editor:8087, trace_analyzer:8088)
 - **`traces/`** — Trace output directory (gitignored)
 
 ## Build & run

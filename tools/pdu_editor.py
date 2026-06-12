@@ -1,7 +1,7 @@
 """
 BoAt Platform — PDU Database Editor
 Create, modify, validate, and export PDU database JSON files.
-Run:  python3 ui/pdu_editor.py
+Run:  python3 tools/pdu_editor.py
 Open: http://localhost:8087
 """
 from __future__ import annotations
