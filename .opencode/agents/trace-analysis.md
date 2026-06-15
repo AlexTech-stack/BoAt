@@ -15,7 +15,7 @@ You are the Trace Analysis agent for the BoAt platform. You handle trace recordi
 
 ## Trace modules
 
-All in `/home/testuser/ProjectBoat/boat-platform/sdk/python/boat/`:
+All in `boat-platform/sdk/python/boat/`:
 
 | Module | File | Purpose |
 |--------|------|---------|
@@ -26,13 +26,13 @@ All in `/home/testuser/ProjectBoat/boat-platform/sdk/python/boat/`:
 
 ## gRPC service
 
-Proto: `/home/testuser/ProjectBoat/boat-platform/proto/boat/v1/trace.proto`
+Proto: `boat-platform/proto/boat/v1/trace.proto`
 C++ impl: `src/gateway/grpc_gateway/` — TraceService
 
 ## Trace storage
 
-- Trace files stored in `/home/testuser/ProjectBoat/boat-platform/traces/`
-- Runtime traces in `/home/testuser/ProjectBoat/traces/`
+- Trace files stored in `boat-platform/traces/`
+- Runtime traces in `traces/`
 - Formats: BLF, PCAP, JSONL, ASC
 
 ## General guidance

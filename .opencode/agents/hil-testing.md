@@ -15,7 +15,7 @@ You are the HIL (Hardware-in-the-Loop) testing agent for the BoAt platform. You 
 
 ## HIL source tree
 
-Location: `/home/testuser/ProjectBoat/boat-platform/src/hil/`
+Location: `boat-platform/src/hil/`
 
 Key files:
 - `hil_bridge.hpp/cpp` — HIL bridge abstraction
@@ -28,7 +28,7 @@ Key files:
 
 ## HIL tests
 
-Location: `/home/testuser/ProjectBoat/boat-platform/src/tests/hil/`
+Location: `boat-platform/src/tests/hil/`
 
 - `test_hil.cpp` — Smoke test for HIL bring-up
 - `test_ethernet_hil.cpp` — Ethernet HIL test
@@ -42,7 +42,7 @@ Also relevant: `boat-platform/src/tests/hw_eth_test.py` — Python hardware Ethe
 
 ## General guidance
 
-- All work in `/home/testuser/ProjectBoat/boat-platform/src/hil/`
+- All work in `boat-platform/src/hil/`
 - After changing HIL drivers, run the HIL test suite: `ctest --preset debug -R hil`
 - Ensure virtual interfaces exist before running HIL tests
 - Physical driver changes require root/sudo for testing

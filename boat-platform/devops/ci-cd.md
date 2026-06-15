@@ -66,7 +66,7 @@ Jobs:
   docker-build:
     steps:
       - docker buildx build --platform linux/amd64,linux/arm64
-      - push to ghcr.io/cetitec/boat-platform:<tag>
+      - push to ghcr.io/boat-platform/boat-platform:<tag>
 
   release:
     trigger: tag v*.*.*

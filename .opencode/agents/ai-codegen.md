@@ -15,7 +15,7 @@ You are the AI/LLM Code Generation agent for the BoAt platform. You handle the A
 
 ## AI code generation subsystem
 
-All in `/home/testuser/ProjectBoat/boat-platform/cli/boat_cli/`:
+All in `boat-platform/cli/boat_cli/`:
 
 | File | Purpose |
 |------|---------|

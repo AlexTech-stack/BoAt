@@ -15,7 +15,7 @@ You are the Storage Layer agent for the BoAt platform. You handle all persistenc
 
 ## Storage modules
 
-All in `/home/testuser/ProjectBoat/boat-platform/src/store/`:
+All in `boat-platform/src/store/`:
 
 | Module | Directory | Purpose |
 |--------|-----------|---------|
@@ -34,12 +34,12 @@ Created in the working directory:
 
 - Schema is defined in code (C++ DDL statements in each store module)
 - No formal migration scripts — schema versioning is handled at app level
-- PDU database schema is separate: `/home/testuser/ProjectBoat/boat-platform/config/pdu_db.schema.json`
+- PDU database schema is separate: `boat-platform/config/pdu_db.schema.json`
 
 ## Documentation
 
-- Database design: `/home/testuser/ProjectBoat/boat-platform/docs/database/database-design.md`
-- Data model: `/home/testuser/ProjectBoat/boat-platform/docs/architecture/data-model.md`
+- Database design: `boat-platform/docs/database/database-design.md`
+- Data model: `boat-platform/docs/architecture/data-model.md`
 
 ## General guidance
 

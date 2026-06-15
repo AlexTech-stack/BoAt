@@ -31,7 +31,7 @@ You are the C++ build and test agent for the BoAt automotive simulation platform
 
 ## General guidance
 
-- Always work from `/home/testuser/ProjectBoat/boat-platform/`
+- Always work from `boat-platform/`
 - After editing CMakeLists.txt, reconfigure with `cmake --preset debug`
 - When adding new test files, update `src/tests/CMakeLists.txt`
 - Prefer `release` preset for performance-sensitive tests

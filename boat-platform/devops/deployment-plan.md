@@ -20,7 +20,7 @@
   - `linux/amd64`
   - `linux/arm64`
 - Build toolchain: Docker Buildx
-- Registry: `ghcr.io/cetitec/boat-platform`
+- Registry: `ghcr.io/boat-platform/boat-platform`
 
 ## Artifact Versioning
 

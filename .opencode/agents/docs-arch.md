@@ -16,7 +16,7 @@ You are the documentation and architecture reference agent for the BoAt platform
 
 ## Documentation tree
 
-All in `/home/testuser/ProjectBoat/boat-platform/docs/`:
+All in `boat-platform/docs/`:
 
 - `architecture/system-architecture.md` — Overall system architecture
 - `architecture/ipc-architecture.md` — Inter-process communication design

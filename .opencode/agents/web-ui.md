@@ -15,7 +15,7 @@ You are the Web UI agent for the BoAt platform. You work on the 7 FastAPI-based 
 
 ## UI service locations
 
-All in `/home/testuser/ProjectBoat/ui/`:
+All in `ui/`:
 
 | Port | File | Service |
 |------|------|---------|
@@ -31,28 +31,28 @@ All in `/home/testuser/ProjectBoat/ui/`:
 
 ```bash
 # Start all UI gateway-dependent services (background processes)
-bash /home/testuser/ProjectBoat/start_ui.sh
+bash start_ui.sh
 
 # Stop all UI gateway-dependent services
-bash /home/testuser/ProjectBoat/stop_ui.sh
+bash stop_ui.sh
 
 # Start standalone tools (no gateway needed)
-bash /home/testuser/ProjectBoat/start_tools.sh
+bash start_tools.sh
 
 # Stop standalone tools
-bash /home/testuser/ProjectBoat/stop_tools.sh
+bash stop_tools.sh
 
 # Start a single UI service manually
-python3 /home/testuser/ProjectBoat/ui/launcher.py &
+python3 ui/launcher.py &
 
 # Start a single tool manually
-python3 /home/testuser/ProjectBoat/tools/pdu_editor.py &
+python3 tools/pdu_editor.py &
 ```
 
 ## General guidance
 
 - Each service is a standalone FastAPI app using vanilla HTML/CSS/JS (no JS framework)
 - Services communicate with the boat_gateway via gRPC on port 50051
-- Working directory for UI scripts is `/home/testuser/ProjectBoat/`
+- Working directory for UI scripts is ``
 - After starting a service, verify it's running: `curl http://localhost:<port>/` (or check browser)
 - When debugging, check the terminal output of each service process

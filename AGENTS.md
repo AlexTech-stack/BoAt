@@ -144,7 +144,7 @@ Each service is a standalone `python3 ui/<name>.py` FastAPI/uvicorn app with emb
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`.
-- Docker images pushed to `ghcr.io/cetitec/boat-platform:*`.
+- Docker images pushed to `ghcr.io/boat-platform/boat-platform:*`.
 
 ## PDU Features
 
