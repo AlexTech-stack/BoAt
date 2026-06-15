@@ -1,4 +1,4 @@
-# BoAt — Board of Things
+# BoAt
 
 > **⚠ Work in Progress** — This project is under active development. APIs, configuration, and behavior may change without notice. Contributions and feedback welcome!
 
