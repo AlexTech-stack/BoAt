@@ -15,7 +15,7 @@ You are the proto code generation agent for the BoAt platform. You regenerate C+
 
 ## Proto file locations
 
-- All `.proto` files: `/home/testuser/ProjectBoat/boat-platform/proto/boat/v1/`
+- All `.proto` files: `boat-platform/proto/boat/v1/`
 - 16 service definitions: bus, can, common, control, debug, ethernet, fault, metrics, plugin, replay, scenario, signal, simulation, trace, (plus any new ones)
 
 ## C++ proto generation
@@ -29,11 +29,11 @@ If you modify `BoAtProto.cmake`, reconfigure: `cmake --preset debug`
 
 ## Python proto generation
 
-Located in `/home/testuser/ProjectBoat/boat-platform/sdk/python/boat/stubs/`
+Located in `boat-platform/sdk/python/boat/stubs/`
 
 Script: `generate_stubs.sh` — runs `python3 -m grpc_tools.protoc` with all proto files.
 
-To regenerate: `cd /home/testuser/ProjectBoat/boat-platform/sdk/python/boat/stubs && bash generate_stubs.sh`
+To regenerate: `cd boat-platform/sdk/python/boat/stubs && bash generate_stubs.sh`
 
 ## General guidance
 

@@ -15,7 +15,7 @@ You are the plugin SDK agent for the BoAt platform. You handle plugin developmen
 
 ## Plugin SDK header
 
-Location: `/home/testuser/ProjectBoat/boat-platform/sdk/cpp/include/boat/plugin.h`
+Location: `boat-platform/sdk/cpp/include/boat/plugin.h`
 
 ABI version: 5. Key types and callbacks:
 - `BoatPublishFn` — publish a numeric signal value (signal_id, tick, value)
@@ -29,7 +29,7 @@ ABI version: 5. Key types and callbacks:
 
 ## Sample plugins
 
-Located in `/home/testuser/ProjectBoat/boat-platform/src/plugins/`:
+Located in `boat-platform/src/plugins/`:
 
 | Plugin | Description |
 |--------|-------------|
@@ -40,7 +40,7 @@ Located in `/home/testuser/ProjectBoat/boat-platform/src/plugins/`:
 
 ## CMake plugin support
 
-Module: `/home/testuser/ProjectBoat/boat-platform/cmake/BoAtPlugin.cmake`
+Module: `boat-platform/cmake/BoAtPlugin.cmake`
 
 - Use `add_boat_plugin()` macro to register a new plugin
 - Plugins are built as shared libraries (.so) linked against the SDK
@@ -48,7 +48,7 @@ Module: `/home/testuser/ProjectBoat/boat-platform/cmake/BoAtPlugin.cmake`
 
 ## General guidance
 
-- All plugin work should go in `/home/testuser/ProjectBoat/boat-platform/src/plugins/`
+- All plugin work should go in `boat-platform/src/plugins/`
 - PluginManager (in `src/core/plugin/`) handles dlopen loading
 - To test a new plugin: build it, then use the gateway or CLI to load it
 - The ABI version (`BOAT_PLUGIN_ABI_VERSION`) must match between plugin and host

@@ -2,7 +2,8 @@
 boat-platform/build/
 
 # Python
-__pycache__/
+**/__pycache__/
+.claude/
 *.pyc
 *.pyo
 *.egg-info/

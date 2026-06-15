@@ -62,5 +62,5 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/cetitec/boat-platform:${{ github.ref_name }}
-            ghcr.io/cetitec/boat-platform:latest
+            ghcr.io/boat-platform/boat-platform:${{ github.ref_name }}
+            ghcr.io/boat-platform/boat-platform:latest

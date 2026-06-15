@@ -15,7 +15,7 @@ You are the PDU Database agent for the BoAt platform. You handle the PDU databas
 
 ## PDU database files
 
-Location: `/home/testuser/ProjectBoat/boat-platform/config/`
+Location: `boat-platform/config/`
 
 | File | Purpose |
 |------|---------|
@@ -26,7 +26,7 @@ Location: `/home/testuser/ProjectBoat/boat-platform/config/`
 
 ## Python SDK modules
 
-All in `/home/testuser/ProjectBoat/boat-platform/sdk/python/boat/`:
+All in `boat-platform/sdk/python/boat/`:
 
 | Module | Purpose |
 |--------|---------|
@@ -36,7 +36,7 @@ All in `/home/testuser/ProjectBoat/boat-platform/sdk/python/boat/`:
 
 ## gRPC service
 
-Proto: `/home/testuser/ProjectBoat/boat-platform/proto/boat/v1/pdu.proto`
+Proto: `boat-platform/proto/boat/v1/pdu.proto`
 C++ impl: PduService in `src/gateway/grpc_gateway/`
 
 ## CLI commands

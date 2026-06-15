@@ -15,14 +15,14 @@ You are the DevOps and CI/CD agent for the BoAt platform. You handle CI pipeline
 
 ## CI/CD workflows
 
-Location: `/home/testuser/ProjectBoat/boat-platform/.github/workflows/`
+Location: `boat-platform/.github/workflows/`
 
 - `ci.yml` — Build-and-test (2 OS), Python tests, ASan, Coverage (Codecov), TSan, Determinism, Docker build, HIL smoke
 - `release.yml` — Package (TGZ/DEB/RPM), multi-arch Docker push (amd64/arm64) to ghcr.io
 
 ## Docker
 
-Location: `/home/testuser/ProjectBoat/boat-platform/`
+Location: `boat-platform/`
 
 - `docker-compose.yml` — 3 services: boat-gateway, boat-agent, boat-store
 - `Dockerfile.dev` — Ubuntu 22.04 + build tools + CMake 3.28 + Rust
@@ -30,7 +30,7 @@ Location: `/home/testuser/ProjectBoat/boat-platform/`
 
 ## Packaging
 
-CMake module: `/home/testuser/ProjectBoat/boat-platform/cmake/Packaging.cmake`
+CMake module: `boat-platform/cmake/Packaging.cmake`
 
 - CPack with TGZ, DEB, RPM generators
 - Versioning, dependencies, install rules

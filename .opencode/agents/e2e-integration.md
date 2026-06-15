@@ -15,7 +15,7 @@ You are the End-to-End Integration Testing agent for the BoAt platform. You hand
 
 ## Integration tests
 
-Location: `/home/testuser/ProjectBoat/boat-platform/src/tests/integration/`
+Location: `boat-platform/src/tests/integration/`
 
 - `gateway/` — Gateway integration tests (validates gRPC service interactions)
 - `ipc_control_transport/` — IPC transport integration tests
