@@ -43,7 +43,7 @@ jobs:
       - name: Configure + build runtime binary
         run: cmake --preset release && cmake --build --preset release --target boat_gateway
       - name: Verify runtime binary exists for Dockerfile
-        run: ls build/release/gateway/grpc_gateway/boat_gateway
+        run: ls build/release/src/gateway/grpc_gateway/boat_gateway
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
