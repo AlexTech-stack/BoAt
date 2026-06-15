@@ -450,7 +450,7 @@ sudo ip link add vcan0 type vcan &amp;&amp; sudo ip link set vcan0 up
 <span class="cm"># Start with vcan0 and a virtual Ethernet interface</span>
 BOAT_CAN_INTERFACES=vcan0 \
 BOAT_ETH_INTERFACES=veth0 \
-./build/debug/gateway/grpc_gateway/boat_gateway</code></pre>
+./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
     </div>
   </li>
   <li>
@@ -469,7 +469,7 @@ BOAT_ETH_INTERFACES=veth0 \
 
 <!-- ═══ GATEWAY ═══ -->
 <h2 id="gateway-start">Starting the Gateway</h2>
-<p>The gateway binary is at <code>build/debug/gateway/grpc_gateway/boat_gateway</code> after a successful build. All configuration is done via environment variables.</p>
+<p>The gateway binary is at <code>build/debug/src/gateway/grpc_gateway/boat_gateway</code> after a successful build. All configuration is done via environment variables.</p>
 
 <pre><code><span class="cm"># Minimal: one virtual CAN interface</span>
 BOAT_CAN_INTERFACES=vcan0 ./boat_gateway
@@ -1461,7 +1461,7 @@ sudo ip link set enx28107b9f2017 up</code></pre>
     <div class="step-body">
       <strong>Start the gateway with both physical NICs registered</strong>
 <pre><code>BOAT_ETH_INTERFACES=raw:enx28107b9f2016,raw:enx28107b9f2017 \
-sudo ./build/debug/gateway/grpc_gateway/boat_gateway</code></pre>
+sudo ./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
       Verify startup output:
 <pre><code>[Gateway] Registered raw Ethernet interface 'enx28107b9f2016'
 [Gateway] Registered raw Ethernet interface 'enx28107b9f2017'</code></pre>
@@ -1756,7 +1756,7 @@ nmcli connection up &lt;uuid&gt;</code></pre>
   <summary>How do I run the gateway without sudo for raw Ethernet?</summary>
   <div class="faq-body">
     <p>Grant the <code>CAP_NET_RAW</code> capability to the binary:</p>
-    <pre><code>sudo setcap cap_net_raw+ep ./build/debug/gateway/grpc_gateway/boat_gateway</code></pre>
+    <pre><code>sudo setcap cap_net_raw+ep ./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
     <p>After this, you can run the gateway as a normal user with raw Ethernet support.</p>
   </div>
 </details>

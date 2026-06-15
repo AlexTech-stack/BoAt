@@ -932,12 +932,12 @@ sudo ip link set up vcan1</pre>
             Optionally load always-on C++ node plugins with <code>BOAT_NODE_PLUGINS</code>.
           </div>
 <pre><span class="c"># Basic — opens vcan0</span>
-BOAT_CAN_INTERFACES=vcan0 ./build/debug/gateway/grpc_gateway/boat_gateway
+BOAT_CAN_INTERFACES=vcan0 ./build/debug/src/gateway/grpc_gateway/boat_gateway
 
 <span class="c"># Multiple interfaces + an always-on C++ node plugin</span>
 BOAT_CAN_INTERFACES=vcan0,vcan1 \
 BOAT_NODE_PLUGINS=./build/debug/plugins/can_responder/libcan_responder_plugin.so \
-./build/debug/gateway/grpc_gateway/boat_gateway</pre>
+./build/debug/src/gateway/grpc_gateway/boat_gateway</pre>
         </div>
       </div>
 

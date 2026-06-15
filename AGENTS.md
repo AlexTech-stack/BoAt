@@ -135,7 +135,7 @@ Each service is a standalone `python3 ui/<name>.py` FastAPI/uvicorn app with emb
 
 ## Quirks & gotchas
 
-- Gateway binary path: README says `build/{preset}/src/gateway/grpc_gateway/boat_gateway`, but CI checks `build/release/gateway/grpc_gateway/boat_gateway` (without `src/`). Verify actual binary location if CI fails.
+- Gateway binary path: `build/{preset}/src/gateway/grpc_gateway/boat_gateway`
 - `boat` CLI entry point (boat_cli/main.py): Typer app with subcommands. Uses `BoAtClient(address)` from `boat-py`.
 - `python3 -m boat` dispatches: subcommands `can|pdu|eth|db` → `boat/cmd.py` (one-shot), anything else → `boat/cli.py` (interactive REPL).
 - Proto stubs in `sdk/python/boat/stubs/boat/v1/` must be regenerated when proto files change (`generate_stubs.sh`).

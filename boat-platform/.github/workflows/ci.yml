@@ -24,7 +24,7 @@ jobs:
       - name: Test
         run: ctest --preset release
       - name: Fail fast when gateway artifact missing
-        run: test -f build/release/gateway/grpc_gateway/boat_gateway
+        run: test -f build/release/src/gateway/grpc_gateway/boat_gateway
 
   python-tests:
     runs-on: ubuntu-22.04
