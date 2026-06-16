@@ -1,3 +1,5 @@
+include(BoAtTest)
+
 FetchContent_Declare(
   Catch2
   GIT_REPOSITORY https://github.com/catchorg/Catch2.git
@@ -110,3 +112,7 @@ add_executable(boat_hil_ethernet hil/test_ethernet_hil.cpp)
 target_include_directories(boat_hil_ethernet PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
 target_link_libraries(boat_hil_ethernet PRIVATE boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_hil_ethernet)
+
+# ── Test Harness (P6) ────────────────────────────────────────────────────────
+
+add_boat_test(boat_test_harness unit/test_harness_example.cpp)

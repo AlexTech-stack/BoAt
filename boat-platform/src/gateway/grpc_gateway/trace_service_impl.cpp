@@ -1,9 +1,11 @@
 #include "trace_service_impl.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <exception>
 #include <string>
+#include <vector>
 
 namespace boat::gateway {
 namespace {
@@ -129,6 +131,68 @@ grpc::Status TraceServiceImpl::StreamTrace(grpc::ServerContext* context, const b
       ctx_.trace_store.UnmapTrace(request->trace_id());
     }
     return grpc::Status(grpc::StatusCode::INTERNAL, "unexpected stream trace error");
+  }
+}
+
+grpc::Status TraceServiceImpl::MarkStep(grpc::ServerContext*,
+                                         const boat::v1::MarkStepRequest* request,
+                                         boat::v1::MarkStepResponse* response) {
+  try {
+    const std::string& trace_id = request->trace_id();
+    const std::uint64_t tick = ctx_.sim.clock().tick();
+
+    // Build JSON payload: {"step_id":N,"step_name":"...","metadata":{...}}
+    std::string payload = R"({"step_id":)" + std::to_string(request->step_id()) +
+                          R"(,"step_name":")" + request->step_name() + "\"";
+    if (!request->metadata().empty()) {
+      payload += R"(,"metadata":{)";
+      bool first = true;
+      for (const auto& [k, v] : request->metadata()) {
+        if (!first) payload += ",";
+        first = false;
+        payload += "\"" + k + "\":\"" + v + "\"";
+      }
+      payload += "}";
+    }
+    payload += "}";
+
+    const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             std::chrono::steady_clock::now().time_since_epoch())
+                             .count();
+
+    boat::store::TraceRecordHeader header{};
+    header.magic = 0xB0A7B0A7;
+    header.event_type = 9002;  // kEventTypeStepMarker
+    header.tick = tick;
+    header.wall_time_ns = now_ns;
+    header.payload_size = static_cast<std::uint32_t>(payload.size());
+
+    // Serialize header
+    std::vector<std::uint8_t> record_data(sizeof(header) + payload.size());
+    std::memcpy(record_data.data(), &header, sizeof(header));
+    if (!payload.empty()) {
+      std::memcpy(record_data.data() + sizeof(header), payload.data(), payload.size());
+    }
+
+    // Storage path derived from trace_id
+    const std::string storage_path = "traces/" + trace_id + ".trace";
+
+    boat::store::TraceRecord meta;
+    meta.id = trace_id;
+    meta.simulation_id = "";  // markers are not tied to a specific simulation
+    meta.start_tick = tick;
+    meta.end_tick = tick;
+    meta.format = boat::store::TraceRecord::Format::BINARY;
+    meta.storage_path = storage_path;
+
+    ctx_.trace_store.AppendTraceRecord(meta, record_data);
+
+    response->set_marker_timestamp_ns(static_cast<std::uint64_t>(now_ns));
+    return grpc::Status::OK;
+  } catch (const std::exception& ex) {
+    return MapTraceException(ex);
+  } catch (...) {
+    return grpc::Status(grpc::StatusCode::INTERNAL, "unexpected mark step error");
   }
 }
 

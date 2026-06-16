@@ -51,6 +51,7 @@ class FlatFileTraceStore : public ITraceStore {
   ~FlatFileTraceStore() override;
 
   void WriteTrace(const TraceRecord& meta, std::span<const std::uint8_t> data) override;
+  void AppendTraceRecord(const TraceRecord& meta, std::span<const std::uint8_t> record_data);
   std::span<const std::uint8_t> ReadTraceMmap(const std::string& trace_id) override;
   std::vector<TraceRecord> ListTraces(const std::string& simulation_id) override;
   std::vector<TraceRecord> ListAllTraces() override;

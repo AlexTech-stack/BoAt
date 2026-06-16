@@ -17,6 +17,9 @@ class TraceServiceImpl final : public boat::v1::TraceService::Service {
                           boat::v1::TraceResponse* response) override;
   grpc::Status StreamTrace(grpc::ServerContext* context, const boat::v1::StreamTraceRequest* request,
                            grpc::ServerWriter<boat::v1::TraceEvent>* writer) override;
+  grpc::Status MarkStep(grpc::ServerContext* context,
+                        const boat::v1::MarkStepRequest* request,
+                        boat::v1::MarkStepResponse* response) override;
 
  private:
   GatewayContext& ctx_;

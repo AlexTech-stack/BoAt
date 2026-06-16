@@ -49,6 +49,11 @@ class TraceServiceStub(object):
                 request_serializer=boat_dot_v1_dot_trace__pb2.StreamTraceRequest.SerializeToString,
                 response_deserializer=boat_dot_v1_dot_trace__pb2.TraceEvent.FromString,
                 _registered_method=True)
+        self.MarkStep = channel.unary_unary(
+                '/boat.v1.TraceService/MarkStep',
+                request_serializer=boat_dot_v1_dot_trace__pb2.MarkStepRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_trace__pb2.MarkStepResponse.FromString,
+                _registered_method=True)
 
 
 class TraceServiceServicer(object):
@@ -72,6 +77,12 @@ class TraceServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def MarkStep(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_TraceServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -89,6 +100,11 @@ def add_TraceServiceServicer_to_server(servicer, server):
                     servicer.StreamTrace,
                     request_deserializer=boat_dot_v1_dot_trace__pb2.StreamTraceRequest.FromString,
                     response_serializer=boat_dot_v1_dot_trace__pb2.TraceEvent.SerializeToString,
+            ),
+            'MarkStep': grpc.unary_unary_rpc_method_handler(
+                    servicer.MarkStep,
+                    request_deserializer=boat_dot_v1_dot_trace__pb2.MarkStepRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_trace__pb2.MarkStepResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -172,6 +188,33 @@ class TraceService(object):
             '/boat.v1.TraceService/StreamTrace',
             boat_dot_v1_dot_trace__pb2.StreamTraceRequest.SerializeToString,
             boat_dot_v1_dot_trace__pb2.TraceEvent.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def MarkStep(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.TraceService/MarkStep',
+            boat_dot_v1_dot_trace__pb2.MarkStepRequest.SerializeToString,
+            boat_dot_v1_dot_trace__pb2.MarkStepResponse.FromString,
             options,
             channel_credentials,
             insecure,

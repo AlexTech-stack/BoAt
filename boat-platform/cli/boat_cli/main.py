@@ -14,6 +14,7 @@ from .plugin import plugin_app
 from .replay import replay_app
 from .scenario import scenario_app
 from .sim import sim_app
+from .test import test_app
 from .trace import trace_app
 
 app = typer.Typer()
@@ -28,6 +29,7 @@ app.add_typer(eth_app,      name="eth")
 app.add_typer(pdu_app,      name="pdu",  help="PDU routing and transmission.")
 app.add_typer(db_app,       name="db",   help="PDU database inspection.")
 app.add_typer(gen_app,      name="gen")
+app.add_typer(test_app,     name="test",  help="Run tests and inspect test configurations.")
 app.add_typer(trace_app,    name="trace")
 
 
