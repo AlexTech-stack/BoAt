@@ -157,7 +157,7 @@ void ReplayController::ReplayLoop() {
       boat::core::BusEvent event;
       event.type = header.event_type;
       event.tick = header.tick;
-      event.payload = payload;
+      event.payload = boat::core::UnknownPayload{header.event_type, payload};
       event_bus_.Publish(std::move(event));
 
       boat::core::BusEvent replay_event;

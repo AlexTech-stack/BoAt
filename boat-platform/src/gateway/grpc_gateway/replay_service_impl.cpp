@@ -97,16 +97,14 @@ grpc::Status ReplayServiceImpl::StreamReplay(grpc::ServerContext* context, const
   std::mutex events_mutex;
   std::vector<boat::v1::ReplayEvent> pending;
 
-  const auto handle = ctx_.event_bus.Subscribe(boat::replay::kReplayBusEventType, [&](const boat::core::BusEvent& event) {
+  const auto handle = ctx_.sim.event_bus().Subscribe(boat::replay::kReplayBusEventType, [&](const boat::core::BusEvent& event) {
     boat::v1::ReplayEvent replay_event;
     replay_event.set_replay_id(request->replay_id());
     replay_event.set_tick(event.tick);
-    if (event.payload.has_value()) {
-      try {
-        replay_event.set_payload(std::any_cast<std::string>(event.payload));
-      } catch (const std::bad_any_cast&) {
-        replay_event.set_payload("replay-event");
-      }
+    if (const auto* s = std::get_if<std::string>(&event.payload)) {
+      replay_event.set_payload(*s);
+    } else {
+      replay_event.set_payload("replay-event");
     }
     std::lock_guard<std::mutex> lock(events_mutex);
     pending.push_back(std::move(replay_event));
@@ -124,13 +122,13 @@ grpc::Status ReplayServiceImpl::StreamReplay(grpc::ServerContext* context, const
       }
     }
     if (ctx_.replay_controller.HasError()) {
-      ctx_.event_bus.Unsubscribe(handle);
+      ctx_.sim.event_bus().Unsubscribe(handle);
       return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, ctx_.replay_controller.LastError());
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
-  ctx_.event_bus.Unsubscribe(handle);
+  ctx_.sim.event_bus().Unsubscribe(handle);
   return grpc::Status::OK;
 }
 

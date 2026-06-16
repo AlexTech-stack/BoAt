@@ -52,6 +52,8 @@ class SignalBus {
 
   mutable std::mutex mutex_;
   std::unordered_map<BusSubscriberId, Subscription> subscriptions_;
+  std::unordered_map<std::string, std::vector<BusSubscriberId>> signal_index_;
+  std::vector<BusSubscriberId> wildcard_subscribers_;
   BusSubscriberId next_id_{0};
 };
 

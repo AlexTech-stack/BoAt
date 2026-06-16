@@ -29,7 +29,7 @@ grpc::Status FaultServiceImpl::InjectFault(grpc::ServerContext*, const boat::v1:
       .end_tick = request->tick() + 1,
       .type = ToCoreFaultType(request->type()),
   };
-  ctx_.fault_injector.Schedule(spec);
+  ctx_.sim.fault_injector().Schedule(spec);
 
   boat::v1::FaultEvent event;
   event.set_fault_id(GenerateFaultId());

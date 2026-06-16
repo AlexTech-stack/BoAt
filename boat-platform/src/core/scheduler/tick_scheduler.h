@@ -59,6 +59,9 @@ class TickScheduler {
   std::vector<std::mutex> local_queue_mutexes_;
   std::atomic<std::size_t> next_worker_{0};
 
+  std::condition_variable work_cv_;
+  std::mutex work_mutex_;
+
   std::atomic<std::size_t> pending_tasks_{0};
   std::condition_variable pending_cv_;
   std::mutex pending_mutex_;

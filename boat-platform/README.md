@@ -66,6 +66,26 @@ boat can list-buses
 boat --json can list-buses
 ```
 
+## Architecture
+
+### Dual PluginManager
+
+The gateway runs **two independent `PluginManager` instances**, each with a separate tick domain:
+
+| Manager | Created in | Lifecycle | Tick source | Plugin set |
+|---|---|---|---|---|
+| `node_manager` | `main.cpp:170` | Always-on (gateway lifetime) | Dedicated background thread, configurable interval via `BOAT_NODE_TICK_MS`/`US` | Plugins from `BOAT_NODE_PLUGINS` env var (e.g. CanTp, SOME/IP) |
+| `plugin_manager` | `main.cpp:78` | Per-simulation (loaded/unloaded via gRPC) | Simulation `TickScheduler` coordinator (10ms tick via `on_tick_hook`) | Scenario-declared plugins from `StartSimulation` RPC |
+
+This "double-tick" design serves two distinct use cases:
+
+- **Node plugins** (e.g. CAN Transport Protocol) must stay alive and responsive on the bus regardless of whether any simulation is running. If a CAN diagnostic request arrives, the CanTp plugin needs to react even with no active scenario.
+- **Simulation plugins** are loaded per-scenario, ticked deterministically by the simulation scheduler, and fully torn down when the simulation stops. They are part of the reproducible simulation state.
+
+Both managers use the same C ABI (`BoatPluginVTable`) and can load the same `.so` files. A plugin can be loaded into both managers simultaneously (e.g. a vehicle dynamics node that runs persistently while a test simulation loads additional signal-processing plugins).
+
+The node tick thread also drives `PduRouter::OnTick()` for the PDU transmission engine, ensuring scheduled CAN/Ethernet frames are sent on time even outside simulation.
+
 ## Known issues
 
 - **Ubuntu 22.04** ships cmake 3.22 (too old). Use the [Kitware binary release](https://github.com/Kitware/CMake/releases) or the official APT repo.

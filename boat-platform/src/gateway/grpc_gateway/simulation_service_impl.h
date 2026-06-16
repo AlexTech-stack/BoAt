@@ -10,15 +10,22 @@
 
 #include "boat/v1/simulation.grpc.pb.h"
 #include "core/scenario/scenario_loader.h"
+#include "core/simulation/simulation_context.h"
 #include "core/state/sim_state_machine.h"
-#include "gateway_context.h"
 #include "store/config_store/config_store.h"
+
+namespace boat::hil {
+class CanBusRegistry;
+class EthernetBusRegistry;
+}  // namespace boat::hil
 
 namespace boat::gateway {
 
 class SimulationServiceImpl final : public boat::v1::SimulationService::Service {
  public:
-  explicit SimulationServiceImpl(GatewayContext& ctx);
+  SimulationServiceImpl(boat::core::SimulationContext& sim,
+                        boat::hil::CanBusRegistry& can_registry,
+                        boat::hil::EthernetBusRegistry& eth_registry);
 
   grpc::Status CreateSimulation(grpc::ServerContext* context, const boat::v1::CreateSimulationRequest* request,
                                 boat::v1::SimulationResponse* response) override;
@@ -44,7 +51,9 @@ class SimulationServiceImpl final : public boat::v1::SimulationService::Service 
   void FillSimulation(const std::string& simulation_id, const boat::core::ScenarioDef& scenario,
                       boat::v1::Simulation* out) const;
 
-  GatewayContext& ctx_;
+  boat::core::SimulationContext& sim_;
+  boat::hil::CanBusRegistry& can_registry_;
+  boat::hil::EthernetBusRegistry& eth_registry_;
   std::unordered_map<std::string, boat::core::ScenarioDef> simulations_;
   mutable std::mutex simulations_mutex_;
   boat::store::SqliteTomlConfigStore config_store_{"boat_config.db"};

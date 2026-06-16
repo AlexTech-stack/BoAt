@@ -1,9 +1,24 @@
 #include "hil_bridge.h"
 
-#include <any>
+#include <cstring>
 #include <utility>
 
 namespace boat::hil {
+namespace {
+
+std::vector<std::uint8_t> EncodeCanFrame(const CanFrame& frame) {
+  std::vector<std::uint8_t> data(sizeof(frame));
+  std::memcpy(data.data(), &frame, sizeof(frame));
+  return data;
+}
+
+bool DecodeCanFrame(const std::vector<std::uint8_t>& data, CanFrame& frame) {
+  if (data.size() < sizeof(frame)) return false;
+  std::memcpy(&frame, data.data(), sizeof(frame));
+  return true;
+}
+
+}  // namespace
 
 HilBridge::HilBridge(std::shared_ptr<IHalDriver> driver, boat::core::EventBus& bus)
     : driver_(std::move(driver)), bus_(bus) {}
@@ -17,18 +32,25 @@ void HilBridge::Start() {
     if (driver_ == nullptr) {
       return;
     }
-    const CanFrame* frame = std::any_cast<CanFrame>(&event.payload);
-    if (frame == nullptr) {
+    const auto* unknown = std::get_if<boat::core::UnknownPayload>(&event.payload);
+    if (unknown == nullptr) {
       return;
     }
-    (void)driver_->WriteFrame(*frame);
+    CanFrame frame{};
+    if (!DecodeCanFrame(unknown->data, frame)) {
+      return;
+    }
+    (void)driver_->WriteFrame(frame);
   });
 
   rx_thread_ = std::thread([this]() {
     while (running_.load()) {
       CanFrame frame {};
       if (driver_ != nullptr && driver_->ReadFrame(frame)) {
-        bus_.Publish(boat::core::BusEvent{kEventTypeCanFrameRx, frame, 0});
+        bus_.Publish(boat::core::BusEvent{
+            kEventTypeCanFrameRx,
+            boat::core::UnknownPayload{kEventTypeCanFrameRx, EncodeCanFrame(frame)},
+            0});
         std::function<void(const CanFrame&)> cb;
         {
           std::lock_guard<std::mutex> lock(on_receive_mutex_);

@@ -13,17 +13,25 @@ EventBus::SubscriptionHandle EventBus::Subscribe(std::uint32_t type, HandlerFn h
   std::lock_guard<std::mutex> lock(mutex_);
   const SubscriptionHandle handle = next_handle_++;
   subscribers_[type].push_back({handle, std::move(handler)});
+  handle_to_type_[handle] = type;
   return handle;
 }
 
 void EventBus::Unsubscribe(SubscriptionHandle handle) {
   std::lock_guard<std::mutex> lock(mutex_);
-  for (auto& [type, handlers] : subscribers_) {
-    (void)type;
-    handlers.erase(std::remove_if(handlers.begin(), handlers.end(),
-                                  [handle](const HandlerEntry& entry) { return entry.handle == handle; }),
-                   handlers.end());
+  const auto it = handle_to_type_.find(handle);
+  if (it == handle_to_type_.end()) {
+    return;
   }
+  const std::uint32_t type = it->second;
+  auto& handlers = subscribers_[type];
+  handlers.erase(std::remove_if(handlers.begin(), handlers.end(),
+                                [handle](const HandlerEntry& entry) { return entry.handle == handle; }),
+                 handlers.end());
+  if (handlers.empty()) {
+    subscribers_.erase(type);
+  }
+  handle_to_type_.erase(it);
 }
 
 void EventBus::Dispatch() {

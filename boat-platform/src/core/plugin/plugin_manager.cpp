@@ -71,115 +71,156 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
     throw std::runtime_error("Plugin initialize() failed");
   }
 
+  PluginHandle handle{dl_handle, plugin, so_path, abi_version, destroy_fn, {}};
+
   // Wire the signal publisher if the plugin supports it.
   if (plugin->vtable->set_publisher != nullptr && publisher_fn_) {
-    auto* fn_copy = new SignalPublishFn(publisher_fn_);
+    auto fn_shared = std::make_shared<SignalPublishFn>(publisher_fn_);
     plugin->vtable->set_publisher(
         plugin->ctx,
         [](void* pctx, const char* signal_id, uint64_t tick, double value) {
           (*static_cast<SignalPublishFn*>(pctx))(signal_id, tick, value);
         },
-        fn_copy);
+        fn_shared.get());
+    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
 
   // Wire the CAN publisher if the plugin supports it.
   if (plugin->vtable->set_can_publisher != nullptr && can_publisher_fn_) {
-    auto* fn_copy = new CanPublishFn(can_publisher_fn_);
+    auto fn_shared = std::make_shared<CanPublishFn>(can_publisher_fn_);
     plugin->vtable->set_can_publisher(
         plugin->ctx,
         [](void* pctx, const BoatCanFrame* frame) {
           if (frame != nullptr) (*static_cast<CanPublishFn*>(pctx))(*frame);
         },
-        fn_copy);
+        fn_shared.get());
+    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
 
   // Wire the Ethernet publisher if the plugin supports it.
   if (plugin->vtable->set_eth_publisher != nullptr && eth_publisher_fn_) {
-    auto* fn_copy = new EthPublishFn(eth_publisher_fn_);
+    auto fn_shared = std::make_shared<EthPublishFn>(eth_publisher_fn_);
     plugin->vtable->set_eth_publisher(
         plugin->ctx,
         [](void* pctx, const BoatEthFrame* frame) {
           if (frame != nullptr) (*static_cast<EthPublishFn*>(pctx))(*frame);
         },
-        fn_copy);
+        fn_shared.get());
+    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
 
   // Wire the bus-signal publisher if the plugin supports it.
   if (plugin->vtable->set_bus_publisher != nullptr && bus_publisher_fn_) {
-    auto* fn_copy = new BusPublishFn(bus_publisher_fn_);
+    auto fn_shared = std::make_shared<BusPublishFn>(bus_publisher_fn_);
     plugin->vtable->set_bus_publisher(
         plugin->ctx,
         [](void* pctx, const char* name, double value) {
           (*static_cast<BusPublishFn*>(pctx))(name, value);
         },
-        fn_copy);
+        fn_shared.get());
+    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
 
   // Wire the PDU publisher if the plugin supports it.
   if (plugin->vtable->set_pdu_publisher != nullptr && pdu_publisher_fn_) {
-    auto* fn_copy = new PduPublishFn(pdu_publisher_fn_);
+    auto fn_shared = std::make_shared<PduPublishFn>(pdu_publisher_fn_);
     plugin->vtable->set_pdu_publisher(
         plugin->ctx,
         [](void* pctx, const BoatPduFrame* frame) {
           if (frame != nullptr) (*static_cast<PduPublishFn*>(pctx))(*frame);
         },
-        fn_copy);
+        fn_shared.get());
+    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
-
-  PluginHandle handle{dl_handle, plugin, so_path, abi_version, destroy_fn};
-  plugins_[handle.name] = handle;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    plugins_[handle.name] = handle;
+  }
   return handle;
 #endif
 }
 
 void PluginManager::Unload(const std::string& name) {
-  auto it = plugins_.find(name);
-  if (it == plugins_.end()) {
-    return;
+  PluginHandle handle;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = plugins_.find(name);
+    if (it == plugins_.end()) {
+      return;
+    }
+    handle = std::move(it->second);
+    plugins_.erase(it);
   }
 
 #ifndef _WIN32
-  if (it->second.plugin != nullptr) {
-    it->second.destroy_fn(it->second.plugin);
+  if (handle.plugin != nullptr) {
+    handle.destroy_fn(handle.plugin);
   }
-  if (it->second.dl_handle != nullptr) {
-    dlclose(it->second.dl_handle);
+  if (handle.dl_handle != nullptr) {
+    dlclose(handle.dl_handle);
   }
+  // publisher_contexts freed automatically when handle goes out of scope
 #endif
-  plugins_.erase(it);
 }
 
 void PluginManager::TickAll(std::uint64_t tick) {
-  for (auto& [name, handle] : plugins_) {
-    (void)name;
-    handle.plugin->vtable->on_tick(handle.plugin->ctx, tick);
+  std::vector<BoatPlugin*> snapshot;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    snapshot.reserve(plugins_.size());
+    for (auto& [name, handle] : plugins_) {
+      (void)name;
+      snapshot.push_back(handle.plugin);
+    }
+  }
+  for (auto* plugin : snapshot) {
+    plugin->vtable->on_tick(plugin->ctx, tick);
   }
 }
 
 void PluginManager::DispatchCanFrame(const BoatCanFrame& frame, const std::string& iface) {
-  for (auto& [name, handle] : plugins_) {
-    (void)name;
-    if (handle.plugin->vtable->on_can_frame != nullptr) {
-      handle.plugin->vtable->on_can_frame(handle.plugin->ctx, &frame, iface.c_str());
+  std::vector<BoatPlugin*> snapshot;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    snapshot.reserve(plugins_.size());
+    for (auto& [name, handle] : plugins_) {
+      (void)name;
+      snapshot.push_back(handle.plugin);
+    }
+  }
+  for (auto* plugin : snapshot) {
+    if (plugin->vtable->on_can_frame != nullptr) {
+      plugin->vtable->on_can_frame(plugin->ctx, &frame, iface.c_str());
     }
   }
 }
 
 void PluginManager::DispatchEthFrame(const BoatEthFrame& frame, const std::string& iface) {
-  for (auto& [name, handle] : plugins_) {
-    (void)name;
-    if (handle.plugin->vtable->on_eth_frame != nullptr) {
-      handle.plugin->vtable->on_eth_frame(handle.plugin->ctx, &frame, iface.c_str());
+  std::vector<BoatPlugin*> snapshot;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    snapshot.reserve(plugins_.size());
+    for (auto& [name, handle] : plugins_) {
+      (void)name;
+      snapshot.push_back(handle.plugin);
+    }
+  }
+  for (auto* plugin : snapshot) {
+    if (plugin->vtable->on_eth_frame != nullptr) {
+      plugin->vtable->on_eth_frame(plugin->ctx, &frame, iface.c_str());
     }
   }
 }
 
 void PluginManager::ShutdownAll() {
   std::vector<std::string> names;
-  names.reserve(plugins_.size());
-  for (const auto& [name, handle] : plugins_) {
-    (void)handle;
-    names.push_back(name);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    names.reserve(plugins_.size());
+    for (const auto& [name, handle] : plugins_) {
+      (void)handle;
+      names.push_back(name);
+    }
   }
   for (const auto& name : names) {
     Unload(name);
@@ -187,6 +228,7 @@ void PluginManager::ShutdownAll() {
 }
 
 std::vector<std::string> PluginManager::List() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   std::vector<std::string> names;
   names.reserve(plugins_.size());
   for (const auto& [name, handle] : plugins_) {

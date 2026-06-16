@@ -1,6 +1,5 @@
 #include "metrics_service_impl.h"
 
-#include <any>
 #include <chrono>
 #include <cstring>
 #include <mutex>
@@ -42,11 +41,14 @@ grpc::Status MetricsServiceImpl::StreamMetrics(grpc::ServerContext* context, con
   std::mutex metrics_mutex;
   std::vector<boat::v1::MetricPoint> pending;
 
-  const auto handle = ctx_.event_bus.Subscribe(kMetricEventType, [&](const boat::core::BusEvent& event) {
+  const auto handle = ctx_.sim.event_bus().Subscribe(kMetricEventType, [&](const boat::core::BusEvent& event) {
     boat::v1::MetricPoint point;
     point.set_tick(event.tick);
-    if (event.payload.type() == typeid(boat::v1::MetricPoint)) {
-      point = std::any_cast<boat::v1::MetricPoint>(event.payload);
+    if (const auto* unknown = std::get_if<boat::core::UnknownPayload>(&event.payload)) {
+      if (!point.ParseFromArray(unknown->data.data(), static_cast<int>(unknown->data.size()))) {
+        point.set_name("metric");
+        point.set_value(0.0);
+      }
     } else {
       point.set_name("metric");
       point.set_value(0.0);
@@ -69,7 +71,7 @@ grpc::Status MetricsServiceImpl::StreamMetrics(grpc::ServerContext* context, con
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
-  ctx_.event_bus.Unsubscribe(handle);
+  ctx_.sim.event_bus().Unsubscribe(handle);
   return grpc::Status::OK;
 }
 
