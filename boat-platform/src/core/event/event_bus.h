@@ -1,18 +1,34 @@
 #pragma once
 
-#include <any>
 #include <cstdint>
 #include <functional>
 #include <mutex>
 #include <queue>
+#include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace boat::core {
 
+/* Payload for types that cross layer boundaries (CAN/ETH frames, protobuf, …).
+   type_tag discriminates the original type; data holds the serialized bytes. */
+struct UnknownPayload {
+  std::uint32_t type_tag;
+  std::vector<std::uint8_t> data;
+};
+
+using BusEventPayload = std::variant<
+    std::monostate,
+    std::int64_t,
+    double,
+    std::string,
+    UnknownPayload
+>;
+
 struct BusEvent {
   std::uint32_t type;
-  std::any payload;
+  BusEventPayload payload;
   std::uint64_t tick;
 };
 
@@ -35,6 +51,7 @@ class EventBus {
   std::mutex mutex_;
   std::queue<BusEvent> queue_;
   std::unordered_map<std::uint32_t, std::vector<HandlerEntry>> subscribers_;
+  std::unordered_map<SubscriptionHandle, std::uint32_t> handle_to_type_;
   SubscriptionHandle next_handle_{1};
 };
 

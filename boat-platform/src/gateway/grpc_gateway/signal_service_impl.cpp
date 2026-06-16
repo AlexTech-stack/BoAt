@@ -50,7 +50,7 @@ grpc::Status SignalServiceImpl::InjectSignal(grpc::ServerContext*, const boat::v
     case boat::v1::SignalValue::VALUE_NOT_SET:
       return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "signal value is required");
   }
-  ctx_.signal_router.Publish(event);
+  ctx_.sim.signal_router().Publish(event);
   response->set_accepted(true);
   return grpc::Status::OK;
 }
@@ -71,7 +71,7 @@ grpc::Status SignalServiceImpl::SubscribeSignals(grpc::ServerContext* context,
         .tick_max = std::nullopt,
         .comparator = [name](const boat::core::SignalEvent&) { return !name.empty(); },
     };
-    auto handle = ctx_.signal_router.Subscribe(
+    auto handle = ctx_.sim.signal_router().Subscribe(
         signal_id, std::move(predicate),
         [&queue_mutex, &queue, name](const boat::core::SignalEvent& event) {
           boat::v1::SignalValue value;
@@ -107,7 +107,7 @@ grpc::Status SignalServiceImpl::SubscribeSignals(grpc::ServerContext* context,
   }
 
   for (const auto handle : handles) {
-    ctx_.signal_router.Unsubscribe(handle);
+    ctx_.sim.signal_router().Unsubscribe(handle);
   }
   return grpc::Status::OK;
 }

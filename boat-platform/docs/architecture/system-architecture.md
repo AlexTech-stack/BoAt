@@ -51,15 +51,13 @@
 
 | Component | Language | Responsibility |
 |---|---|---|
-| `boat-core` | C++20 | Tick scheduler, signal router, determinism engine |
+| `boat-core` | C++20 | Tick scheduler, signal router, determinism engine, SimulationContext |
 | `boat-plugin-sdk` | C++20 + C ABI | Plugin interface, lifecycle hooks |
-| `boat-gateway` | C++20 / Go | gRPC server, auth, transcoding |
-| `boat-agent` | C++20 | Unix socket control daemon per simulation instance |
+| `boat-gateway` | C++20 | gRPC server, all service implementations |
 | `boat-store` | C++20 | Event/trace persistence, query engine |
 | `boat-replay` | C++20 | Deterministic replay engine |
-| `boat-hil` | C++20 | HIL bridge, hardware driver abstraction |
+| `boat-hil` | C++20 | HIL bridge, CAN/Ethernet driver abstraction, PDU router |
 | `boat-py` | Python 3.11+ | Python SDK, gRPC stubs, test helpers |
-| `boat-cli` | Python / Rust | Command-line interface |
-| `boat-dashboard` | TypeScript/React | Web observability dashboard |
-| `boat-ai` | Python | LLM-assisted test generation, anomaly detection |
+| `boat-cli` | Python | Command-line interface for all gateway services |
+| `boat-ui` | Python (FastAPI) | 10 standalone web dashboards (launcher, dashboard, commander, etc.) |
 

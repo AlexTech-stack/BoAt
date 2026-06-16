@@ -11,10 +11,7 @@
 #include "boat/v1/scenario.grpc.pb.h"
 #include "boat/v1/signal.grpc.pb.h"
 #include "boat/v1/simulation.grpc.pb.h"
-#include "determinism/determinism_engine.h"
-#include "event/event_bus.h"
 #include "event_store/event_store.h"
-#include "fault/fault_injector.h"
 #include "gateway/grpc_gateway/gateway_context.h"
 #include "gateway/grpc_gateway/pdu_service_impl.h"
 #include "gateway/grpc_gateway/scenario_service_impl.h"
@@ -23,14 +20,10 @@
 #include "can_bus_registry.h"
 #include "ethernet_bus_registry.h"
 #include "pdu/pdu_router.h"
-#include "plugin/plugin_manager.h"
 #include "gateway/grpc_gateway/rpc_audit_log.h"
 #include "replay_engine/replay_engine.h"
 #include "scenario/scenario_loader.h"
-#include "scheduler/sim_clock.h"
-#include "scheduler/tick_scheduler.h"
-#include "signal/signal_router.h"
-#include "state/sim_state_machine.h"
+#include "simulation/simulation_context.h"
 #include "trace_store/trace_store.h"
 
 TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[integration][gateway]") {
@@ -41,32 +34,21 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   std::filesystem::remove(event_db_path);
   std::filesystem::remove(trace_db_path);
 
-  boat::core::SimClock clock(777);
-  boat::core::DeterminismEngine determinism(777);
-  boat::core::EventBus event_bus;
-  boat::core::SignalRouter signal_router;
-  boat::core::FaultInjector fault_injector(determinism);
-  boat::core::SimStateMachine state_machine;
-  boat::core::PluginManager plugin_manager;
-  boat::core::TickScheduler scheduler(clock, event_bus, determinism, 2);
+  boat::core::SimulationContext sim(777, 2);
+  boat::core::SignalBus signal_bus;
   boat::core::ScenarioLoader scenario_loader;
   boat::store::SqliteEventStore event_store(event_db_path.string());
   boat::store::FlatFileTraceStore trace_store(trace_db_path.string());
-  boat::replay::ReplayController replay_controller(trace_store, event_store, event_bus);
+  boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
   boat::hil::CanBusRegistry can_registry;  // no interfaces opened in unit tests
   boat::hil::EthernetBusRegistry eth_registry;
   boat::hil::PduRouter pdu_router(can_registry, eth_registry);
   boat::gateway::RpcAuditLog audit_log;
-  signal_router.SetFaultInjector(&fault_injector);
+  sim.signal_router().SetFaultInjector(&sim.fault_injector());
 
   boat::gateway::GatewayContext ctx{
-      .sim_state_machine = state_machine,
-      .sim_clock = clock,
-      .tick_scheduler = scheduler,
-      .event_bus = event_bus,
-      .signal_router = signal_router,
-      .plugin_manager = plugin_manager,
-      .fault_injector = fault_injector,
+      .sim = sim,
+      .signal_bus = signal_bus,
       .scenario_loader = scenario_loader,
       .event_store = event_store,
       .trace_store = trace_store,
@@ -79,7 +61,7 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
 
   boat::gateway::PduServiceImpl pdu_service(ctx);
   boat::gateway::ScenarioServiceImpl scenario_service(ctx);
-  boat::gateway::SimulationServiceImpl simulation_service(ctx);
+  boat::gateway::SimulationServiceImpl simulation_service(sim, can_registry, eth_registry);
   boat::gateway::SignalServiceImpl signal_service(ctx);
 
   grpc::ServerBuilder builder;
@@ -132,7 +114,7 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   boat::v1::SimulationResponse step_response;
   grpc::ClientContext step_ctx;
   REQUIRE(simulation_stub->StepSimulation(&step_ctx, step_request, &step_response).ok());
-  REQUIRE(clock.tick() >= 1000);
+  REQUIRE(sim.clock().tick() >= 1000);
 
   boat::v1::StopSimulationRequest stop_request;
   stop_request.set_simulation_id(simulation_id);
@@ -288,7 +270,7 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   }
 
   server->Shutdown();
-  scheduler.Stop();
+  sim.scheduler().Stop();
   std::filesystem::remove("boat_config.db");
   std::filesystem::remove(event_db_path);
   std::filesystem::remove(trace_db_path);

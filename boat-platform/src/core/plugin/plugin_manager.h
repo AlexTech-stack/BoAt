@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "boat/plugin.h"
@@ -16,6 +18,9 @@ struct PluginHandle {
   std::string name;
   std::uint32_t abi_version;
   boat_plugin_destroy_fn destroy_fn;
+  /* Holds shared ownership of heap-allocated publisher trampoline contexts.
+     Freed automatically when the handle is destroyed (on Unload). */
+  std::vector<std::shared_ptr<void>> publisher_contexts;
 };
 
 /* Signature used inside the core layer to route a signal value to wherever
@@ -68,7 +73,8 @@ class PluginManager {
   [[nodiscard]] std::vector<std::string> List() const;
 
  private:
-  std::unordered_map<std::string, PluginHandle> plugins_;
+  mutable std::mutex mutex_;
+  std::map<std::string, PluginHandle> plugins_;
   SignalPublishFn publisher_fn_;
   CanPublishFn can_publisher_fn_;
   EthPublishFn eth_publisher_fn_;

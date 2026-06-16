@@ -9,6 +9,7 @@ add_library(boat_core STATIC
   determinism/determinism_engine.cpp
   fault/fault_injector.cpp
   scenario/scenario_loader.cpp
+  simulation/simulation_context.cpp
 )
 
 target_include_directories(boat_core PUBLIC

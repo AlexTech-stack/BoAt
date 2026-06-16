@@ -33,7 +33,7 @@ PluginServiceImpl::PluginServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
 grpc::Status PluginServiceImpl::RegisterPlugin(grpc::ServerContext*, const boat::v1::RegisterPluginRequest* request,
                                                boat::v1::PluginResponse* response) {
   try {
-    const auto handle = ctx_.plugin_manager.Load(request->path(), "{}");
+    const auto handle = ctx_.sim.plugin_manager().Load(request->path(), "{}");
     auto* plugin = response->mutable_plugin();
     plugin->set_plugin_id(handle.name);
     plugin->set_name(handle.name);
@@ -50,7 +50,7 @@ grpc::Status PluginServiceImpl::RegisterPlugin(grpc::ServerContext*, const boat:
 grpc::Status PluginServiceImpl::ListPlugins(grpc::ServerContext*, const boat::v1::ListPluginsRequest* request,
                                             boat::v1::ListPluginsResponse* response) {
   try {
-    const auto plugins = ctx_.plugin_manager.List();
+    const auto plugins = ctx_.sim.plugin_manager().List();
     const std::size_t offset = ParseToken(request->page().page_token());
     const std::size_t page_size = request->page().page_size() == 0 ? plugins.size() : request->page().page_size();
     const std::size_t end = std::min(plugins.size(), offset + page_size);
@@ -76,7 +76,7 @@ grpc::Status PluginServiceImpl::ListPlugins(grpc::ServerContext*, const boat::v1
 grpc::Status PluginServiceImpl::GetPluginInfo(grpc::ServerContext*, const boat::v1::GetPluginInfoRequest* request,
                                               boat::v1::PluginResponse* response) {
   try {
-    const auto plugins = ctx_.plugin_manager.List();
+    const auto plugins = ctx_.sim.plugin_manager().List();
     const auto it = std::find(plugins.begin(), plugins.end(), request->plugin_id());
     if (it == plugins.end()) {
       return grpc::Status(grpc::StatusCode::NOT_FOUND, "plugin not found");
@@ -97,7 +97,7 @@ grpc::Status PluginServiceImpl::GetPluginInfo(grpc::ServerContext*, const boat::
 grpc::Status PluginServiceImpl::UnloadPlugin(grpc::ServerContext*, const boat::v1::UnloadPluginRequest* request,
                                              boat::v1::UnloadPluginResponse* response) {
   try {
-    ctx_.plugin_manager.Unload(request->plugin_id());
+    ctx_.sim.plugin_manager().Unload(request->plugin_id());
     response->set_unloaded(true);
     return grpc::Status::OK;
   } catch (const std::exception& ex) {

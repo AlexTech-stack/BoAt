@@ -5,6 +5,14 @@
 
 namespace boat::core {
 
+/* Seeds a Mersenne Twister PRNG with (seed_ ⊕ tick) at the start of every
+   simulation tick.  This guarantees bit-identical random sequences across
+   runs and environments for the same (seed, tick) pair.
+
+   Thread-safety: NOT thread-safe.  Must be called from the coordinator
+   thread only (see TickScheduler::ExecuteTick).
+
+   Used by: FaultInjector noise amplitude, plugin random decisions. */
 class DeterminismEngine {
  public:
   explicit DeterminismEngine(std::uint64_t seed);

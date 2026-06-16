@@ -19,9 +19,6 @@
 #include "ethernet_service_impl.h"
 #include "rpc_audit_interceptor.h"
 #include "rpc_audit_log.h"
-#include "determinism/determinism_engine.h"
-#include "event/event_bus.h"
-#include "fault/fault_injector.h"
 #include "fault_service_impl.h"
 #include "gateway_context.h"
 #include "hil/virtual/virtual_can_driver.h"
@@ -38,13 +35,10 @@
 #include "replay_service_impl.h"
 #include "scenario/scenario_loader.h"
 #include "scenario_service_impl.h"
-#include "scheduler/sim_clock.h"
-#include "scheduler/tick_scheduler.h"
+#include "simulation/simulation_context.h"
 #include "signal/signal_bus.h"
-#include "signal/signal_router.h"
 #include "signal_service_impl.h"
 #include "simulation_service_impl.h"
-#include "state/sim_state_machine.h"
 #include "event_store/event_store.h"
 #include "trace_store/trace_store.h"
 #include "trace_service_impl.h"
@@ -67,19 +61,12 @@ void HandleSignal(int) {
 
 int main() {
   boat::gateway::RpcAuditLog audit_log;
-  boat::core::SimClock clock(0);
   // Gateway bootstrap uses a fixed seed so startup behavior is deterministic across environments.
-  boat::core::DeterminismEngine determinism(kGatewayDeterminismSeed);
-  boat::core::EventBus event_bus;
-  boat::core::SignalRouter signal_router;
+  boat::core::SimulationContext sim(kGatewayDeterminismSeed);
   boat::core::SignalBus signal_bus;
-  boat::core::FaultInjector fault_injector(determinism);
-  boat::core::SimStateMachine state_machine;
-  boat::core::PluginManager plugin_manager;
-  boat::core::TickScheduler scheduler(clock, event_bus, determinism);
   boat::store::SqliteEventStore event_store("boat_events.db");
   boat::store::FlatFileTraceStore trace_store("boat_traces.db");
-  boat::replay::ReplayController replay_controller(trace_store, event_store, event_bus);
+  boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
   boat::core::ScenarioLoader scenario_loader;
 
   // Build Ethernet bus registry from BOAT_ETH_INTERFACES (comma-separated).
@@ -150,7 +137,7 @@ int main() {
 
       // Capture info before driver is moved into the registry.
       auto info = driver->GetInfo();
-      if (can_registry.Add(iface, std::move(driver), event_bus)) {
+      if (can_registry.Add(iface, std::move(driver), sim.event_bus())) {
         std::fprintf(stderr, "[Gateway] Registered CAN interface '%s' "
                      "(driver=%s, fd=%s, state=%s)\n",
                      iface.c_str(),
@@ -273,13 +260,8 @@ int main() {
   }
 
   boat::gateway::GatewayContext ctx{
-      .sim_state_machine = state_machine,
-      .sim_clock = clock,
-      .tick_scheduler = scheduler,
-      .event_bus = event_bus,
-      .signal_router = signal_router,
-      .plugin_manager = plugin_manager,
-      .fault_injector = fault_injector,
+      .sim = sim,
+      .signal_bus = signal_bus,
       .scenario_loader = scenario_loader,
       .event_store = event_store,
       .trace_store = trace_store,
@@ -292,7 +274,7 @@ int main() {
 
   boat::gateway::BusServiceImpl      bus_impl(audit_log, signal_bus);
   boat::gateway::EthernetServiceImpl ethernet_impl(ctx);
-  boat::gateway::SimulationServiceImpl simulation_impl(ctx);
+  boat::gateway::SimulationServiceImpl simulation_impl(sim, can_registry, eth_registry);
   boat::gateway::SignalServiceImpl signal_impl(ctx);
   boat::gateway::ScenarioServiceImpl scenario_impl(ctx);
   boat::gateway::ReplayServiceImpl replay_impl(ctx);
@@ -328,14 +310,14 @@ int main() {
   builder.RegisterService(&debug_impl);
 
   g_server = builder.BuildAndStart();
-  g_scheduler = &scheduler;
+  g_scheduler = &sim.scheduler();
   std::signal(SIGINT, HandleSignal);
   std::signal(SIGTERM, HandleSignal);
 
   if (g_server) {
     g_server->Wait();
   }
-  scheduler.Stop();
+  sim.scheduler().Stop();
   g_node_tick_running.store(false, std::memory_order_release);
   node_manager.ShutdownAll();
   eth_registry.StopAll();

@@ -38,6 +38,8 @@ void TickScheduler::Pause() {
   paused_.store(true, std::memory_order_release);
   // Wake any ExecuteTick waiting for task completion so it can exit cleanly.
   pending_cv_.notify_all();
+  // Wake workers waiting on work_cv_ so they see the paused flag.
+  work_cv_.notify_all();
 }
 
 void TickScheduler::Resume() {
@@ -61,6 +63,7 @@ void TickScheduler::Stop() {
   }
 
   pause_cv_.notify_all();
+  work_cv_.notify_all();
   pending_cv_.notify_all();
   if (coordinator_.joinable()) {
     coordinator_.join();
@@ -109,7 +112,7 @@ bool TickScheduler::EnqueueTask(std::function<void()> task) {
     std::lock_guard<std::mutex> lock(local_queue_mutexes_[worker]);
     local_queues_[worker].push_back(std::move(task));
   }
-  pause_cv_.notify_all();
+  work_cv_.notify_one();
   return true;
 }
 
@@ -130,7 +133,42 @@ void TickScheduler::ExecuteTick(std::uint64_t tick) {
     // Task not completed (paused or stopped) — abandon without advancing state.
     return;
   }
-  // Order is deterministic: seed RNG, dispatch queued events, then advance clock.
+  // ── Deterministic Tick Pipeline ──────────────────────────────────────
+  //
+  // Every simulation tick executes these steps in strict order.  New
+  // features MUST fit into one of these steps rather than introducing
+  // new execution phases outside the pipeline.
+  //
+  //   1. determinism_.BeforeTick(tick)
+  //      Seed the RNG with seed ⊕ tick so that every (seed, tick) pair
+  //      produces an identical random sequence regardless of host timing.
+  //
+  //   2. event_bus_.Dispatch()
+  //      Drain all events queued since the last tick (published by replay,
+  //      HIL bridges, IPC, or plugin callbacks).  Events are dispatched
+  //      in FIFO order to handlers that subscribed to each event type.
+  //
+  //      ⚠ Handlers run synchronously on this thread.  A blocking handler
+  //        stalls the entire pipeline.
+  //
+  //   3. PluginManager::TickAll(tick)  (via on_tick_hook_)
+  //      Invoke every loaded plugin's on_tick callback in deterministic
+  //      order (plugins_ is a std::map sorted by .so path).  Each plugin
+  //      may publish signals, CAN frames, ETH frames, PDU frames, or
+  //      bus-signal values.  Those outputs are queued for the next tick's
+  //      Dispatch() — they do NOT take effect immediately.
+  //
+  //   4. clock_.Step()
+  //      Advance the simulation tick counter.  This is the only place
+  //      tick is incremented.  clock_.tick() is stable for the entire
+  //      duration of steps 1-3.
+  //
+  // Steps 1-4 are identical for coordinator-driven ticks (ExecuteTick)
+  // and for manual stepping (ExecuteTickSynchronously).  The only
+  // difference is that ExecuteTick inserts a worker-pool barrier between
+  // enqueue and step 1 so that any prior tick's background work has
+  // completed before we start the next tick.
+  // ──────────────────────────────────────────────────────────────────────
   determinism_.BeforeTick(tick);
   event_bus_.Dispatch();
   clock_.Step();
@@ -221,7 +259,14 @@ void TickScheduler::WorkerLoop(std::size_t worker_index) {
     }
 
     if (!got_task) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      {
+        std::unique_lock<std::mutex> lock(work_mutex_);
+        work_cv_.wait(lock, [this] {
+          return !running_.load(std::memory_order_acquire) ||
+                 paused_.load(std::memory_order_acquire) ||
+                 pending_tasks_.load(std::memory_order_acquire) > 0;
+        });
+      }
       continue;
     }
 
