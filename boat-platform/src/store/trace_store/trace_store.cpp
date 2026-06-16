@@ -94,6 +94,51 @@ void FlatFileTraceStore::WriteTrace(const TraceRecord& meta, std::span<const std
   sqlite3_finalize(stmt);
 }
 
+void FlatFileTraceStore::AppendTraceRecord(const TraceRecord& meta,
+                                            std::span<const std::uint8_t> record_data) {
+  const int fd = open(meta.storage_path.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0644);
+  if (fd < 0) {
+    throw std::runtime_error("failed to open trace file for append");
+  }
+
+  std::size_t written = 0;
+  while (written < record_data.size()) {
+    const ssize_t chunk = write(fd, record_data.data() + written, record_data.size() - written);
+    if (chunk <= 0) {
+      close(fd);
+      throw std::runtime_error("failed to append trace record");
+    }
+    written += static_cast<std::size_t>(chunk);
+  }
+  close(fd);
+
+  struct stat file_stat{};
+  if (stat(meta.storage_path.c_str(), &file_stat) != 0) {
+    throw std::runtime_error("failed to stat appended trace file");
+  }
+
+  constexpr const char* kUpsertSql =
+      "INSERT OR REPLACE INTO traces "
+      "(id, simulation_id, start_tick, end_tick, format, storage_path, size_bytes) "
+      "VALUES (?, ?, ?, ?, ?, ?, ?);";
+  sqlite3_stmt* stmt = nullptr;
+  if (sqlite3_prepare_v2(db_, kUpsertSql, -1, &stmt, nullptr) != SQLITE_OK) {
+    throw std::runtime_error("failed to prepare trace index upsert");
+  }
+  sqlite3_bind_text(stmt, 1, meta.id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 2, meta.simulation_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(meta.start_tick));
+  sqlite3_bind_int64(stmt, 4, static_cast<sqlite3_int64>(meta.end_tick));
+  sqlite3_bind_int(stmt, 5, static_cast<int>(meta.format));
+  sqlite3_bind_text(stmt, 6, meta.storage_path.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 7, static_cast<sqlite3_int64>(file_stat.st_size));
+  if (sqlite3_step(stmt) != SQLITE_DONE) {
+    sqlite3_finalize(stmt);
+    throw std::runtime_error("failed to persist trace index after append");
+  }
+  sqlite3_finalize(stmt);
+}
+
 std::span<const std::uint8_t> FlatFileTraceStore::ReadTraceMmap(const std::string& trace_id) {
   constexpr const char* kSelectSql = "SELECT storage_path FROM traces WHERE id = ?;";
   sqlite3_stmt* stmt = nullptr;
