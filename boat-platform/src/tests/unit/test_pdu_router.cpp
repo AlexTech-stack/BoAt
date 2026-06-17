@@ -559,17 +559,25 @@ TEST_CASE("TransmissionEngine schedules cyclic send", "[unit][pdu][txengine]") {
   // No tick yet → nothing sent
   REQUIRE(send_count == 0);
 
-  // Tick at t=100 → should fire
+  // Tick at t=100 → initialises schedule without sending
   engine.OnTick(100);
+  REQUIRE(send_count == 0);
+
+  // Tick at t=199 → before first period → should not fire
+  engine.OnTick(199);
+  REQUIRE(send_count == 0);
+
+  // Tick at t=200 → first period → should fire
+  engine.OnTick(200);
   REQUIRE(send_count == 1);
   REQUIRE(last_id == 42);
 
-  // Tick at t=199 → before next period → should not fire
-  engine.OnTick(199);
+  // Tick at t=299 → before next period → should not fire
+  engine.OnTick(299);
   REQUIRE(send_count == 1);
 
-  // Tick at t=200 → next period → should fire
-  engine.OnTick(200);
+  // Tick at t=300 → next period → should fire
+  engine.OnTick(300);
   REQUIRE(send_count == 2);
 }
 
@@ -631,18 +639,19 @@ TEST_CASE("TransmissionEngine Mixed mode sends cyclic + OnChange", "[unit][pdu][
   });
 
   engine.ConfigureSchedule(42, sched);
-  engine.UpdatePayload(42, {0xAA});  // no OnChange yet since first payload
+  engine.UpdatePayload(42, {0xAA});  // first set triggers OnChange send, schedules 2 reps
 
-  // Cyclic tick
+  // Cyclic tick at t=100 initialises the schedule without sending;
+  // reps from the first OnChange fire here
   engine.OnTick(100);
-  REQUIRE(send_count >= 1);
+  REQUIRE(send_count == 2);  // 1 OnChange + 1 rep
 
-  // Change payload → immediate + reps
+  // Change payload → immediate + re-scheduled reps
   engine.UpdatePayload(42, {0xBB});
   // immediate send, now tick reps
   engine.OnTick(110);
   engine.OnTick(120);
-  // count: 1(first UpdatePayload, initial change) + 1(cyclic 100) + 1(OnChange resend) + 2(reps) = 5
+  // count: 1(first OnChange) + 1(rep) + 1(second OnChange) + 2(reps) = 5
   REQUIRE(send_count == 5);
 }
 
@@ -678,6 +687,11 @@ TEST_CASE("PduRouter OnTick triggers cyclic send from configured route", "[unit]
   // Manually send to set the payload for the engine
   REQUIRE(f.router.SendPdu(0x100, {0xAA}));
 
+  // First OnTick initialises the schedule without sending
   f.router.OnTick(50);
-  REQUIRE(f.mock_can->written.size() >= 2);  // initial send + tick
+  REQUIRE(f.mock_can->written.size() == 1);  // only the manual send
+
+  // Second OnTick at (50+50)=100 → first cycle fires
+  f.router.OnTick(100);
+  REQUIRE(f.mock_can->written.size() >= 2);  // manual send + tick
 }
