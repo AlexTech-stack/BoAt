@@ -12,7 +12,7 @@ void TransmissionEngine::ConfigureSchedule(uint32_t pdu_id,
   std::lock_guard<std::mutex> lock(mutex_);
   ScheduleState state;
   state.schedule      = schedule;
-  state.next_tick_ms  = 0;
+  state.next_tick_ms  = kTickNotScheduled;
   state.remaining_reps = 0;
   states_[pdu_id]     = std::move(state);
 }
