@@ -4,11 +4,11 @@ import typer
 
 from boat.client import BoAtClient
 
+from .ai import ai_app
 from .can import can_app
 from .can_tp import can_tp_app
 from .db import db_app
 from .eth import eth_app
-from .gen import gen_app
 from .pdu import pdu_app
 from .plugin import plugin_app
 from .replay import replay_app
@@ -19,6 +19,7 @@ from .trace import trace_app
 
 app = typer.Typer()
 
+app.add_typer(ai_app,       name="ai",    help="AI-powered assistants (scenario, bus-setup, cli, plugin).")
 app.add_typer(sim_app,      name="sim")
 app.add_typer(scenario_app, name="scenario")
 app.add_typer(replay_app,   name="replay")
@@ -28,7 +29,6 @@ app.add_typer(can_tp_app,   name="can-tp")
 app.add_typer(eth_app,      name="eth")
 app.add_typer(pdu_app,      name="pdu",  help="PDU routing and transmission.")
 app.add_typer(db_app,       name="db",   help="PDU database inspection.")
-app.add_typer(gen_app,      name="gen")
 app.add_typer(test_app,     name="test",  help="Run tests and inspect test configurations.")
 app.add_typer(trace_app,    name="trace")
 
