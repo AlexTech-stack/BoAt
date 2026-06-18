@@ -14,7 +14,7 @@ BoAt is a tick-based simulation gateway that bridges virtual and physical CAN/Et
 
 - **Deterministic core** — Tick-based scheduler with seeded determinism guarantees bit-identical replay across runs and environments.
 - **CAN & Ethernet HIL** — Supports both virtual (`vcan*`) and physical CAN interfaces (PEAK PCAN, Kvaser, gs_usb) via SocketCAN, plus virtual Ethernet over UDP multicast.
-- **Plugin SDK** — C ABI v6 plugin interface with `on_tick`, `on_can_frame`, `on_eth_frame` hooks. Load `.so` plugins at runtime. Built-in plugins: vehicle dynamics, sensor simulation, CAN transport protocol (ISO 15765-2), SOME/IP middleware.
+- **Plugin SDK** — C ABI v7 plugin interface with `on_tick`, `on_can_frame`, `on_eth_frame` hooks. `BOAT_CAN_FLAG_SELF_SENT` (0x08) tags internally-dispatched frames to prevent self-loop. Load `.so` plugins at runtime. Built-in plugins: vehicle dynamics, sensor simulation, CAN transport protocol (ISO 15765-2), SOME/IP middleware.
 - **Dual PluginManager architecture** — Two independent `PluginManager` instances run concurrently: a simulation-scoped manager (driven by the tick scheduler during simulation runs) and an always-on node manager (driven by its own independent tick thread for persistent plugins like CAN-TP). Both managers use the same ABI but serve different lifetimes.
 - **gRPC API** — 15 protobuf services: Simulation, Signal, Scenario, Replay, Fault, Metrics, Trace, CAN, Ethernet, PDU, Plugin, Debug, and the always-on BusService.
 - **Python SDK + CLI** — `boat-py` package with `BoAtClient`, `CanNode`, `PduNode` classes. `boat-cli` with commands for sim, scenario, CAN, PDU, CAN-TP, replay, trace, and plugin management.

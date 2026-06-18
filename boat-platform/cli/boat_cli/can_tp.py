@@ -107,7 +107,7 @@ def can_tp_send(
     resolved_id = int(nsdu_id, 0)
     payload = bytes.fromhex(data.replace(":", "").replace(" ", ""))
 
-    if len(payload) <= 7:
+    if len(payload) <= can_dlc - 1:
         print_table(
             ["nsdu_id", "len", "note"],
             [[f"0x{resolved_id:X}", len(payload),

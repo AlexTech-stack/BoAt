@@ -24,7 +24,7 @@
   - `proto/boat/v1/` — 15 protobuf definitions defining all gRPC services
   - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, CAN/ETH nodes, trace tools)
   - `sdk/cpp/include/boat/` — C++ SDK headers
-    - `plugin.h` — Plugin ABI (v6: +set_pdu_publisher)
+    - `plugin.h` — Plugin ABI v7 (BOAT_CAN_FLAG_SELF_SENT, per-interface CAN publish)
     - `can_tp.h` — Standalone CanTp C API (can_tp_send, can_tp_configure)
     - `someip.h` — SOME/IP protocol constants
   - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|can|eth|pdu|can-tp|...`)

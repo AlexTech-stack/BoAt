@@ -17,7 +17,7 @@ You are the plugin SDK agent for the BoAt platform. You handle plugin developmen
 
 Location: `boat-platform/sdk/cpp/include/boat/plugin.h`
 
-ABI version: 5. Key types and callbacks:
+ABI version: 7. Key types and callbacks:
 - `BoatPublishFn` — publish a numeric signal value (signal_id, tick, value)
 - `BoatCanPublishFn` — publish raw CAN frame
 - `BoatCanReceiveFn` — receive CAN frame callback
