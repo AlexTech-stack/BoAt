@@ -40,8 +40,12 @@ struct NsduConnection {
   uint32_t tx_offset{0};
   uint8_t  tx_seq{0};
   uint8_t  tx_bs_remaining{0};    // BS remaining before needing next FC
+  uint8_t  tx_bs_original{0};     // BS from the received FC (0 = unlimited)
   uint32_t tx_stmin_us{0};        // STmin from peer in microseconds
   std::chrono::steady_clock::time_point tx_next_send_time;
+
+  // RX CF tracking for re-FC (BS > 0)
+  uint32_t rx_cf_count{0};
 };
 
 /* CanTp plugin state. */

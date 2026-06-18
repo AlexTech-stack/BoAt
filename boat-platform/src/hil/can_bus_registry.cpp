@@ -1,5 +1,7 @@
 #include "can_bus_registry.h"
 
+#include <boat/plugin.h>
+
 #include <utility>
 
 namespace boat::hil {
@@ -36,10 +38,11 @@ bool CanBusRegistry::SendFrame(const std::string& iface, const CanFrame& frame) 
     }
     it->second.bridge->SendFrame(frame);
   }
-  // Dispatch directly so gRPC subscribers see sent frames without socket loopback.
-  // Lock must be released first: subscriber callbacks may re-enter SendFrame/SendFrameAll
-  // (e.g. a C++ plugin that reacts and sends a response).
-  DispatchRx(frame, iface);
+  // Tag as self-sent so subscribers (especially plugins) can distinguish
+  // internally-dispatched loopback from frames received from the wire.
+  CanFrame self = frame;
+  self.flags |= BOAT_CAN_FLAG_SELF_SENT;
+  DispatchRx(self, iface);
   return true;
 }
 
@@ -53,8 +56,10 @@ void CanBusRegistry::SendFrameAll(const CanFrame& frame) {
       dispatched_ifaces.push_back(name);
     }
   }
+  CanFrame self = frame;
+  self.flags |= BOAT_CAN_FLAG_SELF_SENT;
   for (const auto& iface : dispatched_ifaces) {
-    DispatchRx(frame, iface);
+    DispatchRx(self, iface);
   }
 }
 

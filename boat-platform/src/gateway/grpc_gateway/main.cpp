@@ -156,12 +156,17 @@ int main() {
   // startup and run independently of any simulation lifecycle.
   boat::core::PluginManager node_manager;
   {
-    node_manager.SetCanPublisher([&can_registry](const BoatCanFrame& f) {
+    node_manager.SetCanPublisher([&can_registry](const BoatCanFrame& f,
+                                                 const std::string& plugin_iface) {
       boat::hil::CanFrame frame{};
       frame.can_id = f.can_id;
       frame.dlc    = f.dlc;
       std::memcpy(frame.data, f.data, f.dlc);
-      can_registry.SendFrameAll(frame);
+      if (!plugin_iface.empty()) {
+        can_registry.SendFrame(plugin_iface, frame);
+      } else {
+        can_registry.SendFrameAll(frame);
+      }
     });
     // Dispatch incoming CAN frames to all loaded nodes.
     can_registry.Subscribe("", [&node_manager](const boat::hil::CanFrame& f,
@@ -169,6 +174,7 @@ int main() {
       BoatCanFrame bf{};
       bf.can_id = f.can_id;
       bf.dlc    = f.dlc;
+      bf.flags  = f.flags;
       std::memcpy(bf.data, f.data, f.dlc);
       node_manager.DispatchCanFrame(bf, iface);
     });
@@ -188,15 +194,22 @@ int main() {
       signal_bus.Publish(name, value);
     });
     // Load node plugins from BOAT_NODE_PLUGINS env var.
+    // Entries are separated by comma.  Each entry may optionally specify a
+    // JSON config separated by '?':
+    //   ./can_tp.so?{"iface":"can0"},./can_tp.so?{"iface":"can1"}
     {
       const char* nodes_env = std::getenv("BOAT_NODE_PLUGINS");
       if (nodes_env != nullptr) {
         std::istringstream ss(nodes_env);
-        std::string so_path;
-        while (std::getline(ss, so_path, ',')) {
-          if (so_path.empty()) continue;
+        std::string entry;
+        while (std::getline(ss, entry, ',')) {
+          if (entry.empty()) continue;
+          auto qpos = entry.find('?');
+          std::string so_path  = entry.substr(0, qpos);
+          std::string config   = (qpos != std::string::npos)
+                                    ? entry.substr(qpos + 1) : "{}";
           try {
-            node_manager.Load(so_path, "{}");
+            node_manager.Load(so_path, config);
           } catch (const std::exception& ex) {
             (void)ex;
           }

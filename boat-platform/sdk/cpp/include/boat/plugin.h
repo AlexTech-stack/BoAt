@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define BOAT_PLUGIN_ABI_VERSION 6
+#define BOAT_PLUGIN_ABI_VERSION 7
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,7 +14,8 @@ typedef void (*BoatPublishFn)(void* publisher_ctx, const char* signal_id,
                               uint64_t tick, double value);
 
 /* CAN frame type used by the plugin CAN-publish callback.
- * flags bits: CANFD_BRS=0x01, CANFD_ESI=0x02, CANFD_FDF=0x04; 0 = classic CAN. */
+ * flags bits: CANFD_BRS=0x01, CANFD_ESI=0x02, CANFD_FDF=0x04, SELF_SENT=0x08; 0 = classic CAN. */
+#define BOAT_CAN_FLAG_SELF_SENT 0x08
 typedef struct BoatCanFrame {
   uint32_t can_id;
   uint8_t  dlc;    /* actual byte count: 0-8 classic, 0-64 FD */
