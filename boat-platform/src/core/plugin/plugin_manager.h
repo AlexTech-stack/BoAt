@@ -28,8 +28,9 @@ struct PluginHandle {
 using SignalPublishFn =
     std::function<void(const char* signal_id, uint64_t tick, double value)>;
 
-/* Signature for delivering a raw CAN frame from a plugin to the HIL layer. */
-using CanPublishFn = std::function<void(const BoatCanFrame& frame)>;
+/* Signature for delivering a raw CAN frame from a plugin to the HIL layer.
+   plugin_iface is the interface the plugin is configured for (from its config JSON). */
+using CanPublishFn = std::function<void(const BoatCanFrame& frame, const std::string& plugin_iface)>;
 
 /* Signature for delivering an Ethernet frame from a plugin to the HIL layer. */
 using EthPublishFn = std::function<void(const BoatEthFrame& frame)>;

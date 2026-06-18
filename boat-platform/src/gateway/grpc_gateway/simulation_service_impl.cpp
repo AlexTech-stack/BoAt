@@ -116,14 +116,18 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
           sim_.signal_router().Publish(ev);
         });
     sim_.plugin_manager().SetCanPublisher(
-        [this](const BoatCanFrame& boat_frame) {
+        [this](const BoatCanFrame& boat_frame, const std::string& plugin_iface) {
           boat::hil::CanFrame frame{};
           frame.can_id = boat_frame.can_id;
           frame.dlc    = boat_frame.dlc;
           frame.flags  = boat_frame.flags;
           std::memset(frame.data, 0, sizeof(frame.data));
           std::memcpy(frame.data, boat_frame.data, boat_frame.dlc);
-          can_registry_.SendFrameAll(frame);
+          if (!plugin_iface.empty()) {
+            can_registry_.SendFrame(plugin_iface, frame);
+          } else {
+            can_registry_.SendFrameAll(frame);
+          }
         });
     sim_.plugin_manager().SetEthPublisher(
         [this](const BoatEthFrame& boat_frame) {

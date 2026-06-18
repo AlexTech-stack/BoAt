@@ -87,14 +87,33 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
 
   // Wire the CAN publisher if the plugin supports it.
   if (plugin->vtable->set_can_publisher != nullptr && can_publisher_fn_) {
-    auto fn_shared = std::make_shared<CanPublishFn>(can_publisher_fn_);
+    // Parse the plugin's configured interface from its config JSON.
+    std::string plugin_iface;
+    auto key_pos = config_json.find("\"iface\"");
+    if (key_pos != std::string::npos) {
+      auto val_pos = config_json.find('"', key_pos + 7);
+      if (val_pos != std::string::npos) {
+        auto end_pos = config_json.find('"', val_pos + 1);
+        if (end_pos != std::string::npos) {
+          plugin_iface = config_json.substr(val_pos + 1, end_pos - val_pos - 1);
+        }
+      }
+    }
+    struct CanPublishBinding {
+      CanPublishFn fn;
+      std::string  iface;
+    };
+    auto binding = std::make_shared<CanPublishBinding>(
+        CanPublishBinding{can_publisher_fn_, std::move(plugin_iface)});
     plugin->vtable->set_can_publisher(
         plugin->ctx,
         [](void* pctx, const BoatCanFrame* frame) {
-          if (frame != nullptr) (*static_cast<CanPublishFn*>(pctx))(*frame);
+          if (frame == nullptr) return;
+          auto* b = static_cast<CanPublishBinding*>(pctx);
+          b->fn(*frame, b->iface);
         },
-        fn_shared.get());
-    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
+        static_cast<void*>(binding.get()));
+    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(binding));
   }
 
   // Wire the Ethernet publisher if the plugin supports it.
