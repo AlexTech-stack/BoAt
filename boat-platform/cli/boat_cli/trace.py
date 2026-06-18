@@ -176,6 +176,13 @@ def cmd_replay(
                         help="Simulation ID forwarded with every frame"),
     verbose: bool  = typer.Option(False, "--verbose", "-v",
                         help="Print every frame as it is sent"),
+    server_side: bool = typer.Option(False, "--server-side",
+                        help="Upload trace and use server-side ReplayService for playback"),
+    channel: int | None = typer.Option(None, "--channel", "-c",
+                        help="Only replay frames from this CAN channel (1-based)"),
+    can_id: str | None = typer.Option(None, "--id", "-i",
+                        help="Only replay frames with this CAN ID (hex, e.g. 0x100). "
+                             "Comma-separated for multiple IDs."),
 ) -> None:
     """Replay a CAN trace file (.asc or .blf) through the gateway."""
     try:
@@ -191,34 +198,45 @@ def cmd_replay(
 
     bus_list = [b.strip() for b in buses.split(",") if b.strip()] if buses else []
     gateway  = ctx.obj["host"] if ctx.obj else "localhost:50051"
+    id_set: set[int] | None = None
+    if can_id:
+        id_set = {int(s.strip(), 16) for s in can_id.split(",") if s.strip()}
 
     def _on_frame(idx: int, msg) -> None:
         if verbose:
-            iface = bus_list[min(max(0, (getattr(msg, "channel", 1) or 1) - 1),
-                                 len(bus_list) - 1)] if bus_list else "vcan0"
-            typer.echo(
-                f"[{idx:6d}] t={msg.timestamp:.6f}  "
-                f"id=0x{msg.arbitration_id:08X}  "
-                f"iface={iface}  "
-                f"data={msg.data.hex()}"
-            )
+            if server_side:
+                typer.echo(f"[{idx:6d}] tick={msg.tick}  payload={msg.payload[:32]}")
+            else:
+                iface = bus_list[min(max(0, (getattr(msg, "channel", 1) or 1) - 1),
+                                     len(bus_list) - 1)] if bus_list else "vcan0"
+                typer.echo(
+                    f"[{idx:6d}] t={msg.timestamp:.6f}  "
+                    f"id=0x{msg.arbitration_id:08X}  "
+                    f"iface={iface}  "
+                    f"data={msg.data.hex()}"
+                )
 
     replayer = TraceReplayer(
-        gateway       = gateway,
-        buses         = bus_list,
-        speed         = speed,
-        simulation_id = sim_id,
-        on_frame      = _on_frame if verbose else None,
+        gateway        = gateway,
+        buses          = bus_list,
+        speed          = speed,
+        simulation_id  = sim_id,
+        on_frame       = _on_frame if verbose else None,
+        channel_filter = channel,
+        id_filter      = id_set,
     )
 
     speed_label = f"{speed}x" if speed > 0 else "max"
+    mode_label = "server-side" if server_side else "direct"
+    ch_label = f" ch={channel}" if channel is not None else ""
     typer.echo(
         f"Replaying {file.name} → {gateway}  "
-        f"[speed={speed_label}  loop={loop}  buses={bus_list or ['vcan0']}]"
+        f"[mode={mode_label}  speed={speed_label}  loop={loop}{ch_label}"
+        f"  buses={bus_list or ['vcan0']}]"
     )
 
     try:
-        total = replayer.replay(str(file), loop=loop)
+        total = replayer.replay(str(file), loop=loop, server_side=server_side)
     except TraceReplayError as e:
         print_error(str(e))
         raise typer.Exit(1)

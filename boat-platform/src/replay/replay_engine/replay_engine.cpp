@@ -39,6 +39,49 @@ void ReplayController::Start(const ReplayConfig& config) {
   replay_thread_ = std::thread(&ReplayController::ReplayLoop, this);
 }
 
+void ReplayController::StartFromEvents(const boat::store::EventFilter& filter,
+                                        const ReplayConfig& replay_cfg) {
+  const auto events = event_store_.Query(filter);
+  if (events.empty()) {
+    return;
+  }
+
+  std::vector<std::uint8_t> trace_data;
+  for (const auto& event : events) {
+    boat::store::TraceRecordHeader header{};
+    header.magic = kTraceMagic;
+    header.event_type = static_cast<std::uint32_t>(event.tick);
+    header.tick = event.tick;
+    header.wall_time_ns = event.wall_time_ns;
+    header.payload_size = static_cast<std::uint32_t>(event.value_blob.size());
+
+    trace_data.insert(trace_data.end(), reinterpret_cast<const std::uint8_t*>(&header),
+                      reinterpret_cast<const std::uint8_t*>(&header) + sizeof(header));
+    trace_data.insert(trace_data.end(), event.value_blob.begin(), event.value_blob.end());
+  }
+
+  const std::string trace_id = "evtstore_replay_" +
+                               filter.simulation_id.value_or("default") + "_" +
+                               std::to_string(events[0].tick);
+
+  const std::string storage_path = "/tmp/" + trace_id + ".trace";
+
+  boat::store::TraceRecord meta;
+  meta.id = trace_id;
+  meta.simulation_id = filter.simulation_id.value_or("");
+  meta.start_tick = events.front().tick;
+  meta.end_tick = events.back().tick;
+  meta.format = boat::store::TraceRecord::Format::BINARY;
+  meta.storage_path = storage_path;
+
+  trace_store_.WriteTrace(meta, std::span<const std::uint8_t>(trace_data));
+
+  ReplayConfig config = replay_cfg;
+  config.trace_id = trace_id;
+  config.start_tick = events.front().tick;
+  Start(config);
+}
+
 void ReplayController::Seek(std::uint64_t tick) {
   requested_seek_tick_.store(tick);
   seek_pending_.store(true);
@@ -71,6 +114,11 @@ bool ReplayController::HasError() const {
 std::string ReplayController::LastError() const {
   std::lock_guard<std::mutex> lock(error_mutex_);
   return last_error_;
+}
+
+void ReplayController::SetEventForwarder(EventForwarder forwarder) {
+  std::lock_guard<std::mutex> lock(forwarder_mutex_);
+  event_forwarder_ = std::move(forwarder);
 }
 
 bool ReplayController::SeekToTick(std::uint64_t tick, std::size_t& offset) const {
@@ -153,6 +201,13 @@ void ReplayController::ReplayLoop() {
         std::memcpy(payload.data(), mapped_trace_.data() + offset, header.payload_size);
       }
       offset += header.payload_size;
+
+      {
+        std::lock_guard<std::mutex> lock(forwarder_mutex_);
+        if (event_forwarder_) {
+          event_forwarder_(header.event_type, header.tick, payload);
+        }
+      }
 
       boat::core::BusEvent event;
       event.type = header.event_type;

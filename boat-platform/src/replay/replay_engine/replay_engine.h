@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <span>
 #include <string>
@@ -15,6 +16,15 @@
 namespace boat::replay {
 
 inline constexpr std::uint32_t kReplayBusEventType = 9001;
+inline constexpr std::uint32_t kReplayEthEventBase = 0xEE000000;
+inline constexpr std::uint32_t kReplayPduEventBase = 0xDD000000;
+
+inline constexpr std::uint32_t MakeReplayEthEventType(std::uint16_t ethertype) {
+  return kReplayEthEventBase | (ethertype & 0xFFFF);
+}
+inline constexpr std::uint32_t MakeReplayPduEventType(std::uint32_t pdu_id) {
+  return kReplayPduEventBase | (pdu_id & 0xFFFF);
+}
 
 enum class ReplaySpeed {
   REAL_TIME = 0,
@@ -37,12 +47,18 @@ class ReplayController {
   ~ReplayController();
 
   void Start(const ReplayConfig& config);
+  void StartFromEvents(const boat::store::EventFilter& filter,
+                       const ReplayConfig& config = {});
   void Seek(std::uint64_t tick);
   void Pause();
   void Resume();
   void Stop();
   bool HasError() const;
   std::string LastError() const;
+
+  using EventForwarder = std::function<void(std::uint32_t event_type, std::uint64_t tick,
+                                            const std::vector<std::uint8_t>& payload)>;
+  void SetEventForwarder(EventForwarder forwarder);
 
  private:
   void ReplayLoop();
@@ -51,6 +67,9 @@ class ReplayController {
   boat::store::ITraceStore& trace_store_;
   boat::store::IEventStore& event_store_;
   boat::core::EventBus& event_bus_;
+
+  EventForwarder event_forwarder_;
+  std::mutex forwarder_mutex_;
 
   std::atomic<std::uint64_t> current_tick_{0};
   std::atomic<bool> running_{false};
