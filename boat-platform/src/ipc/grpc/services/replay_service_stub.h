@@ -21,6 +21,17 @@ class ReplayServiceStub final : public boat::v1::ReplayService::Service {
                           boat::v1::ReplayControlResponse* response) override;
   grpc::Status StreamReplay(grpc::ServerContext* context, const boat::v1::StreamReplayRequest* request,
                             grpc::ServerWriter<boat::v1::ReplayEvent>* writer) override;
+  grpc::Status PauseReplay(grpc::ServerContext* context, const boat::v1::PauseReplayRequest* request,
+                           boat::v1::ReplayControlResponse* response) override;
+  grpc::Status ResumeReplay(grpc::ServerContext* context, const boat::v1::ResumeReplayRequest* request,
+                            boat::v1::ReplayControlResponse* response) override;
+  grpc::Status StopReplay(grpc::ServerContext* context, const boat::v1::StopReplayRequest* request,
+                          boat::v1::ReplayControlResponse* response) override;
+  grpc::Status ImportTraceData(grpc::ServerContext* context, const boat::v1::ImportTraceDataRequest* request,
+                               boat::v1::ReplayControlResponse* response) override;
+  grpc::Status StartReplayFromEvents(grpc::ServerContext* context,
+                                     const boat::v1::StartReplayFromEventsRequest* request,
+                                     boat::v1::ReplayControlResponse* response) override;
 
  private:
   boat::core::EventBus& event_bus_;

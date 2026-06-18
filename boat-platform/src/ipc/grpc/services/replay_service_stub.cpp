@@ -12,6 +12,7 @@ ReplayServiceStub::ReplayServiceStub(boat::core::EventBus& event_bus, boat::core
 
 grpc::Status ReplayServiceStub::StartReplay(grpc::ServerContext*, const boat::v1::StartReplayRequest*,
                                             boat::v1::ReplayControlResponse*) {
+  // IPC stub: no-op — the gateway binary uses ReplayServiceImpl directly.
   return grpc::Status::OK;
 }
 grpc::Status ReplayServiceStub::SeekReplay(grpc::ServerContext*, const boat::v1::SeekReplayRequest*,
@@ -20,6 +21,27 @@ grpc::Status ReplayServiceStub::SeekReplay(grpc::ServerContext*, const boat::v1:
 }
 grpc::Status ReplayServiceStub::StreamReplay(grpc::ServerContext*, const boat::v1::StreamReplayRequest*,
                                              grpc::ServerWriter<boat::v1::ReplayEvent>*) {
+  return grpc::Status::OK;
+}
+grpc::Status ReplayServiceStub::PauseReplay(grpc::ServerContext*, const boat::v1::PauseReplayRequest*,
+                                            boat::v1::ReplayControlResponse*) {
+  return grpc::Status::OK;
+}
+grpc::Status ReplayServiceStub::ResumeReplay(grpc::ServerContext*, const boat::v1::ResumeReplayRequest*,
+                                             boat::v1::ReplayControlResponse*) {
+  return grpc::Status::OK;
+}
+grpc::Status ReplayServiceStub::StopReplay(grpc::ServerContext*, const boat::v1::StopReplayRequest*,
+                                           boat::v1::ReplayControlResponse*) {
+  return grpc::Status::OK;
+}
+grpc::Status ReplayServiceStub::ImportTraceData(grpc::ServerContext*, const boat::v1::ImportTraceDataRequest*,
+                                                boat::v1::ReplayControlResponse*) {
+  return grpc::Status::OK;
+}
+grpc::Status ReplayServiceStub::StartReplayFromEvents(grpc::ServerContext*,
+                                                      const boat::v1::StartReplayFromEventsRequest*,
+                                                      boat::v1::ReplayControlResponse*) {
   return grpc::Status::OK;
 }
 

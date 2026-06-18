@@ -222,6 +222,38 @@ int main() {
   // captured for OnTick() calls and PDU publisher wiring.
   boat::hil::PduRouter pdu_router(can_registry, eth_registry);
 
+  // Register replay forwarder: bridges replayed events to CAN/Ethernet/PDU bus registries
+  replay_controller.SetEventForwarder(
+      [&can_registry, &eth_registry, &pdu_router](
+          std::uint32_t event_type, std::uint64_t tick,
+          const std::vector<std::uint8_t>& payload) {
+        if (event_type >= boat::replay::kReplayEthEventBase &&
+            event_type < boat::replay::kReplayEthEventBase + 0x10000) {
+          boat::hil::EthernetFrame eth_frame{};
+          const std::uint16_t ethertype =
+              static_cast<std::uint16_t>(event_type & 0xFFFF);
+          eth_frame.ethertype = ethertype;
+          const std::size_t copy_len = std::min(payload.size(), eth_frame.payload.size());
+          if (copy_len > 0) {
+            std::memcpy(eth_frame.payload.data(), payload.data(), copy_len);
+          }
+          eth_registry.SendFrameAll(eth_frame);
+        } else if (event_type >= boat::replay::kReplayPduEventBase &&
+                   event_type < boat::replay::kReplayPduEventBase + 0x10000) {
+          const std::uint32_t pdu_id = event_type & 0xFFFF;
+          pdu_router.SendPdu(pdu_id, payload);
+        } else if (event_type >= 0x100 && event_type <= 0x1FFFFFFF) {
+          boat::hil::CanFrame can_frame{};
+          can_frame.can_id = event_type;
+          const std::size_t copy_len = std::min(payload.size(), sizeof(can_frame.data));
+          if (copy_len > 0) {
+            can_frame.dlc = static_cast<std::uint8_t>(copy_len);
+            std::memcpy(can_frame.data, payload.data(), copy_len);
+          }
+          can_registry.SendFrameAll(can_frame);
+        }
+      });
+
   // Wire the PDU publisher so plugins (e.g. CanTp) can deliver reassembled
   // I-PDUs into the PduRouter.
   node_manager.SetPduPublisher([&pdu_router](const BoatPduFrame& f) {

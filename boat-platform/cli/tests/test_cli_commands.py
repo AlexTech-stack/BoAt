@@ -29,9 +29,13 @@ def _fake_client() -> SimpleNamespace:
         ValidateScenario=Mock(return_value=SimpleNamespace(valid=True, issues=[])),
     )
     replay = SimpleNamespace(
-        StartReplay=Mock(return_value=SimpleNamespace(accepted=True)),
+        StartReplay=Mock(return_value=SimpleNamespace(accepted=True, replay_id="r1")),
         SeekReplay=Mock(return_value=SimpleNamespace(accepted=True)),
         StreamReplay=Mock(return_value=[]),
+        PauseReplay=Mock(return_value=SimpleNamespace(accepted=True)),
+        ResumeReplay=Mock(return_value=SimpleNamespace(accepted=True)),
+        StopReplay=Mock(return_value=SimpleNamespace(accepted=True)),
+        StartReplayFromEvents=Mock(return_value=SimpleNamespace(accepted=True, replay_id="r-evt")),
     )
     plugin = SimpleNamespace(
         RegisterPlugin=Mock(return_value=SimpleNamespace(plugin=SimpleNamespace(plugin_id="p1", name="plug", version="1.0", loaded=True))),
@@ -120,6 +124,27 @@ def test_replay_and_plugin_commands_call_expected_methods() -> None:
     assert fake_client.plugin.ListPlugins.called
     assert fake_client.plugin.GetPluginInfo.called
     assert fake_client.plugin.UnloadPlugin.called
+
+
+def test_new_replay_commands_call_expected_methods() -> None:
+    fake_client = _fake_client()
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        assert runner.invoke(app, ["replay", "pause"]).exit_code == 0
+        assert runner.invoke(app, ["replay", "resume"]).exit_code == 0
+        assert runner.invoke(app, ["replay", "stop"]).exit_code == 0
+        assert runner.invoke(app, [
+            "replay", "from-events", "--sim-id", "sim-1",
+            "--speed", "accelerated", "--multiplier", "2.0",
+        ]).exit_code == 0
+        assert runner.invoke(app, [
+            "replay", "start", "--trace", "t1",
+            "--speed", "step", "--multiplier", "3.0", "--sim-id", "s1",
+        ]).exit_code == 0
+
+    assert fake_client.replay.PauseReplay.called
+    assert fake_client.replay.ResumeReplay.called
+    assert fake_client.replay.StopReplay.called
+    assert fake_client.replay.StartReplayFromEvents.called
 
 
 def test_eth_commands_call_expected_methods() -> None:

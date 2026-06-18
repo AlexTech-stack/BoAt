@@ -107,10 +107,11 @@ bool SocketCanDriver::WriteFrame(const CanFrame& frame) {
     return false;
   }
 
+  const std::uint32_t ext_flag = (frame.can_id > 0x7FF) ? CAN_EFF_FLAG : 0U;
   if (frame.flags & kCanFdFlagFdf) {
     // CAN FD frame
     struct canfd_frame raw {};
-    raw.can_id = frame.can_id;
+    raw.can_id = frame.can_id | ext_flag;
     raw.len    = frame.dlc <= CANFD_MAX_DLEN ? frame.dlc : CANFD_MAX_DLEN;
     raw.flags  = frame.flags;
     std::memcpy(raw.data, frame.data, raw.len);
@@ -119,7 +120,7 @@ bool SocketCanDriver::WriteFrame(const CanFrame& frame) {
   } else {
     // Classic CAN frame
     struct can_frame raw {};
-    raw.can_id  = frame.can_id;
+    raw.can_id  = frame.can_id | ext_flag;
     raw.can_dlc = frame.dlc <= CAN_MAX_DLEN ? frame.dlc : CAN_MAX_DLEN;
     std::memcpy(raw.data, frame.data, raw.can_dlc);
     const ssize_t bytes = write(socket_fd_, &raw, sizeof(raw));

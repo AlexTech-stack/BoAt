@@ -49,6 +49,31 @@ class ReplayServiceStub(object):
                 request_serializer=boat_dot_v1_dot_replay__pb2.StreamReplayRequest.SerializeToString,
                 response_deserializer=boat_dot_v1_dot_replay__pb2.ReplayEvent.FromString,
                 _registered_method=True)
+        self.PauseReplay = channel.unary_unary(
+                '/boat.v1.ReplayService/PauseReplay',
+                request_serializer=boat_dot_v1_dot_replay__pb2.PauseReplayRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+                _registered_method=True)
+        self.ResumeReplay = channel.unary_unary(
+                '/boat.v1.ReplayService/ResumeReplay',
+                request_serializer=boat_dot_v1_dot_replay__pb2.ResumeReplayRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+                _registered_method=True)
+        self.StopReplay = channel.unary_unary(
+                '/boat.v1.ReplayService/StopReplay',
+                request_serializer=boat_dot_v1_dot_replay__pb2.StopReplayRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+                _registered_method=True)
+        self.ImportTraceData = channel.unary_unary(
+                '/boat.v1.ReplayService/ImportTraceData',
+                request_serializer=boat_dot_v1_dot_replay__pb2.ImportTraceDataRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+                _registered_method=True)
+        self.StartReplayFromEvents = channel.unary_unary(
+                '/boat.v1.ReplayService/StartReplayFromEvents',
+                request_serializer=boat_dot_v1_dot_replay__pb2.StartReplayFromEventsRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+                _registered_method=True)
 
 
 class ReplayServiceServicer(object):
@@ -72,6 +97,36 @@ class ReplayServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def PauseReplay(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ResumeReplay(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StopReplay(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ImportTraceData(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StartReplayFromEvents(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ReplayServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -89,6 +144,31 @@ def add_ReplayServiceServicer_to_server(servicer, server):
                     servicer.StreamReplay,
                     request_deserializer=boat_dot_v1_dot_replay__pb2.StreamReplayRequest.FromString,
                     response_serializer=boat_dot_v1_dot_replay__pb2.ReplayEvent.SerializeToString,
+            ),
+            'PauseReplay': grpc.unary_unary_rpc_method_handler(
+                    servicer.PauseReplay,
+                    request_deserializer=boat_dot_v1_dot_replay__pb2.PauseReplayRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.SerializeToString,
+            ),
+            'ResumeReplay': grpc.unary_unary_rpc_method_handler(
+                    servicer.ResumeReplay,
+                    request_deserializer=boat_dot_v1_dot_replay__pb2.ResumeReplayRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.SerializeToString,
+            ),
+            'StopReplay': grpc.unary_unary_rpc_method_handler(
+                    servicer.StopReplay,
+                    request_deserializer=boat_dot_v1_dot_replay__pb2.StopReplayRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.SerializeToString,
+            ),
+            'ImportTraceData': grpc.unary_unary_rpc_method_handler(
+                    servicer.ImportTraceData,
+                    request_deserializer=boat_dot_v1_dot_replay__pb2.ImportTraceDataRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.SerializeToString,
+            ),
+            'StartReplayFromEvents': grpc.unary_unary_rpc_method_handler(
+                    servicer.StartReplayFromEvents,
+                    request_deserializer=boat_dot_v1_dot_replay__pb2.StartReplayFromEventsRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -172,6 +252,141 @@ class ReplayService(object):
             '/boat.v1.ReplayService/StreamReplay',
             boat_dot_v1_dot_replay__pb2.StreamReplayRequest.SerializeToString,
             boat_dot_v1_dot_replay__pb2.ReplayEvent.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PauseReplay(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.ReplayService/PauseReplay',
+            boat_dot_v1_dot_replay__pb2.PauseReplayRequest.SerializeToString,
+            boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ResumeReplay(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.ReplayService/ResumeReplay',
+            boat_dot_v1_dot_replay__pb2.ResumeReplayRequest.SerializeToString,
+            boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StopReplay(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.ReplayService/StopReplay',
+            boat_dot_v1_dot_replay__pb2.StopReplayRequest.SerializeToString,
+            boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ImportTraceData(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.ReplayService/ImportTraceData',
+            boat_dot_v1_dot_replay__pb2.ImportTraceDataRequest.SerializeToString,
+            boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StartReplayFromEvents(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.ReplayService/StartReplayFromEvents',
+            boat_dot_v1_dot_replay__pb2.StartReplayFromEventsRequest.SerializeToString,
+            boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
             options,
             channel_credentials,
             insecure,

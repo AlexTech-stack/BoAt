@@ -40,6 +40,18 @@ grpc::Status MapReplayException(const std::exception& ex) {
 
 ReplayServiceImpl::ReplayServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
 
+boat::replay::ReplaySpeed ReplayServiceImpl::ProtoSpeedToInternal(boat::v1::ReplaySpeed proto_speed) const {
+  switch (proto_speed) {
+    case boat::v1::REPLAY_SPEED_ACCELERATED:
+      return boat::replay::ReplaySpeed::ACCELERATED;
+    case boat::v1::REPLAY_SPEED_STEP_BY_STEP:
+      return boat::replay::ReplaySpeed::STEP_BY_STEP;
+    case boat::v1::REPLAY_SPEED_REAL_TIME:
+    default:
+      return boat::replay::ReplaySpeed::REAL_TIME;
+  }
+}
+
 grpc::Status ReplayServiceImpl::StartReplay(grpc::ServerContext*, const boat::v1::StartReplayRequest* request,
                                             boat::v1::ReplayControlResponse* response) {
   try {
@@ -49,7 +61,8 @@ grpc::Status ReplayServiceImpl::StartReplay(grpc::ServerContext*, const boat::v1
     }
     boat::replay::ReplayConfig config{
         .trace_id = request->trace_id(),
-        .speed = boat::replay::ReplaySpeed::REAL_TIME,
+        .speed = ProtoSpeedToInternal(request->speed()),
+        .speed_multiplier = request->speed_multiplier() > 0.0 ? request->speed_multiplier() : 1.0,
     };
     ctx_.replay_controller.Start(config);
     {
@@ -130,6 +143,139 @@ grpc::Status ReplayServiceImpl::StreamReplay(grpc::ServerContext* context, const
 
   ctx_.sim.event_bus().Unsubscribe(handle);
   return grpc::Status::OK;
+}
+
+grpc::Status ReplayServiceImpl::PauseReplay(grpc::ServerContext*, const boat::v1::PauseReplayRequest* request,
+                                            boat::v1::ReplayControlResponse* response) {
+  try {
+    std::lock_guard<std::mutex> lock(replay_mutex_);
+    const auto it = active_replays_.find(request->replay_id());
+    if (it == active_replays_.end()) {
+      return grpc::Status(grpc::StatusCode::NOT_FOUND, "replay not found");
+    }
+    ctx_.replay_controller.Pause();
+    response->set_accepted(true);
+    response->set_replay_id(request->replay_id());
+    return grpc::Status::OK;
+  } catch (const std::exception& ex) {
+    return MapReplayException(ex);
+  } catch (...) {
+    return grpc::Status(grpc::StatusCode::INTERNAL, "unexpected pause replay error");
+  }
+}
+
+grpc::Status ReplayServiceImpl::ResumeReplay(grpc::ServerContext*, const boat::v1::ResumeReplayRequest* request,
+                                             boat::v1::ReplayControlResponse* response) {
+  try {
+    std::lock_guard<std::mutex> lock(replay_mutex_);
+    const auto it = active_replays_.find(request->replay_id());
+    if (it == active_replays_.end()) {
+      return grpc::Status(grpc::StatusCode::NOT_FOUND, "replay not found");
+    }
+    ctx_.replay_controller.Resume();
+    response->set_accepted(true);
+    response->set_replay_id(request->replay_id());
+    return grpc::Status::OK;
+  } catch (const std::exception& ex) {
+    return MapReplayException(ex);
+  } catch (...) {
+    return grpc::Status(grpc::StatusCode::INTERNAL, "unexpected resume replay error");
+  }
+}
+
+grpc::Status ReplayServiceImpl::StopReplay(grpc::ServerContext*, const boat::v1::StopReplayRequest* request,
+                                           boat::v1::ReplayControlResponse* response) {
+  try {
+    std::lock_guard<std::mutex> lock(replay_mutex_);
+    const auto it = active_replays_.find(request->replay_id());
+    if (it == active_replays_.end()) {
+      return grpc::Status(grpc::StatusCode::NOT_FOUND, "replay not found");
+    }
+    ctx_.replay_controller.Stop();
+    active_replays_.erase(it);
+    response->set_accepted(true);
+    response->set_replay_id(request->replay_id());
+    return grpc::Status::OK;
+  } catch (const std::exception& ex) {
+    return MapReplayException(ex);
+  } catch (...) {
+    return grpc::Status(grpc::StatusCode::INTERNAL, "unexpected stop replay error");
+  }
+}
+
+grpc::Status ReplayServiceImpl::ImportTraceData(grpc::ServerContext*, const boat::v1::ImportTraceDataRequest* request,
+                                                boat::v1::ReplayControlResponse* response) {
+  try {
+    if (request->trace_id().empty()) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "trace_id must be non-empty");
+    }
+    if (request->data().empty()) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "trace data must be non-empty");
+    }
+
+    const std::string storage_path = "traces/" + request->trace_id() + ".trace";
+
+    boat::store::TraceRecord meta;
+    meta.id = request->trace_id();
+    meta.simulation_id = "";
+    meta.format = boat::store::TraceRecord::Format::BINARY;
+    meta.storage_path = storage_path;
+
+    std::span<const std::uint8_t> data_span(
+        reinterpret_cast<const std::uint8_t*>(request->data().data()),
+        request->data().size());
+
+    ctx_.trace_store.WriteTrace(meta, data_span);
+
+    response->set_accepted(true);
+    response->set_replay_id(request->trace_id());
+    return grpc::Status::OK;
+  } catch (const std::exception& ex) {
+    return MapReplayException(ex);
+  } catch (...) {
+    return grpc::Status(grpc::StatusCode::INTERNAL, "unexpected import trace error");
+  }
+}
+
+grpc::Status ReplayServiceImpl::StartReplayFromEvents(grpc::ServerContext*,
+                                                       const boat::v1::StartReplayFromEventsRequest* request,
+                                                       boat::v1::ReplayControlResponse* response) {
+  try {
+    if (request->simulation_id().empty()) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "simulation_id must be non-empty");
+    }
+
+    boat::store::EventFilter filter;
+    filter.simulation_id = request->simulation_id();
+    if (!request->signal_id().empty()) {
+      filter.signal_id = request->signal_id();
+    }
+    if (request->tick_min() > 0) {
+      filter.tick_min = request->tick_min();
+    }
+    if (request->tick_max() > 0) {
+      filter.tick_max = request->tick_max();
+    }
+
+    boat::replay::ReplayConfig cfg;
+    cfg.speed = ProtoSpeedToInternal(request->speed());
+    cfg.speed_multiplier = request->speed_multiplier() > 0.0 ? request->speed_multiplier() : 1.0;
+    ctx_.replay_controller.StartFromEvents(filter, cfg);
+
+    const std::string replay_id = "evtstore_replay_" + request->simulation_id();
+    {
+      std::lock_guard<std::mutex> lock(replay_mutex_);
+      active_replays_[replay_id] = boat::replay::ReplayConfig{};
+    }
+
+    response->set_accepted(true);
+    response->set_replay_id(replay_id);
+    return grpc::Status::OK;
+  } catch (const std::exception& ex) {
+    return MapReplayException(ex);
+  } catch (...) {
+    return grpc::Status(grpc::StatusCode::INTERNAL, "unexpected replay from events error");
+  }
 }
 
 }  // namespace boat::gateway

@@ -52,6 +52,11 @@ add_executable(boat_unit_ipc_channel_selector unit/test_ipc_channel_selector.cpp
 target_link_libraries(boat_unit_ipc_channel_selector PRIVATE boat_ipc Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_ipc_channel_selector)
 
+add_executable(boat_unit_replay_engine unit/test_replay_engine.cpp)
+target_include_directories(boat_unit_replay_engine PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(boat_unit_replay_engine PRIVATE boat_core boat_store boat_replay Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_replay_engine)
+
 add_executable(
   boat_integration_gateway
   integration/test_gateway.cpp
@@ -89,6 +94,30 @@ target_link_libraries(
     Catch2::Catch2WithMain
 )
 catch_discover_tests(boat_integration_ipc_control_transport)
+
+add_executable(
+  boat_integration_replay_service
+  integration/test_replay_service.cpp
+  ../gateway/grpc_gateway/replay_service_impl.cpp
+)
+target_include_directories(boat_integration_replay_service PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/hil
+  ${BOAT_PROTO_GENERATED_DIR}
+)
+target_link_libraries(
+  boat_integration_replay_service
+  PRIVATE
+    boat_core
+    boat_hil
+    boat_store
+    boat_replay
+    boat_proto_generated
+    grpc++
+    protobuf::libprotobuf
+    Catch2::Catch2WithMain
+)
+catch_discover_tests(boat_integration_replay_service)
 
 add_executable(boat_determinism_seed determinism/test_seed.cpp)
 target_link_libraries(boat_determinism_seed PRIVATE boat_core Catch2::Catch2WithMain)
