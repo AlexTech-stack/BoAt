@@ -8,7 +8,7 @@ message CanFrame {
   bytes  data         = 3;
   uint64 timestamp_ns = 4;
   string iface        = 5;
-  uint32 flags        = 6;  // CANFD_FDF=4, CANFD_BRS=1, CANFD_ESI=2; 0 = classic CAN
+  uint32 flags        = 6;  // CANFD_FDF=4, CANFD_BRS=1, CANFD_ESI=2, SELF_SENT=8; 0 = classic CAN
 }
 
 message SendCanFrameRequest {

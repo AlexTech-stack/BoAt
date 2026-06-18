@@ -6,7 +6,7 @@ PluginService gRPC API.
 
 This module provides:
 
-- can_tp_connect(plugin_name): get a handle to a loaded CanTp plugin
+- CanTpHandle(so_path): load the CanTp shared library and get a handle
 - configure(handle, nsdu_id, ...): configure an N-SDU connection
 - send(handle, nsdu_id, data): send a large PDU through CanTp segmentation
 
