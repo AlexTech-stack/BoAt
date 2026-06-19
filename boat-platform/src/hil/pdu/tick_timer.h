@@ -8,9 +8,10 @@ namespace boat::hil {
 
 /* Abstract tick timer: blocks until the next tick boundary.
  *
- * Two implementations:
- *   SleepTickTimer    — std::this_thread::sleep_for/sleep_until (>1ms range)
- *   TimerfdTickTimer  — Linux timerfd (1μs–1ms range, high precision, drift-free)
+ * Sole backend on Linux:
+ *   TimerfdTickTimer — Linux timerfd (μs–ms range, drift-free)
+ * The portable SleepTickTimer is provided as a non-Linux fallback but is
+ * never selected by the factory — this codebase is Linux-only.
  */
 class TickTimer {
  public:
@@ -23,7 +24,7 @@ class TickTimer {
   virtual bool WaitForNextTick() = 0;
 
   /* Block until an absolute time point (drift-free).  Returns false if
-   * stopped.  Implementations use sleep_until or timerfd+TFD_TIMER_ABSTIME. */
+   * stopped.  Timers implement via timerfd+TFD_TIMER_ABSTIME. */
   virtual bool WaitUntil(std::chrono::steady_clock::time_point deadline) = 0;
 
   /* Stop the timer (may interrupt a blocked WaitForNextTick). */
@@ -35,14 +36,13 @@ class TickTimer {
   /* Elapsed nanoseconds since Init(). */
   virtual std::chrono::nanoseconds Elapsed() const = 0;
 
-  /* Factory: create the best backend for the given interval.
-   * For interval < 1ms creates TimerfdTickTimer, else SleepTickTimer. */
+  /* Factory: creates a TimerfdTickTimer (Linux-only platform). */
   static std::unique_ptr<TickTimer> Create(std::chrono::nanoseconds interval);
 };
 
-/* Low-precision backend using std::this_thread::sleep_for/sleep_until.
- * Suitable for >1ms ticks.  Portable across POSIX systems.
- * Selected by TickTimer::Create when interval > 1ms. */
+/* Portable fallback using std::this_thread::sleep_for/sleep_until.
+ * Never selected by TickTimer::Create on Linux — retained so the
+ * class hierarchy compiles on non-Linux platforms. */
 class SleepTickTimer final : public TickTimer {
  public:
   bool Init(std::chrono::nanoseconds interval) override;
@@ -59,9 +59,8 @@ class SleepTickTimer final : public TickTimer {
   bool                      running_{false};
 };
 
-/* High-precision backend using Linux timerfd.
- * Suitable for 1μs–1ms ticks (inclusive).  Absolute-time scheduling, no drift.
- * Linux-only.  Selected by TickTimer::Create when interval <= 1ms. */
+/* Sole backend on Linux: Linux timerfd with absolute-time scheduling.
+ * Selected by TickTimer::Create for all intervals.  Drift-free. */
 class TimerfdTickTimer final : public TickTimer {
  public:
   ~TimerfdTickTimer() override { Stop(); }
