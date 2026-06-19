@@ -13,16 +13,7 @@ namespace boat::hil {
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 std::unique_ptr<TickTimer> TickTimer::Create(std::chrono::nanoseconds interval) {
-#ifdef __linux__
-  if (interval <= std::chrono::milliseconds(1)) {
-    auto t = std::make_unique<TimerfdTickTimer>();
-    t->Init(interval);
-    return t;
-  }
-#else
-  (void)interval;
-#endif
-  auto t = std::make_unique<SleepTickTimer>();
+  auto t = std::make_unique<TimerfdTickTimer>();
   t->Init(interval);
   return t;
 }

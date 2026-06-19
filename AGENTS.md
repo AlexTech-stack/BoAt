@@ -205,10 +205,8 @@ boat pdu route --id 0x300 --transport can --iface vcan0 --send-type mixed --cycl
 # Lower intervals increase CPU load — 100μs tick on a typical x86 adds ~1-2% CPU per
 # 10 scheduled PDUs.
 #
-# Timer backends (auto-selected by TickTimer factory):
-#   SleepTickTimer     — std::this_thread::sleep_for/sleep_until, used for intervals > 1ms
-#   TimerfdTickTimer   — Linux timerfd (CLOCK_MONOTONIC), used for intervals <= 1ms,
-#                        absolute-time scheduling, no drift accumulation
+# Timer backend: Linux timerfd with absolute-time scheduling, no drift.
+# TickTimer::Create always returns a TimerfdTickTimer on this platform.
 
 # ── STOP sending ──────────────────────────────────────────────────────────
 

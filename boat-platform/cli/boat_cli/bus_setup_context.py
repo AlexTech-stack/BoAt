@@ -55,13 +55,12 @@ _BUS_REFERENCE = """\
 
   BOAT_CAN_INTERFACES=vcan0,vcan1,can0   # CAN interfaces the gateway manages
   BOAT_ETH_INTERFACES=veth0              # Ethernet interfaces
-  BOAT_NODE_TICK_MS=10                   # Node plugin tick interval (ms)
-  BOAT_NODE_TICK_US=100                  # Node plugin tick interval (us, high-precision)
-  BOAT_NODE_PLUGINS=/path/to/plugin.so   # Colon-separated plugins to load at startup
+  BOAT_NODE_TICK_MS=1                    # Node plugin tick interval (ms, default)
+  BOAT_NODE_TICK_US=100                  # Node plugin tick interval (us, overrides MS)
 
-### Timer backends (auto-selected by tick interval)
-  - >= 1ms : SleepTickTimer (std::this_thread::sleep_for)
-  - < 1ms  : TimerfdTickTimer (Linux timerfd, absolute-time, no drift)
+### Timer backend
+  Single backend: TimerfdTickTimer (Linux timerfd, absolute-time, no drift)
+  All intervals use timerfd — SleepTickTimer is never selected on Linux.
 
 ## Gateway Startup Examples
 

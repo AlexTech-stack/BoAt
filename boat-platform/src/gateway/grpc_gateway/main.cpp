@@ -264,9 +264,9 @@ int main() {
 
   // Start a background tick thread for node plugins and PDU transmission engine.
   // The tick interval sets the minimum achievable PDU cycle time.
-  //   BOAT_NODE_TICK_MS=N   — set tick in ms (default 10, min 1, >=1ms range uses SleepTickTimer)
-  //   BOAT_NODE_TICK_US=N   — set tick in μs (high-precision mode, uses TimerfdTickTimer)
-  //   BOAT_NODE_TICK_US takes precedence over BOAT_NODE_TICK_MS when both are set.
+  //   BOAT_NODE_TICK_MS=N   — set tick in ms (default 1)
+  //   BOAT_NODE_TICK_US=N   — set tick in μs (overrides MS when set)
+  //   Both use TimerfdTickTimer (Linux timerfd, absolute-time scheduling).
   {
     using namespace std::chrono_literals;
     std::chrono::nanoseconds tick_ns = 1ms;  // default
