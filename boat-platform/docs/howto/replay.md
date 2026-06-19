@@ -113,18 +113,6 @@ determined solely by the tick timer and the configured speed.
 boat trace replay recording.blf --server-side --buses can0
 ```
 
-The trace binary data is uploaded via `ImportTraceData`, then played back via
-`StartReplay`. The `EventForwarder` callback bridges replayed events to the
-CAN/Ethernet/PDU hardware, while the `EventBus` publishes the events so plugins
-and signal routers can observe them.
-
-### Executing server-side replay
-
-The trace binary data is uploaded via `ImportTraceData`, then played back via
-`StartReplay`. The `EventForwarder` callback bridges replayed events to the
-CAN/Ethernet/PDU hardware, while the `EventBus` publishes the events so plugins
-and signal routers can observe them.
-
 Speed is controlled uniformly via `--speed` (see [Speed control](#speed-control)
 above). In server-side mode there is no per-frame gRPC overhead, so true max
 speed is achievable with `--speed 0` or large multipliers.
@@ -136,8 +124,8 @@ pattern as the gateway node tick:
 
 ```
 BOAT_NODE_TICK_US=100    # 100μs ticks (high-precision timerfd, sub-ms)
-BOAT_NODE_TICK_MS=1      # 1ms ticks (default, SleepTickTimer)
-BOAT_NODE_TICK_US=1000   # same as 1ms, uses timerfd backend
+BOAT_NODE_TICK_MS=1      # 1ms ticks (default, uses SleepTickTimer)
+BOAT_NODE_TICK_US=999    # 999μs ticks, uses timerfd (any value < 1ms)
 ```
 
 - `BOAT_NODE_TICK_US` takes precedence when both are set
@@ -245,4 +233,6 @@ replayer.replay_server_side("tracefile.blf")
 | Frames not appearing on the bus | Check that the CAN interface is up: `ip link show can0`. For FD frames, interface must be configured with `fd on` and `dbitrate`. |
 | Extended IDs appear truncated (e.g. `29F` instead of `1BFC829F`) | SocketCan driver missing `CAN_EFF_FLAG`. Build the latest gateway. |
 | gRPC `UNAVAILABLE` | Gateway not running or wrong host/port. Verify: `boat can list-buses`. |
+| Server-side replay imports but no frames appear on the bus | The trace file timestamps may be absolute (epoch-based). The Python SDK converts timestamps to relative ticks internally since build `43824e6`. Upgrade the SDK: `pip install -e ./sdk/python`. |
+| Server-side replay seems to hang (no console output after "Replaying...") | The Python client blocks on `StreamReplay` waiting for events from the gateway's EventBus. CAN frames are still sent to the bus — verify with `candump`. The `EventBus` requires a running tick scheduler to dispatch events, which is not active outside an active simulation. Use `Ctrl+C` to interrupt; the frames will have been delivered. |
 | No frames replayed | Check the trace file format (`.blf`/`.asc`). Ensure the channel filter is correct: `python3 -c "import can; print([getattr(m,'channel') for m in can.BLFReader('file.blf')][:5])"`. |
