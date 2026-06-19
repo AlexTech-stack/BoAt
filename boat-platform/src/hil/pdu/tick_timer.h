@@ -9,8 +9,8 @@ namespace boat::hil {
 /* Abstract tick timer: blocks until the next tick boundary.
  *
  * Two implementations:
- *   SleepTickTimer    — std::this_thread::sleep_for (1-10ms range)
- *   TimerfdTickTimer  — Linux timerfd (1μs-1ms range, high precision)
+ *   SleepTickTimer    — std::this_thread::sleep_for/sleep_until (>1ms range)
+ *   TimerfdTickTimer  — Linux timerfd (1μs–1ms range, high precision, drift-free)
  */
 class TickTimer {
  public:
@@ -40,8 +40,9 @@ class TickTimer {
   static std::unique_ptr<TickTimer> Create(std::chrono::nanoseconds interval);
 };
 
-/* Low-precision backend using std::this_thread::sleep_for.
- * Suitable for 1-10ms ticks.  Portable across POSIX systems. */
+/* Low-precision backend using std::this_thread::sleep_for/sleep_until.
+ * Suitable for >1ms ticks.  Portable across POSIX systems.
+ * Selected by TickTimer::Create when interval > 1ms. */
 class SleepTickTimer final : public TickTimer {
  public:
   bool Init(std::chrono::nanoseconds interval) override;
@@ -59,8 +60,8 @@ class SleepTickTimer final : public TickTimer {
 };
 
 /* High-precision backend using Linux timerfd.
- * Suitable for 1μs-1ms ticks.  Absolute-time scheduling, no drift.
- * Linux-only. */
+ * Suitable for 1μs–1ms ticks (inclusive).  Absolute-time scheduling, no drift.
+ * Linux-only.  Selected by TickTimer::Create when interval <= 1ms. */
 class TimerfdTickTimer final : public TickTimer {
  public:
   ~TimerfdTickTimer() override { Stop(); }

@@ -124,14 +124,14 @@ pattern as the gateway node tick:
 
 ```
 BOAT_NODE_TICK_US=100    # 100μs ticks (high-precision timerfd, sub-ms)
-BOAT_NODE_TICK_MS=1      # 1ms ticks (default, uses SleepTickTimer)
-BOAT_NODE_TICK_US=999    # 999μs ticks, uses timerfd (any value < 1ms)
+BOAT_NODE_TICK_MS=1      # 1ms ticks (default, uses timerfd backend)
+BOAT_NODE_TICK_US=999    # 999μs ticks, uses timerfd (any value ≤ 1ms)
 ```
 
 - `BOAT_NODE_TICK_US` takes precedence when both are set
-- Values < 1ms use the `TimerfdTickTimer` backend (Linux `timerfd` with
+- Values ≤ 1ms use the `TimerfdTickTimer` backend (Linux `timerfd` with
   `CLOCK_MONOTONIC`, absolute-time scheduling, no drift accumulation)
-- Values ≥ 1ms use `SleepTickTimer` (`std::this_thread::sleep_until`)
+- Values > 1ms use `SleepTickTimer` (`std::this_thread::sleep_until`)
 - Minimum practical value is ~100μs (below that, processing overhead per tick
   exceeds the tick interval and deadlines fire immediately)
 
