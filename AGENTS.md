@@ -206,8 +206,8 @@ boat pdu route --id 0x300 --transport can --iface vcan0 --send-type mixed --cycl
 # 10 scheduled PDUs.
 #
 # Timer backends (auto-selected by TickTimer factory):
-#   SleepTickTimer     — std::this_thread::sleep_for, used for intervals >= 1ms
-#   TimerfdTickTimer   — Linux timerfd (CLOCK_MONOTONIC), used for intervals < 1ms,
+#   SleepTickTimer     — std::this_thread::sleep_for/sleep_until, used for intervals > 1ms
+#   TimerfdTickTimer   — Linux timerfd (CLOCK_MONOTONIC), used for intervals <= 1ms,
 #                        absolute-time scheduling, no drift accumulation
 
 # ── STOP sending ──────────────────────────────────────────────────────────
