@@ -191,7 +191,7 @@ void TickScheduler::ExecuteTickSynchronously(std::uint64_t tick) {
 
 void TickScheduler::CoordinatorLoop() {
   // Each tick represents 10 ms of simulation time; sleep to match real time.
-  constexpr auto kTickInterval = std::chrono::milliseconds(10);
+  constexpr auto kTickInterval = std::chrono::milliseconds(1);
   while (running_.load(std::memory_order_acquire)) {
     {
       std::unique_lock<std::mutex> pause_lock(pause_mutex_);

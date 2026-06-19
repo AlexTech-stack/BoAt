@@ -43,6 +43,13 @@ bool SleepTickTimer::WaitForNextTick() {
   return running_;
 }
 
+bool SleepTickTimer::WaitUntil(std::chrono::steady_clock::time_point deadline) {
+  if (!running_) return false;
+  std::this_thread::sleep_until(deadline);
+  tick_count_++;
+  return running_;
+}
+
 void SleepTickTimer::Stop() {
   running_ = false;
 }
@@ -100,6 +107,28 @@ bool TimerfdTickTimer::WaitForNextTick() {
   // consumed — next read will wait for the following interval.
   if (n <= 0) return false;
 
+  tick_count_ += expirations;
+  return true;
+}
+
+bool TimerfdTickTimer::WaitUntil(std::chrono::steady_clock::time_point deadline) {
+  if (fd_ < 0) return false;
+
+  auto deadline_ns = deadline.time_since_epoch();
+  itimerspec spec{};
+  spec.it_value = ToTimespec(deadline_ns);
+
+  // One-shot set at the absolute deadline.  If deadline is in the past
+  // the timer fires immediately — no drift, no lost time.
+  if (timerfd_settime(fd_, TFD_TIMER_ABSTIME, &spec, nullptr) < 0) return false;
+
+  uint64_t expirations = 0;
+  ssize_t n;
+  do {
+    n = ::read(fd_, &expirations, sizeof(expirations));
+  } while (n < 0 && errno == EINTR);
+
+  if (n <= 0) return false;
   tick_count_ += expirations;
   return true;
 }

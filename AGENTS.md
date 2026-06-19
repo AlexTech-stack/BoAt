@@ -198,12 +198,12 @@ boat pdu route --id 0x300 --transport can --iface vcan0 --send-type mixed --cycl
 #   --ttl N            IPv4 TTL / IPv6 Hop Limit (default 64)
 #   --vlan N           802.1Q VLAN ID
 
-# The gateway's OnTick() drives the transmission engine (10ms default tick interval,
+# The gateway's OnTick() drives the transmission engine (1ms default tick interval,
 # set via BOAT_NODE_TICK_MS).  The tick interval is the minimum cycle time — e.g.
-# a 10ms tick supports cycle_ms >= 10ms.  Setting BOAT_NODE_TICK_MS=1 gives 1ms
-# precision.  For sub-ms precision use BOAT_NODE_TICK_US (e.g. BOAT_NODE_TICK_US=100
-# for 100μs ticks, uses high-precision timerfd backend).  Lower intervals increase
-# CPU load — 100μs tick on a typical x86 adds ~1-2% CPU per 10 scheduled PDUs.
+# a 1ms tick supports cycle_ms >= 1ms.  For sub-ms precision use BOAT_NODE_TICK_US
+# (e.g. BOAT_NODE_TICK_US=100 for 100μs ticks, uses high-precision timerfd backend).
+# Lower intervals increase CPU load — 100μs tick on a typical x86 adds ~1-2% CPU per
+# 10 scheduled PDUs.
 #
 # Timer backends (auto-selected by TickTimer factory):
 #   SleepTickTimer     — std::this_thread::sleep_for, used for intervals >= 1ms

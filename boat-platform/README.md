@@ -75,7 +75,7 @@ The gateway runs **two independent `PluginManager` instances**, each with a sepa
 | Manager | Created in | Lifecycle | Tick source | Plugin set |
 |---|---|---|---|---|
 | `node_manager` | `main.cpp:170` | Always-on (gateway lifetime) | Dedicated background thread, configurable interval via `BOAT_NODE_TICK_MS`/`US` | Plugins from `BOAT_NODE_PLUGINS` env var (e.g. CanTp, SOME/IP) |
-| `plugin_manager` | `main.cpp:78` | Per-simulation (loaded/unloaded via gRPC) | Simulation `TickScheduler` coordinator (10ms tick via `on_tick_hook`) | Scenario-declared plugins from `StartSimulation` RPC |
+| `plugin_manager` | `main.cpp:78` | Per-simulation (loaded/unloaded via gRPC) | Simulation `TickScheduler` coordinator (1ms tick via `on_tick_hook`) | Scenario-declared plugins from `StartSimulation` RPC |
 
 This "double-tick" design serves two distinct use cases:
 
