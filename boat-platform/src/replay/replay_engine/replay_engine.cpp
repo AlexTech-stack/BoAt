@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -11,7 +13,6 @@ namespace boat::replay {
 namespace {
 
 constexpr std::uint32_t kTraceMagic = 0xB0A7B0A7;
-constexpr std::uint64_t kTickDurationNs = 1'000'000ULL;
 
 }  // namespace
 
@@ -36,6 +37,12 @@ void ReplayController::Start(const ReplayConfig& config) {
     std::lock_guard<std::mutex> lock(error_mutex_);
     last_error_.clear();
   }
+
+  ParseTickDurationFromEnv();
+  tick_timer_ = boat::hil::TickTimer::Create(tick_duration_);
+  replay_base_time_ = std::chrono::steady_clock::now();
+  replay_base_tick_ = config.start_tick;
+
   replay_thread_ = std::thread(&ReplayController::ReplayLoop, this);
 }
 
@@ -101,6 +108,9 @@ void ReplayController::Stop() {
   if (replay_thread_.joinable()) {
     replay_thread_.join();
   }
+  if (tick_timer_) {
+    tick_timer_->Stop();
+  }
   if (was_running || !active_config_.trace_id.empty()) {
     trace_store_.UnmapTrace(active_config_.trace_id);
   }
@@ -119,6 +129,32 @@ std::string ReplayController::LastError() const {
 void ReplayController::SetEventForwarder(EventForwarder forwarder) {
   std::lock_guard<std::mutex> lock(forwarder_mutex_);
   event_forwarder_ = std::move(forwarder);
+}
+
+void ReplayController::ParseTickDurationFromEnv() {
+  //   BOAT_NODE_TICK_US=N   — set tick in μs (high-precision, overrides MS)
+  //   BOAT_NODE_TICK_MS=N   — set tick in ms (default 1)
+  // Same pattern as the gateway node tick in main.cpp.
+  const char* us_env = std::getenv("BOAT_NODE_TICK_US");
+  if (us_env != nullptr) {
+    char* end = nullptr;
+    auto val = std::strtoul(us_env, &end, 10);
+    if (end != us_env && val > 0) {
+      tick_duration_ = std::chrono::microseconds(val);
+      return;
+    }
+  }
+  const char* ms_env = std::getenv("BOAT_NODE_TICK_MS");
+  if (ms_env != nullptr) {
+    char* end = nullptr;
+    auto val = std::strtoul(ms_env, &end, 10);
+    if (end != ms_env && val > 0) {
+      tick_duration_ = std::chrono::milliseconds(val);
+      return;
+    }
+  }
+  // Default: 1ms.
+  tick_duration_ = std::chrono::milliseconds(1);
 }
 
 bool ReplayController::SeekToTick(std::uint64_t tick, std::size_t& offset) const {
@@ -153,7 +189,6 @@ void ReplayController::ReplayLoop() {
     }
 
     std::size_t offset = 0;
-    std::uint64_t prev_tick = current_tick_.load();
     while (running_.load() && offset + sizeof(boat::store::TraceRecordHeader) <= mapped_trace_.size()) {
       {
         std::unique_lock<std::mutex> lock(pause_mutex_);
@@ -169,7 +204,9 @@ void ReplayController::ReplayLoop() {
         const auto target_tick = requested_seek_tick_.load();
         SeekToTick(target_tick, offset);
         current_tick_.store(target_tick);
-        prev_tick = target_tick;
+        // Reset absolute-timing baseline so the target tick fires immediately.
+        replay_base_time_ = std::chrono::steady_clock::now();
+        replay_base_tick_ = target_tick;
         continue;
       }
 
@@ -184,16 +221,19 @@ void ReplayController::ReplayLoop() {
         throw std::runtime_error("trace record payload out of bounds");
       }
 
+      // Absolute-time deadline for this record's tick.
+      // t_deadline = t_base + (tick - tick_base) * tick_duration / multiplier
       double speed_multiplier = active_config_.speed_multiplier;
       if (speed_multiplier <= 0.0) {
         speed_multiplier = 1.0;
       }
       if (active_config_.speed == ReplaySpeed::REAL_TIME ||
           active_config_.speed == ReplaySpeed::ACCELERATED) {
-        const auto delta_tick = header.tick > prev_tick ? (header.tick - prev_tick) : 0ULL;
-        const auto delay_ns = static_cast<std::uint64_t>(
-            static_cast<double>(delta_tick * kTickDurationNs) / speed_multiplier);
-        std::this_thread::sleep_for(std::chrono::nanoseconds(delay_ns));
+        const auto tick_offset_ns = static_cast<double>(
+            (header.tick - replay_base_tick_) * tick_duration_.count());
+        const auto deadline_offset = std::chrono::nanoseconds(
+            static_cast<std::uint64_t>(tick_offset_ns / speed_multiplier));
+        tick_timer_->WaitUntil(replay_base_time_ + deadline_offset);
       }
 
       std::vector<std::uint8_t> payload(header.payload_size);
@@ -235,7 +275,6 @@ void ReplayController::ReplayLoop() {
       event_store_.InsertBatch(std::span<const boat::store::EventRecord>(batch));
 
       current_tick_.store(header.tick);
-      prev_tick = header.tick;
 
       if (active_config_.speed == ReplaySpeed::STEP_BY_STEP) {
         paused_.store(true);

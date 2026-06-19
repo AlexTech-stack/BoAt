@@ -10,9 +10,13 @@ Two replay modes are available:
 | Mode | Description | CLI flag |
 |------|-------------|----------|
 | **Direct** | Reads a trace file locally and sends each CAN frame one-by-one via `CanService.SendCanFrame` gRPC | (default) |
-| **Server-side** | Converts the trace to the gateway's internal binary format, uploads via `ReplayService.ImportTraceData`, then plays back server-side | `--server-side` |
+| **Server-side** | Converts the trace to the gateway's internal binary format, uploads via `ReplayService.ImportTraceData`, then plays back server-side using the gateway's tick timer | `--server-side` |
 
-Direct mode is simpler and recommended for most use cases.
+Server-side mode is **recommended for most use cases** — it avoids per-frame gRPC
+overhead and uses the gateway's high-precision tick timer with drift-free
+absolute-time scheduling (see [Tick configuration](#tick-configuration) below).
+Direct mode is simpler for quick ad-hoc replays but each frame incurs a gRPC
+round-trip (~5-8ms) even at max speed.
 
 ## Quick start
 
@@ -69,7 +73,7 @@ boat trace replay recording.blf --speed 2.0 --buses can0
 # Half speed (a fifth of original)
 boat trace replay recording.blf --speed 0.2 --buses can0
 
-# Maximum speed (no inter-frame delays)
+# Maximum speed (no client-side delays; per-frame gRPC overhead still applies)
 boat trace replay recording.blf --speed 0 --buses can0
 ```
 
@@ -90,14 +94,67 @@ boat trace replay recording.blf --verbose --buses can0
 ## Server-side replay
 
 The server-side mode uploads the trace to the gateway and replays it through the
-`ReplayService`, which publishes events on the internal `EventBus`. This allows
-plugins and signal routers to observe the replayed traffic.
+`ReplayService`, which runs on the gateway's internal tick timer. Because the
+entire trace is uploaded in a single request and the gateway drives the timing
+internally, there is **no per-frame gRPC overhead** — the gap between frames is
+determined solely by the tick timer and the configured speed.
 
 ```bash
+# Full pipeline: upload + replay in one command
 boat trace replay recording.blf --server-side --buses can0
 ```
 
-After upload, the trace can be managed like any other trace in the store:
+The trace binary data is uploaded via `ImportTraceData`, then played back via
+`StartReplay`. The `EventForwarder` callback bridges replayed events to the
+CAN/Ethernet/PDU hardware, while the `EventBus` publishes the events so plugins
+and signal routers can observe them.
+
+### Speed with server-side replay
+
+The tick timer drives the replay pacing. At default 1ms tick, the timing is:
+
+| Speed multiplier | Behavior |
+|-----------------|----------|
+| `0` | Max speed — no waiting between ticks, frames fire as fast as the CPU can process them |
+| `1.0` | Real-time: each tick = 1ms of wall clock |
+| `2.0` | 2x speed: ticks advance at 0.5ms intervals |
+| `0.5` | Half speed: ticks advance at 2ms intervals |
+
+```bash
+# Max speed server-side (no frame spacing = fastest possible)
+boat trace replay recording.blf --server-side --speed 0 --buses can0
+
+# 10x accelerated
+boat trace replay recording.blf --server-side --speed 10 --buses can0
+```
+
+### Tick configuration
+
+The tick interval is configurable via environment variables, using the same
+pattern as the gateway node tick:
+
+```
+BOAT_NODE_TICK_US=100    # 100μs ticks (high-precision timerfd, sub-ms)
+BOAT_NODE_TICK_MS=1      # 1ms ticks (default, SleepTickTimer)
+BOAT_NODE_TICK_US=1000   # same as 1ms, uses timerfd backend
+```
+
+- `BOAT_NODE_TICK_US` takes precedence when both are set
+- Values < 1ms use the `TimerfdTickTimer` backend (Linux `timerfd` with
+  `CLOCK_MONOTONIC`, absolute-time scheduling, no drift accumulation)
+- Values ≥ 1ms use `SleepTickTimer` (`std::this_thread::sleep_until`)
+- Minimum practical value is ~100μs (below that, processing overhead per tick
+  exceeds the tick interval and deadlines fire immediately)
+
+The tick timer uses **absolute-time scheduling** — each frame is pinned to an
+absolute wall-clock deadline (`t_base + tick * tick_duration / multiplier`).
+Deadlines in the past fire immediately, so the replay can never fall behind by
+more than one tick; there is no accumulated drift even across long traces.
+
+### Managing uploaded traces
+
+After upload, the trace is stored in the gateway's trace store and can be
+managed independently:
 
 ```bash
 # List stored traces

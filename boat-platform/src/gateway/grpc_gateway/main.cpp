@@ -269,7 +269,7 @@ int main() {
   //   BOAT_NODE_TICK_US takes precedence over BOAT_NODE_TICK_MS when both are set.
   {
     using namespace std::chrono_literals;
-    std::chrono::nanoseconds tick_ns = 10ms;  // default
+    std::chrono::nanoseconds tick_ns = 1ms;  // default
 
     const char* us_env = std::getenv("BOAT_NODE_TICK_US");
     if (us_env != nullptr) {

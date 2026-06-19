@@ -22,6 +22,10 @@ class TickTimer {
   /* Block until the next tick.  Returns false if stopped. */
   virtual bool WaitForNextTick() = 0;
 
+  /* Block until an absolute time point (drift-free).  Returns false if
+   * stopped.  Implementations use sleep_until or timerfd+TFD_TIMER_ABSTIME. */
+  virtual bool WaitUntil(std::chrono::steady_clock::time_point deadline) = 0;
+
   /* Stop the timer (may interrupt a blocked WaitForNextTick). */
   virtual void Stop() = 0;
 
@@ -42,6 +46,7 @@ class SleepTickTimer final : public TickTimer {
  public:
   bool Init(std::chrono::nanoseconds interval) override;
   bool WaitForNextTick() override;
+  bool WaitUntil(std::chrono::steady_clock::time_point deadline) override;
   void Stop() override;
   uint64_t TickCount() const override { return tick_count_; }
   std::chrono::nanoseconds Elapsed() const override;
@@ -62,6 +67,7 @@ class TimerfdTickTimer final : public TickTimer {
 
   bool Init(std::chrono::nanoseconds interval) override;
   bool WaitForNextTick() override;
+  bool WaitUntil(std::chrono::steady_clock::time_point deadline) override;
   void Stop() override;
   uint64_t TickCount() const override { return tick_count_; }
   std::chrono::nanoseconds Elapsed() const override;

@@ -2,12 +2,15 @@
 
 #include "event/event_bus.h"
 #include "event_store/event_store.h"
+#include "pdu/tick_timer.h"
 #include "trace_store/trace_store.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <span>
 #include <string>
@@ -63,6 +66,7 @@ class ReplayController {
  private:
   void ReplayLoop();
   bool SeekToTick(std::uint64_t tick, std::size_t& offset) const;
+  void ParseTickDurationFromEnv();
 
   boat::store::ITraceStore& trace_store_;
   boat::store::IEventStore& event_store_;
@@ -84,6 +88,12 @@ class ReplayController {
   std::atomic<std::uint64_t> requested_seek_tick_{0};
   std::atomic<bool> seek_pending_{false};
   std::string last_error_;
+
+  // TickTimer-based absolute-time scheduling (drift-free).
+  std::unique_ptr<boat::hil::TickTimer> tick_timer_;
+  std::chrono::nanoseconds tick_duration_{std::chrono::milliseconds(1)};
+  std::chrono::steady_clock::time_point replay_base_time_;
+  std::uint64_t replay_base_tick_{0};
 };
 
 }  // namespace boat::replay
