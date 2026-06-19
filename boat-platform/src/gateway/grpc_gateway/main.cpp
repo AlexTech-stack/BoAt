@@ -242,7 +242,7 @@ int main() {
                    event_type < boat::replay::kReplayPduEventBase + 0x10000) {
           const std::uint32_t pdu_id = event_type & 0xFFFF;
           pdu_router.SendPdu(pdu_id, payload);
-        } else if (event_type >= 0x100 && event_type <= 0x1FFFFFFF) {
+        } else if (event_type <= 0x1FFFFFFF) {
           boat::hil::CanFrame can_frame{};
           can_frame.can_id = event_type;
           const std::size_t copy_len = std::min(payload.size(), sizeof(can_frame.data));
