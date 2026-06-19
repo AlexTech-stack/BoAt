@@ -11,7 +11,7 @@ struct sqlite3;
 
 namespace boat::store {
 
-struct TraceRecordHeader {
+struct __attribute__((packed)) TraceRecordHeader {
   std::uint32_t magic;
   std::uint32_t event_type;
   std::uint64_t tick;
