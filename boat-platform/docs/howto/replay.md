@@ -70,12 +70,21 @@ boat trace replay recording.blf --speed 1.0 --buses can0
 # Twice as fast
 boat trace replay recording.blf --speed 2.0 --buses can0
 
-# Half speed (a fifth of original)
-boat trace replay recording.blf --speed 0.2 --buses can0
+# Half speed
+boat trace replay recording.blf --speed 0.5 --buses can0
 
-# Maximum speed (no client-side delays; per-frame gRPC overhead still applies)
+# Maximum speed (as fast as possible; in direct mode per-frame gRPC overhead still applies)
 boat trace replay recording.blf --speed 0 --buses can0
 ```
+
+| `--speed` | Behavior |
+|-----------|----------|
+| `0` | Max speed — no delay, frames fire at CPU-limited rate |
+| `0 < x < 1` | Slower than real-time (e.g. `0.1` = 10x slower) |
+| `1.0` | Real-time (default) |
+| `2.0` | 2x speed |
+| `10` | 10x speed |
+| `10000+` | Effectively max speed, indistinguishable from `0` |
 
 ### Loop
 
@@ -109,24 +118,16 @@ The trace binary data is uploaded via `ImportTraceData`, then played back via
 CAN/Ethernet/PDU hardware, while the `EventBus` publishes the events so plugins
 and signal routers can observe them.
 
-### Speed with server-side replay
+### Executing server-side replay
 
-The tick timer drives the replay pacing. At default 1ms tick, the timing is:
+The trace binary data is uploaded via `ImportTraceData`, then played back via
+`StartReplay`. The `EventForwarder` callback bridges replayed events to the
+CAN/Ethernet/PDU hardware, while the `EventBus` publishes the events so plugins
+and signal routers can observe them.
 
-| Speed multiplier | Behavior |
-|-----------------|----------|
-| `0` | Max speed — no waiting between ticks, frames fire as fast as the CPU can process them |
-| `1.0` | Real-time: each tick = 1ms of wall clock |
-| `2.0` | 2x speed: ticks advance at 0.5ms intervals |
-| `0.5` | Half speed: ticks advance at 2ms intervals |
-
-```bash
-# Max speed server-side (no frame spacing = fastest possible)
-boat trace replay recording.blf --server-side --speed 0 --buses can0
-
-# 10x accelerated
-boat trace replay recording.blf --server-side --speed 10 --buses can0
-```
+Speed is controlled uniformly via `--speed` (see [Speed control](#speed-control)
+above). In server-side mode there is no per-frame gRPC overhead, so true max
+speed is achievable with `--speed 0` or large multipliers.
 
 ### Tick configuration
 
