@@ -152,7 +152,7 @@ class TraceReplayer:
         if not upload_resp.accepted:
             raise TraceReplayError(f"ImportTraceData rejected: {upload_resp.error.message}")
 
-        speed_mult = max(0.0, self.speed or 1.0)
+        speed_mult = 1_000_000.0 if self.speed == 0 else self.speed
         start_resp = replay_stub.StartReplay(
             replay_pb2.StartReplayRequest(
                 trace_id=trace_id,
@@ -191,6 +191,7 @@ class TraceReplayer:
         """Convert an .asc/.blf file to the gateway's internal binary trace format."""
         reader = self._open_reader(path)
         result = bytearray()
+        first_ts: Optional[float] = None
 
         with reader:
             for msg in reader:
@@ -199,8 +200,14 @@ class TraceReplayer:
                     continue
                 if self.id_filter and msg.arbitration_id not in self.id_filter:
                     continue
-                tick = int(msg.timestamp * 1000)
-                wall_time_ns = int(msg.timestamp * 1_000_000_000)
+
+                ts = msg.timestamp
+                if first_ts is None:
+                    first_ts = ts
+                relative_ts = ts - first_ts
+
+                tick = int(relative_ts * 1000)
+                wall_time_ns = int(relative_ts * 1_000_000_000)
                 payload = bytes(msg.data)
                 event_type = msg.arbitration_id
 
