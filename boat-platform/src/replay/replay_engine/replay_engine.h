@@ -40,6 +40,7 @@ struct ReplayConfig {
   ReplaySpeed speed{ReplaySpeed::REAL_TIME};
   double speed_multiplier{1.0};
   std::uint64_t start_tick{0};
+  std::string eth_iface;
 };
 
 class ReplayController {
@@ -62,6 +63,7 @@ class ReplayController {
   using EventForwarder = std::function<void(std::uint32_t event_type, std::uint64_t tick,
                                             const std::vector<std::uint8_t>& payload)>;
   void SetEventForwarder(EventForwarder forwarder);
+  const ReplayConfig& GetActiveConfig() const;
 
  private:
   void ReplayLoop();

@@ -15,6 +15,7 @@ message StartReplayRequest {
   string simulation_id = 2;
   ReplaySpeed speed = 3;
   double speed_multiplier = 4;
+  string eth_iface = 5;
 }
 message SeekReplayRequest { string replay_id = 1; uint64 tick = 2; }
 message StreamReplayRequest { string replay_id = 1; }
