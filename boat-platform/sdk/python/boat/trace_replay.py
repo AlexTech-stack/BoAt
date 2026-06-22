@@ -1,6 +1,8 @@
-"""Python SDK for replaying CAN trace files through the BoAt gateway.
+"""Python SDK for replaying CAN / Ethernet trace files through the BoAt gateway.
 
-Supported formats: ASC, BLF (via python-can).
+Supported formats:
+  - CAN: .asc, .blf (via python-can)
+  - Ethernet: .pcap (DLT_EN10MB)
 
 Two replay modes are available:
 
@@ -8,6 +10,8 @@ Two replay modes are available:
 2. **Server-side mode**: Converts the trace to the gateway's internal binary format,
    uploads it via ReplayService.ImportTraceData, then plays back using
    ReplayService.StartReplay + StreamReplay.
+
+Ethernet traces always use server-side mode.
 
 Quick example::
 
@@ -23,9 +27,13 @@ Quick example::
 
     # Server-side mode:
     replayer.replay_server_side("recording.asc")
+
+    # Ethernet pcap (always server-side):
+    replayer.replay("capture.pcap")
 """
 from __future__ import annotations
 
+from collections import namedtuple
 import struct
 import time
 from pathlib import Path
@@ -37,6 +45,68 @@ _CANFD_FDF = 0x04   # FD frame
 
 # Internal trace format magic number
 _TRACE_MAGIC = 0xB0A7B0A7
+
+# Replay Ethernet event type base (matches kReplayEthEventBase in C++)
+_REPLAY_ETH_EVENT_BASE = 0xEE000000
+
+
+EthernetPcapFrame = namedtuple("EthernetPcapFrame", [
+    "timestamp", "dst_mac", "src_mac", "ethertype", "payload",
+])
+
+
+class EthernetPcapReader:
+    """Iterate Ethernet frames from a standard pcap file (DLT_EN10MB).
+
+    Yields ``EthernetPcapFrame`` per packet record.
+    Context-manager compatible (``with reader: for frame in reader:``).
+    """
+
+    def __init__(self, path: str) -> None:
+        self._f = open(path, "rb")
+        try:
+            hdr = self._f.read(24)
+            if len(hdr) < 24:
+                raise TraceReplayError("Truncated pcap global header")
+            _, _, _, _, _, _, dlt = struct.unpack("<IHHiIII", hdr)
+            if dlt != 1:  # DLT_EN10MB
+                raise TraceReplayError(
+                    f"Unsupported pcap DLT {dlt}, expected DLT_EN10MB (1)"
+                )
+        except TraceReplayError:
+            self._f.close()
+            raise
+        except Exception as e:
+            self._f.close()
+            raise TraceReplayError(f"Invalid pcap file: {e}") from e
+
+    def __enter__(self) -> "EthernetPcapReader":
+        return self
+
+    def __exit__(self, *args) -> None:
+        self._f.close()
+
+    def __iter__(self) -> "EthernetPcapReader":
+        return self
+
+    def __next__(self) -> EthernetPcapFrame:
+        hdr = self._f.read(16)
+        if len(hdr) < 16:
+            self._f.close()
+            raise StopIteration
+        ts_sec, ts_usec, incl_len, _ = struct.unpack("<IIII", hdr)
+        frame = self._f.read(incl_len)
+        if len(frame) < 14:
+            self._f.close()
+            raise StopIteration
+        ts = ts_sec + ts_usec / 1_000_000
+        return EthernetPcapFrame(
+            timestamp=ts,
+            dst_mac=frame[0:6],
+            src_mac=frame[6:12],
+            ethertype=(frame[12] << 8) | frame[13],
+            payload=frame[14:incl_len],
+        )
 
 
 class TraceReplayError(RuntimeError):
@@ -88,11 +158,12 @@ class TraceReplayer:
         """Replay a trace file.
 
         Args:
-            path: Path to an ``.asc`` or ``.blf`` file.
+            path: Path to a ``.asc``, ``.blf``, or ``.pcap`` file.
             loop: If *True* replay the file indefinitely until the process is
                   interrupted.
             server_side: If *True*, upload the trace and use the gateway's
-                         ReplayService for server-side playback.
+                         ReplayService for server-side playback.  Automatically
+                         enabled for ``.pcap`` / ``.pcapng`` files.
 
         Returns:
             Total number of frames sent (across all loop iterations).
@@ -101,11 +172,14 @@ class TraceReplayer:
             TraceReplayError: If the file cannot be opened or a gRPC error
             occurs.
         """
+        path = Path(path)
+        if path.suffix.lower() in (".pcap", ".pcapng") and not server_side:
+            server_side = True  # Ethernet requires server-side mode
+
         if server_side:
             return self.replay_server_side(path, loop=loop)
 
         stub = self._get_stub()
-        path = Path(path)
         total = 0
         while True:
             total += self._replay_once(stub, path, total == 0)
@@ -188,19 +262,17 @@ class TraceReplayer:
     # ── Internals ──────────────────────────────────────────────────────────────
 
     def _convert_to_binary(self, path: Path) -> bytes:
-        """Convert an .asc/.blf file to the gateway's internal binary trace format."""
+        """Convert a trace file to the gateway's internal binary trace format.
+
+        Handles both CAN (ASC/BLF) and Ethernet (pcap) sources.
+        """
         reader = self._open_reader(path)
         result = bytearray()
         first_ts: Optional[float] = None
+        is_eth = isinstance(reader, EthernetPcapReader)
 
         with reader:
             for msg in reader:
-                ch = getattr(msg, "channel", None)
-                if self.channel_filter is not None and ch != self.channel_filter:
-                    continue
-                if self.id_filter and msg.arbitration_id not in self.id_filter:
-                    continue
-
                 ts = msg.timestamp
                 if first_ts is None:
                     first_ts = ts
@@ -208,8 +280,20 @@ class TraceReplayer:
 
                 tick = int(relative_ts * 1000)
                 wall_time_ns = int(relative_ts * 1_000_000_000)
-                payload = bytes(msg.data)
-                event_type = msg.arbitration_id
+
+                if is_eth:
+                    # Ethernet frame → replay as eth event type
+                    event_type = _REPLAY_ETH_EVENT_BASE | (msg.ethertype & 0xFFFF)
+                    raw = msg.dst_mac + msg.src_mac + struct.pack(">H", msg.ethertype) + msg.payload
+                else:
+                    # CAN frame (original behaviour)
+                    ch = getattr(msg, "channel", None)
+                    if self.channel_filter is not None and ch != self.channel_filter:
+                        continue
+                    if self.id_filter and msg.arbitration_id not in self.id_filter:
+                        continue
+                    event_type = msg.arbitration_id
+                    raw = bytes(msg.data)
 
                 header = struct.pack(
                     "<IIQqI",
@@ -217,10 +301,10 @@ class TraceReplayer:
                     event_type,
                     tick,
                     wall_time_ns,
-                    len(payload),
+                    len(raw),
                 )
                 result.extend(header)
-                result.extend(payload)
+                result.extend(raw)
 
         return bytes(result)
 
@@ -256,21 +340,31 @@ class TraceReplayer:
         return self.buses[min(idx, len(self.buses) - 1)]
 
     def _open_reader(self, path: Path):
-        """Return a python-can log reader appropriate for *path*."""
+        """Return a reader appropriate for *path*.
+
+        Supports:
+          - ``.pcap`` / ``.pcapng`` → ``EthernetPcapReader``
+          - ``.asc`` / ``.blf`` → python-can reader
+        """
+        suffix = path.suffix.lower()
+        if suffix in (".pcap", ".pcapng"):
+            return EthernetPcapReader(str(path))
+
+        # CAN formats (need python-can)
         try:
             import can
         except ImportError as e:
             raise TraceReplayError(
-                "python-can is required for trace replay: "
+                "python-can is required for CAN trace replay: "
                 "pip install python-can"
             ) from e
-        suffix = path.suffix.lower()
         if suffix == ".asc":
             return can.ASCReader(str(path))
         if suffix == ".blf":
             return can.BLFReader(str(path))
         raise TraceReplayError(
-            f"Unsupported trace format '{suffix}'. Supported: .asc, .blf"
+            f"Unsupported trace format '{suffix}'. "
+            "Supported: .pcap, .pcapng, .asc, .blf"
         )
 
     def _replay_once(self, stub, path: Path, is_first: bool) -> int:
