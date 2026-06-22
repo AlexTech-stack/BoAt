@@ -164,7 +164,7 @@ def cmd_status(
 @trace_app.command("replay")
 def cmd_replay(
     ctx:     typer.Context,
-    file:    Path = typer.Argument(..., help="Path to .asc or .blf trace file"),
+    file:    Path = typer.Argument(..., help="Path to .asc, .blf (CAN) or .pcap (Ethernet) trace file"),
     buses:   str  = typer.Option("",    "--buses",  "-b",
                         help="Comma-separated CAN interfaces for channel mapping "
                              "(ch1→first, ch2→second, …). Default: vcan0"),
@@ -184,7 +184,13 @@ def cmd_replay(
                         help="Only replay frames with this CAN ID (hex, e.g. 0x100). "
                              "Comma-separated for multiple IDs."),
 ) -> None:
-    """Replay a CAN trace file (.asc or .blf) through the gateway."""
+    """Replay a trace file (.asc, .blf, .pcap) through the gateway.
+
+    CAN formats (.asc, .blf) support --channel and --id filters.
+
+    Ethernet pcap files (.pcap, DLT_EN10MB) always use --server-side mode.
+    The --channel and --id flags have no effect on pcap replay.
+    """
     try:
         sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
         from boat.trace_replay import TraceReplayer, TraceReplayError

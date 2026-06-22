@@ -198,6 +198,66 @@ sudo ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on
 boat can list-buses
 ```
 
+## Ethernet replay
+
+Ethernet traffic recorded in standard pcap (``DLT_EN10MB``) format can be
+replayed through the gateway. The workflow is identical to CAN replay — the CLI
+auto-detects ``.pcap`` files and uses server-side mode automatically.
+
+```bash
+# Prerequisites: gateway must be running with Ethernet interfaces configured
+BOAT_ETH_INTERFACES=veth0 ./build/debug/src/gateway/grpc_gateway/boat_gateway
+
+# Replay a pcap file at real-time speed onto veth0
+boat trace replay capture.pcap --buses veth0 --speed 1.0
+
+# Max speed
+boat trace replay capture.pcap --buses veth0 --speed 0
+
+# Filters: --channel and --id are CAN-only and have no effect on pcap files
+```
+
+### How it works
+
+The pcap file is parsed by the Python SDK, which converts each Ethernet frame
+into the gateway's internal binary trace format:
+
+- **event_type** = ``0xEE000000 | ethertype`` (e.g. ``0xEE000800`` for IPv4)
+- **payload** = ``[6 dst_mac][6 src_mac][2 ethertype BE][raw payload]``
+
+The C++ event forwarder reconstructs a full ``EthernetFrame`` from the payload,
+preserving all MAC addresses, ethertype, and frame data — every bit is identical
+to the original capture (forensic replay).
+
+### Ethernet event forwarder (CLI)
+
+The ``boat trace replay`` command sends the binary trace to the gateway via
+``ImportTraceData``, then plays it back through the ``ReplayService`` tick
+timer.  Frames are delivered to all registered Ethernet interfaces
+(``SendFrameAll``).  Per-interface targeting will be added in a future phase.
+
+### Speed and tick configuration
+
+Both CAN and Ethernet replay share the same tick timer. See
+[Tick configuration](#tick-configuration) above for details on
+``BOAT_NODE_TICK_MS`` and ``BOAT_NODE_TICK_US``.
+
+### Supported formats
+
+| Format | Extension | Type |
+|--------|-----------|------|
+| Standard pcap | ``.pcap`` | DLT\_EN10MB (1) — Ethernet II frames |
+| PCAPNG | ``.pcapng`` | Not yet supported |
+
+### Future phases
+
+| Phase | Mode | Description |
+|-------|------|-------------|
+| 1 | Forensic (current) | Every bit identical to the pcap — MAC, ethertype, payload |
+| 2 | MAC adaptation | MAC addresses replaced with the interface's own MAC |
+| 3 | MAC + IP adaptation | MAC + IP rewritten, header checksums recomputed |
+| 4 | Full RFC compliance | TTL, protocol, checksums all computed fresh per RFC |
+
 ## Extended (29-bit) CAN IDs
 
 The SocketCan driver automatically sets the `CAN_EFF_FLAG` bit when a CAN ID
@@ -231,6 +291,7 @@ replayer.replay_server_side("tracefile.blf")
 | Frames not appearing on the bus | Check that the CAN interface is up: `ip link show can0`. For FD frames, interface must be configured with `fd on` and `dbitrate`. |
 | Extended IDs appear truncated (e.g. `29F` instead of `1BFC829F`) | SocketCan driver missing `CAN_EFF_FLAG`. Build the latest gateway. |
 | gRPC `UNAVAILABLE` | Gateway not running or wrong host/port. Verify: `boat can list-buses`. |
+| Ethernet pcap replayed but no frames on bus | Verify the Ethernet interface is configured (`BOAT_ETH_INTERFACES=veth0`) and registered: `boat eth list-ifaces`. The pcap DLT must be `EN10MB` (1). |
 | Server-side replay imports but no frames appear on the bus | The trace file timestamps may be absolute (epoch-based). The Python SDK converts timestamps to relative ticks internally since build `43824e6`. Upgrade the SDK: `pip install -e ./sdk/python`. |
-| Server-side replay seems to hang (no console output after "Replaying...") | The Python client blocks on `StreamReplay` waiting for events from the gateway's EventBus. CAN frames are still sent to the bus — verify with `candump`. The `EventBus` requires a running tick scheduler to dispatch events, which is not active outside an active simulation. Use `Ctrl+C` to interrupt; the frames will have been delivered. |
-| No frames replayed | Check the trace file format (`.blf`/`.asc`). Ensure the channel filter is correct: `python3 -c "import can; print([getattr(m,'channel') for m in can.BLFReader('file.blf')][:5])"`. |
+| Server-side replay seems to hang (no console output after "Replaying...") | The Python client blocks on `StreamReplay` waiting for events from the gateway's EventBus. CAN/Ethernet frames are still sent to the bus — verify with `candump`/`tcpdump`. Use `Ctrl+C` to interrupt; the frames will have been delivered. |
+| No frames replayed | Check the trace file format (`.blf`/`.asc`/`.pcap`). Ensure the channel filter is correct: `python3 -c "import can; print([getattr(m,'channel') for m in can.BLFReader('file.blf')][:5])"`. |

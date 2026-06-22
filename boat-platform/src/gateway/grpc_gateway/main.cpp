@@ -229,13 +229,20 @@ int main() {
           const std::vector<std::uint8_t>& payload) {
         if (event_type >= boat::replay::kReplayEthEventBase &&
             event_type < boat::replay::kReplayEthEventBase + 0x10000) {
+          // Payload: [6 dst_mac][6 src_mac][2 ethertype BE][raw payload]
           boat::hil::EthernetFrame eth_frame{};
-          const std::uint16_t ethertype =
+          eth_frame.ethertype =
               static_cast<std::uint16_t>(event_type & 0xFFFF);
-          eth_frame.ethertype = ethertype;
-          const std::size_t copy_len = std::min(payload.size(), eth_frame.payload.size());
-          if (copy_len > 0) {
-            std::memcpy(eth_frame.payload.data(), payload.data(), copy_len);
+          if (payload.size() >= 14) {
+            std::size_t off = 0;
+            std::memcpy(eth_frame.dst_mac, payload.data() + off, 6); off += 6;
+            std::memcpy(eth_frame.src_mac, payload.data() + off, 6); off += 6;
+            // ethertype from payload (unused, event_type is authoritative)
+            off += 2;
+            eth_frame.payload.assign(payload.data() + off, payload.data() + payload.size());
+          } else {
+            // Fallback for legacy records without MAC header
+            eth_frame.payload.assign(payload.begin(), payload.end());
           }
           eth_registry.SendFrameAll(eth_frame);
         } else if (event_type >= boat::replay::kReplayPduEventBase &&
