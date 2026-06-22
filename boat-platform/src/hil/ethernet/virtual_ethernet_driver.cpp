@@ -81,22 +81,30 @@ bool VirtualEthernetDriver::Open() {
     return false;
   }
 
-  // Join the multicast group.
+  // Join the multicast group on loopback so traffic stays local to the host.
   struct ip_mreq mreq{};
   inet_pton(AF_INET, mcast_addr_.c_str(), &mreq.imr_multiaddr);
-  mreq.imr_interface.s_addr = INADDR_ANY;
+  mreq.imr_interface.s_addr = htonl(INADDR_LOOPBACK);
   if (setsockopt(sock_, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
     ::close(sock_);
     sock_ = -1;
     return false;
   }
 
-  // Do NOT enable multicast loopback: the registry dispatches sent frames
-  // directly to gRPC subscribers via EthernetBusRegistry::DispatchRx, so
-  // socket loopback is not needed and would cause every sent frame to be
-  // double-delivered (once via DispatchRx, once via the rx_thread read-back).
-  // Other processes' sockets on the same host still receive the multicast.
-  const unsigned char loop = 0;
+  // Set the outgoing interface for sent multicast packets to loopback.
+  const in_addr_t loop_if = htonl(INADDR_LOOPBACK);
+  if (setsockopt(sock_, IPPROTO_IP, IP_MULTICAST_IF, &loop_if, sizeof(loop_if)) < 0) {
+    ::close(sock_);
+    sock_ = -1;
+    return false;
+  }
+
+  // Enable multicast loopback so other local sockets (Wireshark, tcpdump,
+  // or another gateway instance) can receive the virtual Ethernet traffic.
+  // The EthernetBusRegistry no longer calls DispatchRx in SendFrame/SendFrameAll
+  // for virtual interfaces — the rx_thread picks up the looped-back frame
+  // and dispatches it, eliminating the double-delivery concern.
+  const unsigned char loop = 1;
   setsockopt(sock_, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop));
 
   // Keep TTL local to avoid leaking onto the network.
