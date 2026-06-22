@@ -131,6 +131,10 @@ void ReplayController::SetEventForwarder(EventForwarder forwarder) {
   event_forwarder_ = std::move(forwarder);
 }
 
+const ReplayConfig& ReplayController::GetActiveConfig() const {
+  return active_config_;
+}
+
 void ReplayController::ParseTickDurationFromEnv() {
   //   BOAT_NODE_TICK_US=N   — set tick in μs (high-precision, overrides MS)
   //   BOAT_NODE_TICK_MS=N   — set tick in ms (default 1)

@@ -1,6 +1,8 @@
-"""Python SDK for replaying CAN trace files through the BoAt gateway.
+"""Python SDK for replaying CAN/Ethernet trace files through the BoAt gateway.
 
-Supported formats: ASC, BLF (via python-can).
+Supported formats:
+  - CAN: .asc, .blf (via python-can)
+  - Ethernet: .pcap (DLT_EN10MB, IPv4+UDP/ICMP only)
 
 Two replay modes are available:
 
@@ -9,23 +11,32 @@ Two replay modes are available:
    uploads it via ReplayService.ImportTraceData, then plays back using
    ReplayService.StartReplay + StreamReplay.
 
+Ethernet traces always use server-side mode.
+
 Quick example::
 
     from boat.trace_replay import TraceReplayer
 
+    # CAN replay
     replayer = TraceReplayer(
         gateway="localhost:50051",
-        buses=["vcan0", "vcan1"],   # channel 1 → vcan0, channel 2 → vcan1
-        speed=1.0,                   # real-time; >1 faster, <1 slower
+        buses=["vcan0", "vcan1"],
+        speed=1.0,
     )
-    # Direct mode (default):
     replayer.replay("recording.asc")
 
-    # Server-side mode:
-    replayer.replay_server_side("recording.asc")
+    # Ethernet pcap replay (always server-side)
+    replayer = TraceReplayer(
+        gateway="localhost:50051",
+        buses=["eth0"],
+        replay_src_ip="192.168.1.1",
+        replay_dst_ip="192.168.1.100",
+    )
+    replayer.replay("capture.pcap")
 """
 from __future__ import annotations
 
+from collections import namedtuple
 import struct
 import time
 from pathlib import Path
@@ -38,28 +49,94 @@ _CANFD_FDF = 0x04   # FD frame
 # Internal trace format magic number
 _TRACE_MAGIC = 0xB0A7B0A7
 
+# Replay Ethernet event type base (matches kReplayEthEventBase in C++)
+_REPLAY_ETH_EVENT_BASE = 0xEE000000
+
+
+EthernetPcapFrame = namedtuple("EthernetPcapFrame", [
+    "timestamp", "dst_mac", "src_mac", "ethertype", "payload",
+])
+
+
+class EthernetPcapReader:
+    """Iterate Ethernet frames from a standard pcap file (DLT_EN10MB).
+
+    Yields ``EthernetPcapFrame`` per packet record.
+    Context-manager compatible.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._f = open(path, "rb")
+        try:
+            hdr = self._f.read(24)
+            if len(hdr) < 24:
+                raise TraceReplayError("Truncated pcap global header")
+            _, _, _, _, _, _, dlt = struct.unpack("<IHHiIII", hdr)
+            if dlt != 1:
+                raise TraceReplayError(
+                    f"Unsupported pcap DLT {dlt}, expected DLT_EN10MB (1)"
+                )
+        except TraceReplayError:
+            self._f.close()
+            raise
+        except Exception as e:
+            self._f.close()
+            raise TraceReplayError(f"Invalid pcap file: {e}") from e
+
+    def __enter__(self) -> "EthernetPcapReader":
+        return self
+
+    def __exit__(self, *args) -> None:
+        self._f.close()
+
+    def __iter__(self) -> "EthernetPcapReader":
+        return self
+
+    def __next__(self) -> EthernetPcapFrame:
+        hdr = self._f.read(16)
+        if len(hdr) < 16:
+            self._f.close()
+            raise StopIteration
+        ts_sec, ts_usec, incl_len, _ = struct.unpack("<IIII", hdr)
+        frame = self._f.read(incl_len)
+        if len(frame) < 14:
+            self._f.close()
+            raise StopIteration
+        ts = ts_sec + ts_usec / 1_000_000
+        return EthernetPcapFrame(
+            timestamp=ts,
+            dst_mac=frame[0:6],
+            src_mac=frame[6:12],
+            ethertype=(frame[12] << 8) | frame[13],
+            payload=frame[14:incl_len],
+        )
+
 
 class TraceReplayError(RuntimeError):
     pass
 
 
 class TraceReplayer:
-    """Replay a CAN trace file through the BoAt gateway via gRPC.
+    """Replay a CAN/Ethernet trace file through the BoAt gateway via gRPC.
 
     Args:
         gateway:     gRPC address of the BoAt gateway (host:port).
-        buses:       Ordered list of CAN interface names.  Channel *N* in the
-                     trace file maps to ``buses[N-1]`` (1-based, ASC/BLF
-                     convention).  If the channel number exceeds the list
-                     length the last entry is used.  Pass an empty list to
-                     use ``"vcan0"`` for every frame.
+        buses:       Ordered list of interface names.  For CAN: channel *N*
+                     maps to ``buses[N-1]`` (1-based).  For Ethernet: the
+                     first bus is the target interface for reconstructed frames.
         speed:       Playback speed multiplier.  ``1.0`` = real-time,
                      ``2.0`` = twice as fast, ``0.5`` = half speed.
                      ``0`` means send as fast as possible (no delay).
         simulation_id: Simulation ID forwarded to the gateway (usually ``""``).
         on_frame:    Optional callback ``(index, msg) -> None`` called for
-                     every frame just before it is sent.  Useful for progress
-                     reporting.
+                     every frame just before it is sent.
+        channel_filter: If set, only replay CAN frames from this channel.
+        id_filter:   If set, only replay CAN frames with these arbitration IDs.
+        eth_iface:   Target Ethernet interface for pcap replay (overrides ``buses[0]``).
+        replay_src_ip: Source IP address for reconstructed IP header (Ethernet replay).
+        replay_dst_ip: Destination IP address for reconstructed IP header.
+        replay_src_mac: Override source MAC (auto-detected from interface if not set).
+        replay_dst_mac: Override destination MAC (default: broadcast for UDP/ICMP).
     """
 
     def __init__(
@@ -71,16 +148,26 @@ class TraceReplayer:
         on_frame: Optional[Callable] = None,
         channel_filter: Optional[int] = None,
         id_filter: Optional[set[int]] = None,
+        eth_iface: Optional[str] = None,
+        replay_src_ip: Optional[str] = None,
+        replay_dst_ip: Optional[str] = None,
+        replay_src_mac: Optional[str] = None,
+        replay_dst_mac: Optional[str] = None,
     ) -> None:
-        self.gateway       = gateway
-        self.buses         = buses or []
-        self.speed         = speed
-        self.simulation_id = simulation_id
-        self.on_frame      = on_frame
+        self.gateway        = gateway
+        self.buses          = buses or []
+        self.speed          = speed
+        self.simulation_id  = simulation_id
+        self.on_frame       = on_frame
         self.channel_filter = channel_filter
-        self.id_filter     = id_filter or set()
-        self._stub         = None
-        self._replay_stub  = None
+        self.id_filter      = id_filter or set()
+        self.eth_iface       = eth_iface
+        self.replay_src_ip   = replay_src_ip
+        self.replay_dst_ip   = replay_dst_ip
+        self.replay_src_mac  = replay_src_mac
+        self.replay_dst_mac  = replay_dst_mac
+        self._stub          = None
+        self._replay_stub   = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -88,11 +175,12 @@ class TraceReplayer:
         """Replay a trace file.
 
         Args:
-            path: Path to an ``.asc`` or ``.blf`` file.
+            path: Path to a ``.asc``, ``.blf``, or ``.pcap`` file.
             loop: If *True* replay the file indefinitely until the process is
                   interrupted.
             server_side: If *True*, upload the trace and use the gateway's
-                         ReplayService for server-side playback.
+                         ReplayService for server-side playback.  Automatically
+                         enabled for ``.pcap`` files.
 
         Returns:
             Total number of frames sent (across all loop iterations).
@@ -101,11 +189,13 @@ class TraceReplayer:
             TraceReplayError: If the file cannot be opened or a gRPC error
             occurs.
         """
+        path = Path(path)
+        if path.suffix.lower() == ".pcap" and not server_side:
+            server_side = True
         if server_side:
             return self.replay_server_side(path, loop=loop)
 
         stub = self._get_stub()
-        path = Path(path)
         total = 0
         while True:
             total += self._replay_once(stub, path, total == 0)
@@ -153,12 +243,14 @@ class TraceReplayer:
             raise TraceReplayError(f"ImportTraceData rejected: {upload_resp.error.message}")
 
         speed_mult = 1_000_000.0 if self.speed == 0 else self.speed
+        eth_iface = self.eth_iface or (self.buses[0] if self.buses else "")
         start_resp = replay_stub.StartReplay(
             replay_pb2.StartReplayRequest(
                 trace_id=trace_id,
                 simulation_id=self.simulation_id,
                 speed=replay_pb2.REPLAY_SPEED_ACCELERATED,
                 speed_multiplier=speed_mult,
+                eth_iface=eth_iface,
             )
         )
 
@@ -188,19 +280,17 @@ class TraceReplayer:
     # ── Internals ──────────────────────────────────────────────────────────────
 
     def _convert_to_binary(self, path: Path) -> bytes:
-        """Convert an .asc/.blf file to the gateway's internal binary trace format."""
+        """Convert a trace file to the gateway's internal binary trace format.
+
+        Handles both CAN (ASC/BLF) and Ethernet (pcap) sources.
+        """
         reader = self._open_reader(path)
         result = bytearray()
         first_ts: Optional[float] = None
+        is_eth = isinstance(reader, EthernetPcapReader)
 
         with reader:
             for msg in reader:
-                ch = getattr(msg, "channel", None)
-                if self.channel_filter is not None and ch != self.channel_filter:
-                    continue
-                if self.id_filter and msg.arbitration_id not in self.id_filter:
-                    continue
-
                 ts = msg.timestamp
                 if first_ts is None:
                     first_ts = ts
@@ -208,8 +298,18 @@ class TraceReplayer:
 
                 tick = int(relative_ts * 1000)
                 wall_time_ns = int(relative_ts * 1_000_000_000)
-                payload = bytes(msg.data)
-                event_type = msg.arbitration_id
+
+                if is_eth:
+                    raw = self._reconstruct_ip_packet(msg)
+                    event_type = _REPLAY_ETH_EVENT_BASE | (msg.ethertype & 0xFFFF)
+                else:
+                    ch = getattr(msg, "channel", None)
+                    if self.channel_filter is not None and ch != self.channel_filter:
+                        continue
+                    if self.id_filter and msg.arbitration_id not in self.id_filter:
+                        continue
+                    raw = bytes(msg.data)
+                    event_type = msg.arbitration_id
 
                 header = struct.pack(
                     "<IIQqI",
@@ -217,12 +317,119 @@ class TraceReplayer:
                     event_type,
                     tick,
                     wall_time_ns,
-                    len(payload),
+                    len(raw),
                 )
                 result.extend(header)
-                result.extend(payload)
+                result.extend(raw)
 
         return bytes(result)
+
+    def _reconstruct_ip_packet(self, frame: EthernetPcapFrame) -> bytes:
+        """Reconstruct an IP packet with user-specified addresses.
+
+        Parses the original IP+transport headers from *frame*, preserves protocol,
+        ports, TTL, and transport payload.  Rewrites src/dst IPs with
+        user-provided values.  Recalculates IP and UDP checksums.
+        """
+        payload = frame.payload
+        if len(payload) < 20:
+            return b""
+
+        # Parse IPv4 header
+        version_ihl = payload[0]
+        ihl = (version_ihl & 0x0F) * 4
+        if ihl < 20 or ihl > len(payload):
+            return b""
+        total_len = (payload[2] << 8) | payload[3]
+        identification = (payload[4] << 8) | payload[5]
+        flags_frag = (payload[6] << 8) | payload[7]
+        ttl = payload[8]
+        protocol = payload[9]
+        orig_src = payload[12:16]
+        orig_dst = payload[16:20]
+
+        header_end = ihl
+        transport_payload = payload[header_end:total_len]
+
+        src_ip_bytes = self._parse_ip(self.replay_src_ip or str(orig_src))
+        dst_ip_bytes = self._parse_ip(self.replay_dst_ip or str(orig_dst))
+
+        if protocol == 17 and len(transport_payload) >= 8:
+            # UDP: preserve ports, rebuild header
+            src_port = struct.unpack("!H", transport_payload[0:2])[0]
+            dst_port = struct.unpack("!H", transport_payload[2:4])[0]
+            udp_len = len(transport_payload[8:]) + 8
+            udp_data = transport_payload[8:]
+            new_udp = struct.pack("!HHHH", src_port, dst_port, udp_len, 0)
+            new_udp += udp_data
+            transport = new_udp
+            total_len = 20 + len(new_udp)
+        elif protocol == 1 and len(transport_payload) >= 4:
+            # ICMP: preserve type/code/rest, rebuild
+            icmp_type = transport_payload[0:1]
+            icmp_code = transport_payload[1:2]
+            icmp_rest = transport_payload[4:]
+            new_icmp = icmp_type + icmp_code + b"\x00\x00"  # checksum placeholder
+            new_icmp += icmp_rest
+            transport = new_icmp
+            total_len = 20 + len(new_icmp)
+        else:
+            # Unknown protocol — pass through as-is
+            transport = transport_payload
+            total_len = 20 + len(transport)
+
+        # Build IP header (no options)
+        ip_header = struct.pack("!BBHHHBBH4s4s",
+            0x45,                     # version=4, ihl=5
+            0,                        # DSCP/ECN
+            total_len,                # total length
+            identification,           # identification
+            flags_frag,               # flags + fragment offset
+            ttl,                      # time to live
+            protocol,                 # protocol
+            0,                        # header checksum (placeholder)
+            src_ip_bytes,             # source address
+            dst_ip_bytes,             # destination address
+        )
+
+        # Calculate IP checksum
+        ip_csum = self._checksum(ip_header)
+        ip_header = ip_header[:10] + struct.pack("!H", ip_csum) + ip_header[12:]
+
+        result = ip_header + transport
+
+        # Calculate UDP checksum if UDP (optional but good practice)
+        if protocol == 17:
+            pseudo = src_ip_bytes + dst_ip_bytes + b"\x00" + struct.pack("!BH", 17, len(transport))
+            udp_offset = 20
+            udp_hdr = result[udp_offset:udp_offset + 8]
+            udp_csum = self._checksum(pseudo + udp_hdr + transport[8:])
+            if udp_csum == 0:
+                udp_csum = 0xFFFF
+            result = result[:udp_offset + 6] + struct.pack("!H", udp_csum) + result[udp_offset + 8:]
+
+        # Calculate ICMP checksum if ICMP
+        if protocol == 1:
+            icmp_offset = 20
+            icmp_csum = self._checksum(result[icmp_offset:])
+            result = result[:icmp_offset + 2] + struct.pack("!H", icmp_csum) + result[icmp_offset + 4:]
+
+        return result
+
+    @staticmethod
+    def _parse_ip(ip_str: str) -> bytes:
+        parts = ip_str.split(".")
+        return bytes(int(p) for p in parts)
+
+    @staticmethod
+    def _checksum(data: bytes) -> int:
+        s = 0
+        for i in range(0, len(data), 2):
+            word = (data[i] << 8) | (data[i + 1] if i + 1 < len(data) else 0)
+            s += word
+        while s >> 16:
+            s = (s & 0xFFFF) + (s >> 16)
+        return (~s) & 0xFFFF
 
     def _get_replay_stub(self):
         if self._replay_stub is not None:
@@ -256,21 +463,30 @@ class TraceReplayer:
         return self.buses[min(idx, len(self.buses) - 1)]
 
     def _open_reader(self, path: Path):
-        """Return a python-can log reader appropriate for *path*."""
+        """Return a reader appropriate for *path*.
+
+        Supports:
+          - ``.pcap`` (DLT_EN10MB) → ``EthernetPcapReader``
+          - ``.asc`` / ``.blf`` → python-can reader
+        """
+        suffix = path.suffix.lower()
+        if suffix == ".pcap":
+            return EthernetPcapReader(str(path))
+
         try:
             import can
         except ImportError as e:
             raise TraceReplayError(
-                "python-can is required for trace replay: "
+                "python-can is required for CAN trace replay: "
                 "pip install python-can"
             ) from e
-        suffix = path.suffix.lower()
         if suffix == ".asc":
             return can.ASCReader(str(path))
         if suffix == ".blf":
             return can.BLFReader(str(path))
         raise TraceReplayError(
-            f"Unsupported trace format '{suffix}'. Supported: .asc, .blf"
+            f"Unsupported trace format '{suffix}'. "
+            "Supported: .pcap, .asc, .blf"
         )
 
     def _replay_once(self, stub, path: Path, is_first: bool) -> int:

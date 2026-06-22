@@ -164,10 +164,12 @@ def cmd_status(
 @trace_app.command("replay")
 def cmd_replay(
     ctx:     typer.Context,
-    file:    Path = typer.Argument(..., help="Path to .asc or .blf trace file"),
+    file:    Path = typer.Argument(..., help="Path to .asc, .blf, or .pcap trace file"),
     buses:   str  = typer.Option("",    "--buses",  "-b",
                         help="Comma-separated CAN interfaces for channel mapping "
-                             "(ch1→first, ch2→second, …). Default: vcan0"),
+                             "(ch1→first, ch2→second, …). "
+                             "For pcap replay the first bus is the target Ethernet "
+                             "interface. Default: vcan0"),
     speed:   float = typer.Option(1.0,  "--speed",  "-s",
                         help="Playback speed multiplier (1.0=real-time, 0=max)"),
     loop:    bool  = typer.Option(False, "--loop",   "-l",
@@ -177,14 +179,23 @@ def cmd_replay(
     verbose: bool  = typer.Option(False, "--verbose", "-v",
                         help="Print every frame as it is sent"),
     server_side: bool = typer.Option(False, "--server-side",
-                        help="Upload trace and use server-side ReplayService for playback"),
+                        help="Upload trace and use server-side ReplayService for playback. "
+                             "Auto-enabled for .pcap files."),
     channel: int | None = typer.Option(None, "--channel", "-c",
                         help="Only replay frames from this CAN channel (1-based)"),
     can_id: str | None = typer.Option(None, "--id", "-i",
                         help="Only replay frames with this CAN ID (hex, e.g. 0x100). "
                              "Comma-separated for multiple IDs."),
+    replay_src_ip: str | None = typer.Option(None, "--replay-src-ip",
+                        help="Source IP for reconstructed IP header (Ethernet pcap replay)"),
+    replay_dst_ip: str | None = typer.Option(None, "--replay-dst-ip",
+                        help="Destination IP for reconstructed IP header"),
+    replay_src_mac: str | None = typer.Option(None, "--replay-src-mac",
+                        help="Override source MAC (auto-detected from interface if not set)"),
+    replay_dst_mac: str | None = typer.Option(None, "--replay-dst-mac",
+                        help="Override destination MAC (default: broadcast for UDP/ICMP)"),
 ) -> None:
-    """Replay a CAN trace file (.asc or .blf) through the gateway."""
+    """Replay a trace file (.asc, .blf, .pcap) through the gateway."""
     try:
         sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
         from boat.trace_replay import TraceReplayer, TraceReplayError
@@ -224,15 +235,22 @@ def cmd_replay(
         on_frame       = _on_frame if verbose else None,
         channel_filter = channel,
         id_filter      = id_set,
+        eth_iface      = bus_list[0] if bus_list else None,
+        replay_src_ip  = replay_src_ip,
+        replay_dst_ip  = replay_dst_ip,
+        replay_src_mac = replay_src_mac,
+        replay_dst_mac = replay_dst_mac,
     )
 
     speed_label = f"{speed}x" if speed > 0 else "max"
     mode_label = "server-side" if server_side else "direct"
+    is_pcap = file.suffix.lower() == ".pcap"
     ch_label = f" ch={channel}" if channel is not None else ""
     typer.echo(
         f"Replaying {file.name} → {gateway}  "
         f"[mode={mode_label}  speed={speed_label}  loop={loop}{ch_label}"
-        f"  buses={bus_list or ['vcan0']}]"
+        f"  buses={bus_list or ['vcan0']}"
+        f"{'  pcap' if is_pcap else ''}]"
     )
 
     try:

@@ -204,6 +204,76 @@ The SocketCan driver automatically sets the `CAN_EFF_FLAG` bit when a CAN ID
 exceeds the 11-bit range (`> 0x7FF`). This ensures extended frames appear
 correctly on the bus with their full 29-bit identifier.
 
+## Ethernet (pcap) replay
+
+Replay pcap-captured Ethernet traffic (IPv4+UDP/ICMP) through the BoAt gateway.
+
+Headers are rewritten to match the target network:
+- **L2 (Ethernet):** Source MAC auto-detected from the target interface; destination
+  MAC defaults to broadcast.  Both are overridable via ``--replay-src-mac`` /
+  ``--replay-dst-mac``.
+- **L3 (IPv4):** Source and destination IPs are replaced with user-specified
+  values (``--replay-src-ip`` / ``--replay-dst-ip``).  TTL is preserved from
+  the original packet.
+- **L4 (UDP):** Ports and payload are preserved from the original pcap.
+- **L4 (ICMP):** Type, code, and payload are preserved.  The IP addresses are
+  rewritten and the ICMP checksum is recalculated.
+- **Checksums:** IP header, UDP (if applicable), and ICMP checksums are
+  recalculated after rewriting.
+
+``.pcapng`` is **not** supported — only classic pcap (DLT\_EN10MB).
+
+### Quick start
+
+```bash
+# Replay a pcap file — source MAC auto-detected from eth0
+boat trace replay capture.pcap --buses eth0 \
+  --replay-src-ip 192.168.1.1 \
+  --replay-dst-ip 192.168.1.100
+```
+
+### Specifying MAC addresses
+
+```bash
+# Override source and destination MAC
+boat trace replay capture.pcap --buses eth0 \
+  --replay-src-ip 192.168.1.1 \
+  --replay-dst-ip 192.168.1.100 \
+  --replay-src-mac 02:de:ad:be:ef:01 \
+  --replay-dst-mac 02:de:ad:be:ef:02
+```
+
+### How it works
+
+1. Python SDK reads the pcap file, strips L2/L3/L4 headers, preserving
+   protocol, ports, TTL, and application payload from the original.
+2. A clean IPv4 header is built with user-specified source/destination IPs
+   (same TTL and protocol as the original).
+3. UDP or ICMP headers are rebuilt (ports preserved for UDP; type/code for ICMP).
+4. IP and transport checksums are calculated.
+5. The reconstructed IP packet is stored in the gateway's binary trace format.
+6. The C++ forwarder reads the trace records, auto-detects the source MAC from
+   the target interface, wraps the IP packet in an Ethernet L2 frame, and sends
+   it on the specified interface via ``SendFrame(iface, ...)``.
+
+### Supported protocols
+
+| Protocol | Status |
+|----------|--------|
+| IPv4 + UDP | Full support — ports preserved, IPs rewritten |
+| IPv4 + ICMP | Full support — type/code preserved, IPs rewritten |
+| IPv4 + TCP | **Phase 2** — requires TCP state machine (connection tracking, window-adaptive ACK/SEQ) |
+| IPv6 | Not yet supported |
+
+### Technical notes
+
+- Ethernet replay uses ``SendFrame(iface, ...)`` — never ``SendFrameAll``.
+- Only server-side mode is supported for pcap files (auto-forced).
+- Interface config (`eth_iface`) is passed via the updated ``StartReplayRequest``
+  protobuf message and stored in ``ReplayConfig.eth_iface``.
+- The original TCP sequence numbers in ``.pcap`` files are incorrect for replay
+  in a live network — a stateful TCP proxy is required (Phase 2).
+
 ## Programmatic usage (Python SDK)
 
 ```python
@@ -228,9 +298,10 @@ replayer.replay_server_side("tracefile.blf")
 
 | Symptom | Likely cause |
 |---------|--------------|
-| Frames not appearing on the bus | Check that the CAN interface is up: `ip link show can0`. For FD frames, interface must be configured with `fd on` and `dbitrate`. |
+| Frames not appearing on the bus | Check that the CAN/Ethernet interface is up. For CAN FD: `ip link show can0`. For Ethernet: `ip link show eth0`. |
 | Extended IDs appear truncated (e.g. `29F` instead of `1BFC829F`) | SocketCan driver missing `CAN_EFF_FLAG`. Build the latest gateway. |
 | gRPC `UNAVAILABLE` | Gateway not running or wrong host/port. Verify: `boat can list-buses`. |
-| Server-side replay imports but no frames appear on the bus | The trace file timestamps may be absolute (epoch-based). The Python SDK converts timestamps to relative ticks internally since build `43824e6`. Upgrade the SDK: `pip install -e ./sdk/python`. |
-| Server-side replay seems to hang (no console output after "Replaying...") | The Python client blocks on `StreamReplay` waiting for events from the gateway's EventBus. CAN frames are still sent to the bus — verify with `candump`. The `EventBus` requires a running tick scheduler to dispatch events, which is not active outside an active simulation. Use `Ctrl+C` to interrupt; the frames will have been delivered. |
-| No frames replayed | Check the trace file format (`.blf`/`.asc`). Ensure the channel filter is correct: `python3 -c "import can; print([getattr(m,'channel') for m in can.BLFReader('file.blf')][:5])"`. |
+| Server-side replay imports but no CAN frames appear on the bus | The trace file timestamps may be absolute (epoch-based). The Python SDK converts timestamps to relative ticks internally since build `43824e6`. Upgrade the SDK: `pip install -e ./sdk/python`. |
+| Server-side replay seems to hang (no console output after "Replaying...") | The Python client blocks on `StreamReplay` waiting for events from the gateway's EventBus. CAN/Ethernet frames are still sent to the bus — verify with `candump` / `tcpdump`. Use `Ctrl+C` to interrupt; the frames will have been delivered. |
+| No frames replayed | Check the trace file format (`.blf`/`.asc`/`.pcap`). Ensure the channel filter is correct. For pcap: only classic pcap (DLT\_EN10MB) is supported, not pcapng. |
+| Ethernet pcap replay: no frames on the wire | Verify that the target interface name is correct (`--buses eth0`) and that ``--replay-src-ip`` / ``--replay-dst-ip`` are set. The interface must be up and the gateway must have it registered (check ``BOAT_ETH_INTERFACES`` environment variable). |

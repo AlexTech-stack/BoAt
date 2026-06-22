@@ -63,6 +63,7 @@ grpc::Status ReplayServiceImpl::StartReplay(grpc::ServerContext*, const boat::v1
         .trace_id = request->trace_id(),
         .speed = ProtoSpeedToInternal(request->speed()),
         .speed_multiplier = request->speed_multiplier() > 0.0 ? request->speed_multiplier() : 1.0,
+        .eth_iface = request->eth_iface(),
     };
     ctx_.replay_controller.Start(config);
     {

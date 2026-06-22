@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -48,6 +49,26 @@ std::shared_ptr<grpc::Server> g_server;
 boat::core::TickScheduler* g_scheduler = nullptr;
 std::atomic<bool> g_node_tick_running{false};
 constexpr std::uint64_t kGatewayDeterminismSeed = 777;
+
+std::array<std::uint8_t, 6> ReadInterfaceMac(const std::string& iface) {
+  std::array<std::uint8_t, 6> mac{};
+  std::ifstream f("/sys/class/net/" + iface + "/address");
+  if (!f.is_open()) {
+    mac[5] = 0x01;
+    return mac;
+  }
+  std::string line;
+  std::getline(f, line);
+  if (line.size() < 17) {
+    mac[5] = 0x01;
+    return mac;
+  }
+  for (int i = 0; i < 6; ++i) {
+    mac[i] = static_cast<std::uint8_t>(
+        std::stoul(line.substr(i * 3, 2), nullptr, 16));
+  }
+  return mac;
+}
 
 void HandleSignal(int) {
   if (g_server) {
@@ -224,20 +245,22 @@ int main() {
 
   // Register replay forwarder: bridges replayed events to CAN/Ethernet/PDU bus registries
   replay_controller.SetEventForwarder(
-      [&can_registry, &eth_registry, &pdu_router](
+      [&can_registry, &eth_registry, &pdu_router, &replay_controller](
           std::uint32_t event_type, std::uint64_t tick,
           const std::vector<std::uint8_t>& payload) {
         if (event_type >= boat::replay::kReplayEthEventBase &&
             event_type < boat::replay::kReplayEthEventBase + 0x10000) {
-          boat::hil::EthernetFrame eth_frame{};
-          const std::uint16_t ethertype =
-              static_cast<std::uint16_t>(event_type & 0xFFFF);
-          eth_frame.ethertype = ethertype;
-          const std::size_t copy_len = std::min(payload.size(), eth_frame.payload.size());
-          if (copy_len > 0) {
-            std::memcpy(eth_frame.payload.data(), payload.data(), copy_len);
+          const auto& cfg = replay_controller.GetActiveConfig();
+          if (cfg.eth_iface.empty()) {
+            return;
           }
-          eth_registry.SendFrameAll(eth_frame);
+          static const auto src_mac = ReadInterfaceMac(cfg.eth_iface);
+          boat::hil::EthernetFrame eth_frame{};
+          std::memcpy(eth_frame.src_mac, src_mac.data(), 6);
+          std::memset(eth_frame.dst_mac, 0xFF, 6);
+          eth_frame.ethertype = static_cast<std::uint16_t>(event_type & 0xFFFF);
+          eth_frame.payload.assign(payload.begin(), payload.end());
+          eth_registry.SendFrame(cfg.eth_iface, eth_frame);
         } else if (event_type >= boat::replay::kReplayPduEventBase &&
                    event_type < boat::replay::kReplayPduEventBase + 0x10000) {
           const std::uint32_t pdu_id = event_type & 0xFFFF;
