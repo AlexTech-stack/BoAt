@@ -266,6 +266,7 @@ class TraceReplayer:
 
         Handles both CAN (ASC/BLF) and Ethernet (pcap) sources.
         """
+        path = Path(path)
         reader = self._open_reader(path)
         result = bytearray()
         first_ts: Optional[float] = None
@@ -346,6 +347,7 @@ class TraceReplayer:
           - ``.pcap`` / ``.pcapng`` → ``EthernetPcapReader``
           - ``.asc`` / ``.blf`` → python-can reader
         """
+        path = Path(path)
         suffix = path.suffix.lower()
         if suffix in (".pcap", ".pcapng"):
             return EthernetPcapReader(str(path))
