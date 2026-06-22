@@ -60,9 +60,8 @@ bool EthernetBusRegistry::SendFrame(const std::string& iface,
   if (!written) {
     std::fprintf(stderr, "[EthRegistry] WriteFrame failed on '%s'\n", iface.c_str());
   }
-  // Always dispatch locally so gRPC subscribers receive the frame.
-  // Virtual drivers (UDP multicast) have IP_MULTICAST_LOOP=1, so the rx_thread
-  // also picks up the frame — gRPC subscribers may receive it twice.
+  // Always dispatch locally so gRPC subscribers receive the frame even when
+  // the physical write fails (simulation mode still needs delivery).
   DispatchRx(frame, iface);
   return written;
 }
