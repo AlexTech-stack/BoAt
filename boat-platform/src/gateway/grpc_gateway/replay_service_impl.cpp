@@ -213,7 +213,7 @@ grpc::Status ReplayServiceImpl::ImportTraceData(grpc::ServerContext*, const boat
       return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "trace data must be non-empty");
     }
 
-    const std::string storage_path = "traces/" + request->trace_id() + ".trace";
+    const std::string storage_path = "/tmp/" + request->trace_id() + ".trace";
 
     boat::store::TraceRecord meta;
     meta.id = request->trace_id();
