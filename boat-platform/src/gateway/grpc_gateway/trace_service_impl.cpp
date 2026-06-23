@@ -175,7 +175,7 @@ grpc::Status TraceServiceImpl::MarkStep(grpc::ServerContext*,
     }
 
     // Storage path derived from trace_id
-    const std::string storage_path = "traces/" + trace_id + ".trace";
+    const std::string storage_path = "/tmp/" + trace_id + ".trace";
 
     boat::store::TraceRecord meta;
     meta.id = trace_id;
