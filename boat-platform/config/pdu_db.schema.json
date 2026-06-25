@@ -24,6 +24,8 @@
         "additionalProperties": false,
         "properties": {
 
+          "Comment":     { "type": "string", "description": "Optional human-readable comment about the message." },
+          "Node":        { "type": "string", "description": "Optional name of the ECU node that transmits this message (from DBC sender field)." },
           "DbId":        { "type": "integer", "minimum": 0 },
           "MessageName": { "type": "string" },
           "Bus":         { "type": "string", "description": "Symbolic interface name" },
@@ -133,6 +135,7 @@
         "id":          { "type": "integer", "minimum": 1,
                          "description": "Signal ID, unique within the message. Full address: DbId.id" },
         "SignalName":  { "type": "string" },
+        "Comment":     { "type": "string", "description": "Optional human-readable comment about the signal (from DBC CM_ lines)." },
         "Length":      { "type": "integer", "minimum": 1, "description": "Signal length in bits." },
         "StartPos":    { "type": "integer", "minimum": 0, "description": "Start bit position (LSB, 0-indexed)." },
         "ByteOrder":   { "type": "integer", "enum": [0, 1],
