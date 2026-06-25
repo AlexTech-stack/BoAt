@@ -36,7 +36,7 @@ python3 tools/dbc2boatjson.py boat-platform/config/pdu_db.schema.json input.dbc 
 | `--bus-type` | `CAN` | `CAN` or `CANFD` |
 | `--node` | `""` | Default sender node (used when BO_ has no sender) |
 | `--start-id` | `1` | First `DbId` to assign |
-| `--no-validate` | — | Skip schema validation |
+| `--validate` | — | Validate the generated output against `pdu_db.schema.json` (requires `jsonschema`) |
 
 ### Examples
 
@@ -49,11 +49,11 @@ python3 tools/dbc2boatjson.py \
     --bus "Powertrain_CAN" \
     --bus-type CANFD
 
-# Skip validation (jsonschema not installed, or you trust the DBC)
+# Validate the output against the schema (requires jsonschema)
 python3 tools/dbc2boatjson.py \
     boat-platform/config/pdu_db.schema.json \
     input.dbc output.json \
-    --no-validate
+    --validate
 ```
 
 ## What happens during conversion
@@ -186,12 +186,12 @@ payload = msg.pack()
 
 ## Schema validation
 
-By default the tool validates the generated JSON against
-`pdu_db.schema.json`. Requires `jsonschema`:
+Validation is **off by default**. Pass `--validate` to check the generated
+JSON against `pdu_db.schema.json`. Requires `jsonschema`:
 
 ```bash
 pip install jsonschema
+python3 tools/dbc2boatjson.py schema.json input.dbc output.json --validate
 ```
 
 Validation errors are printed to stderr and the tool exits with code 1.
-Use `--no-validate` to skip this step.

@@ -339,8 +339,8 @@ def main() -> None:
                         help="Default node name when BO_ sender is missing")
     parser.add_argument("--start-id", type=int, default=1,
                         help="First DbId to assign (default: 1)")
-    parser.add_argument("--no-validate", action="store_true",
-                        help="Skip schema validation of output")
+    parser.add_argument("--validate", action="store_true",
+                        help="Validate the generated output against the schema (requires jsonschema)")
 
     args = parser.parse_args()
 
@@ -360,7 +360,7 @@ def main() -> None:
     )
 
     # ── Validate ────────────────────────────────────────────────────────
-    if not args.no_validate:
+    if args.validate:
         print(f"Validating against schema: {args.schema}")
         errors = validate(args.schema, boat_db)
         if errors:
