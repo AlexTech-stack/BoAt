@@ -78,6 +78,9 @@ def make_signal(sig_id, name):
         "Max": mx,
         "Unit": unit,
         "EnumValues": ENUM_MAP.get(name, None),
+        "IsMuxor": False,
+        "MuxValue": None,
+        "Comment": "",
     }
     return d
 
@@ -197,6 +200,8 @@ def make_can_msgs(bus, bus_type, base_id, count, shared_names, fd=False):
             "BRS": fd,
             "signalcount": len(signals),
             "signals": signals,
+            "Comment": "",
+            "Node": "",
         })
 
     # Unique messages
@@ -234,6 +239,8 @@ def make_can_msgs(bus, bus_type, base_id, count, shared_names, fd=False):
             "BRS": fd,
             "signalcount": len(signals),
             "signals": signals,
+            "Comment": "",
+            "Node": "",
         })
 
     return msgs
@@ -302,6 +309,8 @@ for bus_name, cfg in ETH_CFG.items():
             "IpduMEntries": pdu_ids,
             "signalcount": 0,
             "signals": [],
+            "Comment": "",
+            "Node": "",
         })
 
         for pi, pdu_name_suffix in enumerate(pdu_sig_names):
@@ -328,6 +337,8 @@ for bus_name, cfg in ETH_CFG.items():
                 "Length": max(8, frame_len(signals)),
                 "signalcount": len(signals),
                 "signals": signals,
+                "Comment": "",
+                "Node": "",
             })
 
 print(f"Total messages: {len(messages)}")

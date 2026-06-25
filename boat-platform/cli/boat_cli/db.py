@@ -53,6 +53,11 @@ def db_show(
         sys.exit(1)
 
     # ── header ────────────────────────────────────────────────────────
+    extra_header = []
+    if entry.get("Comment"):
+        extra_header.append(["Comment", entry["Comment"]])
+    if entry.get("Node"):
+        extra_header.append(["Node", entry["Node"]])
     print_table(
         ["Field", "Value"],
         [
@@ -66,7 +71,7 @@ def db_show(
             ["CycleTime",   f"{entry['CycleTime']} ms"],
             ["CycleTimeFast", f"{entry['CycleTimeFast']} ms"],
             ["isE2E",       str(entry["isE2E"])],
-        ],
+        ] + extra_header,
         False,
     )
 
@@ -113,6 +118,8 @@ def db_show(
         for s in entry["signals"]:
             bo = "Intel" if s["ByteOrder"] == 0 else "Motorola"
             enum_str = ", ".join(f"{k}={v}" for k, v in (s["EnumValues"] or {}).items())
+            mux_str = "MUX" if s.get("IsMuxor") else (str(s["MuxValue"]) if s.get("MuxValue") is not None else "-")
+            comment_str = (s.get("Comment") or "")[:40]
             sig_rows.append([
                 str(s["id"]),
                 s["SignalName"],
@@ -124,10 +131,13 @@ def db_show(
                 f"×{s['Factor']} +{s['Offset']}",
                 f"{s['Min']}…{s['Max']} {s['Unit']}".strip(),
                 enum_str or "-",
+                mux_str,
+                comment_str,
             ])
         print_table(
             ["id", "SignalName", "Length", "StartPos", "ByteOrder",
-             "ValueType", "InitVal", "Scale", "Range", "EnumValues"],
+             "ValueType", "InitVal", "Scale", "Range", "EnumValues",
+             "Mux", "Comment"],
             sig_rows,
             False,
         )

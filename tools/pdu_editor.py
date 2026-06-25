@@ -272,6 +272,9 @@ def api_signal_create(db_id: int, body: dict):
                     "Max": float(body.get("max", 1.0)),
                     "Unit": body.get("unit", ""),
                     "EnumValues": body.get("enum_values"),
+                    "IsMuxor": bool(body.get("is_muxor", False)),
+                    "MuxValue": body.get("mux_value"),
+                    "Comment": body.get("comment", ""),
                 }
                 msg.setdefault("signals", []).append(sig)
                 msg["signalcount"] = len(msg["signals"])
@@ -631,6 +634,7 @@ tr.selected td { background:rgba(88,166,255,0.1); }
               <th style="width:30px"><input type="checkbox" onchange="toggleAllSignals(this)"/></th>
               <th>id</th><th>Name</th><th>Bits</th><th>Start</th><th>Order</th><th>Type</th>
               <th>Factor</th><th>Offset</th><th>Min</th><th>Max</th><th>Unit</th><th>Enum</th>
+              <th>Mux</th><th>MuxVal</th><th>Comment</th>
             </tr></thead>
             <tbody id="signal-tbody"></tbody>
           </table>
@@ -938,6 +942,10 @@ function renderSignals(msg) {
 
   tb.innerHTML = msg.signals.map(s => {
     const checked = _checkedSigs.has(s.id);
+    const isMux = s.IsMuxor || false;
+    const muxVal = s.MuxValue !== undefined && s.MuxValue !== null ? s.MuxValue : '';
+    const muxCheck = `<input type="checkbox" ${isMux?'checked':''} onchange="updateSignalField(${msgId},${s.id},'IsMuxor',this.checked)" onclick="event.stopPropagation()"/>`;
+    const muxValInp = `<input value="${muxVal}" placeholder="null" onchange="updateSignalField(${msgId},${s.id},'MuxValue',this.value===''?null:parseInt(this.value))" onclick="event.stopPropagation()" type="number" min="0"/>`;
     return `<tr class="${s.id===selectedSigId?'selected':''}" onclick="selectSig(${s.id})">
       <td><input type="checkbox" ${checked?'checked':''} onclick="event.stopPropagation()" onchange="onSigCheck(${s.id},this.checked)"/></td>
       <td>${s.id}</td>
@@ -952,6 +960,9 @@ function renderSignals(msg) {
       <td>${_num(s,'Max','type="number" step="any"')}</td>
       <td>${_inp(s,'Unit')}</td>
       <td>${_inp(s,'EnumValues')}</td>
+      <td>${muxCheck}</td>
+      <td>${muxValInp}</td>
+      <td>${_inp(s,'Comment')}</td>
     </tr>`;
   }).join("");
 }
@@ -1081,6 +1092,9 @@ async function addSignal() {
     Max: 1.0,
     Unit: "",
     EnumValues: null,
+    IsMuxor: false,
+    MuxValue: null,
+    Comment: "",
   };
   msg.signals.push(sig);
   msg.signalcount = msg.signals.length;
