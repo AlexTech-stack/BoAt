@@ -59,6 +59,9 @@ BA_CYCLE_RE = re.compile(
     r'^BA_ "GenMsgCycleTime" BO_ (\w+) (\d+);'
 )
 
+# Message name suffix encoding cycle time (e.g. "ESC_02_10ms" → 10ms)
+CYCLE_NAME_RE = re.compile(r"_(\d+)ms$")
+
 
 # ── DBC parser ───────────────────────────────────────────────────────────────
 
@@ -186,8 +189,19 @@ def parse_dbc(path: str) -> dict:
 
 # ── BoAt JSON builder ────────────────────────────────────────────────────────
 
+def _name_suffix_cycle_ms(name: str) -> Optional[int]:
+    """Extract cycle time from message name ending in ``_<N>ms`` (e.g. ``ESC_02_10ms``)."""
+    m = CYCLE_NAME_RE.search(name)
+    if m:
+        val = int(m.group(1))
+        if val > 0:
+            return val
+    return None
+
+
 def build_boat_db(dbc: dict, *, bus: str = "CAN", bus_type: str = "CAN",
-                  default_node: str = "", start_id: int = 1) -> dict:
+                  default_node: str = "", start_id: int = 1,
+                  default_cycle_ms: int = 0) -> dict:
     """Convert parsed DBC data into a BoAt PDU database dict."""
 
     messages = dbc["messages"]
@@ -203,14 +217,14 @@ def build_boat_db(dbc: dict, *, bus: str = "CAN", bus_type: str = "CAN",
     for addr in sorted(messages.keys()):
         msg = messages[addr]
         sigs = signals.get(addr, [])
+        # Determine send type and cycle time (priority: BA_ > name suffix > default > Spontaneous)
         cycle_ms = cycle_times.get(addr, 0)
+        if cycle_ms == 0:
+            cycle_ms = _name_suffix_cycle_ms(msg["name"]) or 0
+        if cycle_ms == 0 and default_cycle_ms > 0:
+            cycle_ms = default_cycle_ms
 
-        # Determine send type and cycle time
-        if cycle_ms and cycle_ms > 0:
-            send_type = "Cyclic"
-        else:
-            send_type = "Spontaneous"
-            cycle_ms = 0
+        send_type = "Cyclic" if cycle_ms > 0 else "Spontaneous"
 
         # Frame type: 29-bit if address > 0x7FF
         frame_type = 1 if addr > 0x7FF else 0
@@ -339,6 +353,8 @@ def main() -> None:
                         help="Default node name when BO_ sender is missing")
     parser.add_argument("--start-id", type=int, default=1,
                         help="First DbId to assign (default: 1)")
+    parser.add_argument("--default-cycle-ms", type=int, default=0,
+                        help="Default cycle time in ms for messages without BA_ GenMsgCycleTime or name suffix (default: 0 = Spontaneous)")
     parser.add_argument("--validate", action="store_true",
                         help="Validate the generated output against the schema (requires jsonschema)")
 
@@ -357,6 +373,7 @@ def main() -> None:
         bus_type=args.bus_type,
         default_node=args.node,
         start_id=args.start_id,
+        default_cycle_ms=args.default_cycle_ms,
     )
 
     # ── Validate ────────────────────────────────────────────────────────

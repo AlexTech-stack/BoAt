@@ -36,6 +36,7 @@ python3 tools/dbc2boatjson.py boat-platform/config/pdu_db.schema.json input.dbc 
 | `--bus-type` | `CAN` | `CAN` or `CANFD` |
 | `--node` | `""` | Default sender node (used when BO_ has no sender) |
 | `--start-id` | `1` | First `DbId` to assign |
+| `--default-cycle-ms` | `0` | Default cycle time for messages without BA_ or name-suffix timing (0 = Spontaneous) |
 | `--validate` | — | Validate the generated output against `pdu_db.schema.json` (requires `jsonschema`) |
 
 ### Examples
@@ -48,6 +49,13 @@ python3 tools/dbc2boatjson.py \
     my_vehicle.json \
     --bus "Powertrain_CAN" \
     --bus-type CANFD
+
+# Apply a default 100ms cycle time to all messages without explicit timing
+python3 tools/dbc2boatjson.py \
+    boat-platform/config/pdu_db.schema.json \
+    my_vehicle.dbc \
+    my_vehicle.json \
+    --default-cycle-ms 100
 
 # Validate the output against the schema (requires jsonschema)
 python3 tools/dbc2boatjson.py \
@@ -80,8 +88,11 @@ BO_ 36 KINEMATICS: 8 XXX
 ```
 
 - **FrameType**: `1` (29-bit) if `Identifier > 0x7FF`, otherwise `0` (11-bit)
-- **SendType**: `"Cyclic"` when `BA_ "GenMsgCycleTime"` is present and `> 0`, otherwise `"Spontaneous"`
-- **CycleTime**: from `BA_ "GenMsgCycleTime"`, or `0`
+- **SendType** / **CycleTime**: determined by the first matching rule:
+  1. `BA_ "GenMsgCycleTime"` if present and `> 0` → `Cyclic`
+  2. Message name suffix `_<N>ms` (e.g. `ESC_02_10ms`) → `Cyclic` with N ms
+  3. `--default-cycle-ms` if set and `> 0` → `Cyclic`
+  4. Otherwise → `Spontaneous` with `CycleTime: 0`
 - **Node**: from the `BO_` sender field (e.g. `XXX`, `EPS`, `HCU`)
 
 ### Signals
