@@ -81,14 +81,17 @@ class Message:
     """
 
     def __init__(self, db_entry: dict) -> None:
-        self._db     = db_entry
-        self._values: Dict[str, float] = {}
-        self._sigs:   Dict[str, dict]  = {}
+        self._db       = db_entry
+        self._values:  Dict[str, float] = {}
+        self._sigs:    Dict[str, dict]  = {}
+        self._muxor: Optional[str] = None  # name of the multiplexor signal, if any
 
         for sig in db_entry.get("signals", []):
             name = sig["SignalName"]
             self._sigs[name]   = sig
             self._values[name] = float(sig["InitValue"])
+            if sig.get("IsMuxor", False):
+                self._muxor = name
 
     # ------------------------------------------------------------------
     # Properties
@@ -143,13 +146,26 @@ class Message:
     # Packing
 
     def pack(self) -> bytes:
-        """Pack all signal values into a raw byte payload.
+        """Pack signal values into a raw byte payload, respecting multiplexing.
+
+        If the message has a multiplexor signal (IsMuxor=true), only static
+        signals (no MuxValue) and signals whose MuxValue matches the
+        multiplexor's current value are packed.
 
         Returns:
             bytes of length self.length, ready for transmission.
         """
+        # Determine active mux group.
+        active_mux: Optional[int] = None
+        if self._muxor is not None:
+            active_mux = int(round(self._values[self._muxor]))
+
         buf = bytearray(self.length)
         for name, sig in self._sigs.items():
+            # Skip signals belonging to a non-active mux group.
+            mv = sig.get("MuxValue")
+            if mv is not None and active_mux is not None and mv != active_mux:
+                continue
             phys  = self._values[name]
             # physical → raw
             factor = sig["Factor"] if sig["Factor"] != 0 else 1.0
@@ -164,10 +180,15 @@ class Message:
     # Display
 
     def __repr__(self) -> str:
-        lines = [f"<Message '{self.name}' DbId={self.db_id} BusType={self.bus_type}>"]
+        mux_tag = f" muxor={self._muxor}" if self._muxor else ""
+        lines = [f"<Message '{self.name}' DbId={self.db_id} BusType={self.bus_type}{mux_tag}>"]
         for name, sig in self._sigs.items():
             phys = self._values[name]
             unit = sig.get("Unit", "")
             raw  = round((phys - sig["Offset"]) / (sig["Factor"] or 1.0))
-            lines.append(f"  .{name:30s} = {phys:10g} {unit}  (raw={raw})")
+            mux_info = ""
+            mv = sig.get("MuxValue")
+            if mv is not None:
+                mux_info = f" [mux={mv}]"
+            lines.append(f"  .{name:30s} = {phys:10g} {unit}{mux_info}  (raw={raw})")
         return "\n".join(lines)

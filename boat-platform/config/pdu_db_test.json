@@ -16,6 +16,10 @@
       "CycleTime": 100,
       "CycleTimeFast": 0,
       "NrOfRepetitions": 0,
+      "Identifier": 256,
+      "FrameType": 0,
+      "Length": 8,
+      "BRS": false,
       "signalcount": 1,
       "signals": [
         {
@@ -28,18 +32,19 @@
           "SigSendType": false,
           "Repetitions": 0,
           "InitValue": 0,
-          "Factor": 0.1,
-          "Offset": 0,
-          "Min": 0,
-          "Max": 300,
+          "Factor": 0.01,
+          "Offset": 0.0,
+          "Min": 0.0,
+          "Max": 300.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
       ],
-      "Identifier": 256,
-      "FrameType": 0,
-      "Length": 8,
-      "BRS": false
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 2,
@@ -56,12 +61,35 @@
       "CycleTime": 500,
       "CycleTimeFast": 0,
       "NrOfRepetitions": 0,
-      "signalcount": 0,
-      "signals": [],
       "Identifier": 257,
       "FrameType": 0,
       "Length": 8,
-      "BRS": false
+      "BRS": false,
+      "signalcount": 1,
+      "signals": [
+        {
+          "id": 1,
+          "SignalName": "EngineRPM",
+          "Length": 16,
+          "StartPos": 0,
+          "ByteOrder": 0,
+          "ValueType": "Unsigned",
+          "SigSendType": false,
+          "Repetitions": 0,
+          "InitValue": 0,
+          "Factor": 0.125,
+          "Offset": 0.0,
+          "Min": 0.0,
+          "Max": 8000.0,
+          "Unit": "rpm",
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
+        }
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 3,
@@ -99,9 +127,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 4,
@@ -139,9 +172,14 @@
           "Min": 0.0,
           "Max": 999999.0,
           "Unit": "km",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 5,
@@ -179,9 +217,14 @@
           "Min": 0.0,
           "Max": 150.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 6,
@@ -219,9 +262,14 @@
           "Min": -500.0,
           "Max": 500.0,
           "Unit": "Nm",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 7,
@@ -259,9 +307,14 @@
           "Min": -20.0,
           "Max": 100.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 8,
@@ -299,9 +352,14 @@
           "Min": -500.0,
           "Max": 500.0,
           "Unit": "A",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 9,
@@ -339,9 +397,14 @@
           "Min": 0.0,
           "Max": 800.0,
           "Unit": "V",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 10,
@@ -379,9 +442,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 11,
@@ -419,9 +487,14 @@
           "Min": -500.0,
           "Max": 500.0,
           "Unit": "Nm",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 12,
@@ -459,9 +532,14 @@
           "Min": -20.0,
           "Max": 100.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 13,
@@ -499,9 +577,14 @@
           "Min": -500.0,
           "Max": 500.0,
           "Unit": "A",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 14,
@@ -539,9 +622,14 @@
           "Min": 0.0,
           "Max": 800.0,
           "Unit": "V",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 15,
@@ -579,9 +667,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 16,
@@ -626,9 +719,14 @@
             "3": "D",
             "4": "S",
             "5": "M"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 17,
@@ -666,9 +764,14 @@
           "Min": 0.0,
           "Max": 250.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 18,
@@ -706,9 +809,14 @@
           "Min": 0.0,
           "Max": 1.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 19,
@@ -751,9 +859,14 @@
             "1": "On",
             "2": "Error",
             "3": "Derated"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 20,
@@ -795,9 +908,14 @@
             "0": "Closed",
             "1": "Open",
             "2": "Error"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 21,
@@ -830,14 +948,19 @@
           "SigSendType": false,
           "Repetitions": 0,
           "InitValue": 0,
-          "Factor": 0.1,
-          "Offset": 0,
-          "Min": 0,
-          "Max": 300,
+          "Factor": 0.01,
+          "Offset": 0.0,
+          "Min": 0.0,
+          "Max": 300.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 22,
@@ -875,9 +998,14 @@
           "Min": -40.0,
           "Max": 85.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 23,
@@ -915,9 +1043,14 @@
           "Min": -40.0,
           "Max": 85.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 24,
@@ -955,9 +1088,14 @@
           "Min": -780.0,
           "Max": 780.0,
           "Unit": "deg",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 25,
@@ -995,9 +1133,14 @@
           "Min": 0.0,
           "Max": 250.0,
           "Unit": "bar",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 26,
@@ -1035,9 +1178,14 @@
           "Min": 0.0,
           "Max": 300.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 27,
@@ -1075,9 +1223,14 @@
           "Min": 0.0,
           "Max": 300.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 28,
@@ -1115,9 +1268,14 @@
           "Min": 0.0,
           "Max": 300.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 29,
@@ -1155,9 +1313,14 @@
           "Min": 0.0,
           "Max": 300.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 30,
@@ -1195,9 +1358,14 @@
           "Min": 0.0,
           "Max": 5.0,
           "Unit": "bar",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 31,
@@ -1235,9 +1403,14 @@
           "Min": 0.0,
           "Max": 5.0,
           "Unit": "bar",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 32,
@@ -1275,9 +1448,14 @@
           "Min": 0.0,
           "Max": 5.0,
           "Unit": "bar",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 33,
@@ -1315,9 +1493,14 @@
           "Min": 0.0,
           "Max": 5.0,
           "Unit": "bar",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 34,
@@ -1355,9 +1538,14 @@
           "Min": 0.0,
           "Max": 250.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 35,
@@ -1400,9 +1588,14 @@
             "1": "Left",
             "2": "Right",
             "3": "Both"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 36,
@@ -1440,9 +1633,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 37,
@@ -1480,9 +1678,14 @@
           "Min": 0.0,
           "Max": 250.0,
           "Unit": "m",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 38,
@@ -1520,9 +1723,14 @@
           "Min": 0.0,
           "Max": 1.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 39,
@@ -1560,9 +1768,14 @@
           "Min": 0.0,
           "Max": 250.0,
           "Unit": "bar",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 40,
@@ -1600,9 +1813,14 @@
           "Min": 0.0,
           "Max": 300.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 41,
@@ -1640,9 +1858,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 42,
@@ -1680,9 +1903,14 @@
           "Min": -40.0,
           "Max": 85.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 43,
@@ -1720,9 +1948,14 @@
           "Min": -40.0,
           "Max": 85.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 44,
@@ -1760,9 +1993,14 @@
           "Min": 0.0,
           "Max": 150.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 45,
@@ -1800,9 +2038,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 46,
@@ -1844,9 +2087,14 @@
             "0": "Closed",
             "1": "Open",
             "2": "Error"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 47,
@@ -1884,9 +2132,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 48,
@@ -1924,9 +2177,14 @@
           "Min": 14.0,
           "Max": 32.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 49,
@@ -1964,9 +2222,14 @@
           "Min": 0.0,
           "Max": 7.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 50,
@@ -2009,9 +2272,14 @@
             "1": "LowBeam",
             "2": "HighBeam",
             "3": "Fog"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 51,
@@ -2054,9 +2322,14 @@
             "1": "Int",
             "2": "Slow",
             "3": "Fast"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 52,
@@ -2094,9 +2367,14 @@
           "Min": -500.0,
           "Max": 500.0,
           "Unit": "A",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 53,
@@ -2134,9 +2412,14 @@
           "Min": -20.0,
           "Max": 100.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 54,
@@ -2174,9 +2457,14 @@
           "Min": -40.0,
           "Max": 85.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 55,
@@ -2214,9 +2502,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 56,
@@ -2258,9 +2551,14 @@
             "0": "Closed",
             "1": "Open",
             "2": "Error"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 57,
@@ -2298,9 +2596,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 58,
@@ -2338,9 +2641,14 @@
           "Min": 14.0,
           "Max": 32.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 59,
@@ -2378,9 +2686,14 @@
           "Min": 0.0,
           "Max": 7.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 60,
@@ -2423,9 +2736,14 @@
             "1": "LowBeam",
             "2": "HighBeam",
             "3": "Fog"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 61,
@@ -2463,9 +2781,14 @@
           "Min": 0.0,
           "Max": 8000.0,
           "Unit": "rpm",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 62,
@@ -2503,9 +2826,14 @@
           "Min": 0.0,
           "Max": 999999.0,
           "Unit": "km",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 63,
@@ -2543,9 +2871,14 @@
           "Min": -780.0,
           "Max": 780.0,
           "Unit": "deg",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 64,
@@ -2587,9 +2920,14 @@
             "0": "Closed",
             "1": "Open",
             "2": "Error"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 65,
@@ -2632,9 +2970,14 @@
             "1": "LowBeam",
             "2": "HighBeam",
             "3": "Fog"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 66,
@@ -2677,9 +3020,14 @@
             "1": "Int",
             "2": "Slow",
             "3": "Fast"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 67,
@@ -2717,9 +3065,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 68,
@@ -2757,9 +3110,14 @@
           "Min": 14.0,
           "Max": 32.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 69,
@@ -2797,9 +3155,14 @@
           "Min": 0.0,
           "Max": 7.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 70,
@@ -2837,9 +3200,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 71,
@@ -2877,9 +3245,14 @@
           "Min": 0.0,
           "Max": 250.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 72,
@@ -2917,9 +3290,14 @@
           "Min": 0.0,
           "Max": 1.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 73,
@@ -2964,9 +3342,14 @@
             "3": "D",
             "4": "S",
             "5": "M"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 74,
@@ -3004,9 +3387,14 @@
           "Min": 0.0,
           "Max": 250.0,
           "Unit": "m",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 75,
@@ -3044,9 +3432,14 @@
           "Min": 0.0,
           "Max": 300.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 76,
@@ -3084,9 +3477,14 @@
           "Min": -40.0,
           "Max": 85.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 77,
@@ -3124,9 +3522,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 78,
@@ -3168,9 +3571,14 @@
             "0": "Closed",
             "1": "Open",
             "2": "Error"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 79,
@@ -3213,9 +3621,14 @@
             "1": "LowBeam",
             "2": "HighBeam",
             "3": "Fog"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 80,
@@ -3258,9 +3671,14 @@
             "1": "Int",
             "2": "Slow",
             "3": "Fast"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 81,
@@ -3287,13 +3705,15 @@
       "DstPort": 5001,
       "TTL": 64,
       "IpduMEntries": [
-        82,
-        83,
-        84,
-        85
+        11272193,
+        11272194,
+        11272195,
+        11272196
       ],
       "signalcount": 0,
-      "signals": []
+      "signals": [],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 82,
@@ -3325,14 +3745,19 @@
           "SigSendType": false,
           "Repetitions": 0,
           "InitValue": 0,
-          "Factor": 0.1,
-          "Offset": 0,
-          "Min": 0,
-          "Max": 300,
+          "Factor": 0.01,
+          "Offset": 0.0,
+          "Min": 0.0,
+          "Max": 300.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 83,
@@ -3369,9 +3794,14 @@
           "Min": 0.0,
           "Max": 8000.0,
           "Unit": "rpm",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 84,
@@ -3408,9 +3838,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 85,
@@ -3447,9 +3882,14 @@
           "Min": 0.0,
           "Max": 999999.0,
           "Unit": "km",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 86,
@@ -3476,13 +3916,15 @@
       "DstPort": 5001,
       "TTL": 64,
       "IpduMEntries": [
-        87,
-        88,
-        89,
-        90
+        11272197,
+        11272198,
+        11272199,
+        11272200
       ],
       "signalcount": 0,
-      "signals": []
+      "signals": [],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 87,
@@ -3519,9 +3961,14 @@
           "Min": -780.0,
           "Max": 780.0,
           "Unit": "deg",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 88,
@@ -3558,9 +4005,14 @@
           "Min": 0.0,
           "Max": 250.0,
           "Unit": "bar",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 89,
@@ -3597,9 +4049,14 @@
           "Min": 0.0,
           "Max": 300.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 90,
@@ -3636,9 +4093,14 @@
           "Min": 0.0,
           "Max": 5.0,
           "Unit": "bar",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 91,
@@ -3665,13 +4127,15 @@
       "DstPort": 5001,
       "TTL": 64,
       "IpduMEntries": [
-        92,
-        93,
-        94,
-        95
+        11272201,
+        11272202,
+        11272203,
+        11272204
       ],
       "signalcount": 0,
-      "signals": []
+      "signals": [],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 92,
@@ -3708,9 +4172,14 @@
           "Min": 0.0,
           "Max": 250.0,
           "Unit": "m",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 93,
@@ -3752,9 +4221,14 @@
             "1": "Left",
             "2": "Right",
             "3": "Both"
-          }
+          },
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 94,
@@ -3791,9 +4265,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 95,
@@ -3830,9 +4309,14 @@
           "Min": 0.0,
           "Max": 250.0,
           "Unit": "km/h",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 96,
@@ -3859,13 +4343,15 @@
       "DstPort": 5001,
       "TTL": 64,
       "IpduMEntries": [
-        97,
-        98,
-        99,
-        100
+        11272205,
+        11272206,
+        11272207,
+        11272208
       ],
       "signalcount": 0,
-      "signals": []
+      "signals": [],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 97,
@@ -3902,9 +4388,14 @@
           "Min": -500.0,
           "Max": 500.0,
           "Unit": "Nm",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 98,
@@ -3941,9 +4432,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 99,
@@ -3980,9 +4476,14 @@
           "Min": -500.0,
           "Max": 500.0,
           "Unit": "A",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 100,
@@ -4019,9 +4520,14 @@
           "Min": 0.0,
           "Max": 800.0,
           "Unit": "V",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 101,
@@ -4048,18 +4554,20 @@
       "DstPort": 5101,
       "TTL": 64,
       "IpduMEntries": [
-        102,
-        103,
-        104,
-        105
+        11272449,
+        11272450,
+        11272451,
+        11272452
       ],
       "signalcount": 0,
-      "signals": []
+      "signals": [],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 102,
       "MessageName": "DiagReq_PDU",
-      "Bus": "Diag_ETH",
+      "Bus": "Diagnostic_ETH",
       "BusType": "ETH_PDU",
       "MessageType": 0,
       "Direction": 0,
@@ -4091,9 +4599,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 103,
@@ -4130,9 +4643,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 104,
@@ -4169,9 +4687,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 105,
@@ -4208,9 +4731,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 106,
@@ -4237,18 +4765,20 @@
       "DstPort": 5101,
       "TTL": 64,
       "IpduMEntries": [
-        107,
-        108,
-        109,
-        110
+        11272453,
+        11272454,
+        11272455,
+        11272456
       ],
       "signalcount": 0,
-      "signals": []
+      "signals": [],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 107,
       "MessageName": "DiagReq_PDU",
-      "Bus": "Flash_ETH",
+      "Bus": "Diagnostic_ETH",
       "BusType": "ETH_PDU",
       "MessageType": 0,
       "Direction": 0,
@@ -4280,9 +4810,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 108,
@@ -4319,9 +4854,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 109,
@@ -4358,9 +4898,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 110,
@@ -4397,9 +4942,14 @@
           "Min": 0.0,
           "Max": 100.0,
           "Unit": "%",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 111,
@@ -4426,18 +4976,20 @@
       "DstPort": 5101,
       "TTL": 64,
       "IpduMEntries": [
-        112,
-        113,
-        114,
-        115
+        11272457,
+        11272458,
+        11272459,
+        11272460
       ],
       "signalcount": 0,
-      "signals": []
+      "signals": [],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 112,
       "MessageName": "VIN_PDU",
-      "Bus": "EOL_ETH",
+      "Bus": "Diagnostic_ETH",
       "BusType": "ETH_PDU",
       "MessageType": 0,
       "Direction": 0,
@@ -4469,9 +5021,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 113,
@@ -4508,9 +5065,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 114,
@@ -4547,9 +5109,14 @@
           "Min": 0.0,
           "Max": 999999.0,
           "Unit": "km",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 115,
@@ -4586,9 +5153,14 @@
           "Min": -40.0,
           "Max": 85.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 116,
@@ -4615,18 +5187,20 @@
       "DstPort": 5101,
       "TTL": 64,
       "IpduMEntries": [
-        117,
-        118,
-        119,
-        120
+        11272461,
+        11272462,
+        11272463,
+        11272464
       ],
       "signalcount": 0,
-      "signals": []
+      "signals": [],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 117,
       "MessageName": "ECUSerial_PDU",
-      "Bus": "Config_ETH",
+      "Bus": "Diagnostic_ETH",
       "BusType": "ETH_PDU",
       "MessageType": 0,
       "Direction": 0,
@@ -4658,9 +5232,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 118,
@@ -4697,9 +5276,14 @@
           "Min": 0.0,
           "Max": 0.0,
           "Unit": "",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 119,
@@ -4736,9 +5320,14 @@
           "Min": 0.0,
           "Max": 150.0,
           "Unit": "degC",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     },
     {
       "DbId": 120,
@@ -4775,9 +5364,14 @@
           "Min": 0.0,
           "Max": 999999.0,
           "Unit": "km",
-          "EnumValues": null
+          "EnumValues": null,
+          "IsMuxor": false,
+          "MuxValue": null,
+          "Comment": ""
         }
-      ]
+      ],
+      "Comment": "",
+      "Node": ""
     }
   ],
   "signal_routes": [

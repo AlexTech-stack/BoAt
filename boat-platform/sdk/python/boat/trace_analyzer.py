@@ -240,6 +240,9 @@ class TraceAnalyzer:
                             "Max": 1.0,
                             "Unit": "",
                             "EnumValues": None,
+                    "IsMuxor": False,
+                    "MuxValue": None,
+                    "Comment": "",
                         })
                         sig_id += 1
                 pos += 8
