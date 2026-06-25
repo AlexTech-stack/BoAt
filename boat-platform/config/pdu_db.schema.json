@@ -141,6 +141,15 @@
         "ByteOrder":   { "type": "integer", "enum": [0, 1],
                          "description": "0=Intel/Little-endian  1=Motorola/Big-endian" },
         "ValueType":   { "type": "string", "enum": ["Unsigned", "Signed", "Float", "Bool"] },
+        "IsMuxor":     { "type": "boolean", "default": false,
+                         "description": "True if this signal is the multiplexor selector for the message. Exactly one signal per message should have IsMuxor=true. The selector value determines which MuxValue group is active." },
+        "MuxValue":    {
+                         "description": "Multiplexed signal group value. Null (or absent) = static signal, always present. An integer = this signal is only active when the multiplexor selector equals this value. Signals with different MuxValues may share the same StartPos/Length. Signals with the same MuxValue must not overlap.",
+                         "oneOf": [
+                           { "type": "integer", "minimum": 0, "maximum": 65535 },
+                           { "type": "null" }
+                         ]
+                       },
         "SigSendType": { "type": "boolean",
                          "description": "True = a value change on this signal triggers an OnChange or fast-cycle transmission." },
         "Repetitions": { "type": "integer", "minimum": 0 },
