@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,13 @@ struct SignalDef {
   double      min_val{0.0};
   double      max_val{0.0};
   std::string unit;
+
+  // Multiplexing support
+  bool               is_muxor{false};
+  std::optional<int> mux_value;
+
+  // Metadata
+  std::string comment;
 };
 
 struct MessageDef {
@@ -29,6 +37,10 @@ struct MessageDef {
   std::string                 name;
   uint32_t                    length_bytes{8};
   std::vector<SignalDef>      signals;
+
+  // Metadata
+  std::string comment;
+  std::string node;
 };
 
 // ── Bit-level pack/unpack (Intel / Motorola) ─────────────────────────────────

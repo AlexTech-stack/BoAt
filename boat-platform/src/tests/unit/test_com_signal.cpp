@@ -137,6 +137,144 @@ TEST_CASE("UnpackSignals round-trip", "[unit][com]") {
   REQUIRE(unpacked.at("Temp") == 25.0);
 }
 
+TEST_CASE("PackSignals with multiplexing — packs only active mux group", "[unit][com]") {
+  MessageDef msg;
+  msg.name = "MuxMsg";
+  msg.length_bytes = 8;
+
+  // Multiplexor signal
+  SignalDef muxor;
+  muxor.name = "MUX";
+  muxor.bit_length = 2;
+  muxor.start_pos = 0;
+  muxor.is_motorola = false;
+  muxor.factor = 1.0;
+  muxor.offset = 0.0;
+  muxor.value_type = "Unsigned";
+  muxor.is_muxor = true;
+  msg.signals.push_back(muxor);
+
+  // Static signal (always present)
+  SignalDef static_sig;
+  static_sig.name = "StaticVal";
+  static_sig.bit_length = 8;
+  static_sig.start_pos = 8;
+  static_sig.is_motorola = false;
+  static_sig.factor = 1.0;
+  static_sig.offset = 0.0;
+  static_sig.value_type = "Unsigned";
+  msg.signals.push_back(static_sig);
+
+  // Mux group 0 signals
+  SignalDef mux0_sig;
+  mux0_sig.name = "Group0_Val";
+  mux0_sig.bit_length = 8;
+  mux0_sig.start_pos = 16;
+  mux0_sig.is_motorola = false;
+  mux0_sig.factor = 1.0;
+  mux0_sig.offset = 0.0;
+  mux0_sig.value_type = "Unsigned";
+  mux0_sig.mux_value = 0;
+  msg.signals.push_back(mux0_sig);
+
+  // Mux group 1 signals
+  SignalDef mux1_sig;
+  mux1_sig.name = "Group1_Val";
+  mux1_sig.bit_length = 8;
+  mux1_sig.start_pos = 16;   // same position as Group0_Val!
+  mux1_sig.is_motorola = false;
+  mux1_sig.factor = 1.0;
+  mux1_sig.offset = 0.0;
+  mux1_sig.value_type = "Unsigned";
+  mux1_sig.mux_value = 1;
+  msg.signals.push_back(mux1_sig);
+
+  // Pack with MUX=0: Group0_Val should be packed, Group1_Val should be skipped.
+  {
+    const auto bytes = PackSignals(msg, {{"MUX", 0.0}, {"StaticVal", 0xAA}, {"Group0_Val", 0xBB}});
+    REQUIRE(bytes[0] == 0x00);  // MUX=0
+    REQUIRE(bytes[1] == 0xAA);  // StaticVal
+    REQUIRE(bytes[2] == 0xBB);  // Group0_Val
+  }
+
+  // Pack with MUX=1: Group1_Val should be packed, Group0_Val skipped.
+  {
+    const auto bytes = PackSignals(msg, {{"MUX", 1.0}, {"StaticVal", 0xAA}, {"Group1_Val", 0xCC}});
+    REQUIRE(bytes[0] == 0x01);  // MUX=1
+    REQUIRE(bytes[1] == 0xAA);  // StaticVal
+    REQUIRE(bytes[2] == 0xCC);  // Group1_Val
+  }
+}
+
+TEST_CASE("UnpackSignals with multiplexing — decodes only active mux group", "[unit][com]") {
+  MessageDef msg;
+  msg.name = "MuxMsg";
+  msg.length_bytes = 8;
+
+  SignalDef muxor;
+  muxor.name = "MUX";
+  muxor.bit_length = 2;
+  muxor.start_pos = 0;
+  muxor.is_motorola = false;
+  muxor.factor = 1.0;
+  muxor.offset = 0.0;
+  muxor.value_type = "Unsigned";
+  muxor.is_muxor = true;
+  msg.signals.push_back(muxor);
+
+  SignalDef static_sig;
+  static_sig.name = "StaticVal";
+  static_sig.bit_length = 8;
+  static_sig.start_pos = 8;
+  static_sig.is_motorola = false;
+  static_sig.factor = 1.0;
+  static_sig.offset = 0.0;
+  static_sig.value_type = "Unsigned";
+  msg.signals.push_back(static_sig);
+
+  SignalDef mux0_sig;
+  mux0_sig.name = "Group0_Val";
+  mux0_sig.bit_length = 8;
+  mux0_sig.start_pos = 16;
+  mux0_sig.is_motorola = false;
+  mux0_sig.factor = 1.0;
+  mux0_sig.offset = 0.0;
+  mux0_sig.value_type = "Unsigned";
+  mux0_sig.mux_value = 0;
+  msg.signals.push_back(mux0_sig);
+
+  SignalDef mux1_sig;
+  mux1_sig.name = "Group1_Val";
+  mux1_sig.bit_length = 8;
+  mux1_sig.start_pos = 16;
+  mux1_sig.is_motorola = false;
+  mux1_sig.factor = 1.0;
+  mux1_sig.offset = 0.0;
+  mux1_sig.value_type = "Unsigned";
+  mux1_sig.mux_value = 1;
+  msg.signals.push_back(mux1_sig);
+
+  // Pack with MUX=0, then unpack — should see Group0_Val but not Group1_Val.
+  {
+    const auto packed = PackSignals(msg, {{"MUX", 0.0}, {"StaticVal", 0xAA}, {"Group0_Val", 0xBB}});
+    const auto unpacked = UnpackSignals(msg, packed.data(), packed.size());
+    REQUIRE(unpacked.at("MUX") == 0.0);
+    REQUIRE(unpacked.at("StaticVal") == 0xAA);
+    REQUIRE(unpacked.at("Group0_Val") == 0xBB);
+    REQUIRE(unpacked.find("Group1_Val") == unpacked.end());
+  }
+
+  // Pack with MUX=1, then unpack — should see Group1_Val but not Group0_Val.
+  {
+    const auto packed = PackSignals(msg, {{"MUX", 1.0}, {"StaticVal", 0xAA}, {"Group1_Val", 0xCC}});
+    const auto unpacked = UnpackSignals(msg, packed.data(), packed.size());
+    REQUIRE(unpacked.at("MUX") == 1.0);
+    REQUIRE(unpacked.at("StaticVal") == 0xAA);
+    REQUIRE(unpacked.at("Group1_Val") == 0xCC);
+    REQUIRE(unpacked.find("Group0_Val") == unpacked.end());
+  }
+}
+
 TEST_CASE("E2eCrc8 produces non-zero result", "[unit][com]") {
   const uint8_t data[] = {0x01, 0x02, 0x03, 0x04};
   const uint8_t crc = E2eCrc8(data, 4);

@@ -111,18 +111,32 @@ class PduMessageNode:
     def _pack_message(msg: dict) -> bytes:
         """Build the on-wire payload from the message's signal defaults.
 
+        Respects multiplexing: if a multiplexor signal (IsMuxor=true) is
+        present, only static signals (no MuxValue) and signals whose
+        MuxValue matches the muxor's InitValue are packed.
+
         CAN/CANFD frames pack signals into *Length* bytes.
         ETH_PDU frames use *Length* as the PDU payload size.
         ETH containers have no direct signals (they route via IpduM).
         """
         frame_len = msg.get("Length", 0)
         if frame_len == 0:
-            # ETH containers typically have signalcount=0 and no signals
             return b""
+
+        # Determine active mux group from the muxor's InitValue.
+        active_mux = None
+        for sig in msg.get("signals", []):
+            if sig.get("IsMuxor", False):
+                active_mux = int(sig.get("InitValue", 0))
+                break
 
         buf = bytearray(frame_len)
 
         for sig in msg.get("signals", []):
+            mv = sig.get("MuxValue")
+            if mv is not None and active_mux is not None and mv != active_mux:
+                continue
+
             start = sig["StartPos"]
             length = sig["Length"]
             byte_order = sig["ByteOrder"]  # 0=Intel, 1=Motorola

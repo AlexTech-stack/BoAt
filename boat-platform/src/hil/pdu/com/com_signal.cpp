@@ -87,13 +87,42 @@ uint64_t UnpackMotorola(const uint8_t* data, uint32_t start_bit,
   return result;
 }
 
-// ── Signal-level pack ────────────────────────────────────────────────────────
+// ── Signal-level pack (mux-aware) ─────────────────────────────────────────────
+//
+// If a multiplexor signal (is_muxor=true) exists, only signals whose
+// mux_value matches the muxor's current value are packed, plus static
+// signals (mux_value = nullopt) and the muxor itself.
 
 std::vector<uint8_t> PackSignals(const MessageDef& msg,
                                  const std::map<std::string, double>& values) {
   std::vector<uint8_t> buffer(msg.length_bytes, 0);
 
+  // Find the multiplexor signal (if any).
+  const SignalDef* muxor = nullptr;
   for (const auto& sig : msg.signals) {
+    if (sig.is_muxor) {
+      muxor = &sig;
+      break;
+    }
+  }
+
+  // Determine the active mux value.
+  int active_mux = 0;
+  bool has_muxor = false;
+  if (muxor) {
+    has_muxor = true;
+    auto it = values.find(muxor->name);
+    double mux_physical = (it != values.end()) ? it->second : muxor->init_value;
+    active_mux = static_cast<int>(std::round(mux_physical));
+  }
+
+  for (const auto& sig : msg.signals) {
+    // Skip signals belonging to a non-active mux group.
+    if (sig.mux_value.has_value() && sig.mux_value.value() != active_mux) {
+      continue;
+    }
+    // The muxor itself is always packed (already included above).
+
     auto it = values.find(sig.name);
     double physical = (it != values.end()) ? it->second : sig.init_value;
     int64_t raw = PhysicalToRaw(physical, sig.factor, sig.offset);
@@ -119,7 +148,11 @@ std::vector<uint8_t> PackSignals(const MessageDef& msg,
   return buffer;
 }
 
-// ── Signal-level unpack ──────────────────────────────────────────────────────
+// ── Signal-level unpack (mux-aware) ───────────────────────────────────────────
+//
+// First pass: decode all static signals (no mux_value), including the muxor.
+// If a multiplexor is active, read its value and decode the matching
+// dynamic group in a second pass.
 
 std::map<std::string, double> UnpackSignals(const MessageDef& msg,
                                              const uint8_t* data,
@@ -127,16 +160,22 @@ std::map<std::string, double> UnpackSignals(const MessageDef& msg,
   std::map<std::string, double> result;
   const uint32_t actual_len = std::min(len, msg.length_bytes);
 
-  for (const auto& sig : msg.signals) {
-    uint64_t raw_u;
+  // First pass: static signals + the muxor.
+  int active_mux = 0;
+  bool has_muxor = false;
 
+  for (const auto& sig : msg.signals) {
+    if (sig.mux_value.has_value()) {
+      continue;  // skip dynamic signals for now
+    }
+
+    uint64_t raw_u;
     if (sig.is_motorola) {
       raw_u = UnpackMotorola(data, sig.start_pos, sig.bit_length);
     } else {
       raw_u = UnpackIntel(data, sig.start_pos, sig.bit_length);
     }
 
-    // Sign-extend
     int64_t raw_s = static_cast<int64_t>(raw_u);
     if (sig.value_type == "Signed") {
       uint64_t mask = (1ULL << sig.bit_length) - 1;
@@ -147,6 +186,38 @@ std::map<std::string, double> UnpackSignals(const MessageDef& msg,
 
     double physical = RawToPhysical(raw_s, sig.factor, sig.offset);
     result[sig.name] = physical;
+
+    if (sig.is_muxor) {
+      has_muxor = true;
+      active_mux = static_cast<int>(std::round(physical));
+    }
+  }
+
+  // Second pass: dynamic signals matching the active mux group.
+  if (has_muxor) {
+    for (const auto& sig : msg.signals) {
+      if (!sig.mux_value.has_value() || sig.mux_value.value() != active_mux) {
+        continue;
+      }
+
+      uint64_t raw_u;
+      if (sig.is_motorola) {
+        raw_u = UnpackMotorola(data, sig.start_pos, sig.bit_length);
+      } else {
+        raw_u = UnpackIntel(data, sig.start_pos, sig.bit_length);
+      }
+
+      int64_t raw_s = static_cast<int64_t>(raw_u);
+      if (sig.value_type == "Signed") {
+        uint64_t mask = (1ULL << sig.bit_length) - 1;
+        int64_t sign_bit = 1ULL << (sig.bit_length - 1);
+        raw_s = raw_u & mask;
+        if (raw_s & sign_bit) raw_s |= ~mask;
+      }
+
+      double physical = RawToPhysical(raw_s, sig.factor, sig.offset);
+      result[sig.name] = physical;
+    }
   }
 
   return result;
