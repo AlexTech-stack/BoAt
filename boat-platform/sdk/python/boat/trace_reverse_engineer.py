@@ -764,6 +764,9 @@ class TraceReverseEngineer:
                     "Max": sig.max_val,
                     "Unit": sig.unit,
                     "EnumValues": sig.enum_values,
+                    "IsMuxor": False,
+                    "MuxValue": None,
+                    "Comment": "",
                 })
 
             messages.append({
@@ -789,6 +792,8 @@ class TraceReverseEngineer:
                 "BRS": msg.is_fd,
                 "signalcount": len(signals_list),
                 "signals": signals_list,
+                "Comment": "",
+                "Node": "",
             })
 
         return {

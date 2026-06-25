@@ -49,6 +49,9 @@ def _raw_to_physical(raw: int, sig: dict) -> float:
 def unpack_message(data: bytes, msg: Message) -> dict[str, float]:
     """Unpack raw CAN/Ethernet payload bytes into signal values.
 
+    Respects multiplexing: static signals and the muxor are decoded first,
+    then only signals whose MuxValue matches the muxor's decoded value.
+
     Args:
         data: Raw payload bytes (e.g., from a CAN frame).
         msg:  Message instance whose signal definitions will be used.
@@ -58,11 +61,31 @@ def unpack_message(data: bytes, msg: Message) -> dict[str, float]:
     """
     if len(data) < msg.length:
         data = data + b'\x00' * (msg.length - len(data))
+    payload = data[:msg.length]
+
+    # First pass: static signals + muxor.
     values: dict[str, float] = {}
+    active_mux: Optional[int] = None
     for name, sig in msg._sigs.items():
-        raw = _unpack_signal(data[:msg.length], sig)
+        mv = sig.get("MuxValue")
+        if mv is not None:
+            continue  # skip dynamic signals for now
+        raw = _unpack_signal(payload, sig)
         phys = _raw_to_physical(raw, sig)
         values[name] = phys
+        if sig.get("IsMuxor", False):
+            active_mux = int(round(phys))
+
+    # Second pass: dynamic signals matching the active mux group.
+    if active_mux is not None:
+        for name, sig in msg._sigs.items():
+            mv = sig.get("MuxValue")
+            if mv is None or mv != active_mux:
+                continue
+            raw = _unpack_signal(payload, sig)
+            phys = _raw_to_physical(raw, sig)
+            values[name] = phys
+
     return values
 
 
