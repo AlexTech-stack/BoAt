@@ -2,7 +2,7 @@
 
 Supported formats:
   - CAN: .asc, .blf (via python-can)
-  - Ethernet: .pcap (DLT_EN10MB, IPv4+UDP/ICMP only)
+   - Ethernet: .pcap (DLT_EN10MB, IPv4/IPv6+UDP/ICMP)
 
 Two replay modes are available:
 
@@ -37,6 +37,7 @@ Quick example::
 from __future__ import annotations
 
 from collections import namedtuple
+import ipaddress
 import struct
 import time
 from pathlib import Path
@@ -136,7 +137,7 @@ class TraceReplayer:
         replay_src_ip: Source IP address for reconstructed IP header (Ethernet replay).
         replay_dst_ip: Destination IP address for reconstructed IP header.
         replay_src_mac: Override source MAC (auto-detected from interface if not set).
-        replay_dst_mac: Override destination MAC (default: broadcast for UDP/ICMP).
+        replay_dst_mac: Override destination MAC (default: broadcast for IPv4/IPv6 UDP/ICMP).
     """
 
     def __init__(
@@ -327,10 +328,14 @@ class TraceReplayer:
     def _reconstruct_ip_packet(self, frame: EthernetPcapFrame) -> bytes:
         """Reconstruct an IP packet with user-specified addresses.
 
-        Parses the original IP+transport headers from *frame*, preserves protocol,
-        ports, TTL, and transport payload.  Rewrites src/dst IPs with
-        user-provided values.  Recalculates IP and UDP checksums.
+        Dispatches to IPv4 or IPv6 handler based on *frame.ethertype*.
         """
+        if frame.ethertype == 0x86DD:
+            return self._reconstruct_ip6_packet(frame)
+        return self._reconstruct_ip4_packet(frame)
+
+    def _reconstruct_ip4_packet(self, frame: EthernetPcapFrame) -> bytes:
+        """Reconstruct an IPv4 packet with user-specified addresses."""
         payload = frame.payload
         if len(payload) < 20:
             return b""
@@ -398,7 +403,7 @@ class TraceReplayer:
 
         result = ip_header + transport
 
-        # Calculate UDP checksum if UDP (optional but good practice)
+        # Calculate UDP checksum if UDP
         if protocol == 17:
             pseudo = src_ip_bytes + dst_ip_bytes + b"\x00" + struct.pack("!BH", 17, len(transport))
             udp_offset = 20
@@ -416,10 +421,83 @@ class TraceReplayer:
 
         return result
 
+    def _reconstruct_ip6_packet(self, frame: EthernetPcapFrame) -> bytes:
+        """Reconstruct an IPv6 packet with user-specified addresses.
+
+        Handles UDP (next header 17) and ICMPv6 (next header 58).
+        Both require mandatory checksums with IPv6 pseudo-header.
+        Extension headers beyond the fixed 40-byte header are not parsed;
+        unknown next headers pass through as-is.
+        """
+        payload = frame.payload
+        if len(payload) < 40:
+            return b""
+
+        orig_src = payload[8:24]
+        orig_dst = payload[24:40]
+        next_header = payload[6]
+        hop_limit = payload[7]
+        payload_len = (payload[4] << 8) | payload[5]
+
+        transport_payload = payload[40:40 + payload_len]
+
+        src_ip_bytes = self._parse_ip(self.replay_src_ip or str(orig_src))
+        dst_ip_bytes = self._parse_ip(self.replay_dst_ip or str(orig_dst))
+
+        if next_header == 17 and len(transport_payload) >= 8:
+            # UDP over IPv6: port preservation, mandatory checksum
+            src_port = struct.unpack("!H", transport_payload[0:2])[0]
+            dst_port = struct.unpack("!H", transport_payload[2:4])[0]
+            udp_data = transport_payload[8:]
+            udp_len = len(udp_data) + 8
+            new_udp = struct.pack("!HHHH", src_port, dst_port, udp_len, 0)
+            new_udp += udp_data
+            transport = new_udp
+        elif next_header == 58 and len(transport_payload) >= 4:
+            # ICMPv6: preserve type/code/rest, mandatory checksum
+            icmp6_type = transport_payload[0:1]
+            icmp6_code = transport_payload[1:2]
+            icmp6_rest = transport_payload[4:]
+            new_icmp6 = icmp6_type + icmp6_code + b"\x00\x00"
+            new_icmp6 += icmp6_rest
+            transport = new_icmp6
+        else:
+            transport = transport_payload
+
+        # Build IPv6 fixed header (40 bytes, no options)
+        v_tc_flow = payload[0:4]  # preserve original version/tc/flow label
+        ip6_header = v_tc_flow + struct.pack("!HBB",
+            len(transport),        # payload length
+            next_header,           # next header
+            hop_limit,             # hop limit
+        ) + src_ip_bytes + dst_ip_bytes
+
+        result = ip6_header + transport
+
+        # UDP checksum (mandatory for IPv6)
+        if next_header == 17:
+            pseudo = src_ip_bytes + dst_ip_bytes + struct.pack("!I", len(transport))
+            pseudo += b"\x00\x00\x00" + struct.pack("!B", 17)
+            udp_offset = 40
+            udp_hdr = result[udp_offset:udp_offset + 8]
+            udp_csum = self._checksum(pseudo + udp_hdr + transport[8:])
+            if udp_csum == 0:
+                udp_csum = 0xFFFF
+            result = result[:udp_offset + 6] + struct.pack("!H", udp_csum) + result[udp_offset + 8:]
+
+        # ICMPv6 checksum (mandatory, includes pseudo-header — unlike ICMPv4)
+        if next_header == 58:
+            pseudo = src_ip_bytes + dst_ip_bytes + struct.pack("!I", len(transport))
+            pseudo += b"\x00\x00\x00" + struct.pack("!B", 58)
+            icmp6_offset = 40
+            icmp6_csum = self._checksum(pseudo + result[icmp6_offset:])
+            result = result[:icmp6_offset + 2] + struct.pack("!H", icmp6_csum) + result[icmp6_offset + 4:]
+
+        return result
+
     @staticmethod
     def _parse_ip(ip_str: str) -> bytes:
-        parts = ip_str.split(".")
-        return bytes(int(p) for p in parts)
+        return ipaddress.ip_address(ip_str).packed
 
     @staticmethod
     def _checksum(data: bytes) -> int:

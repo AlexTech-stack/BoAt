@@ -232,6 +232,17 @@ boat trace replay capture.pcap --buses eth0 \
   --replay-dst-ip 192.168.1.100
 ```
 
+### IPv6 example
+
+```bash
+# Replay a pcap with IPv6 traffic — source MAC auto-detected from eth0
+boat trace replay capture.pcap --buses eth0 \
+  --replay-src-ip 2001:db8::1 \
+  --replay-dst-ip 2001:db8::100
+```
+
+Both full and compressed IPv6 notation are accepted (e.g. ``2001:db8::ff00:42:8329``).
+
 ### Specifying MAC addresses
 
 ```bash
@@ -263,7 +274,8 @@ boat trace replay capture.pcap --buses eth0 \
 | IPv4 + UDP | Full support — ports preserved, IPs rewritten |
 | IPv4 + ICMP | Full support — type/code preserved, IPs rewritten |
 | IPv4 + TCP | **Phase 2** — requires TCP state machine (connection tracking, window-adaptive ACK/SEQ) |
-| IPv6 | Not yet supported |
+| IPv6 + UDP | Full support — same as IPv4 UDP with mandatory checksum |
+| IPv6 + ICMPv6 | Full support — type/code preserved, checksum includes pseudo-header |
 
 ### Technical notes
 
