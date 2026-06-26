@@ -100,6 +100,72 @@ def _icmp_packet(src_ip: bytes, dst_ip: bytes, payload: bytes, ttl: int = 64) ->
     return eth
 
 
+def _checksum(data: bytes) -> int:
+    """Compute the Internet checksum over *data*."""
+    s = 0
+    for i in range(0, len(data), 2):
+        word = (data[i] << 8) | (data[i + 1] if i + 1 < len(data) else 0)
+        s += word
+    while s >> 16:
+        s = (s & 0xFFFF) + (s >> 16)
+    return (~s) & 0xFFFF
+
+
+def _udp6_packet(src_ip: bytes, dst_ip: bytes, src_port: int, dst_port: int,
+                 payload: bytes, hop_limit: int = 64) -> bytes:
+    """Build a raw Ethernet frame containing an IPv6+UDP packet."""
+    udp_len = 8 + len(payload)
+    udp_hdr = struct.pack("!HHHH", src_port, dst_port, udp_len, 0)
+    udp_data = udp_hdr + payload
+    # UDP checksum with IPv6 pseudo-header (mandatory)
+    pseudo = src_ip + dst_ip + struct.pack("!I", udp_len)
+    pseudo += b"\x00\x00\x00" + struct.pack("!B", 17)
+    udp_csum = _checksum(pseudo + udp_data)
+    if udp_csum == 0:
+        udp_csum = 0xFFFF
+    udp_hdr = struct.pack("!HHHH", src_port, dst_port, udp_len, udp_csum)
+    udp_data = udp_hdr + payload
+    # IPv6 header
+    v_tc_flow = 0x60000000  # version=6, tc=0, flow=0
+    ip6_hdr = struct.pack("!IHBB", v_tc_flow, len(udp_data), 17, hop_limit)
+    ip6_hdr += src_ip + dst_ip
+    # Ethernet frame
+    eth = (
+        b"\x00\x01\x02\x03\x04\x05"
+        b"\x06\x07\x08\x09\x0a\x0b"
+        b"\x86\xdd"
+        + ip6_hdr + udp_data
+    )
+    return eth
+
+
+def _icmp6_packet(src_ip: bytes, dst_ip: bytes, payload: bytes, hop_limit: int = 64) -> bytes:
+    """Build a raw Ethernet frame containing an IPv6+ICMPv6 echo packet."""
+    icmp6_type = 128  # echo request
+    icmp6_code = 0
+    icmp6_ident = 0x1234
+    icmp6_seq = 1
+    icmp6_hdr = struct.pack("!BBHHH", icmp6_type, icmp6_code, 0, icmp6_ident, icmp6_seq)
+    icmp6_data = icmp6_hdr + payload
+    # ICMPv6 checksum with IPv6 pseudo-header (mandatory — unlike ICMPv4)
+    pseudo = src_ip + dst_ip + struct.pack("!I", len(icmp6_data))
+    pseudo += b"\x00\x00\x00" + struct.pack("!B", 58)
+    icmp6_csum = _checksum(pseudo + icmp6_data)
+    icmp6_data = icmp6_hdr[:2] + struct.pack("!H", icmp6_csum) + icmp6_data[4:]
+    # IPv6 header
+    v_tc_flow = 0x60000000
+    ip6_hdr = struct.pack("!IHBB", v_tc_flow, len(icmp6_data), 58, hop_limit)
+    ip6_hdr += src_ip + dst_ip
+    # Ethernet frame
+    eth = (
+        b"\x00\x01\x02\x03\x04\x05"
+        b"\x06\x07\x08\x09\x0a\x0b"
+        b"\x86\xdd"
+        + ip6_hdr + icmp6_data
+    )
+    return eth
+
+
 class TestEthernetPcapReader:
     def test_reads_pcap_global_header(self, tmp_path):
         from boat.trace_replay import EthernetPcapReader
@@ -388,3 +454,251 @@ class TestConvertToBinary:
             offset += 28 + payload_size
 
         assert records == 2
+
+
+class TestReconstructIp6Packet:
+    def _make_replayer(self, replay_src_ip="2001:db8::1",
+                       replay_dst_ip="2001:db8::100"):
+        from boat.trace_replay import TraceReplayer
+        return TraceReplayer(
+            buses=["eth0"],
+            speed=1.0,
+            replay_src_ip=replay_src_ip,
+            replay_dst_ip=replay_dst_ip,
+        )
+
+    def test_udp6_packet_reconstructed_with_new_ips(self):
+        replayer = self._make_replayer("2001:db8::ff00:42:8329",
+                                       "2001:db8::ff00:42:9300")
+
+        app_data = b"Hello from IPv6 UDP!"
+        eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, app_data,
+        )
+
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(
+            timestamp=1.0,
+            dst_mac=eth[0:6],
+            src_mac=eth[6:12],
+            ethertype=0x86DD,
+            payload=eth[14:],
+        )
+
+        result = replayer._reconstruct_ip_packet(frame)
+
+        # Verify IPv6 header
+        assert result[0] >> 4 == 6  # version
+        assert result[6] == 17     # next header = UDP
+        # Source IP should be rewritten
+        assert result[8:24] == b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\xff\x00\x00\x42\x83\x29"
+        # Dest IP should be rewritten
+        assert result[24:40] == b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\xff\x00\x00\x42\x93\x00"
+
+        # Verify UDP header
+        assert result[40:42] == struct.pack("!H", 12345)  # src_port preserved
+        assert result[42:44] == struct.pack("!H", 30490)  # dst_port preserved
+        udp_len = struct.unpack("!H", result[44:46])[0]
+        assert udp_len == 8 + len(app_data)
+
+        # Verify UDP checksum is valid (mandatory for IPv6, non-zero)
+        udp_csum = struct.unpack("!H", result[46:48])[0]
+        assert udp_csum != 0
+        # Verify UDP checksum correctness — one's complement sum should be 0xFFFF
+        pseudo = result[8:24] + result[24:40] + struct.pack("!I", udp_len)
+        pseudo += b"\x00\x00\x00" + struct.pack("!B", 17)
+        s = 0
+        data = pseudo + result[40:]
+        for i in range(0, len(data), 2):
+            word = struct.unpack("!H", data[i:i+2])[0]
+            s += word
+        while s >> 16:
+            s = (s & 0xFFFF) + (s >> 16)
+        assert s == 0xFFFF
+
+        # Verify payload
+        assert result[48:] == app_data
+
+    def test_icmp6_packet_reconstructed_with_new_ips(self):
+        replayer = self._make_replayer("2001:db8::1", "2001:db8::100")
+
+        app_data = b"IPv6 ping payload"
+        eth = _icmp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            app_data,
+        )
+
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(
+            timestamp=1.0,
+            dst_mac=eth[0:6],
+            src_mac=eth[6:12],
+            ethertype=0x86DD,
+            payload=eth[14:],
+        )
+
+        result = replayer._reconstruct_ip_packet(frame)
+
+        # Verify IPv6 header
+        assert result[0] >> 4 == 6
+        assert result[6] == 58     # next header = ICMPv6
+        assert result[8:24] == b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01"
+        assert result[24:40] == b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00"
+
+        # Verify ICMPv6 type/code preserved (echo request)
+        assert result[40] == 128  # type
+        assert result[41] == 0    # code
+
+        # Verify ICMPv6 checksum is valid (mandatory with pseudo-header)
+        pseudo = result[8:24] + result[24:40] + struct.pack("!I", len(result[40:]))
+        pseudo += b"\x00\x00\x00" + struct.pack("!B", 58)
+        assert _checksum(pseudo + result[40:]) == 0
+
+    def test_ipv6_hop_limit_preserved(self):
+        replayer = self._make_replayer("2001:db8::1", "2001:db8::100")
+
+        eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"data", hop_limit=128,
+        )
+
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(
+            timestamp=1.0,
+            dst_mac=eth[0:6],
+            src_mac=eth[6:12],
+            ethertype=0x86DD,
+            payload=eth[14:],
+        )
+
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result[7] == 128  # hop limit preserved
+
+    def test_ipv6_unknown_next_header_passthrough(self):
+        replayer = self._make_replayer("2001:db8::1", "2001:db8::100")
+
+        payload_bytes = b"\x01\x02\x03\x04"
+        # Build IPv6+unknown (next header 0xFD)
+        v_tc_flow = 0x60000000
+        ip6_hdr = struct.pack("!IHBB", v_tc_flow, len(payload_bytes), 0xFD, 64)
+        ip6_hdr += (
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01" +
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"
+        )
+        eth = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x86\xdd" + ip6_hdr + payload_bytes
+
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(
+            timestamp=1.0,
+            dst_mac=eth[0:6],
+            src_mac=eth[6:12],
+            ethertype=0x86DD,
+            payload=eth[14:],
+        )
+
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result[6] == 0xFD  # next header preserved
+        assert result[40:] == payload_bytes
+
+    def test_short_ipv6_payload_returns_empty(self):
+        replayer = self._make_replayer()
+
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(
+            timestamp=1.0,
+            dst_mac=b"\x00" * 6,
+            src_mac=b"\x00" * 6,
+            ethertype=0x86DD,
+            payload=b"\x00" * 10,  # too short for IPv6 header
+        )
+
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result == b""
+
+
+class TestConvertToBinaryIp6:
+    def _make_replayer(self, **kwargs):
+        from boat.trace_replay import TraceReplayer
+        params = {
+            "buses": ["eth0"],
+            "speed": 1.0,
+            "replay_src_ip": "2001:db8::1",
+            "replay_dst_ip": "2001:db8::100",
+        }
+        params.update(kwargs)
+        return TraceReplayer(**params)
+
+    def _pcap_bytes(self, eth_frames: list[bytes]) -> Path:
+        import tempfile
+        f = tempfile.NamedTemporaryFile(suffix=".pcap", delete=False)
+        f.write(_make_pcap(eth_frames))
+        f.close()
+        return Path(f.name)
+
+    def test_converts_ipv6_pcap_to_binary_format(self, tmp_path):
+        replayer = self._make_replayer()
+        eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"IPV6_DATA",
+        )
+        p = self._pcap_bytes([eth])
+        binary = replayer._convert_to_binary(p)
+        p.unlink()
+
+        assert len(binary) >= 28
+        magic, event_type, tick, _, payload_size = struct.unpack_from("<IIQqI", binary, 0)
+        assert magic == 0xB0A7B0A7
+        assert event_type == 0xEE000000 | 0x86DD  # eth base | ethertype IPv6
+        assert tick == 0
+        assert payload_size > 0
+
+        payload = binary[28:28 + payload_size]
+        assert len(payload) == payload_size
+        assert payload[0] >> 4 == 6  # IPv6 version
+        assert payload[6] == 17      # UDP
+
+    def test_converts_mixed_ipv4_ipv6_pcap(self, tmp_path):
+        replayer = self._make_replayer(
+            replay_src_ip="2001:db8::1",
+            replay_dst_ip="2001:db8::100",
+        )
+        ipv4_eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02",
+            11111, 22222, b"v4data",
+        )
+        ipv6_eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            33333, 44444, b"v6data",
+        )
+        p = self._pcap_bytes([ipv4_eth, ipv6_eth])
+        binary = replayer._convert_to_binary(p)
+        p.unlink()
+
+        offset = 0
+        records = []
+        while offset < len(binary):
+            if offset + 28 > len(binary):
+                break
+            magic = struct.unpack_from("<I", binary, offset)[0]
+            if magic != 0xB0A7B0A7:
+                break
+            _, event_type, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
+            records.append((event_type, payload_size))
+            offset += 28 + payload_size
+
+        assert len(records) == 2
+        assert records[0][0] == 0xEE000000 | 0x0800  # IPv4
+        assert records[1][0] == 0xEE000000 | 0x86DD  # IPv6
+        # Record layout: [header(28)] [payload(N)] [header(28)] [payload(M)]
+        payload4 = binary[28:28 + records[0][1]]
+        assert payload4[0] >> 4 == 4
+        off = 28 + records[0][1] + 28  # skip rec0 header+payload + rec1 header
+        payload6 = binary[off:off + records[1][1]]
+        assert payload6[0] >> 4 == 6
+        assert payload6[6] == 17  # UDP over IPv6
