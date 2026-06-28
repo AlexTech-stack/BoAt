@@ -28,13 +28,15 @@ Target: Close remaining M6 GA hardening gaps.
 
 ---
 
-## H3 — gRPC health check service
+## H3 — gRPC health check service ✅
 
 **Risk:** None directly, but absence blocks orchestration integration.
 
 **Scope:** Implement `grpc::Health::CheckService` (standard gRPC health checking protocol). Report `SERVING` when the gateway is alive and the gRPC server has started.
 
 **Acceptance:** `grpc_health_probe` against `0.0.0.0:50051` returns `SERVING`. Docker HEALTHCHECK and K8s liveness probes can use this.
+
+**Status:** Implemented in commit e0d09a9. `Check` and `Watch` both return `SERVING`.
 
 ---
 
