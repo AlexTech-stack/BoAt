@@ -14,6 +14,7 @@ add_executable(
   metrics_service_impl.cpp
   trace_service_impl.cpp
   fault_service_impl.cpp
+  health_service_impl.cpp
 )
 target_include_directories(boat_gateway PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
