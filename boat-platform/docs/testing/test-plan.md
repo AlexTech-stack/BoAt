@@ -22,7 +22,7 @@ Validate correctness, determinism, performance, reliability, and safety for:
 
 ## Entry Criteria
 
-- Requirements baselined in `Technicalplan.md`
+- Requirements baselined in `project-plan.md`
 - API contract baselined in `api/api-specification.md`
 - Test environments provisioned (Docker, virtual CAN, optional hardware lab)
 
