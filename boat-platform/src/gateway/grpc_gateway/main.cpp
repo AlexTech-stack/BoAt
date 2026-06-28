@@ -21,6 +21,7 @@
 #include "rpc_audit_log.h"
 #include "fault_service_impl.h"
 #include "gateway_context.h"
+#include "health_service_impl.h"
 #include "hil/virtual/virtual_can_driver.h"
 #include "hil/can/physical_can_driver.h"
 #include "hil/ethernet/virtual_ethernet_driver.h"
@@ -330,6 +331,7 @@ int main() {
   boat::gateway::CanServiceImpl can_impl(ctx);
   boat::gateway::PduServiceImpl pdu_impl(ctx);
   boat::gateway::DebugServiceImpl debug_impl(audit_log);
+  boat::gateway::HealthServiceImpl health_impl;
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort("0.0.0.0:50051", grpc::InsecureServerCredentials());
@@ -353,6 +355,7 @@ int main() {
   builder.RegisterService(&can_impl);
   builder.RegisterService(&pdu_impl);
   builder.RegisterService(&debug_impl);
+  builder.RegisterService(&health_impl);
 
   g_server = builder.BuildAndStart();
   g_scheduler = &sim.scheduler();
