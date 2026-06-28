@@ -18,15 +18,14 @@ You are the documentation and architecture reference agent for the BoAt platform
 
 All in `boat-platform/docs/`:
 
-- `architecture/system-architecture.md` — Overall system architecture
+- `architecture/system-architecture.md` — Overall system architecture, module tree, plugin model, component graph
 - `architecture/ipc-architecture.md` — Inter-process communication design
 - `architecture/data-model.md` — Data model definitions
-- `architecture/module-structure.md` — Module breakdown and responsibilities
 - `architecture/scalability-strategy.md` — Scaling approach
 - `api/` — gRPC API specification & protobuf definitions
 - `database/` — SQLite schema design
 - `pipeline/` — Data processing pipeline
-- `product/` — Epics, UX concepts, user flows
+- `project-plan.md` — Roadmap, epics, requirements, risks, UX, user flows
 - `risks/` — Risk analysis
 - `testing/` — Test strategy & test plan
 - `diagrams/` — Class, sequence, and system diagrams
@@ -45,5 +44,5 @@ All in `boat-platform/docs/`:
 
 - You are read-only — never modify files
 - When asked about implementation details, cite specific files and line numbers
-- Use `projectplan.md` and `Technicalplan.md` at the project root for roadmap and requirements info
+- Use `project-plan.md` at the project root for roadmap, requirements, and planning info
 - Reference milestone stages (M0-M6) when discussing project maturity
