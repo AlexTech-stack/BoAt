@@ -17,6 +17,39 @@ import typer
 
 from .output import print_error, print_table
 
+_ETHERTYPE_NAMES: dict[str, int] = {
+    "ipv4": 0x0800, "ip": 0x0800,
+    "arp": 0x0806,
+    "ipv6": 0x86DD,
+    "vlan": 0x8100,
+    "boat": 0x88B5,
+}
+
+_PROTOCOL_NAMES: dict[str, int] = {
+    "icmp": 1, "icmpv4": 1,
+    "igmp": 2,
+    "tcp": 6,
+    "udp": 17,
+    "ipv6": 41,
+    "icmpv6": 58,
+    "ospf": 89,
+    "sctp": 132,
+}
+
+
+def _resolve_value(value: str, table: dict[str, int]) -> int:
+    """Resolve a name or numeric value to an integer.
+
+    Tries *table* lookup first, then hex (``0x...``), then decimal.
+    """
+    key = value.lower()
+    if key in table:
+        return table[key]
+    if value.startswith("0x") or value.startswith("0X"):
+        return int(value, 16)
+    return int(value, 10)
+
+
 trace_app = typer.Typer(help="Manage trace recording sessions and replay trace files.")
 
 _DEFAULT_RECORDER = "http://localhost:8083"
@@ -194,6 +227,24 @@ def cmd_replay(
                         help="Override source MAC (auto-detected from interface if not set)"),
     replay_dst_mac: str | None = typer.Option(None, "--replay-dst-mac",
                         help="Override destination MAC (default: broadcast for UDP/ICMP)"),
+    ip_filter: str | None = typer.Option(None, "--ip-filter",
+                        help="Comma-separated IP addresses to filter by (applied after IP "
+                             "mapping). Only packets whose rewritten src or dst matches are "
+                             "replayed. Example: 192.168.0.100,192.168.0.101"),
+    ip_map: str | None = typer.Option(None, "--ip-map",
+                        help="Comma-separated old=new IP mappings, e.g. "
+                             "10.10.10.10=192.168.0.100,10.10.10.11=192.168.0.101. "
+                             "IPs not in the map keep their original value (or --replay-src-ip / "
+                             "--replay-dst-ip fallback)."),
+    ethertype: str | None = typer.Option(None, "--ethertype",
+                        help="Comma-separated EtherType filter (pre-rewrite). "
+                             "Accepts hex (0x0800) or name (ipv4, ipv6, arp). "
+                             "Example: ipv4,0x86DD"),
+    protocol: str | None = typer.Option(None, "--protocol",
+                        help="Comma-separated L4 protocol filter (pre-rewrite). "
+                             "Accepts decimal (17) or name (udp, tcp, icmp, icmpv6). "
+                             "Applied by number regardless of IP version. "
+                             "Example: udp,icmp,58"),
 ) -> None:
     """Replay a trace file (.asc, .blf, .pcap) through the gateway."""
     try:
@@ -212,6 +263,26 @@ def cmd_replay(
     id_set: set[int] | None = None
     if can_id:
         id_set = {int(s.strip(), 16) for s in can_id.split(",") if s.strip()}
+    ip_filter_set: set[str] | None = None
+    if ip_filter:
+        ip_filter_set = {s.strip() for s in ip_filter.split(",") if s.strip()}
+    ip_map_dict: dict[str, str] | None = None
+    if ip_map:
+        ip_map_dict = {}
+        for pair in ip_map.split(","):
+            pair = pair.strip()
+            if "=" in pair:
+                old_ip, new_ip = pair.split("=", 1)
+                ip_map_dict[old_ip.strip()] = new_ip.strip()
+
+    ethertype_set: set[int] | None = None
+    if ethertype:
+        ethertype_set = {_resolve_value(s.strip(), _ETHERTYPE_NAMES)
+                         for s in ethertype.split(",") if s.strip()}
+    protocol_set: set[int] | None = None
+    if protocol:
+        protocol_set = {_resolve_value(s.strip(), _PROTOCOL_NAMES)
+                        for s in protocol.split(",") if s.strip()}
 
     def _on_frame(idx: int, msg) -> None:
         if verbose:
@@ -240,6 +311,10 @@ def cmd_replay(
         replay_dst_ip  = replay_dst_ip,
         replay_src_mac = replay_src_mac,
         replay_dst_mac = replay_dst_mac,
+        ip_filter        = ip_filter_set,
+        ip_map           = ip_map_dict,
+        ethertype_filter = ethertype_set,
+        protocol_filter  = protocol_set,
     )
 
     speed_label = f"{speed}x" if speed > 0 else "max"
