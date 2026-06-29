@@ -702,3 +702,576 @@ class TestConvertToBinaryIp6:
         payload6 = binary[off:off + records[1][1]]
         assert payload6[0] >> 4 == 6
         assert payload6[6] == 17  # UDP over IPv6
+
+
+class TestIpFilter:
+    """Tests for the ip_filter parameter (post-rewrite filtering)."""
+
+    def _make_replayer(self, ip_filter: set[str] | None = None, **kwargs):
+        from boat.trace_replay import TraceReplayer
+        params = {"buses": ["eth0"], "speed": 1.0, "replay_src_ip": "192.168.0.100"}
+        params.update(kwargs)
+        params["ip_filter"] = ip_filter
+        return TraceReplayer(**params)
+
+    def test_filter_matches_src(self):
+        """Packet whose rewritten src is in the filter set is replayed."""
+        replayer = self._make_replayer(ip_filter={"192.168.0.100"})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert len(result) > 0
+        assert result[12:16] == b"\xc0\xa8\x00\x64"  # 192.168.0.100
+
+    def test_filter_matches_dst(self):
+        """Packet whose rewritten dst is in the filter set is replayed."""
+        replayer = self._make_replayer(
+            replay_src_ip=None, replay_dst_ip="192.168.0.101",
+            ip_filter={"192.168.0.101"},
+        )
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert len(result) > 0
+        assert result[16:20] == b"\xc0\xa8\x00\x65"  # 192.168.0.101
+
+    def test_filter_no_match_returns_empty(self):
+        """Packet whose rewritten IPs do not match the filter is dropped."""
+        replayer = self._make_replayer(ip_filter={"10.0.0.99"})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result == b""
+
+    def test_filter_empty_set_no_filtering(self):
+        """Empty filter set = no filtering, all packets pass through."""
+        replayer = self._make_replayer(ip_filter=set())
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert len(result) > 0
+
+    def test_filter_preserves_original_ips_when_no_rewrite(self):
+        """Filter still works when no global rewrite is set — checks original IPs."""
+        replayer = self._make_replayer(
+            replay_src_ip=None, replay_dst_ip=None,
+            ip_filter={"10.0.0.1"},
+        )
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert len(result) > 0
+        assert result[12:16] == b"\x0a\x00\x00\x01"  # original IP preserved
+
+    def test_filter_icmp_packet(self):
+        """ICMP packets are also filtered by post-rewrite IP."""
+        replayer = self._make_replayer(ip_filter={"192.168.0.100"})
+        eth = _icmp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", b"ping",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert len(result) > 0
+        assert result[12:16] == b"\xc0\xa8\x00\x64"
+
+
+class TestIpMap:
+    """Tests for the ip_map parameter (per-IP rewriting)."""
+
+    def _make_replayer(self, ip_map: dict[str, str] | None = None, **kwargs):
+        from boat.trace_replay import TraceReplayer
+        params = {"buses": ["eth0"], "speed": 1.0}
+        params.update(kwargs)
+        params["ip_map"] = ip_map
+        return TraceReplayer(**params)
+
+    def test_map_src_ip(self):
+        """Source IP from the map is rewritten; dest IP is preserved."""
+        replayer = self._make_replayer(ip_map={"10.0.0.1": "192.168.0.100"})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result[12:16] == b"\xc0\xa8\x00\x64"  # mapped src
+        assert result[16:20] == b"\x0a\x00\x00\x02"  # original dst
+
+    def test_map_dst_ip(self):
+        """Dest IP from the map is rewritten; source IP is preserved."""
+        replayer = self._make_replayer(ip_map={"10.0.0.2": "192.168.0.101"})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result[12:16] == b"\x0a\x00\x00\x01"  # original src
+        assert result[16:20] == b"\xc0\xa8\x00\x65"  # mapped dst
+
+    def test_map_both_ips(self):
+        """Both src and dst are independently rewritten via the map."""
+        replayer = self._make_replayer(ip_map={
+            "10.0.0.1": "192.168.0.100",
+            "10.0.0.2": "192.168.0.101",
+        })
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result[12:16] == b"\xc0\xa8\x00\x64"
+        assert result[16:20] == b"\xc0\xa8\x00\x65"
+
+    def test_map_unknown_ip_preserved(self):
+        """IPs not in the map keep their original value."""
+        replayer = self._make_replayer(ip_map={"99.99.99.99": "1.2.3.4"})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result[12:16] == b"\x0a\x00\x00\x01"  # original preserved
+        assert result[16:20] == b"\x0a\x00\x00\x02"
+
+    def test_map_unknown_ip_falls_back_to_global(self):
+        """IPs not in the map fall back to replay_src_ip / replay_dst_ip if set."""
+        replayer = self._make_replayer(
+            replay_src_ip="10.10.10.10", replay_dst_ip="10.10.10.11",
+            ip_map={"99.99.99.99": "1.2.3.4"},  # doesn't match src or dst
+        )
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result[12:16] == b"\x0a\x0a\x0a\x0a"  # global fallback
+        assert result[16:20] == b"\x0a\x0a\x0a\x0b"
+
+    def test_map_with_icmp(self):
+        """ICMP packets are properly rewritten via the map."""
+        replayer = self._make_replayer(ip_map={"10.0.0.1": "192.168.0.100"})
+        eth = _icmp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", b"ping",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result[12:16] == b"\xc0\xa8\x00\x64"
+        assert result[9] == 1  # protocol ICMP
+        # ICMP checksum valid
+        assert _checksum(result[20:]) == 0
+
+    def test_map_ipv6(self):
+        """IPv6 addresses are properly rewritten via the map."""
+        replayer = self._make_replayer(ip_map={
+            "2001:db8::1": "2001:db8::ff00:42:8329",
+        })
+        eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x86DD, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result[8:24] == b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\xff\x00\x00\x42\x83\x29"
+        assert result[24:40] == b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"
+
+
+class TestIpFilterAndMap:
+    """Combined ip_map + ip_filter: map first, then filter on the result."""
+
+    def _make_replayer(self, ip_map=None, ip_filter=None, **kwargs):
+        from boat.trace_replay import TraceReplayer
+        params = {"buses": ["eth0"], "speed": 1.0}
+        params.update(kwargs)
+        params["ip_map"] = ip_map
+        params["ip_filter"] = ip_filter
+        return TraceReplayer(**params)
+
+    def test_map_then_filter_match(self):
+        """Packet mapped to an IP in the filter set is replayed."""
+        replayer = self._make_replayer(
+            ip_map={"10.0.0.1": "192.168.0.100"},
+            ip_filter={"192.168.0.100"},
+        )
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert len(result) > 0
+        assert result[12:16] == b"\xc0\xa8\x00\x64"
+
+    def test_map_then_filter_no_match(self):
+        """Packet mapped to an IP NOT in the filter set is dropped."""
+        replayer = self._make_replayer(
+            ip_map={"10.0.0.1": "192.168.0.100"},
+            ip_filter={"10.0.0.99"},
+        )
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert result == b""
+
+    def test_map_then_filter_multi_conversation(self):
+        """Multiple conversations in the same pcap: only matching ones pass."""
+        replayer = self._make_replayer(
+            ip_map={
+                "10.0.0.1": "192.168.0.100",
+                "10.0.0.2": "192.168.0.101",
+            },
+            ip_filter={"192.168.0.100"},
+        )
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert len(result) > 0  # src maps to 192.168.0.100 -> matches filter
+
+        # Different conversation: src=10.0.0.3, dst=10.0.0.4 (not in map)
+        eth2 = _udp_packet(
+            b"\x0a\x00\x00\x03", b"\x0a\x00\x00\x04", 11111, 22222, b"other",
+        )
+        frame2 = EthernetPcapFrame(2.0, eth2[0:6], eth2[6:12], 0x0800, eth2[14:])
+        result2 = replayer._reconstruct_ip_packet(frame2)
+        assert result2 == b""  # rewritten IPs (original) don't match filter
+
+    def test_map_then_filter_convert_to_binary(self):
+        """End-to-end: filtered-out packets produce no binary trace records."""
+        replayer = self._make_replayer(
+            ip_map={"10.0.0.1": "192.168.0.100"},
+            ip_filter={"192.168.0.100"},
+        )
+        # Frame 1: matches (src maps to 192.168.0.100)
+        eth1 = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"keep",
+        )
+        # Frame 2: does not match (original IPs, no map entry -> preserved -> not in filter)
+        eth2 = _udp_packet(
+            b"\x0a\x00\x00\x03", b"\x0a\x00\x00\x04", 11111, 22222, b"drop",
+        )
+        import tempfile
+        data = _make_pcap([eth1, eth2])
+        p = Path(tempfile.NamedTemporaryFile(suffix=".pcap", delete=False).name)
+        p.write_bytes(data)
+        binary = replayer._convert_to_binary(p)
+        p.unlink()
+
+        # Should have exactly 1 record (frame 2 was filtered out)
+        offset = 0
+        records = 0
+        while offset < len(binary):
+            if offset + 28 > len(binary):
+                break
+            magic = struct.unpack_from("<I", binary, offset)[0]
+            if magic != 0xB0A7B0A7:
+                break
+            records += 1
+            _, _, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
+            offset += 28 + payload_size
+        assert records == 1
+
+
+class TestEthertypeFilter:
+    """Tests for the ethertype_filter parameter (pre-rewrite L2 filter)."""
+
+    def _make_replayer(self, ethertype_filter=None, **kwargs):
+        from boat.trace_replay import TraceReplayer
+        params = {"buses": ["eth0"], "speed": 1.0}
+        params.update(kwargs)
+        params["ethertype_filter"] = ethertype_filter
+        return TraceReplayer(**params)
+
+    def _pcap_bytes(self, eth_frames: list[bytes]):
+        import tempfile
+        p = Path(tempfile.NamedTemporaryFile(suffix=".pcap", delete=False).name)
+        p.write_bytes(_make_pcap(eth_frames))
+        return p
+
+    def test_filter_ipv4_only(self):
+        """Only IPv4 frames pass through when filter is {0x0800}."""
+        replayer = self._make_replayer(ethertype_filter={0x0800})
+        ipv4_eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"v4",
+        )
+        ipv6_eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"v6",
+        )
+        p = self._pcap_bytes([ipv4_eth, ipv6_eth])
+        binary = replayer._convert_to_binary(p)
+        p.unlink()
+
+        offset = 0
+        ethertypes = []
+        while offset < len(binary):
+            if offset + 28 > len(binary):
+                break
+            magic = struct.unpack_from("<I", binary, offset)[0]
+            if magic != 0xB0A7B0A7:
+                break
+            _, event_type, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
+            ethertypes.append(event_type & 0xFFFF)
+            offset += 28 + payload_size
+        assert ethertypes == [0x0800]  # only IPv4
+
+    def test_filter_ipv6_only(self):
+        """Only IPv6 frames pass through when filter is {0x86DD}."""
+        replayer = self._make_replayer(ethertype_filter={0x86DD})
+        ipv4_eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"v4",
+        )
+        ipv6_eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"v6",
+        )
+        p = self._pcap_bytes([ipv4_eth, ipv6_eth])
+        binary = replayer._convert_to_binary(p)
+        p.unlink()
+
+        offset = 0
+        ethertypes = []
+        while offset < len(binary):
+            if offset + 28 > len(binary):
+                break
+            magic = struct.unpack_from("<I", binary, offset)[0]
+            if magic != 0xB0A7B0A7:
+                break
+            _, event_type, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
+            ethertypes.append(event_type & 0xFFFF)
+            offset += 28 + payload_size
+        assert ethertypes == [0x86DD]  # only IPv6
+
+    def test_filter_empty_set_no_filtering(self):
+        """Empty ethertype_filter set passes all frames."""
+        replayer = self._make_replayer(ethertype_filter=set())
+        ipv4_eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"v4",
+        )
+        ipv6_eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"v6",
+        )
+        p = self._pcap_bytes([ipv4_eth, ipv6_eth])
+        binary = replayer._convert_to_binary(p)
+        p.unlink()
+
+        offset = 0
+        count = 0
+        while offset < len(binary):
+            if offset + 28 > len(binary):
+                break
+            magic = struct.unpack_from("<I", binary, offset)[0]
+            if magic != 0xB0A7B0A7:
+                break
+            count += 1
+            _, _, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
+            offset += 28 + payload_size
+        assert count == 2  # both pass
+
+
+class TestProtocolFilter:
+    """Tests for the protocol_filter parameter (pre-rewrite L4 filter)."""
+
+    def _make_replayer(self, protocol_filter=None, **kwargs):
+        from boat.trace_replay import TraceReplayer
+        params = {"buses": ["eth0"], "speed": 1.0}
+        params.update(kwargs)
+        params["protocol_filter"] = protocol_filter
+        return TraceReplayer(**params)
+
+    def test_filter_udp_only(self):
+        """Only UDP packets pass through when filter is {17}."""
+        replayer = self._make_replayer(protocol_filter={17})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+    def test_filter_udp_icmpv4(self):
+        """Both UDP and ICMPv4 pass when filter is {1, 17}."""
+        replayer = self._make_replayer(protocol_filter={1, 17})
+        udp_eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        icmp_eth = _icmp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", b"ping",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        udp_result = replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(1.0, udp_eth[0:6], udp_eth[6:12], 0x0800, udp_eth[14:])
+        )
+        assert len(udp_result) > 0
+        icmp_result = replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(2.0, icmp_eth[0:6], icmp_eth[6:12], 0x0800, icmp_eth[14:])
+        )
+        assert len(icmp_result) > 0
+
+    def test_filter_udp_rejects_icmp(self):
+        """UDP-only filter drops ICMP packets (returns empty)."""
+        replayer = self._make_replayer(protocol_filter={17})
+        eth = _icmp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", b"ping",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        result = replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        )
+        assert result == b""
+
+    def test_filter_udp_rejects_unknown(self):
+        """UDP-only filter drops unknown protocol packets."""
+        replayer = self._make_replayer(protocol_filter={17})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        # Modify the protocol byte to 0xFD (unknown)
+        payload = eth[14:]
+        modified = payload[:9] + bytes([0xFD]) + payload[10:]
+        eth_mod = eth[:14] + modified
+        result = replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(1.0, eth_mod[0:6], eth_mod[6:12], 0x0800, eth_mod[14:])
+        )
+        assert result == b""
+
+    def test_filter_tcp_blocked(self):
+        """TCP packets (protocol 6) are blocked when filter is {17}."""
+        replayer = self._make_replayer(protocol_filter={17})
+        # Build a minimal TCP-like frame (protocol=6)
+        total_len = 20 + 20  # IP header + TCP header (no payload)
+        ip_hdr = struct.pack("!BBHHHBBH4s4s",
+            0x45, 0, total_len, 0x9ABC, 0, 64, 6, 0,
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02")
+        s = 0
+        for i in range(0, 20, 2):
+            word = struct.unpack("!H", ip_hdr[i:i+2])[0]
+            s += word
+        while s >> 16:
+            s = (s & 0xFFFF) + (s >> 16)
+        ip_hdr = ip_hdr[:10] + struct.pack("!H", (~s) & 0xFFFF) + ip_hdr[12:]
+        tcp_hdr = b"\x00\x50\x00\x50" + b"\x00" * 16  # minimal TCP header
+        eth = b"\x00" * 12 + b"\x08\x00" + ip_hdr + tcp_hdr
+        from boat.trace_replay import EthernetPcapFrame
+        result = replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        )
+        assert result == b""
+
+    def test_filter_udp_over_ipv6(self):
+        """UDP filter works for IPv6 (protocol 17) by number, not IP version."""
+        replayer = self._make_replayer(protocol_filter={17})
+        eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"v6data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        result = replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x86DD, eth[14:])
+        )
+        assert len(result) > 0
+        assert result[6] == 17  # UDP over IPv6
+
+    def test_filter_icmpv6_over_ipv6(self):
+        """ICMPv6 (protocol 58) is allowed when in the filter set."""
+        replayer = self._make_replayer(protocol_filter={58})
+        eth = _icmp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            b"ping6",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        result = replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x86DD, eth[14:])
+        )
+        assert len(result) > 0
+        assert result[6] == 58  # ICMPv6
+
+    def test_filter_empty_set_passes_all(self):
+        """Empty protocol_filter set passes all protocols."""
+        replayer = self._make_replayer(protocol_filter=set())
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        result = replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        )
+        assert len(result) > 0
+
+
+class TestEthertypeAndProtocolFilter:
+    """Combined ethertype + protocol filter (both pre-rewrite)."""
+
+    def test_ipv4_udp_only(self):
+        """Only IPv4+UDP packets pass through (end-to-end via _convert_to_binary)."""
+        from boat.trace_replay import TraceReplayer
+        import tempfile
+
+        replayer = TraceReplayer(
+            buses=["eth0"], speed=1.0,
+            ethertype_filter={0x0800},
+            protocol_filter={17},
+        )
+        udp_v4 = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"keep",
+        )
+        icmp_v4 = _icmp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", b"drop",
+        )
+        udp_v6 = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"drop",
+        )
+        data = _make_pcap([udp_v4, icmp_v4, udp_v6])
+        p = Path(tempfile.NamedTemporaryFile(suffix=".pcap", delete=False).name)
+        p.write_bytes(data)
+        binary = replayer._convert_to_binary(p)
+        p.unlink()
+
+        offset = 0
+        records = 0
+        while offset < len(binary):
+            if offset + 28 > len(binary):
+                break
+            magic = struct.unpack_from("<I", binary, offset)[0]
+            if magic != 0xB0A7B0A7:
+                break
+            records += 1
+            _, _, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
+            offset += 28 + payload_size
+        assert records == 1  # only UDPv4 passes both filters

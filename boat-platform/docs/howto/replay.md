@@ -10,9 +10,13 @@ gateway onto live buses and network interfaces.
 cd boat-platform
 cmake --preset debug && cmake --build --preset debug
 
-# Start the gateway
-BOAT_CAN_INTERFACES=vcan0 BOAT_ETH_INTERFACES=eth0 \
+# Start the gateway (virtual Ethernet interfaces need no prefix)
+BOAT_ETH_INTERFACES=veth0 \
   build/debug/src/gateway/grpc_gateway/boat_gateway
+
+# Start the gateway (physical Ethernet NICs need raw: prefix)
+BOAT_ETH_INTERFACES=raw:eth0 \
+  sudo build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
 ### CAN replay
@@ -60,7 +64,15 @@ are listed than channels, the last bus is used as fallback.
 
 For Ethernet traces, only the first bus is relevant — it selects the target
 network interface for frame injection.  The gateway must have the interface
-registered via the `BOAT_ETH_INTERFACES` environment variable.
+registered via the `BOAT_ETH_INTERFACES` environment variable:
+
+```bash
+# Virtual interface (veth) — no prefix needed
+BOAT_ETH_INTERFACES=veth0 ...
+
+# Physical NIC (raw AF_PACKET) — requires raw: prefix and CAP_NET_RAW / root
+BOAT_ETH_INTERFACES=raw:eth0 ...  # or raw:enx28107b9f2017
+```
 
 ## Filtering
 
@@ -86,15 +98,20 @@ Both standard 11-bit IDs (e.g. `0x040`) and extended 29-bit IDs
 
 ### Ethernet IP addresses
 
-Source and destination IPs are rewritten in every replayed packet.  Both IPv4
-and IPv6 are accepted:
+Three mechanisms control IP address rewriting — global rewrite, mapping table,
+and post-rewrite filter.
+
+#### Global rewrite (`--replay-src-ip` / `--replay-dst-ip`)
+
+Every packet in the pcap has its source and destination IP replaced with the
+given addresses.  Both IPv4 and IPv6 are accepted:
 
 ```bash
-# IPv4
+# IPv4 — all packets rewritten to 192.168.1.1 → 192.168.1.100
 boat trace replay capture.pcap --buses eth0 \
   --replay-src-ip 192.168.1.1 --replay-dst-ip 192.168.1.100
 
-# IPv6 — full and compressed notation both work
+# IPv6
 boat trace replay capture.pcap --buses eth0 \
   --replay-src-ip 2001:db8::1 --replay-dst-ip 2001:db8::100
 ```
@@ -102,6 +119,119 @@ boat trace replay capture.pcap --buses eth0 \
 The CLI accepts any notation supported by Python's `ipaddress` module:
 ``2001:db8::ff00:42:8329``, ``2001:0db8:0000:0000:0000:ff00:0042:8329``,
 ``::ffff:192.168.1.1``, etc.
+
+#### Per-IP mapping table (`--ip-map`)
+
+Rewrite specific IP addresses to specific targets, leaving other conversations
+unmodified.  This lets you replay a pcap that contains multiple IP
+conversations and map each one to different real-world IPs:
+
+```bash
+# Rewrite 10.10.10.10 → 192.168.0.100 and 10.10.10.11 → 192.168.0.101
+# Other IPs in the pcap are left at their original values
+boat trace replay capture.pcap --buses eth0 \
+  --ip-map 10.10.10.10=192.168.0.100,10.10.10.11=192.168.0.101
+```
+
+When both ``--ip-map`` and ``--replay-src-ip``/``--replay-dst-ip`` are set,
+entries in the mapping table take precedence for matching IPs; the global
+rewrite acts as a fallback for unmapped addresses:
+
+```bash
+# 10.10.10.10 → 192.168.0.100 (via map)
+# 10.10.10.11 → 10.0.0.1    (via global fallback)
+boat trace replay capture.pcap --buses eth0 \
+  --ip-map 10.10.10.10=192.168.0.100 \
+  --replay-src-ip 10.0.0.1
+```
+
+#### Post-rewrite IP filter (`--ip-filter`)
+
+After IP rewriting (via map or global rewrite), filter out packets whose
+resulting source or destination IP is not in the given set.  This lets you
+select only the conversations you care about from a busy pcap:
+
+```bash
+# Rewrite IPs, then keep only packets involving 192.168.0.100
+boat trace replay capture.pcap --buses eth0 \
+  --ip-map 10.10.10.10=192.168.0.100,10.10.10.11=192.168.0.101 \
+  --ip-filter 192.168.0.100
+```
+
+The filter is applied **after** all IP rewriting (map + global), so you filter
+on the final, rewritten addresses — not the original capture IPs.
+
+#### EtherType filter (`--ethertype`)
+
+Filter by L2 EtherType **before** any IP processing.  Only packets whose
+EtherType is in the given set are replayed.  Accepts hex values or names:
+
+```bash
+# Only IPv4 (0x0800)
+boat trace replay capture.pcap --buses eth0 --ethertype ipv4
+
+# Only IPv6 (0x86DD)
+boat trace replay capture.pcap --buses eth0 --ethertype ipv6
+
+# Multiple: IPv4 + ARP
+boat trace replay capture.pcap --buses eth0 --ethertype ipv4,arp
+```
+
+Recognised EtherType names:
+
+| Name    | Value    |
+|---------|----------|
+| ``ip`` / ``ipv4`` | ``0x0800`` |
+| ``arp`` | ``0x0806`` |
+| ``ipv6`` | ``0x86DD`` |
+| ``vlan`` | ``0x8100`` |
+| ``boat`` | ``0x88B5`` |
+
+#### Protocol filter (`--protocol`)
+
+Filter by L4 protocol number **before** IP rewriting.  Applied by numeric
+value regardless of IP version — ``--protocol udp`` matches both IPv4+UDP
+and IPv6+UDP.  Accepts decimal values or names:
+
+```bash
+# Only UDP
+boat trace replay capture.pcap --buses eth0 --protocol udp
+
+# UDP + ICMP (applies to both IPv4 ICMP and IPv6 ICMPv6)
+boat trace replay capture.pcap --buses eth0 --protocol udp,icmp
+
+# Only ICMPv6
+boat trace replay capture.pcap --buses eth0 --protocol icmpv6
+```
+
+Recognised protocol names:
+
+| Name       | Value |
+|------------|-------|
+| ``icmp`` / ``icmpv4`` | ``1`` |
+| ``igmp`` | ``2`` |
+| ``tcp`` | ``6`` |
+| ``udp`` | ``17`` |
+| ``ipv6`` (encap) | ``41`` |
+| ``icmpv6`` | ``58`` |
+| ``ospf`` | ``89`` |
+| ``sctp`` | ``132`` |
+
+#### Processing order
+
+For each pcap packet:
+
+```
+1. Parse EtherType from the pcap L2 header
+2. EtherType filter:  skip if ethertype not in --ethertype
+3. Parse IP header, extract protocol/next-header number
+4. Protocol filter:   skip if protocol not in --protocol
+5. Apply IP map:      src = ip_map.get(orig_src, replay_src_ip or orig_src)
+                       dst = ip_map.get(orig_dst, replay_dst_ip or orig_dst)
+6. IP filter:         skip if neither rewritten src nor dst is in --ip-filter
+7. Rebuild IP header with the final src/dst addresses
+8. Recalculate IP and transport checksums
+```
 
 ### Ethernet MAC addresses
 
@@ -303,7 +433,7 @@ target network:
 |-------|-------|----------|
 | **L2** | Source MAC | Auto-detected from target interface; overridable via ``--replay-src-mac`` |
 | **L2** | Destination MAC | Defaults to broadcast; overridable via ``--replay-dst-mac`` |
-| **L3** | Source / Dest IP | Replaced with ``--replay-src-ip`` / ``--replay-dst-ip`` |
+| **L3** | Source / Dest IP | Rewritten via ``--replay-src-ip``/``--replay-dst-ip`` (global) or ``--ip-map`` (per-address table) |
 | **L3** | TTL / Hop Limit | Preserved from the original packet |
 | **L4** | UDP ports | Preserved from the original |
 | **L4** | ICMP type/code | Preserved from the original |
@@ -337,9 +467,16 @@ Supported protocol combinations:
 boat trace replay tracefile.blf --channel 4 --buses can0 --id 0x040,0x0C0 --speed 0.2
 candump can0
 
-# Ethernet: replay a pcap with an IP override
+# Ethernet: replay a pcap with a global IP override
 boat trace replay capture.pcap --buses eth0 \
   --replay-src-ip 192.168.10.50 --replay-dst-ip 10.0.0.1
+tcpdump -i eth0
+
+# Ethernet: only replay IPv6 ICMPv6, map specific addresses, filter to one pair
+boat trace replay capture.pcap --buses eth0 \
+  --ethertype ipv6 --protocol icmpv6 \
+  --ip-map 2001:db8::1=fe80::100,2001:db8::2=fe80::200 \
+  --ip-filter fe80::100,fe80::200
 tcpdump -i eth0
 ```
 
@@ -371,6 +508,18 @@ eth_replayer = TraceReplayer(
     replay_dst_ip="192.168.1.100",
 )
 eth_replayer.replay("capture.pcap")
+
+# Ethernet with filters and IP mapping
+eth_replayer = TraceReplayer(
+    gateway="localhost:50051",
+    buses=["eth0"],
+    ethertype_filter={0x86DD},
+    protocol_filter={58},       # ICMPv6
+    ip_map={"2001:db8::1": "fe80::100",
+            "2001:db8::2": "fe80::200"},
+    ip_filter={"fe80::100", "fe80::200"},
+)
+eth_replayer.replay("capture.pcap")
 ```
 
 ## Troubleshooting
@@ -383,4 +532,4 @@ eth_replayer.replay("capture.pcap")
 | CAN server-side replay imports but no frames on the bus | The trace file timestamps may be absolute (epoch-based). The Python SDK converts to relative ticks internally since build `43824e6`. Upgrade the SDK: `pip install -e ./sdk/python`. |
 | Server-side replay seems to hang (no console output after "Replaying...") | The Python client blocks on `StreamReplay` waiting for events from the gateway's EventBus. Frames are still delivered to the bus — verify with `candump` / `tcpdump`. Use `Ctrl+C` to interrupt. |
 | No frames replayed | Check the trace file format. Ensure channel/ID filters are correct. For pcap: only classic pcap (DLT\_EN10MB) is supported, not pcapng. |
-| Ethernet pcap replay: no frames on the wire | Verify the target interface is correct (`--buses eth0`) and that ``--replay-src-ip`` / ``--replay-dst-ip`` are set. The interface must be up and registered via ``BOAT_ETH_INTERFACES``. |
+| Ethernet pcap replay: no frames on the wire | Verify the target interface is correct (`--buses eth0`) and that ``--replay-src-ip`` / ``--replay-dst-ip`` are set. The interface must be up and registered via ``BOAT_ETH_INTERFACES`` — use ``raw:`` prefix for physical NICs (e.g. ``BOAT_ETH_INTERFACES=raw:eth0``). |

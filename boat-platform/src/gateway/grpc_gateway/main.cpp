@@ -254,7 +254,15 @@ int main() {
           if (cfg.eth_iface.empty()) {
             return;
           }
-          static const auto src_mac = ReadInterfaceMac(cfg.eth_iface);
+          const auto src_mac = ReadInterfaceMac(cfg.eth_iface);
+          static bool mac_logged = false;
+          if (!mac_logged) {
+            mac_logged = true;
+            std::fprintf(stderr, "[Replay] iface=%s src_mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+                         cfg.eth_iface.c_str(),
+                         src_mac[0], src_mac[1], src_mac[2],
+                         src_mac[3], src_mac[4], src_mac[5]);
+          }
           boat::hil::EthernetFrame eth_frame{};
           std::memcpy(eth_frame.src_mac, src_mac.data(), 6);
           std::memset(eth_frame.dst_mac, 0xFF, 6);

@@ -138,6 +138,20 @@ class TraceReplayer:
         replay_dst_ip: Destination IP address for reconstructed IP header.
         replay_src_mac: Override source MAC (auto-detected from interface if not set).
         replay_dst_mac: Override destination MAC (default: broadcast for IPv4/IPv6 UDP/ICMP).
+        ip_filter:      Set of IP addresses to filter by (applied post-rewrite).
+                        Only packets whose rewritten src or dst is in this set
+                        are replayed. Empty set = no filtering.
+        ip_map:         Mapping of original IP → rewritten IP (e.g.
+                        ``{"10.10.10.10": "192.168.0.100"}``).  IPs not in the
+                        map keep their original value (or ``replay_src_ip`` /
+                        ``replay_dst_ip`` fallback).
+        ethertype_filter: Set of EtherType values to filter by (pre-rewrite).
+                          Only packets whose EtherType is in this set are
+                          replayed.  Empty set = no filtering.
+        protocol_filter:  Set of IP protocol / IPv6 next-header numbers to
+                          filter by (pre-rewrite).  Only packets whose L4
+                          protocol is in this set are replayed.  Empty set = no
+                          filtering.
     """
 
     def __init__(
@@ -154,21 +168,29 @@ class TraceReplayer:
         replay_dst_ip: Optional[str] = None,
         replay_src_mac: Optional[str] = None,
         replay_dst_mac: Optional[str] = None,
+        ip_filter: Optional[set[str]] = None,
+        ip_map: Optional[dict[str, str]] = None,
+        ethertype_filter: Optional[set[int]] = None,
+        protocol_filter: Optional[set[int]] = None,
     ) -> None:
-        self.gateway        = gateway
-        self.buses          = buses or []
-        self.speed          = speed
-        self.simulation_id  = simulation_id
-        self.on_frame       = on_frame
-        self.channel_filter = channel_filter
-        self.id_filter      = id_filter or set()
-        self.eth_iface       = eth_iface
-        self.replay_src_ip   = replay_src_ip
-        self.replay_dst_ip   = replay_dst_ip
-        self.replay_src_mac  = replay_src_mac
-        self.replay_dst_mac  = replay_dst_mac
-        self._stub          = None
-        self._replay_stub   = None
+        self.gateway          = gateway
+        self.buses            = buses or []
+        self.speed            = speed
+        self.simulation_id    = simulation_id
+        self.on_frame         = on_frame
+        self.channel_filter   = channel_filter
+        self.id_filter        = id_filter or set()
+        self.eth_iface        = eth_iface
+        self.replay_src_ip    = replay_src_ip
+        self.replay_dst_ip    = replay_dst_ip
+        self.replay_src_mac   = replay_src_mac
+        self.replay_dst_mac   = replay_dst_mac
+        self.ip_filter        = ip_filter or set()
+        self.ip_map           = ip_map or {}
+        self.ethertype_filter = ethertype_filter or set()
+        self.protocol_filter  = protocol_filter or set()
+        self._stub            = None
+        self._replay_stub     = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -301,7 +323,11 @@ class TraceReplayer:
                 wall_time_ns = int(relative_ts * 1_000_000_000)
 
                 if is_eth:
+                    if self.ethertype_filter and msg.ethertype not in self.ethertype_filter:
+                        continue
                     raw = self._reconstruct_ip_packet(msg)
+                    if not raw:
+                        continue
                     event_type = _REPLAY_ETH_EVENT_BASE | (msg.ethertype & 0xFFFF)
                 else:
                     ch = getattr(msg, "channel", None)
@@ -328,8 +354,21 @@ class TraceReplayer:
     def _reconstruct_ip_packet(self, frame: EthernetPcapFrame) -> bytes:
         """Reconstruct an IP packet with user-specified addresses.
 
-        Dispatches to IPv4 or IPv6 handler based on *frame.ethertype*.
+        Applies protocol filter before dispatching to version-specific handler.
         """
+        payload = frame.payload
+        if frame.ethertype == 0x86DD:
+            if len(payload) < 40:
+                return b""
+            protocol = payload[6]
+        else:
+            if len(payload) < 20:
+                return b""
+            protocol = payload[9]
+
+        if self.protocol_filter and protocol not in self.protocol_filter:
+            return b""
+
         if frame.ethertype == 0x86DD:
             return self._reconstruct_ip6_packet(frame)
         return self._reconstruct_ip4_packet(frame)
@@ -356,8 +395,14 @@ class TraceReplayer:
         header_end = ihl
         transport_payload = payload[header_end:total_len]
 
-        src_ip_bytes = self._parse_ip(self.replay_src_ip or str(orig_src))
-        dst_ip_bytes = self._parse_ip(self.replay_dst_ip or str(orig_dst))
+        orig_src_str = str(ipaddress.IPv4Address(orig_src))
+        orig_dst_str = str(ipaddress.IPv4Address(orig_dst))
+        mapped_src = self.ip_map.get(orig_src_str, self.replay_src_ip or orig_src_str)
+        mapped_dst = self.ip_map.get(orig_dst_str, self.replay_dst_ip or orig_dst_str)
+        if self.ip_filter and mapped_src not in self.ip_filter and mapped_dst not in self.ip_filter:
+            return b""
+        src_ip_bytes = self._parse_ip(mapped_src)
+        dst_ip_bytes = self._parse_ip(mapped_dst)
 
         if protocol == 17 and len(transport_payload) >= 8:
             # UDP: preserve ports, rebuild header
@@ -441,8 +486,14 @@ class TraceReplayer:
 
         transport_payload = payload[40:40 + payload_len]
 
-        src_ip_bytes = self._parse_ip(self.replay_src_ip or str(orig_src))
-        dst_ip_bytes = self._parse_ip(self.replay_dst_ip or str(orig_dst))
+        orig_src_str = str(ipaddress.IPv6Address(orig_src))
+        orig_dst_str = str(ipaddress.IPv6Address(orig_dst))
+        mapped_src = self.ip_map.get(orig_src_str, self.replay_src_ip or orig_src_str)
+        mapped_dst = self.ip_map.get(orig_dst_str, self.replay_dst_ip or orig_dst_str)
+        if self.ip_filter and mapped_src not in self.ip_filter and mapped_dst not in self.ip_filter:
+            return b""
+        src_ip_bytes = self._parse_ip(mapped_src)
+        dst_ip_bytes = self._parse_ip(mapped_dst)
 
         if next_header == 17 and len(transport_payload) >= 8:
             # UDP over IPv6: port preservation, mandatory checksum
