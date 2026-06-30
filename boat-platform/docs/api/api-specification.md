@@ -1,10 +1,9 @@
 # API Specification
 
-## gRPC Services
+All protobuf service files are defined under `proto/boat/v1/`, package `boat.v1`.
+13 gRPC services across 15 `.proto` files.
 
-All protobuf service files are defined under `proto/boat/v1/`.
-
-### `simulation.proto` - `SimulationService`
+### `simulation.proto` — SimulationService (9 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
@@ -18,7 +17,7 @@ All protobuf service files are defined under `proto/boat/v1/`.
 | `WatchSimulation` | Server-streaming | Live state change events |
 | `ListSimulations` | Unary | Paginated list |
 
-### `signal.proto` - `SignalService`
+### `signal.proto` — SignalService (3 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
@@ -26,7 +25,7 @@ All protobuf service files are defined under `proto/boat/v1/`.
 | `SubscribeSignals` | Server-streaming | Stream signal values by filter |
 | `GetSignalHistory` | Unary | Query historical values (paginated) |
 
-### `scenario.proto` - `ScenarioService`
+### `scenario.proto` — ScenarioService (5 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
@@ -36,20 +35,22 @@ All protobuf service files are defined under `proto/boat/v1/`.
 | `ValidateScenario` | Unary | Dry-run validation |
 | `DeleteScenario` | Unary | Remove scenario |
 
-### `replay.proto` - `ReplayService`
+### `replay.proto` — ReplayService (8 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
 | `StartReplay` | Unary | Begin deterministic replay from trace |
 | `SeekReplay` | Unary | Jump to tick N |
 | `StreamReplay` | Server-streaming | Stream replayed events |
+| `PauseReplay` | Unary | Pause active replay |
+| `ResumeReplay` | Unary | Resume paused replay |
+| `StopReplay` | Unary | Terminate replay session |
+| `ImportTraceData` | Unary | Import raw trace data for replay |
+| `StartReplayFromEvents` | Unary | Start replay from in-memory events |
 
-Replay session identity:
-- `StartReplay` returns `ReplayControlResponse.replay_id`.
-- Clients must persist that `replay_id` and pass it to `SeekReplay` and `StreamReplay`.
-- `replay_id` is stable for the active replay session key (`trace_id` + optional `simulation_id`) and is the canonical chaining identifier for follow-up replay RPCs.
+Replay session identity: `StartReplay` returns `ReplayControlResponse.replay_id`. Clients pass this to all subsequent replay RPCs.
 
-### `plugin.proto` - `PluginService`
+### `plugin.proto` — PluginService (4 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
@@ -58,29 +59,30 @@ Replay session identity:
 | `GetPluginInfo` | Unary | Fetch plugin metadata |
 | `UnloadPlugin` | Unary | Hot-unload plugin |
 
-### `metrics.proto` - `MetricsService`
+### `metrics.proto` — MetricsService (2 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
 | `GetMetrics` | Unary | Snapshot of current metrics |
 | `StreamMetrics` | Server-streaming | Live metrics stream |
 
-### `trace.proto` - `TraceService`
+### `trace.proto` — TraceService (4 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
 | `GetTrace` | Unary | Fetch trace events by id |
 | `ListTraces` | Unary | Paginated trace listing |
 | `StreamTrace` | Server-streaming | Live trace stream |
+| `MarkStep` | Unary | Record a step marker in the trace |
 
-### `fault.proto` - `FaultService`
+### `fault.proto` — FaultService (2 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
 | `InjectFault` | Unary | Schedule fault injection for simulation |
 | `ListFaults` | Unary | Paginated fault event listing |
 
-### `can.proto` - `CanService`
+### `can.proto` — CanService (3 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
@@ -88,13 +90,46 @@ Replay session identity:
 | `SubscribeCanFrames` | Server-streaming | Stream incoming CAN frames (with optional interface filter) |
 | `ListBuses` | Unary | List registered CAN interfaces with metadata (driver, state, FD support, bitrate) |
 
-### `ethernet.proto` - `EthernetService`
+### `ethernet.proto` — EthernetService (3 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
 | `SendFrame` | Unary | Transmit an Ethernet frame |
 | `SubscribeFrames` | Server-streaming | Stream incoming Ethernet frames |
 | `ListInterfaces` | Unary | List registered Ethernet interfaces |
+
+### `bus.proto` — BusService (2 RPCs)
+
+| Method | Type | Description |
+|---|---|---|
+| `Publish` | Unary | Publish a named value on the always-on node signal bus |
+| `Subscribe` | Server-streaming | Subscribe to bus signals by filter |
+
+### `pdu.proto` — PduService (10 RPCs)
+
+| Method | Type | Description |
+|---|---|---|
+| `SendPdu` | Unary | Transmit a PDU on a configured route |
+| `SubscribePdus` | Server-streaming | Stream incoming PDUs |
+| `ConfigureRoute` | Unary | Create or update a PDU route with transmission schedule |
+| `ListRoutes` | Unary | List configured PDU routes |
+| `ConfigureContainer` | Unary | Configure IpduM container parameters |
+| `ConfigureGroup` | Unary | Create or update an I-PDU group |
+| `EnableGroup` | Unary | Enable a PDU group (allow traffic) |
+| `DisableGroup` | Unary | Disable a PDU group (silence traffic) |
+| `ListGroups` | Unary | List configured PDU groups |
+| `RemoveRoute` | Unary | Remove a PDU route |
+
+### `debug.proto` — DebugService (1 RPC)
+
+| Method | Type | Description |
+|---|---|---|
+| `StreamEvents` | Server-streaming | Stream internal RPC events for debugging |
+
+## Proto files without services
+
+- `common.proto` — Shared message types (PaginationRequest, UUID, etc.)
+- `control.proto` — Control messages (StartCommand, etc.)
 
 ## API Versioning Strategy
 
@@ -105,13 +140,7 @@ Replay session identity:
 
 ## Error Handling Model
 
-- Core gRPC status codes:
-  - `NOT_FOUND`
-  - `INVALID_ARGUMENT`
-  - `FAILED_PRECONDITION`
-  - `INTERNAL`
-  - `UNAVAILABLE`
+- Core gRPC status codes: `NOT_FOUND`, `INVALID_ARGUMENT`, `FAILED_PRECONDITION`, `INTERNAL`, `UNAVAILABLE`.
 - Error payloads use `google.rpc.Status`.
 - `details` includes `ErrorInfo` with `domain`, `reason`, and metadata.
 - Invalid state transition operations return `FAILED_PRECONDITION` and include current state metadata.
-

@@ -633,121 +633,20 @@
     <div class="section-label">Architecture</div>
     <h2>System overview</h2>
     <p class="section-intro">
-      BoAt uses a layered architecture. Clients communicate over gRPC. The gateway
+      BoAt uses a 7-layer architecture. Clients communicate over gRPC. The gateway
       delegates to the C++ simulation core and plugin layer. Hardware is abstracted
       behind a HAL. All state is persisted in the storage layer.
+      See <a href="architecture/system-architecture.md" style="color:var(--blue)">system-architecture.md</a>
+      for the full diagram and component breakdown.
     </p>
-
-    <div class="arch-diagram">
-      <div class="arch-layers">
-
-        <div class="arch-layer" style="background:#0d1e33">
-          <div class="arch-layer-name" style="color:var(--blue)">Client Layer</div>
-          <div class="arch-layer-items">
-            <span class="arch-item layer-client">boat-cli</span>
-            <span class="arch-item layer-client">Python SDK</span>
-            <span class="arch-item layer-client">Live Monitor :8080</span>
-            <span class="arch-item layer-client">System Dashboard :8081</span>
-            <span class="arch-item layer-client">CI/CD Runners</span>
-            <span class="arch-item layer-client">External Tools</span>
-          </div>
-        </div>
-
-        <div class="arch-arrow">↕ gRPC / HTTP2</div>
-
-        <div class="arch-layer" style="background:#1a1100">
-          <div class="arch-layer-name" style="color:var(--orange)">API Gateway Layer — boat_gateway :50051</div>
-          <div class="arch-layer-items">
-            <span class="arch-item layer-gateway">SimulationService</span>
-            <span class="arch-item layer-gateway">SignalService</span>
-            <span class="arch-item layer-gateway">ScenarioService</span>
-            <span class="arch-item layer-gateway">ReplayService</span>
-            <span class="arch-item layer-gateway">FaultService</span>
-            <span class="arch-item layer-gateway">MetricsService</span>
-            <span class="arch-item layer-gateway">TraceService</span>
-            <span class="arch-item layer-gateway">CanService</span>
-            <span class="arch-item layer-gateway">BusService ★</span>
-            <span class="arch-item layer-gateway">PluginService</span>
-          </div>
-        </div>
-
-        <div class="arch-arrow">↕ in-process</div>
-
-        <div class="arch-layer" style="background:#160d20">
-          <div class="arch-layer-name" style="color:var(--purple)">Simulation Core (C++20)</div>
-          <div class="arch-layer-items">
-            <span class="arch-item layer-service">TickScheduler</span>
-            <span class="arch-item layer-service">SignalRouter</span>
-            <span class="arch-item layer-service">DeterminismEngine</span>
-            <span class="arch-item layer-service">SimStateMachine</span>
-            <span class="arch-item layer-service">FaultInjector</span>
-            <span class="arch-item layer-service">EventBus</span>
-            <span class="arch-item layer-service">ScenarioLoader</span>
-            <span class="arch-item layer-service">SimClock</span>
-          </div>
-        </div>
-
-        <div class="arch-arrow">↕ C ABI v7</div>
-
-        <div class="arch-layer" style="background:#0d1a0d">
-          <div class="arch-layer-name" style="color:var(--green)">Plugin Layer</div>
-          <div class="arch-layer-items">
-            <span class="arch-item layer-core">VehicleDynamicsPlugin</span>
-            <span class="arch-item layer-core">SensorModelPlugin</span>
-            <span class="arch-item layer-core">NetworkSimPlugin</span>
-            <span class="arch-item layer-core">CanResponderPlugin</span>
-            <span class="arch-item layer-core">Custom .so plugins</span>
-          </div>
-        </div>
-
-        <div class="arch-arrow">↕ HAL / SocketCAN</div>
-
-        <div class="arch-layer" style="background:#1a1a00">
-          <div class="arch-layer-name" style="color:var(--yellow)">Hardware Abstraction Layer</div>
-          <div class="arch-layer-items">
-            <span class="arch-item layer-hil">HIL Bridge</span>
-            <span class="arch-item layer-hil">CanBusRegistry</span>
-            <span class="arch-item layer-hil">VirtualCanDriver (vcan)</span>
-            <span class="arch-item layer-hil">SocketCanDriver (physical)</span>
-            <span class="arch-item layer-hil">VirtualEthernetDriver (UDP multicast)</span>
-          </div>
-        </div>
-
-        <div class="arch-arrow">↕ SQLite / flat-file</div>
-
-        <div class="arch-layer" style="background:#0d0d1a">
-          <div class="arch-layer-name" style="color:#79c0ff">Persistence Layer</div>
-          <div class="arch-layer-items">
-            <span class="arch-item layer-store">SqliteEventStore</span>
-            <span class="arch-item layer-store">FlatFileTraceStore</span>
-            <span class="arch-item layer-store">ConfigStore (TOML)</span>
-            <span class="arch-item layer-store">ReplayController</span>
-          </div>
-        </div>
-
-      </div>
-    </div>
-
-    <table class="component-table">
-      <thead>
-        <tr>
-          <th>Component</th>
-          <th>Language</th>
-          <th>Responsibility</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr><td>boat-core</td>      <td>C++20</td>          <td>Tick scheduler, signal router, determinism engine, state machine</td></tr>
-        <tr><td>boat-gateway</td>   <td>C++20</td>          <td>gRPC server, all service implementations, node manager</td></tr>
-        <tr><td>boat-plugin-sdk</td><td>C++20 + C ABI</td>  <td>Stable plugin interface, lifecycle hooks, CAN dispatch</td></tr>
-        <tr><td>boat-store</td>     <td>C++20</td>          <td>SQLite event store, flat-file trace store, config store</td></tr>
-        <tr><td>boat-replay</td>    <td>C++20</td>          <td>Deterministic replay controller</td></tr>
-        <tr><td>boat-hil</td>       <td>C++20</td>          <td>HIL bridge, SocketCAN driver, virtual CAN driver, CAN bus registry, virtual Ethernet driver (UDP multicast)</td></tr>
-        <tr><td>boat-py</td>        <td>Python 3.11+</td>   <td>Python SDK: BoAtClient, CanNode, BusNode, gRPC stubs, scenario builder</td></tr>
-        <tr><td>boat-cli</td>       <td>Python</td>         <td>Command-line interface for all gateway services</td></tr>
-        <tr><td>dashboard</td>      <td>Python / HTML</td>  <td>Live Monitor (:8080) and System Dashboard (:8081)</td></tr>
-      </tbody>
-    </table>
+    <p>
+      <strong>Key components:</strong> <code>boat-core</code> (C++20 tick scheduler, signal router, determinism engine),
+      <code>boat-gateway</code> (gRPC server, node manager),
+      <code>boat-plugin-sdk</code> (C ABI v7 plugin interface),
+      <code>boat-hil</code> (CAN/Ethernet drivers, PDU router),
+      <code>boat-py</code> (Python SDK),
+      <code>boat-cli</code> (CLI tool).
+    </p>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════ REQUIREMENTS -->
@@ -755,73 +654,16 @@
     <div class="section-label">Requirements</div>
     <h2>System requirements</h2>
     <p class="section-intro">
-      BoAt builds and runs on Linux. Windows and macOS are not supported
-      (SocketCAN and vcan are Linux-only).
+      BoAt builds and runs on Linux (Ubuntu 22.04+ recommended). Windows and macOS are not supported
+      (SocketCAN and vcan are Linux-only). See <a href="README.md" style="color:var(--blue)">boat-platform/README.md</a>
+      for full prerequisites and build details.
     </p>
-
-    <div class="req-grid">
-
-      <div class="req-card">
-        <h4>🖥️ Operating System</h4>
-        <ul class="req-list">
-          <li>Ubuntu 22.04 LTS or newer (recommended)</li>
-          <li>Any Linux distribution with kernel ≥ 5.10</li>
-          <li><code>vcan</code> kernel module for virtual CAN</li>
-        </ul>
-      </div>
-
-      <div class="req-card">
-        <h4>🔨 Build Tools</h4>
-        <ul class="req-list">
-          <li><code>CMake ≥ 3.24</code></li>
-          <li><code>Ninja</code> build system</li>
-          <li>GCC ≥ 12 or Clang ≥ 15 (C++20 required)</li>
-          <li><code>git</code> (for FetchContent dependencies)</li>
-        </ul>
-      </div>
-
-      <div class="req-card">
-        <h4>🐍 Python</h4>
-        <ul class="req-list">
-          <li><code>Python ≥ 3.11</code></li>
-          <li><code>grpcio ≥ 1.80.0</code></li>
-          <li><code>grpcio-tools ≥ 1.80.0</code></li>
-          <li><code>protobuf ≥ 6.31.1</code></li>
-          <li><code>fastapi</code> + <code>uvicorn</code> (dashboards only)</li>
-        </ul>
-      </div>
-
-      <div class="req-card">
-        <h4>🦀 Rust (for IPC layer)</h4>
-        <ul class="req-list">
-          <li><code>rustup</code> / <code>cargo</code> (stable toolchain)</li>
-          <li>Required by iceoryx2 shared-memory IPC</li>
-          <li>Install: <code>curl https://sh.rustup.rs | sh</code></li>
-        </ul>
-      </div>
-
-      <div class="req-card">
-        <h4>📦 C++ Dependencies</h4>
-        <ul class="req-list">
-          <li>gRPC + Protobuf — fetched automatically via CMake FetchContent</li>
-          <li>spdlog — fetched automatically</li>
-          <li>tomlplusplus — fetched automatically</li>
-          <li>iceoryx2 (C FFI) — fetched automatically</li>
-          <li>SQLite3 — system package (<code>libsqlite3-dev</code>)</li>
-        </ul>
-      </div>
-
-      <div class="req-card">
-        <h4>💾 Hardware (optional)</h4>
-        <ul class="req-list">
-          <li>Physical CAN interface (e.g. Peak PCAN, Kvaser) for HIL</li>
-          <li>Without hardware: <code>vcan0</code> / <code>vcan1</code> virtual interfaces</li>
-          <li>Minimum 4 GB RAM for full build (gRPC compilation)</li>
-          <li>8 GB RAM recommended</li>
-        </ul>
-      </div>
-
-    </div>
+    <p>
+      <strong>Minimal:</strong> CMake ≥ 3.24, Ninja, GCC ≥ 11, Python ≥ 3.11, libsqlite3-dev,
+      Rust (via rustup for iceoryx2).<br>
+      <strong>Optional:</strong> Physical CAN interface (PEAK PCAN, Kvaser) for HIL.
+      8 GB RAM recommended for the full build.
+    </p>
   </section>
 
   <!-- ══════════════════════════════════════════════════════ INSTALLATION -->
@@ -829,119 +671,21 @@
     <div class="section-label">Installation</div>
     <h2>Getting started</h2>
     <p class="section-intro">
-      Follow these steps to build BoAt from source and run the gateway.
-      The first build downloads all C++ dependencies — expect 10–20 minutes
-      depending on your internet connection.
+      See <a href="README.md" style="color:var(--blue)">boat-platform/README.md</a> for detailed instructions.
     </p>
-
-    <div class="steps">
-
-      <div class="step">
-        <div class="step-num-col"><div class="step-num">1</div><div class="step-line"></div></div>
-        <div class="step-body">
-          <div class="step-title">Install system dependencies</div>
-          <div class="step-desc">Install the build tools, Python, SQLite, and the Rust toolchain.</div>
-<pre><span class="c"># Ubuntu / Debian</span>
-sudo apt-get update && sudo apt-get install -y \
-    build-essential cmake ninja-build git \
-    python3 python3-pip libsqlite3-dev \
-    linux-modules-extra-$(uname -r)   <span class="c"># vcan module</span>
-
-<span class="c"># Rust (required for iceoryx2 IPC layer)</span>
+    <pre><span class="c"># Install deps</span>
+sudo apt install build-essential cmake ninja-build git python3-pip libsqlite3-dev
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env</pre>
-        </div>
-      </div>
 
-      <div class="step">
-        <div class="step-num-col"><div class="step-num">2</div><div class="step-line"></div></div>
-        <div class="step-body">
-          <div class="step-title">Clone the repository</div>
-<pre>git clone https://github.com/your-org/boat-platform.git
-cd boat-platform</pre>
-        </div>
-      </div>
+<span class="c"># Build (first build: 10-20 min for gRPC + iceoryx2)</span>
+cmake --preset debug && cmake --build build/debug
 
-      <div class="step">
-        <div class="step-num-col"><div class="step-num">3</div><div class="step-line"></div></div>
-        <div class="step-body">
-          <div class="step-title">Build the C++ gateway and core</div>
-          <div class="step-desc">
-            CMake FetchContent downloads gRPC, Protobuf, spdlog, and iceoryx2 on
-            first configure. Use the <code>debug</code> preset for development or
-            <code>release</code> for production.
-          </div>
-<pre><span class="c"># Configure (debug)</span>
-cmake --preset debug
+<span class="c"># Python SDK + CLI</span>
+pip install -e sdk/python && pip install -e cli
 
-<span class="c"># Build everything</span>
-cmake --build build/debug
-
-<span class="c"># Or release build</span>
-cmake --preset release && cmake --build build/release</pre>
-          <div class="note">
-            <strong>First build note:</strong> Downloading and compiling gRPC takes
-            10–20 minutes. Subsequent builds are incremental and fast.
-          </div>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="step-num-col"><div class="step-num">4</div><div class="step-line"></div></div>
-        <div class="step-body">
-          <div class="step-title">Install the Python SDK and CLI</div>
-<pre><span class="c"># SDK</span>
-pip install -e sdk/python
-
-<span class="c"># CLI</span>
-pip install -e cli
-
-<span class="c"># Dashboard dependencies</span>
-pip install fastapi uvicorn</pre>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="step-num-col"><div class="step-num">5</div><div class="step-line"></div></div>
-        <div class="step-body">
-          <div class="step-title">Set up virtual CAN interfaces</div>
-          <div class="step-desc">Required for running nodes and the dashboard without physical hardware.</div>
-<pre><span class="c"># Load the vcan kernel module</span>
-sudo modprobe vcan
-
-<span class="c"># Create virtual interfaces</span>
-sudo ip link add dev vcan0 type vcan
-sudo ip link set up vcan0
-
-sudo ip link add dev vcan1 type vcan
-sudo ip link set up vcan1</pre>
-          <div class="note">
-            To make these persistent across reboots, add the commands to
-            <code>/etc/rc.local</code> or create a systemd service.
-          </div>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="step-num-col"><div class="step-num">6</div><div class="step-line"></div></div>
-        <div class="step-body">
-          <div class="step-title">Start the gateway</div>
-          <div class="step-desc">
-            The gateway binds to <code>0.0.0.0:50051</code>. Set
-            <code>BOAT_CAN_INTERFACES</code> to the comma-separated list of CAN interfaces to open.
-            Optionally load always-on C++ node plugins with <code>BOAT_NODE_PLUGINS</code>.
-          </div>
-<pre><span class="c"># Basic — opens vcan0</span>
-BOAT_CAN_INTERFACES=vcan0 ./build/debug/src/gateway/grpc_gateway/boat_gateway
-
-<span class="c"># Multiple interfaces + an always-on C++ node plugin</span>
-BOAT_CAN_INTERFACES=vcan0,vcan1 \
-BOAT_NODE_PLUGINS=./build/debug/plugins/can_responder/libcan_responder_plugin.so \
-./build/debug/src/gateway/grpc_gateway/boat_gateway</pre>
-        </div>
-      </div>
-
-    </div>
+<span class="c"># Virtual CAN + gateway</span>
+sudo modprobe vcan && sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
+BOAT_CAN_INTERFACES=vcan0 ./build/debug/src/gateway/grpc_gateway/boat_gateway</pre>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════ USAGE -->
