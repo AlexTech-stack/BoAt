@@ -101,6 +101,9 @@ struct TcpPlugin {
   std::string       raw_iface;
   std::thread       raw_rx_thread;
   std::atomic<bool> raw_rx_running{false};
+  std::mutex        arp_mutex;
+  // Cache: dst_ip_bytes + af → mac_bytes
+  std::unordered_map<std::string, std::array<uint8_t, 6>> arp_cache;
 
   std::unordered_map<int, TcpConnection> connections;
   std::unordered_map<int, TcpListener>  listeners;
