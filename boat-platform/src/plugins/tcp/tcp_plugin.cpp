@@ -379,6 +379,8 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
 
   if (ethertype == 0x0800) {
     if (payload_len < 20) return;
+    uint16_t ip_total = (static_cast<uint16_t>(payload[2]) << 8) | payload[3];
+    if (ip_total < payload_len) payload_len = ip_total;  // clamp out Ethernet padding
     af = AF_INET;
     protocol = payload[9];
     src_ip = payload + 12;
@@ -387,14 +389,15 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
     ip_payload = payload + ihl;
   } else if (ethertype == 0x86DD) {
     if (payload_len < 40) return;
+    uint16_t plen = static_cast<uint16_t>((payload[4] << 8) | payload[5]);
+    uint16_t ip6_total = plen + 40;
+    if (ip6_total < payload_len) payload_len = ip6_total;  // clamp out Ethernet padding
+    if (plen + 40 > payload_len) return;
     af = AF_INET6;
     protocol = payload[6];
     src_ip = payload + 8;
     dst_ip = payload + 24;
-    uint16_t plen = static_cast<uint16_t>((payload[4] << 8) | payload[5]);
     ip_payload = payload + 40;
-    if (plen + 40 > payload_len) return;
-    (void)plen;
   } else {
     return;
   }
