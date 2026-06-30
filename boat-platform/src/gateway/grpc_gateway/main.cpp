@@ -214,6 +214,14 @@ int main() {
       node_manager.DispatchEthFrame(bf, iface);
     });
     // Wire the always-on bus-signal publisher for node plugins.
+    node_manager.SetEthPublisher([&eth_registry](const BoatEthFrame& f) {
+      boat::hil::EthernetFrame ef{};
+      std::memcpy(ef.dst_mac, f.dst_mac, 6);
+      std::memcpy(ef.src_mac, f.src_mac, 6);
+      ef.ethertype   = f.ethertype;
+      ef.payload.assign(f.payload, f.payload + f.payload_len);
+      eth_registry.SendFrameAll(ef);
+    });
     node_manager.SetBusPublisher([&signal_bus](const char* name, double value) {
       signal_bus.Publish(name, value);
     });
@@ -234,8 +242,11 @@ int main() {
                                     ? entry.substr(qpos + 1) : "{}";
           try {
             node_manager.Load(so_path, config);
+            std::fprintf(stderr, "[Gateway] Loaded plugin '%s'\n",
+                         so_path.c_str());
           } catch (const std::exception& ex) {
-            (void)ex;
+            std::fprintf(stderr, "[Gateway] Failed to load plugin '%s': %s\n",
+                         so_path.c_str(), ex.what());
           }
         }
       }

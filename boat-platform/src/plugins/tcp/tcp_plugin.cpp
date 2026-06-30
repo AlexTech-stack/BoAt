@@ -7,6 +7,16 @@
 #include <cstring>
 #include <random>
 
+#include <linux/if_packet.h>
+#ifndef PACKET_IGNORE_OUTGOING
+#define PACKET_IGNORE_OUTGOING 23
+#endif
+#include <net/ethernet.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 namespace btcp = boat::tcp;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -20,17 +30,76 @@ static uint32_t Rand32() {
   return Rng()();
 }
 
+static int FallbackRawSocket(btcp::TcpPlugin* plugin, const char* iface) {
+  if (plugin->raw_sock >= 0) return plugin->raw_sock;
+  plugin->raw_sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+  if (plugin->raw_sock < 0) return -1;
+  // Ignore frames we send ourselves (loopback from same socket)
+  const int ignore_out = 1;
+  setsockopt(plugin->raw_sock, SOL_PACKET, PACKET_IGNORE_OUTGOING,
+             &ignore_out, sizeof(ignore_out));
+  if (iface) {
+    plugin->raw_ifindex = if_nametoindex(iface);
+    if (plugin->raw_ifindex > 0) {
+      struct sockaddr_ll bind_addr{};
+      bind_addr.sll_family  = AF_PACKET;
+      bind_addr.sll_protocol = htons(ETH_P_ALL);
+      bind_addr.sll_ifindex  = plugin->raw_ifindex;
+      if (bind(plugin->raw_sock, reinterpret_cast<struct sockaddr*>(&bind_addr),
+               sizeof(bind_addr)) < 0) {
+        std::fprintf(stderr, "[TCP] bind(%s) failed: %s\n",
+                     iface, std::strerror(errno));
+      }
+    }
+  }
+  return plugin->raw_sock;
+}
+
 static void SendRaw(btcp::TcpPlugin* plugin, const std::vector<uint8_t>& seg) {
-  if (!plugin->eth_publish_fn) return;
-  BoatEthFrame ef{};
-  std::memset(ef.dst_mac, 0xFF, 6);
-  std::memset(ef.src_mac, 0x02, 6);
-  ef.src_mac[5] = 0x01;
-  // Determine ethertype from IP version byte (first nibble)
-  ef.ethertype = (seg[0] >> 4 == 6) ? 0x86DD : 0x0800;
-  ef.payload = const_cast<uint8_t*>(seg.data());
-  ef.payload_len = seg.size();
-  plugin->eth_publish_fn(plugin->eth_publisher_ctx, &ef);
+  if (plugin->eth_publish_fn) {
+    BoatEthFrame ef{};
+    std::memset(ef.dst_mac, 0xFF, 6);
+    std::memset(ef.src_mac, 0x02, 6);
+    ef.src_mac[5] = 0x01;
+    ef.ethertype = (seg[0] >> 4 == 6) ? 0x86DD : 0x0800;
+    ef.payload = const_cast<uint8_t*>(seg.data());
+    ef.payload_len = seg.size();
+    plugin->eth_publish_fn(plugin->eth_publisher_ctx, &ef);
+    return;
+  }
+  std::fprintf(stderr, "[TCP-SEND] method=%s seg_size=%zu iface=%s\n",
+               plugin->eth_publish_fn ? "gateway" : "raw",
+               seg.size(), plugin->raw_iface.c_str());
+  // Fallback: send via raw AF_PACKET socket
+  if (plugin->raw_iface.empty()) {
+    std::fprintf(stderr, "[TCP-SEND] no raw_iface, dropping\n");
+    return;
+  }
+  int sock = FallbackRawSocket(plugin, plugin->raw_iface.c_str());
+  if (sock < 0) return;
+  struct sockaddr_ll dest{};
+  dest.sll_family  = AF_PACKET;
+  dest.sll_protocol = htons(ETH_P_ALL);
+  if (plugin->raw_ifindex > 0) dest.sll_ifindex = plugin->raw_ifindex;
+  dest.sll_halen   = 6;
+  std::memset(dest.sll_addr, 0xFF, 6);
+  // Build L2 frame: dst(6) + src(6) + ethertype(2) + ip_payload
+  uint8_t buf[64 + 65535];
+  std::memset(buf, 0xFF, 6);             // dst MAC = broadcast
+  buf[6] = 0x02; buf[7] = 0x00;          // src MAC = 02:00:00:00:00:01
+  buf[11] = 0x01;
+  uint16_t etype = (seg[0] >> 4 == 6) ? 0x86DD : 0x0800;
+  buf[12] = static_cast<uint8_t>(etype >> 8);
+  buf[13] = static_cast<uint8_t>(etype & 0xFF);
+  std::memcpy(buf + 14, seg.data(), seg.size());
+  size_t total = 14 + seg.size();
+
+  dest.sll_protocol = htons(etype);
+  ssize_t sent = sendto(sock, buf, total, 0,
+                         reinterpret_cast<struct sockaddr*>(&dest), sizeof(dest));
+  if (sent < 0)
+    std::fprintf(stderr, "[TCP] sendto failed: %s\n", std::strerror(errno));
+  std::fprintf(stderr, "[TCP] sendto: total=%zu sent=%zd\n", total, sent);
 }
 
 static int NextId(btcp::TcpPlugin* plugin) {
@@ -58,7 +127,37 @@ static void ParseIp(const char* ip, int af, std::array<uint8_t, 16>& out) {
   }
 }
 
-// ── Vtable callbacks ───────────────────────────────────────────────────────
+// ── Frame processing (shared between gateway callback and raw RX) ─────────
+
+static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
+                            size_t payload_len, uint16_t ethertype);
+
+static void ProcessFrame(btcp::TcpPlugin* plugin, const uint8_t* data, size_t len) {
+  if (!data || len < 14) return;
+  uint16_t etype = static_cast<uint16_t>((data[12] << 8) | data[13]);
+  HandleIncoming(plugin, data + 14, len - 14, etype);
+}
+
+// ── Raw AF_PACKET RX loop ─────────────────────────────────────────────────
+
+static void RawRxLoop(btcp::TcpPlugin* plugin) {
+  uint8_t buf[2048];
+  while (plugin->raw_rx_running.load()) {
+    struct sockaddr_ll addr;
+    socklen_t addr_len = sizeof(addr);
+    ssize_t n = recvfrom(plugin->raw_sock, buf, sizeof(buf), 0,
+                         reinterpret_cast<struct sockaddr*>(&addr), &addr_len);
+    if (n > 0) {
+      uint16_t etype = (n >= 14) ? static_cast<uint16_t>((buf[12] << 8) | buf[13]) : 0;
+      std::fprintf(stderr, "[TCP-RX] recv %zd bytes etype=0x%04x ifindex=%d\n",
+                   n, etype, addr.sll_ifindex);
+      std::lock_guard<std::mutex> lock(plugin->mutex);
+      ProcessFrame(plugin, buf, static_cast<size_t>(n));
+    }
+  }
+}
+
+// ── Vtable callbacks ──────────────────────────────────────────────────────
 
 static int tp_initialize(void* ctx, const char* config_json) {
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
@@ -76,6 +175,19 @@ static int tp_initialize(void* ctx, const char* config_json) {
     plugin->retry_ms = get_val("\"retry_ms\"", 1000);
     plugin->max_retries = get_val("\"max_retries\"", 5);
     plugin->default_mss = static_cast<int>(get_val("\"mss\"", 1460));
+    // Extract raw iface from config {"iface": "eth0", ...}
+    const char* if_key = "\"iface\"";
+    const char* if_pos = std::strstr(config_json, if_key);
+    if (if_pos) {
+      if_pos += std::strlen(if_key);
+      while (*if_pos && *if_pos != '"') ++if_pos;
+      if (*if_pos == '"') {
+        ++if_pos;
+        const char* end = if_pos;
+        while (*end && *end != '"') ++end;
+        plugin->raw_iface.assign(if_pos, end);
+      }
+    }
   }
 
   // Start TX thread
@@ -147,6 +259,21 @@ static int tp_initialize(void* ctx, const char* config_json) {
     }
   });
 
+  // Start standalone raw socket RX when not wired to the gateway
+  std::fprintf(stderr, "[TCP] tp_initialize: eth_publish_fn=%p raw_iface=%s\n",
+               (void*)plugin->eth_publish_fn, plugin->raw_iface.c_str());
+  if (!plugin->eth_publish_fn && !plugin->raw_iface.empty() &&
+      FallbackRawSocket(plugin, plugin->raw_iface.c_str()) >= 0) {
+    std::fprintf(stderr, "[TCP] Raw socket opened fd=%d ifindex=%d\n",
+                 plugin->raw_sock, plugin->raw_ifindex);
+    plugin->raw_rx_running.store(true);
+    plugin->raw_rx_thread = std::thread(RawRxLoop, plugin);
+    std::fprintf(stderr, "[TCP] Raw RX thread started\n");
+  } else {
+    std::fprintf(stderr, "[TCP] No raw RX: publish=%p iface=%s\n",
+                 (void*)plugin->eth_publish_fn, plugin->raw_iface.c_str());
+  }
+
   return 0;
 }
 
@@ -162,6 +289,13 @@ static void tp_shutdown(void* ctx) {
   plugin->tx_cv.notify_one();
   if (plugin->tx_thread.joinable())
     plugin->tx_thread.join();
+  plugin->raw_rx_running.store(false);
+  if (plugin->raw_rx_thread.joinable())
+    plugin->raw_rx_thread.join();
+  if (plugin->raw_sock >= 0) {
+    ::close(plugin->raw_sock);
+    plugin->raw_sock = -1;
+  }
 
   std::lock_guard<std::mutex> lock(plugin->mutex);
   for (auto& [id, conn] : plugin->connections) {
@@ -182,11 +316,15 @@ static void tp_set_eth_publisher(void* ctx, BoatEthPublishFn fn,
   plugin->eth_publisher_ctx = publisher_ctx;
 }
 
-static void tp_on_eth_frame(void* ctx, const BoatEthFrame* frame,
-                             const char* iface) {
-  (void)iface;
-  auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
-  if (!plugin || !frame || frame->payload_len < 40) return;
+// Internal: process an incoming frame (raw payload + ethertype)
+static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
+                            size_t payload_len, uint16_t ethertype) {
+  if (!plugin) return;
+  if (!payload || payload_len < 40) {
+    std::fprintf(stderr, "[TCP-HI] too short: len=%zu plugin=%p\n",
+                 payload_len, (void*)plugin);
+    return;
+  }
 
   int af;
   const uint8_t* ip_payload;
@@ -194,31 +332,35 @@ static void tp_on_eth_frame(void* ctx, const BoatEthFrame* frame,
   const uint8_t* dst_ip;
   uint8_t protocol;
 
-  uint16_t ethertype = frame->ethertype;
   if (ethertype == 0x0800) {
-    if (frame->payload_len < 20) return;
+    if (payload_len < 20) return;
     af = AF_INET;
-    protocol = frame->payload[9];
-    src_ip = frame->payload + 12;
-    dst_ip = frame->payload + 16;
-    uint8_t ihl = (frame->payload[0] & 0x0F) * 4;
-    ip_payload = frame->payload + ihl;
+    protocol = payload[9];
+    src_ip = payload + 12;
+    dst_ip = payload + 16;
+    uint8_t ihl = (payload[0] & 0x0F) * 4;
+    ip_payload = payload + ihl;
   } else if (ethertype == 0x86DD) {
-    if (frame->payload_len < 40) return;
+    if (payload_len < 40) return;
     af = AF_INET6;
-    protocol = frame->payload[6];
-    src_ip = frame->payload + 8;
-    dst_ip = frame->payload + 24;
-    uint16_t plen = static_cast<uint16_t>((frame->payload[4] << 8) | frame->payload[5]);
-    ip_payload = frame->payload + 40;
-    if (plen + 40 > frame->payload_len) return;
+    protocol = payload[6];
+    src_ip = payload + 8;
+    dst_ip = payload + 24;
+    uint16_t plen = static_cast<uint16_t>((payload[4] << 8) | payload[5]);
+    ip_payload = payload + 40;
+    if (plen + 40 > payload_len) return;
     (void)plen;
   } else {
     return;
   }
 
+  std::fprintf(stderr, "[TCP-HI] proto=%d len=%zu etype=0x%04x plugin=%p\n",
+               protocol, payload_len, ethertype, (void*)plugin);
   if (protocol != 6) return;  // Only TCP
-  if (ip_payload + 20 > frame->payload + frame->payload_len) return;
+  if (ip_payload + 20 > payload + payload_len) {
+    std::fprintf(stderr, "[TCP-HI] ip_payload out of bounds\n");
+    return;
+  }
 
   // Parse TCP header
   uint16_t sport = static_cast<uint16_t>((ip_payload[0] << 8) | ip_payload[1]);
@@ -232,14 +374,14 @@ static void tp_on_eth_frame(void* ctx, const BoatEthFrame* frame,
                    (static_cast<uint32_t>(ip_payload[10]) << 8) |
                     static_cast<uint32_t>(ip_payload[11]);
   uint8_t  flags = ip_payload[13];
+  std::fprintf(stderr, "[TCP-PARSE] sport=%u dport=%u flags=0x%02x data_off=%u\n",
+               sport, dport, flags, (ip_payload[12] >> 4) * 4);
   uint8_t  data_off = (ip_payload[12] >> 4) * 4;
-  uint32_t tcp_payload_len = (frame->payload + frame->payload_len) -
-                             (ip_payload + data_off);
+  uint32_t tcp_payload_len = (payload + payload_len) - (ip_payload + data_off);
   if (tcp_payload_len > 65535) tcp_payload_len = 0;
   const uint8_t* tcp_data = (tcp_payload_len > 0) ? ip_payload + data_off : nullptr;
 
-  std::lock_guard<std::mutex> lock(plugin->mutex);
-
+  // NOTE: Caller must hold plugin->mutex when calling this function.
   // Match connection by (src_ip, src_port, dst_ip, dst_port) or reverse
   auto match = [&](btcp::TcpConnection& c) -> bool {
     int len = (c.af == AF_INET) ? 4 : 16;
@@ -255,13 +397,36 @@ static void tp_on_eth_frame(void* ctx, const BoatEthFrame* frame,
   };
 
   // For server: match incoming SYN against listeners
-  if (flags & 0x02) {  // SYN
+  // Pure SYN (no ACK): check for duplicates and match against listeners.
+  // SYN-ACK (flags & 0x12 == 0x12) is handled below in the connection match loop.
+  if ((flags & 0x02) && !(flags & 0x10)) {
+    bool already_exists = false;
+    for (auto& [eid, econn] : plugin->connections) {
+      (void)eid;
+      int elen = (econn.af == AF_INET) ? 4 : 16;
+      if (econn.state == btcp::TCP_SYN_RCVD || econn.state == btcp::TCP_SYN_SENT) {
+        if (std::memcmp(econn.dst_ip.data(), src_ip, elen) == 0 &&
+            econn.dst_port == sport &&
+            std::memcmp(econn.src_ip.data(), dst_ip, elen) == 0 &&
+            econn.src_port == dport) {
+          already_exists = true;
+          break;
+        }
+      }
+    }
+    if (already_exists) goto tcp_rx_done;
+
     for (auto& [lid, listener] : plugin->listeners) {
       (void)lid;
       int len = (listener.af == AF_INET) ? 4 : 16;
-      if (std::memcmp(listener.bind_ip.data(), dst_ip, len) == 0 &&
-          listener.bind_port == dport) {
-        // Create new connection
+      bool ip_match = (std::memcmp(listener.bind_ip.data(), dst_ip, len) == 0);
+      bool port_match = (listener.bind_port == dport);
+      std::fprintf(stderr, "[TCP-LISTEN] check listener lid=%d ip_match=%d port_match=%d conns=%zu listeners=%zu plugin=%p\n",
+                   lid, ip_match, port_match,
+                   plugin->connections.size(), plugin->listeners.size(),
+                   (void*)plugin);
+      if (ip_match && port_match) {
+        std::fprintf(stderr, "[TCP-LISTEN] MATCH on %d! Creating connection\n", lid);
         btcp::TcpConnection conn;
         conn.conn_id = NextId(plugin);
         conn.listener_id = listener.listener_id;
@@ -317,10 +482,13 @@ static void tp_on_eth_frame(void* ctx, const BoatEthFrame* frame,
   }
 
   // Match against existing connections
+  if (plugin->connections.empty())
+    std::fprintf(stderr, "[TCP-MATCH] no connections on plugin=%p\n", (void*)plugin);
   for (auto& [id, conn] : plugin->connections) {
     (void)id;
     if (!match(conn)) continue;
 
+    std::fprintf(stderr, "[TCP-MATCH] matched cid=%d state=%d\n", id, conn.state);
     // Detect direction: are they the source or destination?
     int len = (conn.af == AF_INET) ? 4 : 16;
     bool from_them = (std::memcmp(conn.dst_ip.data(), src_ip, len) == 0 &&
@@ -396,29 +564,39 @@ static void tp_on_eth_frame(void* ctx, const BoatEthFrame* frame,
       }
     }
   }
+  tcp_rx_done:;
+}
+
+// Vtable-compatible wrapper for gateway dispatch
+static void tp_on_eth_frame(void* ctx, const BoatEthFrame* frame,
+                             const char* iface) {
+  (void)iface;
+  auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
+  if (!plugin || !frame) return;
+  std::lock_guard<std::mutex> lock(plugin->mutex);
+  HandleIncoming(plugin, frame->payload, frame->payload_len, frame->ethertype);
 }
 
 // ── ABI exports ────────────────────────────────────────────────────────────
 
-static btcp::TcpPlugin g_plugin;
-
 extern "C" BoatPlugin* boat_plugin_create() {
-  static BoatPluginVTable vtable;
-  vtable.initialize        = tp_initialize;
-  vtable.on_tick           = tp_on_tick;
-  vtable.shutdown          = tp_shutdown;
-  vtable.set_publisher     = nullptr;
-  vtable.set_can_publisher = nullptr;
-  vtable.on_can_frame      = nullptr;
-  vtable.set_eth_publisher = tp_set_eth_publisher;
-  vtable.on_eth_frame      = tp_on_eth_frame;
-  vtable.set_bus_publisher = nullptr;
-  vtable.set_pdu_publisher = nullptr;
+  auto* plugin = new btcp::TcpPlugin();
+  auto* vtable = new BoatPluginVTable();
+  vtable->initialize        = tp_initialize;
+  vtable->on_tick           = tp_on_tick;
+  vtable->shutdown          = tp_shutdown;
+  vtable->set_publisher     = nullptr;
+  vtable->set_can_publisher = nullptr;
+  vtable->on_can_frame      = nullptr;
+  vtable->set_eth_publisher = tp_set_eth_publisher;
+  vtable->on_eth_frame      = tp_on_eth_frame;
+  vtable->set_bus_publisher = nullptr;
+  vtable->set_pdu_publisher = nullptr;
 
-  static BoatPlugin bp;
-  bp.vtable = &vtable;
-  bp.ctx    = &g_plugin;
-  return &bp;
+  auto* bp = new BoatPlugin();
+  bp->vtable = vtable;
+  bp->ctx    = plugin;
+  return bp;
 }
 
 extern "C" void boat_plugin_destroy(BoatPlugin* plugin) {
@@ -426,6 +604,9 @@ extern "C" void boat_plugin_destroy(BoatPlugin* plugin) {
   if (plugin->vtable && plugin->vtable->shutdown) {
     plugin->vtable->shutdown(plugin->ctx);
   }
+  delete static_cast<btcp::TcpPlugin*>(plugin->ctx);
+  delete plugin->vtable;
+  delete plugin;
 }
 
 extern "C" uint32_t boat_plugin_abi_version() {
@@ -435,7 +616,10 @@ extern "C" uint32_t boat_plugin_abi_version() {
 // ── C API ──────────────────────────────────────────────────────────────────
 
 extern "C" int tcp_connect(void* ctx, const char* src_ip, uint16_t src_port,
-                            const char* dst_ip, uint16_t dst_port) {
+                            const char* dst_ip, uint16_t dst_port,
+                            btcp::TcpOnData on_data,
+                            btcp::TcpOnEvent on_event,
+                            void* user_ctx) {
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
   if (!plugin) return -1;
 
@@ -454,6 +638,8 @@ extern "C" int tcp_connect(void* ctx, const char* src_ip, uint16_t src_port,
   conn.state = btcp::TCP_SYN_SENT;
   conn.mss = plugin->default_mss;
 
+  std::fprintf(stderr, "[TCP-CONNECT] sending SYN on %s plugin=%p\n",
+               plugin->raw_iface.c_str(), (void*)plugin);
   // Build SYN
   auto mss_opt = btcp::BuildMssOption(static_cast<uint16_t>(conn.mss));
   std::vector<uint8_t> seg;
@@ -474,6 +660,9 @@ extern "C" int tcp_connect(void* ctx, const char* src_ip, uint16_t src_port,
         btcp::TCP_FLAG_SYN, 65535,
         mss_opt.data(), static_cast<uint32_t>(mss_opt.size()));
   }
+  conn.on_data  = on_data;
+  conn.on_event = on_event;
+  conn.user_ctx = user_ctx;
   conn.my_seq += 1;
 
   int nid = conn.conn_id;
@@ -490,7 +679,10 @@ extern "C" int tcp_connect(void* ctx, const char* src_ip, uint16_t src_port,
   return nid;
 }
 
-extern "C" int tcp_listen(void* ctx, const char* bind_ip, uint16_t bind_port) {
+extern "C" int tcp_listen(void* ctx, const char* bind_ip, uint16_t bind_port,
+                           btcp::TcpOnData on_data,
+                           btcp::TcpOnEvent on_event,
+                           void* user_ctx) {
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
   if (!plugin) return -1;
 
@@ -502,6 +694,8 @@ extern "C" int tcp_listen(void* ctx, const char* bind_ip, uint16_t bind_port) {
   listener.af = af;
   ParseIp(bind_ip, af, listener.bind_ip);
   listener.bind_port = bind_port;
+  listener.on_event = on_event;
+  listener.user_ctx = user_ctx;
 
   int lid = listener.listener_id;
   {
