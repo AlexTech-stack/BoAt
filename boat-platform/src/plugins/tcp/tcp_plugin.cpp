@@ -248,8 +248,8 @@ static int tp_initialize(void* ctx, const char* config_json) {
         bool need_send = false;
         std::vector<uint8_t> seg;
 
-        // Send pending data
-        if (conn.state == btcp::TCP_ESTABLISHED && !conn.send_buffer.empty()) {
+        // Send pending data (fire-and-forget regardless of state)
+        if (!conn.send_buffer.empty()) {
           uint32_t chunk = std::min<uint32_t>(
               static_cast<uint32_t>(conn.send_buffer.size()),
               static_cast<uint32_t>(conn.mss));
@@ -550,6 +550,28 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
             conn.my_ack = seq + 1;
             conn.state = btcp::TCP_ESTABLISHED;
             conn.unacked_segment.clear();
+            // Send pure ACK immediately to complete the 3-way handshake
+            {
+              std::vector<uint8_t> ack_seg;
+              if (af == AF_INET) {
+                ack_seg = btcp::BuildIp4TcpSegment(
+                    conn.src_ip.data(), conn.dst_ip.data(),
+                    conn.src_port, conn.dst_port,
+                    conn.my_seq, conn.my_ack,
+                    nullptr, 0,
+                    btcp::TCP_FLAG_ACK, 65535);
+              } else {
+                ack_seg = btcp::BuildIp6TcpSegment(
+                    conn.src_ip.data(), conn.dst_ip.data(),
+                    conn.src_port, conn.dst_port,
+                    conn.my_seq, conn.my_ack,
+                    nullptr, 0,
+                    btcp::TCP_FLAG_ACK, 65535);
+              }
+              plugin->mutex.unlock();
+              SendRaw(plugin, ack_seg);
+              plugin->mutex.lock();
+            }
             if (conn.on_event)
               conn.on_event(conn.user_ctx, conn.conn_id,
                             btcp::TCP_EVENT_CONNECTED);
@@ -758,8 +780,7 @@ extern "C" int tcp_send(void* ctx, int conn_id,
   std::lock_guard<std::mutex> lock(plugin->mutex);
   auto it = plugin->connections.find(conn_id);
   if (it == plugin->connections.end()) return -1;
-  if (it->second.state != btcp::TCP_ESTABLISHED) return -1;
-
+  // Send even if connection is closing/RST'd (fire-and-forget)
   it->second.send_buffer.insert(it->second.send_buffer.end(), data, data + len);
   plugin->tx_cv.notify_one();
   return static_cast<int>(len);
