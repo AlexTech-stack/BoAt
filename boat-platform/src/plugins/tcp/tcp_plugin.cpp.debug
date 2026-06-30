@@ -8,8 +8,6 @@
 #include <random>
 
 #include <linux/if_packet.h>
-#include <net/if_arp.h>
-#include <linux/sockios.h>
 #ifndef PACKET_IGNORE_OUTGOING
 #define PACKET_IGNORE_OUTGOING 23
 #endif
@@ -57,29 +55,6 @@ static int FallbackRawSocket(btcp::TcpPlugin* plugin, const char* iface) {
   return plugin->raw_sock;
 }
 
-// Resolve a destination MAC via the kernel ARP cache.
-// Returns true if a MAC was found.
-static bool ResolveMac(const std::string& iface, const uint8_t* ip_bytes, int af,
-                        std::array<uint8_t, 6>& mac_out) {
-  int sock = socket(AF_INET, SOCK_DGRAM, 0);
-  if (sock < 0) return false;
-
-  struct arpreq arp{};
-  struct sockaddr_in* sin = reinterpret_cast<struct sockaddr_in*>(&arp.arp_pa);
-  sin->sin_family = AF_INET;
-  std::memcpy(&sin->sin_addr, ip_bytes, 4);
-  std::strncpy(arp.arp_dev, iface.c_str(), IFNAMSIZ - 1);
-
-  bool ok = (ioctl(sock, SIOCGARP, &arp) == 0);
-  ::close(sock);
-  if (!ok) return false;
-
-  // Check if we got a valid hardware address
-  if (arp.arp_ha.sa_family != ARPHRD_ETHER) return false;
-  std::memcpy(mac_out.data(), arp.arp_ha.sa_data, 6);
-  return true;
-}
-
 static void SendRaw(btcp::TcpPlugin* plugin, const std::vector<uint8_t>& seg) {
   if (plugin->eth_publish_fn) {
     BoatEthFrame ef{};
@@ -107,30 +82,10 @@ static void SendRaw(btcp::TcpPlugin* plugin, const std::vector<uint8_t>& seg) {
   dest.sll_protocol = htons(ETH_P_ALL);
   if (plugin->raw_ifindex > 0) dest.sll_ifindex = plugin->raw_ifindex;
   dest.sll_halen   = 6;
-  // Resolve destination MAC from kernel ARP cache
-  int ip_len = (seg[0] >> 4 == 6) ? 16 : 4;
-  int dst_off = (seg[0] >> 4 == 6) ? 24 : 16;
-  const uint8_t* dst_ip = seg.data() + dst_off;
-  std::array<uint8_t, 6> resolved_mac{};
-  resolved_mac.fill(0xFF);  // default: broadcast
-  {
-    std::lock_guard<std::mutex> lock(plugin->arp_mutex);
-    std::string ip_key(reinterpret_cast<const char*>(dst_ip), ip_len);
-    auto it = plugin->arp_cache.find(ip_key);
-    if (it != plugin->arp_cache.end()) {
-      resolved_mac = it->second;
-    } else if (ip_len == 4) {
-      std::array<uint8_t, 6> mac{};
-      if (ResolveMac(plugin->raw_iface, dst_ip, AF_INET, mac)) {
-        resolved_mac = mac;
-        plugin->arp_cache[ip_key] = mac;
-      }
-    }
-  }
-  std::memcpy(dest.sll_addr, resolved_mac.data(), 6);
+  std::memset(dest.sll_addr, 0xFF, 6);
   // Build L2 frame: dst(6) + src(6) + ethertype(2) + ip_payload
   uint8_t buf[64 + 65535];
-  std::memcpy(buf, resolved_mac.data(), 6);  // dst MAC
+  std::memset(buf, 0xFF, 6);             // dst MAC = broadcast
   buf[6] = 0x02; buf[7] = 0x00;          // src MAC = 02:00:00:00:00:01
   buf[11] = 0x01;
   uint16_t etype = (seg[0] >> 4 == 6) ? 0x86DD : 0x0800;

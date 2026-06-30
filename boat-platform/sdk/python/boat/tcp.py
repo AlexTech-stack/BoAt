@@ -48,14 +48,14 @@ class TcpHandle:
         self._tcp_connect.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
                                        ctypes.c_uint16, ctypes.c_char_p,
                                        ctypes.c_uint16,
-                                       _TcpOnDataCb, _TcpOnEventCb,
+                                       ctypes.c_void_p, ctypes.c_void_p,
                                        ctypes.c_void_p]
         self._tcp_connect.restype = ctypes.c_int
 
         self._tcp_listen = self._lib.tcp_listen
         self._tcp_listen.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
                                       ctypes.c_uint16,
-                                      _TcpOnDataCb, _TcpOnEventCb,
+                                      ctypes.c_void_p, ctypes.c_void_p,
                                       ctypes.c_void_p]
         self._tcp_listen.restype = ctypes.c_int
 
@@ -67,7 +67,7 @@ class TcpHandle:
         self._tcp_set_callbacks = self._lib.tcp_set_callbacks
         self._tcp_set_callbacks.argtypes = [
             ctypes.c_void_p, ctypes.c_int,
-            _TcpOnDataCb, _TcpOnEventCb, ctypes.c_void_p,
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
         ]
 
         self._tcp_close = self._lib.tcp_close
@@ -102,23 +102,21 @@ class TcpHandle:
     def connect(self, src_ip: str, src_port: int,
                 dst_ip: str, dst_port: int,
                 on_data=None, on_event=None, user_ctx=None) -> int:
-        """Open an outgoing TCP connection. Returns conn_id."""
+        data_cb = self._make_data_cb(on_data) if on_data else None
+        event_cb = self._make_event_cb(on_event) if on_event else None
         return self._tcp_connect(
             self._ctx, src_ip.encode(), ctypes.c_uint16(src_port),
             dst_ip.encode(), ctypes.c_uint16(dst_port),
-            self._make_data_cb(on_data) if on_data else None,
-            self._make_event_cb(on_event) if on_event else None,
-            user_ctx,
+            data_cb, event_cb, user_ctx,
         )
 
     def listen(self, bind_ip: str, bind_port: int,
                on_data=None, on_event=None, user_ctx=None) -> int:
-        """Start listening for incoming TCP connections. Returns listener_id."""
+        data_cb = self._make_data_cb(on_data) if on_data else None
+        event_cb = self._make_event_cb(on_event) if on_event else None
         return self._tcp_listen(
             self._ctx, bind_ip.encode(), ctypes.c_uint16(bind_port),
-            self._make_data_cb(on_data) if on_data else None,
-            self._make_event_cb(on_event) if on_event else None,
-            user_ctx,
+            data_cb, event_cb, user_ctx,
         )
 
     def send(self, conn_id: int, data: bytes) -> int:
