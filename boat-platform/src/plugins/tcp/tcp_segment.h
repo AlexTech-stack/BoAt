@@ -1,5 +1,6 @@
 #pragma once
 
+#include <arpa/inet.h>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -101,8 +102,10 @@ inline std::vector<uint8_t> BuildIp4TcpSegment(
   tcp[1] = static_cast<uint8_t>(src_port & 0xFF);
   tcp[2] = static_cast<uint8_t>(dst_port >> 8);
   tcp[3] = static_cast<uint8_t>(dst_port & 0xFF);
-  std::memcpy(tcp + 4, &seq, 4);
-  std::memcpy(tcp + 8, &ack, 4);
+  uint32_t seq_be = htonl(seq);
+  uint32_t ack_be = htonl(ack);
+  std::memcpy(tcp + 4, &seq_be, 4);
+  std::memcpy(tcp + 8, &ack_be, 4);
   uint16_t offs_flags = (tcp_hdr_words << 12) | (flags & 0x0FFF);
   tcp[12] = static_cast<uint8_t>(offs_flags >> 8);
   tcp[13] = static_cast<uint8_t>(offs_flags & 0xFF);
@@ -160,8 +163,10 @@ inline std::vector<uint8_t> BuildIp6TcpSegment(
   tcp[1] = static_cast<uint8_t>(src_port & 0xFF);
   tcp[2] = static_cast<uint8_t>(dst_port >> 8);
   tcp[3] = static_cast<uint8_t>(dst_port & 0xFF);
-  std::memcpy(tcp + 4, &seq, 4);
-  std::memcpy(tcp + 8, &ack, 4);
+  uint32_t seq_be = htonl(seq);
+  uint32_t ack_be = htonl(ack);
+  std::memcpy(tcp + 4, &seq_be, 4);
+  std::memcpy(tcp + 8, &ack_be, 4);
   uint16_t offs_flags = (tcp_hdr_words << 12) | (flags & 0x0FFF);
   tcp[12] = static_cast<uint8_t>(offs_flags >> 8);
   tcp[13] = static_cast<uint8_t>(offs_flags & 0xFF);
