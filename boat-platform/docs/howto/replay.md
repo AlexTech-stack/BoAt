@@ -161,6 +161,36 @@ boat trace replay capture.pcap --buses eth0 \
 The filter is applied **after** all IP rewriting (map + global), so you filter
 on the final, rewritten addresses — not the original capture IPs.
 
+#### Direction-aware IP filters (`--src-ip-filter` / `--dst-ip-filter`)
+
+Like ``--ip-filter`` but matching only the **source** or **destination** IP
+specifically.  This lets you replay only one direction of a conversation:
+
+```bash
+# Replay only ping requests from 10.0.0.1 → 8.8.8.8, drop responses
+boat trace replay capture.pcap --buses eth0 \
+  --replay-src-ip 10.0.0.1 --replay-dst-ip 8.8.8.8 \
+  --src-ip-filter 10.0.0.1 --dst-ip-filter 8.8.8.8
+```
+
+The three post-rewrite filters combine as independent **AND** rules:
+
+- ``--ip-filter``: keep if rewritten **src OR dst** is in the set
+- ``--src-ip-filter``: keep only if rewritten **src** is in the set
+- ``--dst-ip-filter``: keep only if rewritten **dst** is in the set
+
+```bash
+# Keep only traffic to 192.168.0.101 (regardless of source)
+boat trace replay capture.pcap --buses eth0 \
+  --replay-src-ip 192.168.0.100 --replay-dst-ip 192.168.0.101 \
+  --dst-ip-filter 192.168.0.101
+
+# Keep only traffic from 192.168.0.100 (regardless of destination)
+boat trace replay capture.pcap --buses eth0 \
+  --replay-src-ip 192.168.0.100 --replay-dst-ip 192.168.0.101 \
+  --src-ip-filter 192.168.0.100
+```
+
 #### EtherType filter (`--ethertype`)
 
 Filter by L2 EtherType **before** any IP processing.  Only packets whose
@@ -222,15 +252,17 @@ Recognised protocol names:
 For each pcap packet:
 
 ```
-1. Parse EtherType from the pcap L2 header
-2. EtherType filter:  skip if ethertype not in --ethertype
-3. Parse IP header, extract protocol/next-header number
-4. Protocol filter:   skip if protocol not in --protocol
-5. Apply IP map:      src = ip_map.get(orig_src, replay_src_ip or orig_src)
-                       dst = ip_map.get(orig_dst, replay_dst_ip or orig_dst)
-6. IP filter:         skip if neither rewritten src nor dst is in --ip-filter
-7. Rebuild IP header with the final src/dst addresses
-8. Recalculate IP and transport checksums
+ 1. Parse EtherType from the pcap L2 header
+ 2. EtherType filter:  skip if ethertype not in --ethertype
+ 3. Parse IP header, extract protocol/next-header number
+ 4. Protocol filter:   skip if protocol not in --protocol
+ 5. Apply IP map:      src = ip_map.get(orig_src, replay_src_ip or orig_src)
+                        dst = ip_map.get(orig_dst, replay_dst_ip or orig_dst)
+ 6. IP filter (OR):    skip if neither rewritten src nor dst is in --ip-filter
+ 7. Src IP filter:     skip if rewritten src not in --src-ip-filter
+ 8. Dst IP filter:     skip if rewritten dst not in --dst-ip-filter
+ 9. Rebuild IP header with the final src/dst addresses
+10. Recalculate IP and transport checksums
 ```
 
 ### Ethernet MAC addresses

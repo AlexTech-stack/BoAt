@@ -152,6 +152,14 @@ class TraceReplayer:
                           filter by (pre-rewrite).  Only packets whose L4
                           protocol is in this set are replayed.  Empty set = no
                           filtering.
+        src_ip_filter:  Set of IP addresses to filter the rewritten source by
+                        (applied post-rewrite).  Only packets whose rewritten
+                        src is in this set are replayed.  Empty set = no
+                        filtering.
+        dst_ip_filter:  Set of IP addresses to filter the rewritten destination
+                        by (applied post-rewrite).  Only packets whose
+                        rewritten dst is in this set are replayed.  Empty set
+                        = no filtering.
     """
 
     def __init__(
@@ -172,6 +180,8 @@ class TraceReplayer:
         ip_map: Optional[dict[str, str]] = None,
         ethertype_filter: Optional[set[int]] = None,
         protocol_filter: Optional[set[int]] = None,
+        src_ip_filter: Optional[set[str]] = None,
+        dst_ip_filter: Optional[set[str]] = None,
     ) -> None:
         self.gateway          = gateway
         self.buses            = buses or []
@@ -189,6 +199,8 @@ class TraceReplayer:
         self.ip_map           = ip_map or {}
         self.ethertype_filter = ethertype_filter or set()
         self.protocol_filter  = protocol_filter or set()
+        self.src_ip_filter    = src_ip_filter or set()
+        self.dst_ip_filter    = dst_ip_filter or set()
         self._stub            = None
         self._replay_stub     = None
 
@@ -401,6 +413,10 @@ class TraceReplayer:
         mapped_dst = self.ip_map.get(orig_dst_str, self.replay_dst_ip or orig_dst_str)
         if self.ip_filter and mapped_src not in self.ip_filter and mapped_dst not in self.ip_filter:
             return b""
+        if self.src_ip_filter and mapped_src not in self.src_ip_filter:
+            return b""
+        if self.dst_ip_filter and mapped_dst not in self.dst_ip_filter:
+            return b""
         src_ip_bytes = self._parse_ip(mapped_src)
         dst_ip_bytes = self._parse_ip(mapped_dst)
 
@@ -491,6 +507,10 @@ class TraceReplayer:
         mapped_src = self.ip_map.get(orig_src_str, self.replay_src_ip or orig_src_str)
         mapped_dst = self.ip_map.get(orig_dst_str, self.replay_dst_ip or orig_dst_str)
         if self.ip_filter and mapped_src not in self.ip_filter and mapped_dst not in self.ip_filter:
+            return b""
+        if self.src_ip_filter and mapped_src not in self.src_ip_filter:
+            return b""
+        if self.dst_ip_filter and mapped_dst not in self.dst_ip_filter:
             return b""
         src_ip_bytes = self._parse_ip(mapped_src)
         dst_ip_bytes = self._parse_ip(mapped_dst)

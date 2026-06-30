@@ -1275,3 +1275,127 @@ class TestEthertypeAndProtocolFilter:
             _, _, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
             offset += 28 + payload_size
         assert records == 1  # only UDPv4 passes both filters
+
+
+class TestSrcDstIpFilter:
+    """Tests for direction-aware src_ip_filter and dst_ip_filter."""
+
+    def _make_replayer(self, src_ip_filter=None, dst_ip_filter=None, **kwargs):
+        from boat.trace_replay import TraceReplayer
+        # No global rewrite — direction filters operate on original IPs
+        params = {"buses": ["eth0"], "speed": 1.0}
+        params.update(kwargs)
+        params["src_ip_filter"] = src_ip_filter
+        params["dst_ip_filter"] = dst_ip_filter
+        return TraceReplayer(**params)
+
+    def test_src_filter_match(self):
+        """Packet whose rewritten src matches src_ip_filter is replayed."""
+        replayer = self._make_replayer(src_ip_filter={"10.0.0.1"})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+    def test_src_filter_no_match(self):
+        """Packet whose rewritten src does NOT match src_ip_filter is dropped."""
+        replayer = self._make_replayer(src_ip_filter={"9.9.9.9"})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert replayer._reconstruct_ip_packet(frame) == b""
+
+    def test_dst_filter_match(self):
+        """Packet whose rewritten dst matches dst_ip_filter is replayed."""
+        replayer = self._make_replayer(dst_ip_filter={"10.0.0.2"})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+    def test_dst_filter_no_match(self):
+        """Packet whose rewritten dst does NOT match dst_ip_filter is dropped."""
+        replayer = self._make_replayer(dst_ip_filter={"9.9.9.9"})
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert replayer._reconstruct_ip_packet(frame) == b""
+
+    def test_strict_direction(self):
+        """Strict direction: src_ip_filter + dst_ip_filter block reverse traffic."""
+        replayer = self._make_replayer(
+            src_ip_filter={"10.0.0.1"},
+            dst_ip_filter={"10.0.0.2"},
+        )
+        # Forward: src=10.0.0.1, dst=10.0.0.2 → matches both filters
+        eth_fwd = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"fwd",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        assert len(replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(1.0, eth_fwd[0:6], eth_fwd[6:12], 0x0800, eth_fwd[14:])
+        )) > 0
+
+        # Reverse: src=10.0.0.2, dst=10.0.0.1 → src_ip_filter drops
+        eth_rev = _udp_packet(
+            b"\x0a\x00\x00\x02", b"\x0a\x00\x00\x01", 12345, 30490, b"rev",
+        )
+        assert replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(2.0, eth_rev[0:6], eth_rev[6:12], 0x0800, eth_rev[14:])
+        ) == b""
+
+    def test_ip_filter_plus_src_filter_combine(self):
+        """ip_filter (OR) + src_ip_filter (strict): reverse blocked despite OR match."""
+        replayer = self._make_replayer(
+            src_ip_filter={"10.0.0.1"},
+            ip_filter={"10.0.0.2"},
+        )
+        # Forward: src=10.0.0.1 passes src filter; ip_filter doesn't match but OR passes
+        eth_fwd = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"fwd",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        assert len(replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(1.0, eth_fwd[0:6], eth_fwd[6:12], 0x0800, eth_fwd[14:])
+        )) > 0
+
+        # Reverse: src=10.0.0.2 — src_ip_filter drops it (10.0.0.2 not in src filter)
+        eth_rev = _udp_packet(
+            b"\x0a\x00\x00\x02", b"\x0a\x00\x00\x01", 12345, 30490, b"rev",
+        )
+        assert replayer._reconstruct_ip_packet(
+            EthernetPcapFrame(2.0, eth_rev[0:6], eth_rev[6:12], 0x0800, eth_rev[14:])
+        ) == b""
+
+    def test_empty_filter_set_no_filtering(self):
+        """Empty src_ip_filter / dst_ip_filter sets do no filtering."""
+        replayer = self._make_replayer(src_ip_filter=set(), dst_ip_filter=set())
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+    def test_src_filter_over_ipv6(self):
+        """src_ip_filter works with IPv6."""
+        replayer = self._make_replayer(
+            src_ip_filter={"2001:db8::1"},
+            replay_src_ip="2001:db8::1", replay_dst_ip="2001:db8::100",
+        )
+        eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"data",
+        )
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x86DD, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
