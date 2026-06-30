@@ -301,15 +301,36 @@ For each pcap packet:
 
 ### Ethernet MAC addresses
 
-Source MAC is auto-detected from the target interface.  Destination MAC
-defaults to broadcast.  Both can be overridden:
+By default, every replayed frame uses the auto-detected source MAC
+(from the target interface) and broadcast destination MAC.  The pcap's
+original L2 MACs are discarded — only the IP packet (L3+) is preserved.
+
+#### Per-IP MAC mapping (`--mac-map`)
+
+Map rewritten IP addresses to specific MAC addresses.  The C++ forwarder
+parses each replayed packet's rewritten src/dst IP, looks them up in the
+map, and uses the result as the src/dst MAC for the Ethernet frame.
+IPs not in the map fall back to the default (auto-detect / broadcast).
 
 ```bash
+# Map each IP to its MAC (applied after --ip-map)
 boat trace replay capture.pcap --buses eth0 \
-  --replay-src-ip 192.168.1.1 --replay-dst-ip 192.168.1.100 \
-  --replay-src-mac 02:de:ad:be:ef:01 \
-  --replay-dst-mac 02:de:ad:be:ef:02
+  --ip-map 10.10.10.1=192.168.0.100,8.8.8.8=192.168.0.1 \
+  --mac-map 192.168.0.100=02:de:ad:be:ef:01,192.168.0.1=02:de:ad:be:ef:02
+
+# Without IP map, the MAC map keys match the original pcap IPs
+boat trace replay capture.pcap --buses eth0 \
+  --mac-map 10.10.10.1=02:de:ad:be:ef:01,8.8.8.8=02:de:ad:be:ef:02
 ```
+
+This gives direction-aware MAC addresses — the request and response
+each get their own MAC that matches their IPs.  For the ping example
+above:
+
+| Packet | Src IP | Dst IP | Src MAC | Dst MAC |
+|--------|--------|--------|---------|---------|
+| Request | 10.10.10.1 | 8.8.8.8 | `02:de:ad:be:ef:01` | `02:de:ad:be:ef:02` |
+| Response | 8.8.8.8 | 10.10.10.1 | `02:de:ad:be:ef:02` | `02:de:ad:be:ef:01` |
 
 ## Timing
 
@@ -497,8 +518,8 @@ target network:
 
 | Layer | Field | Behavior |
 |-------|-------|----------|
-| **L2** | Source MAC | Auto-detected from target interface; overridable via ``--replay-src-mac`` |
-| **L2** | Destination MAC | Defaults to broadcast; overridable via ``--replay-dst-mac`` |
+| **L2** | Source MAC | Auto-detected from target interface; overridable via ``--mac-map`` (per-IP mapping) |
+| **L2** | Destination MAC | Defaults to broadcast; overridable via ``--mac-map`` (per-IP mapping) |
 | **L3** | Source / Dest IP | Rewritten via ``--replay-src-ip``/``--replay-dst-ip`` (global) or ``--ip-map`` (per-address table) |
 | **L3** | TTL / Hop Limit | Preserved from the original packet |
 | **L4** | UDP ports | Preserved from the original |

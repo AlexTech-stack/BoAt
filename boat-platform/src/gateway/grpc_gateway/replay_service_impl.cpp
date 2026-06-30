@@ -64,6 +64,7 @@ grpc::Status ReplayServiceImpl::StartReplay(grpc::ServerContext*, const boat::v1
         .speed = ProtoSpeedToInternal(request->speed()),
         .speed_multiplier = request->speed_multiplier() > 0.0 ? request->speed_multiplier() : 1.0,
         .eth_iface = request->eth_iface(),
+        .mac_map = {request->mac_map().begin(), request->mac_map().end()},
     };
     ctx_.replay_controller.Start(config);
     {

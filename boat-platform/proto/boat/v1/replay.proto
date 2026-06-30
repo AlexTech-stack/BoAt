@@ -16,6 +16,7 @@ message StartReplayRequest {
   ReplaySpeed speed = 3;
   double speed_multiplier = 4;
   string eth_iface = 5;
+  map<string, string> mac_map = 6;
 }
 message SeekReplayRequest { string replay_id = 1; uint64 tick = 2; }
 message StreamReplayRequest { string replay_id = 1; }

@@ -261,6 +261,11 @@ def cmd_replay(
                         help="Comma-separated UDP/TCP destination port numbers to filter by "
                              "(pre-rewrite). Only packets whose destination port is in this "
                              "set are replayed. Example: 30490"),
+    mac_map: str | None = typer.Option(None, "--mac-map",
+                        help="Comma-separated IP=MAC mappings, e.g. "
+                             "192.168.0.100=02:de:ad:be:ef:01,192.168.0.101=02:de:ad:be:ef:02. "
+                             "Applied after IP rewriting. IPs not in the map fall back to "
+                             "default behavior (src=interface MAC, dst=broadcast)."),
 ) -> None:
     """Replay a trace file (.asc, .blf, .pcap) through the gateway."""
     try:
@@ -313,6 +318,14 @@ def cmd_replay(
     dst_port_set: set[int] | None = None
     if dst_port:
         dst_port_set = {int(s.strip()) for s in dst_port.split(",") if s.strip()}
+    mac_map_dict: dict[str, str] | None = None
+    if mac_map:
+        mac_map_dict = {}
+        for pair in mac_map.split(","):
+            pair = pair.strip()
+            if "=" in pair:
+                ip_str, mac_str = pair.split("=", 1)
+                mac_map_dict[ip_str.strip()] = mac_str.strip()
 
     def _on_frame(idx: int, msg) -> None:
         if verbose:
@@ -349,6 +362,7 @@ def cmd_replay(
         dst_ip_filter     = dst_ip_filter_set,
         src_port_filter   = src_port_set,
         dst_port_filter   = dst_port_set,
+        mac_map           = mac_map_dict,
     )
 
     speed_label = f"{speed}x" if speed > 0 else "max"

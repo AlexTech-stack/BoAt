@@ -67,3 +67,7 @@ def test_start_replay_request_has_speed_fields():
     assert req.trace_id == "test"
     assert req.speed == replay_pb2.REPLAY_SPEED_ACCELERATED
     assert req.speed_multiplier == 2.5
+    # mac_map field should exist
+    assert hasattr(req, "mac_map")
+    req.mac_map["192.168.0.100"] = "02:de:ad:be:ef:01"
+    assert req.mac_map["192.168.0.100"] == "02:de:ad:be:ef:01"
