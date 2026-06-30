@@ -253,6 +253,14 @@ def cmd_replay(
                         help="Comma-separated destination IP addresses to filter by (applied "
                              "after IP mapping). Only packets whose rewritten destination IP "
                              "is in this set are replayed. Example: 192.168.0.101"),
+    src_port: str | None = typer.Option(None, "--src-port",
+                        help="Comma-separated UDP/TCP source port numbers to filter by "
+                             "(pre-rewrite). Only packets whose source port is in this set "
+                             "are replayed. Example: 67,68"),
+    dst_port: str | None = typer.Option(None, "--dst-port",
+                        help="Comma-separated UDP/TCP destination port numbers to filter by "
+                             "(pre-rewrite). Only packets whose destination port is in this "
+                             "set are replayed. Example: 30490"),
 ) -> None:
     """Replay a trace file (.asc, .blf, .pcap) through the gateway."""
     try:
@@ -299,6 +307,13 @@ def cmd_replay(
     if dst_ip_filter:
         dst_ip_filter_set = {s.strip() for s in dst_ip_filter.split(",") if s.strip()}
 
+    src_port_set: set[int] | None = None
+    if src_port:
+        src_port_set = {int(s.strip()) for s in src_port.split(",") if s.strip()}
+    dst_port_set: set[int] | None = None
+    if dst_port:
+        dst_port_set = {int(s.strip()) for s in dst_port.split(",") if s.strip()}
+
     def _on_frame(idx: int, msg) -> None:
         if verbose:
             if server_side:
@@ -332,6 +347,8 @@ def cmd_replay(
         protocol_filter  = protocol_set,
         src_ip_filter     = src_ip_filter_set,
         dst_ip_filter     = dst_ip_filter_set,
+        src_port_filter   = src_port_set,
+        dst_port_filter   = dst_port_set,
     )
 
     speed_label = f"{speed}x" if speed > 0 else "max"

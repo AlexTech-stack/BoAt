@@ -53,6 +53,9 @@ _TRACE_MAGIC = 0xB0A7B0A7
 # Replay Ethernet event type base (matches kReplayEthEventBase in C++)
 _REPLAY_ETH_EVENT_BASE = 0xEE000000
 
+# IPv6 extension header numbers that should be walked to find the actual L4 protocol.
+_IPv6_EXTENSION_HEADERS = {0, 43, 44, 50, 51, 60, 135}
+
 
 EthernetPcapFrame = namedtuple("EthernetPcapFrame", [
     "timestamp", "dst_mac", "src_mac", "ethertype", "payload",
@@ -160,6 +163,16 @@ class TraceReplayer:
                         by (applied post-rewrite).  Only packets whose
                         rewritten dst is in this set are replayed.  Empty set
                         = no filtering.
+        src_port_filter: Set of UDP/TCP source port numbers to filter by
+                         (pre-rewrite).  Only packets whose source port is in
+                         this set are replayed.  Only applies to UDP/TCP
+                         and only to unfragmented or first-fragment packets.
+                         Empty set = no filtering.
+        dst_port_filter: Set of UDP/TCP destination port numbers to filter by
+                         (pre-rewrite).  Only packets whose destination port
+                         is in this set are replayed.  Only applies to UDP/TCP
+                         and only to unfragmented or first-fragment packets.
+                         Empty set = no filtering.
     """
 
     def __init__(
@@ -182,6 +195,8 @@ class TraceReplayer:
         protocol_filter: Optional[set[int]] = None,
         src_ip_filter: Optional[set[str]] = None,
         dst_ip_filter: Optional[set[str]] = None,
+        src_port_filter: Optional[set[int]] = None,
+        dst_port_filter: Optional[set[int]] = None,
     ) -> None:
         self.gateway          = gateway
         self.buses            = buses or []
@@ -201,6 +216,8 @@ class TraceReplayer:
         self.protocol_filter  = protocol_filter or set()
         self.src_ip_filter    = src_ip_filter or set()
         self.dst_ip_filter    = dst_ip_filter or set()
+        self.src_port_filter  = src_port_filter or set()
+        self.dst_port_filter  = dst_port_filter or set()
         self._stub            = None
         self._replay_stub     = None
 
@@ -366,13 +383,14 @@ class TraceReplayer:
     def _reconstruct_ip_packet(self, frame: EthernetPcapFrame) -> bytes:
         """Reconstruct an IP packet with user-specified addresses.
 
-        Applies protocol filter before dispatching to version-specific handler.
+        Walks IPv6 extension headers to find the actual L4 protocol,
+        then dispatches to the version-specific handler.
         """
         payload = frame.payload
         if frame.ethertype == 0x86DD:
             if len(payload) < 40:
                 return b""
-            protocol = payload[6]
+            protocol, _, _, _ = self._walk_ipv6_extensions(payload)
         else:
             if len(payload) < 20:
                 return b""
@@ -386,7 +404,11 @@ class TraceReplayer:
         return self._reconstruct_ip4_packet(frame)
 
     def _reconstruct_ip4_packet(self, frame: EthernetPcapFrame) -> bytes:
-        """Reconstruct an IPv4 packet with user-specified addresses."""
+        """Reconstruct an IPv4 packet with user-specified addresses.
+
+        Handles port filter (UDP/TCP), IP fragmentation, and full L4 rebuild
+        for non-fragmented packets.
+        """
         payload = frame.payload
         if len(payload) < 20:
             return b""
@@ -404,8 +426,30 @@ class TraceReplayer:
         orig_src = payload[12:16]
         orig_dst = payload[16:20]
 
+        frag_offset = (flags_frag & 0x1FFF) * 8
+        more_frags  = bool(flags_frag & 0x2000)
+        is_fragmented = frag_offset > 0 or more_frags
+
         header_end = ihl
         transport_payload = payload[header_end:total_len]
+
+        # Port filter (only UDP/TCP, and only when L4 header is present)
+        if protocol in (6, 17) and len(transport_payload) >= 4 and not is_fragmented:
+            pkt_src_port = struct.unpack("!H", transport_payload[0:2])[0]
+            pkt_dst_port = struct.unpack("!H", transport_payload[2:4])[0]
+            if self.src_port_filter and pkt_src_port not in self.src_port_filter:
+                return b""
+            if self.dst_port_filter and pkt_dst_port not in self.dst_port_filter:
+                return b""
+
+        # First fragment (offset 0) still has the L4 header for port parsing
+        if is_fragmented and frag_offset == 0 and protocol in (6, 17) and len(transport_payload) >= 4:
+            pkt_src_port = struct.unpack("!H", transport_payload[0:2])[0]
+            pkt_dst_port = struct.unpack("!H", transport_payload[2:4])[0]
+            if self.src_port_filter and pkt_src_port not in self.src_port_filter:
+                return b""
+            if self.dst_port_filter and pkt_dst_port not in self.dst_port_filter:
+                return b""
 
         orig_src_str = str(ipaddress.IPv4Address(orig_src))
         orig_dst_str = str(ipaddress.IPv4Address(orig_dst))
@@ -420,8 +464,17 @@ class TraceReplayer:
         src_ip_bytes = self._parse_ip(mapped_src)
         dst_ip_bytes = self._parse_ip(mapped_dst)
 
+        # For fragmented packets: rebuild IP header only, keep payload as-is
+        if is_fragmented:
+            ip_header = struct.pack("!BBHHHBBH4s4s",
+                0x45, 0, total_len, identification, flags_frag,
+                ttl, protocol, 0, src_ip_bytes, dst_ip_bytes)
+            ip_csum = self._checksum(ip_header)
+            ip_header = ip_header[:10] + struct.pack("!H", ip_csum) + ip_header[12:]
+            return ip_header + transport_payload
+
+        # Full L4 rebuild for non-fragmented packets
         if protocol == 17 and len(transport_payload) >= 8:
-            # UDP: preserve ports, rebuild header
             src_port = struct.unpack("!H", transport_payload[0:2])[0]
             dst_port = struct.unpack("!H", transport_payload[2:4])[0]
             udp_len = len(transport_payload[8:]) + 8
@@ -431,40 +484,25 @@ class TraceReplayer:
             transport = new_udp
             total_len = 20 + len(new_udp)
         elif protocol == 1 and len(transport_payload) >= 4:
-            # ICMP: preserve type/code/rest, rebuild
             icmp_type = transport_payload[0:1]
             icmp_code = transport_payload[1:2]
             icmp_rest = transport_payload[4:]
-            new_icmp = icmp_type + icmp_code + b"\x00\x00"  # checksum placeholder
+            new_icmp = icmp_type + icmp_code + b"\x00\x00"
             new_icmp += icmp_rest
             transport = new_icmp
             total_len = 20 + len(new_icmp)
         else:
-            # Unknown protocol — pass through as-is
             transport = transport_payload
             total_len = 20 + len(transport)
 
-        # Build IP header (no options)
         ip_header = struct.pack("!BBHHHBBH4s4s",
-            0x45,                     # version=4, ihl=5
-            0,                        # DSCP/ECN
-            total_len,                # total length
-            identification,           # identification
-            flags_frag,               # flags + fragment offset
-            ttl,                      # time to live
-            protocol,                 # protocol
-            0,                        # header checksum (placeholder)
-            src_ip_bytes,             # source address
-            dst_ip_bytes,             # destination address
-        )
-
-        # Calculate IP checksum
+            0x45, 0, total_len, identification, flags_frag,
+            ttl, protocol, 0, src_ip_bytes, dst_ip_bytes)
         ip_csum = self._checksum(ip_header)
         ip_header = ip_header[:10] + struct.pack("!H", ip_csum) + ip_header[12:]
 
         result = ip_header + transport
 
-        # Calculate UDP checksum if UDP
         if protocol == 17:
             pseudo = src_ip_bytes + dst_ip_bytes + b"\x00" + struct.pack("!BH", 17, len(transport))
             udp_offset = 20
@@ -474,7 +512,6 @@ class TraceReplayer:
                 udp_csum = 0xFFFF
             result = result[:udp_offset + 6] + struct.pack("!H", udp_csum) + result[udp_offset + 8:]
 
-        # Calculate ICMP checksum if ICMP
         if protocol == 1:
             icmp_offset = 20
             icmp_csum = self._checksum(result[icmp_offset:])
@@ -482,25 +519,84 @@ class TraceReplayer:
 
         return result
 
+    def _walk_ipv6_extensions(self, payload: bytes) -> tuple[int, int, bytes, bool]:
+        """Walk IPv6 extension headers to find the actual L4 protocol.
+
+        Returns ``(actual_protocol, l4_offset, ext_bytes, is_fragmented)``.
+        """
+        offset = 40
+        next_header = payload[6]
+        ext_bytes = bytearray()
+        is_fragmented = False
+
+        while next_header in _IPv6_EXTENSION_HEADERS:
+            if offset + 2 > len(payload):
+                return (next_header, offset, bytes(ext_bytes), is_fragmented)
+            nh = payload[offset]
+            if next_header == 44:  # Fragment
+                hdr_len = 8
+                is_fragmented = True
+            elif next_header == 51:  # Authentication Header
+                hdr_len = (payload[offset + 1] + 1) * 4
+            else:  # HBH (0), Routing (43), Destination (60), Mobility (135)
+                hdr_len = (payload[offset + 1] + 1) * 8
+            if offset + hdr_len > len(payload):
+                return (next_header, offset, bytes(ext_bytes), is_fragmented)
+            ext_bytes.extend(payload[offset:offset + hdr_len])
+            offset += hdr_len
+            next_header = nh
+
+        return (next_header, offset, bytes(ext_bytes), is_fragmented)
+
     def _reconstruct_ip6_packet(self, frame: EthernetPcapFrame) -> bytes:
         """Reconstruct an IPv6 packet with user-specified addresses.
 
-        Handles UDP (next header 17) and ICMPv6 (next header 58).
-        Both require mandatory checksums with IPv6 pseudo-header.
-        Extension headers beyond the fixed 40-byte header are not parsed;
-        unknown next headers pass through as-is.
+        Walks IPv6 extension headers, applies port filter, handles
+        fragmentation, and rebuilds L4 with mandatory checksums.
         """
         payload = frame.payload
         if len(payload) < 40:
             return b""
 
+        actual_protocol, l4_offset, ext_bytes, is_fragmented = self._walk_ipv6_extensions(payload)
+
         orig_src = payload[8:24]
         orig_dst = payload[24:40]
-        next_header = payload[6]
         hop_limit = payload[7]
-        payload_len = (payload[4] << 8) | payload[5]
 
-        transport_payload = payload[40:40 + payload_len]
+        transport_payload = payload[l4_offset:]
+
+        # Port filter (only UDP/TCP, and only when L4 header is present)
+        if actual_protocol in (6, 17) and len(transport_payload) >= 4 and not is_fragmented:
+            pkt_src_port = struct.unpack("!H", transport_payload[0:2])[0]
+            pkt_dst_port = struct.unpack("!H", transport_payload[2:4])[0]
+            if self.src_port_filter and pkt_src_port not in self.src_port_filter:
+                return b""
+            if self.dst_port_filter and pkt_dst_port not in self.dst_port_filter:
+                return b""
+
+        # First fragment (offset 0) still has L4 header for port parsing
+        frag_offset = 0
+        more_frags = False
+        if is_fragmented:
+            # Parse Fragment header (44) for offset and M flag
+            # Find Fragment header in ext_bytes
+            fh_offset = 0
+            nh = payload[6]
+            while nh != 44 and fh_offset < len(ext_bytes):
+                fh_offset += 8 if nh == 51 else (payload[fh_offset + 1] + 1) * 8 if nh != 44 else 8
+            if fh_offset < len(ext_bytes):
+                fh_data = ext_bytes[fh_offset:fh_offset + 8]
+                fh_info = struct.unpack("!H", fh_data[2:4])[0]
+                frag_offset = (fh_info & 0xFFF8) >> 3  # in 8-byte units
+                more_frags = bool(fh_info & 0x0001)
+            if is_fragmented and frag_offset == 0 and actual_protocol in (6, 17) and len(transport_payload) >= 4:
+                pkt_src_port = struct.unpack("!H", transport_payload[0:2])[0]
+                pkt_dst_port = struct.unpack("!H", transport_payload[2:4])[0]
+                if self.src_port_filter and pkt_src_port not in self.src_port_filter:
+                    return b""
+                if self.dst_port_filter and pkt_dst_port not in self.dst_port_filter:
+                    return b""
 
         orig_src_str = str(ipaddress.IPv6Address(orig_src))
         orig_dst_str = str(ipaddress.IPv6Address(orig_dst))
@@ -515,8 +611,16 @@ class TraceReplayer:
         src_ip_bytes = self._parse_ip(mapped_src)
         dst_ip_bytes = self._parse_ip(mapped_dst)
 
-        if next_header == 17 and len(transport_payload) >= 8:
-            # UDP over IPv6: port preservation, mandatory checksum
+        # For fragmented packets: rebuild IPv6 header + extension bytes + payload as-is
+        if is_fragmented:
+            payload_len = len(ext_bytes) + len(transport_payload)
+            v_tc_flow = payload[0:4]
+            ip6_header = v_tc_flow + struct.pack("!HBB",
+                payload_len, payload[6], hop_limit) + src_ip_bytes + dst_ip_bytes
+            return ip6_header + ext_bytes + transport_payload
+
+        # Full L4 rebuild for non-fragmented packets
+        if actual_protocol == 17 and len(transport_payload) >= 8:
             src_port = struct.unpack("!H", transport_payload[0:2])[0]
             dst_port = struct.unpack("!H", transport_payload[2:4])[0]
             udp_data = transport_payload[8:]
@@ -524,8 +628,7 @@ class TraceReplayer:
             new_udp = struct.pack("!HHHH", src_port, dst_port, udp_len, 0)
             new_udp += udp_data
             transport = new_udp
-        elif next_header == 58 and len(transport_payload) >= 4:
-            # ICMPv6: preserve type/code/rest, mandatory checksum
+        elif actual_protocol == 58 and len(transport_payload) >= 4:
             icmp6_type = transport_payload[0:1]
             icmp6_code = transport_payload[1:2]
             icmp6_rest = transport_payload[4:]
@@ -535,34 +638,33 @@ class TraceReplayer:
         else:
             transport = transport_payload
 
-        # Build IPv6 fixed header (40 bytes, no options)
-        v_tc_flow = payload[0:4]  # preserve original version/tc/flow label
+        # The first next header type in the chain (or actual protocol if no extensions)
+        first_nh = payload[6] if ext_bytes else actual_protocol
+
+        v_tc_flow = payload[0:4]
         ip6_header = v_tc_flow + struct.pack("!HBB",
-            len(transport),        # payload length
-            next_header,           # next header
-            hop_limit,             # hop limit
+            len(ext_bytes) + len(transport),
+            first_nh,
+            hop_limit,
         ) + src_ip_bytes + dst_ip_bytes
 
-        result = ip6_header + transport
+        result = ip6_header + ext_bytes + transport
+        l4_offset_in_result = 40 + len(ext_bytes)
 
-        # UDP checksum (mandatory for IPv6)
-        if next_header == 17:
+        if actual_protocol == 17:
             pseudo = src_ip_bytes + dst_ip_bytes + struct.pack("!I", len(transport))
             pseudo += b"\x00\x00\x00" + struct.pack("!B", 17)
-            udp_offset = 40
-            udp_hdr = result[udp_offset:udp_offset + 8]
+            udp_hdr = result[l4_offset_in_result:l4_offset_in_result + 8]
             udp_csum = self._checksum(pseudo + udp_hdr + transport[8:])
             if udp_csum == 0:
                 udp_csum = 0xFFFF
-            result = result[:udp_offset + 6] + struct.pack("!H", udp_csum) + result[udp_offset + 8:]
+            result = result[:l4_offset_in_result + 6] + struct.pack("!H", udp_csum) + result[l4_offset_in_result + 8:]
 
-        # ICMPv6 checksum (mandatory, includes pseudo-header — unlike ICMPv4)
-        if next_header == 58:
+        if actual_protocol == 58:
             pseudo = src_ip_bytes + dst_ip_bytes + struct.pack("!I", len(transport))
             pseudo += b"\x00\x00\x00" + struct.pack("!B", 58)
-            icmp6_offset = 40
-            icmp6_csum = self._checksum(pseudo + result[icmp6_offset:])
-            result = result[:icmp6_offset + 2] + struct.pack("!H", icmp6_csum) + result[icmp6_offset + 4:]
+            icmp6_csum = self._checksum(pseudo + result[l4_offset_in_result:])
+            result = result[:l4_offset_in_result + 2] + struct.pack("!H", icmp6_csum) + result[l4_offset_in_result + 4:]
 
         return result
 

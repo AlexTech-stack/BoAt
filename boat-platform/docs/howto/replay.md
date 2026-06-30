@@ -247,22 +247,56 @@ Recognised protocol names:
 | ``ospf`` | ``89`` |
 | ``sctp`` | ``132`` |
 
+#### Port filter (`--src-port` / `--dst-port`)
+
+Filter by UDP/TCP port number **before** IP rewriting.  Only applies when
+the protocol is UDP (17) or TCP (6); ICMP and other protocols pass through
+unfiltered.  Port filters are applied after the protocol filter:
+
+```bash
+# Only DHCP (UDP src=68 or dst=67)
+boat trace replay capture.pcap --buses eth0 --protocol udp --src-port 68 --dst-port 67
+
+# Only a specific UDP port
+boat trace replay capture.pcap --buses eth0 --protocol udp --src-port 30490
+```
+
+### Fragmentation and extension headers
+
+The replay engine handles IPv4 fragments and IPv6 extension headers:
+
+- **IPv4 fragments** (identified by the More Fragments flag or non-zero
+  fragment offset): IP-level processing (map, filters) is applied to the
+  IP header.  The L4 payload passes through as-is — checksums are not
+  recalculated (they cover the reassembled datagram).  Port filters apply
+  only to first fragments where the L4 header is present.
+- **IPv6 extension headers** (Hop-by-Hop, Routing, Fragment, Destination,
+  Authentication, Mobility): the extension chain is walked to find the
+  actual L4 protocol (UDP=17, ICMPv6=58, etc.).  Protocol and port filters
+  match against this resolved protocol.  Extension headers are preserved
+  in the reconstructed packet.
+- **IPv6 fragment header** (44): handled like IPv4 fragments — fragmented
+  packets pass through with IP rewrite but without L4 checksum recalculation.
+
 #### Processing order
 
 For each pcap packet:
 
 ```
  1. Parse EtherType from the pcap L2 header
- 2. EtherType filter:  skip if ethertype not in --ethertype
- 3. Parse IP header, extract protocol/next-header number
- 4. Protocol filter:   skip if protocol not in --protocol
- 5. Apply IP map:      src = ip_map.get(orig_src, replay_src_ip or orig_src)
-                        dst = ip_map.get(orig_dst, replay_dst_ip or orig_dst)
- 6. IP filter (OR):    skip if neither rewritten src nor dst is in --ip-filter
- 7. Src IP filter:     skip if rewritten src not in --src-ip-filter
- 8. Dst IP filter:     skip if rewritten dst not in --dst-ip-filter
- 9. Rebuild IP header with the final src/dst addresses
-10. Recalculate IP and transport checksums
+ 2. EtherType filter:      skip if ethertype not in --ethertype
+ 3. Parse IP header
+    For IPv6: walk extension headers → actual protocol + L4 offset
+ 4. Protocol filter:       skip if protocol not in --protocol
+ 5. Port filter:           skip if UDP/TCP port not in --src-port/--dst-port
+ 6. Apply IP map:          src = ip_map.get(orig_src, replay_src_ip or orig_src)
+                            dst = ip_map.get(orig_dst, replay_dst_ip or orig_dst)
+ 7. IP filter (OR):        skip if neither rewritten src nor dst is in --ip-filter
+ 8. Src IP filter:         skip if rewritten src not in --src-ip-filter
+ 9. Dst IP filter:         skip if rewritten dst not in --dst-ip-filter
+10. Rebuild IP header with the final src/dst addresses
+11. If fragmented: keep payload as-is
+    If non-fragmented: rebuild L4 + recalculate checksums
 ```
 
 ### Ethernet MAC addresses

@@ -100,6 +100,44 @@ def _icmp_packet(src_ip: bytes, dst_ip: bytes, payload: bytes, ttl: int = 64) ->
     return eth
 
 
+def _ipv4_frag(src_ip: bytes, dst_ip: bytes, payload: bytes,
+               identification: int, frag_offset: int, more_frags: bool,
+               protocol: int = 17, ttl: int = 64) -> bytes:
+    """Build a raw Ethernet frame containing a fragmented IPv4+UDP datagram."""
+    total_len = 20 + len(payload)
+    flags = (1 << 13) if more_frags else 0  # bit 13 = MF
+    frag_field = flags | frag_offset
+    ip_hdr = struct.pack("!BBHHHBBH4s4s",
+        0x45, 0, total_len, identification, frag_field, ttl, protocol, 0,
+        src_ip, dst_ip)
+    ip_csum = _checksum(ip_hdr)
+    ip_hdr = ip_hdr[:10] + struct.pack("!H", ip_csum) + ip_hdr[12:]
+    return b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x02\x08\x00" + ip_hdr + payload
+
+
+def _ipv6_with_hbh(src_ip: bytes, dst_ip: bytes, src_port: int, dst_port: int,
+                    payload: bytes, hop_limit: int = 64) -> bytes:
+    """Build a raw Ethernet frame containing an IPv6+HBH+UDP packet."""
+    udp_len = 8 + len(payload)
+    udp_hdr = struct.pack("!HHHH", src_port, dst_port, udp_len, 0)
+    udp_data = udp_hdr + payload
+    # UDP checksum with IPv6 pseudo-header
+    pseudo = src_ip + dst_ip + struct.pack("!I", udp_len) + b"\x00\x00\x00\x17"
+    udp_csum = _checksum(pseudo + udp_data)
+    if udp_csum == 0:
+        udp_csum = 0xFFFF
+    udp_hdr = struct.pack("!HHHH", src_port, dst_port, udp_len, udp_csum)
+    udp_data = udp_hdr + payload
+    # Hop-by-Hop extension header (next header = 17=UDP, hdr_ext_len = 0 = 8 bytes)
+    hbh = struct.pack("!BB", 17, 0) + b"\x00" * 6  # 8 bytes total
+    # IPv6 header (next header = 0 = Hop-by-Hop)
+    v_tc_flow = 0x60000000
+    ip6_len = len(hbh) + len(udp_data)
+    ip6_hdr = struct.pack("!IHBB", v_tc_flow, ip6_len, 0, hop_limit)
+    ip6_hdr += src_ip + dst_ip
+    return b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x86\xdd" + ip6_hdr + hbh + udp_data
+
+
 def _checksum(data: bytes) -> int:
     """Compute the Internet checksum over *data*."""
     s = 0
@@ -1399,3 +1437,150 @@ class TestSrcDstIpFilter:
         from boat.trace_replay import EthernetPcapFrame
         frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x86DD, eth[14:])
         assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+
+class TestPortFilter:
+    """Tests for src_port_filter and dst_port_filter (pre-rewrite)."""
+
+    def _make_replayer(self, src_port_filter=None, dst_port_filter=None, **kwargs):
+        from boat.trace_replay import TraceReplayer
+        params = {"buses": ["eth0"], "speed": 1.0, "replay_src_ip": "10.0.0.1",
+                  "replay_dst_ip": "10.0.0.2"}
+        params.update(kwargs)
+        params["src_port_filter"] = src_port_filter
+        params["dst_port_filter"] = dst_port_filter
+        return TraceReplayer(**params)
+
+    def test_src_port_match(self):
+        replayer = self._make_replayer(src_port_filter={12345})
+        eth = _udp_packet(b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data")
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+    def test_src_port_no_match(self):
+        replayer = self._make_replayer(src_port_filter={9999})
+        eth = _udp_packet(b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data")
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert replayer._reconstruct_ip_packet(frame) == b""
+
+    def test_dst_port_match(self):
+        replayer = self._make_replayer(dst_port_filter={30490})
+        eth = _udp_packet(b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data")
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+    def test_dst_port_no_match(self):
+        replayer = self._make_replayer(dst_port_filter={9999})
+        eth = _udp_packet(b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data")
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert replayer._reconstruct_ip_packet(frame) == b""
+
+    def test_port_filter_ignores_icmp(self):
+        """Port filter does not affect ICMP (no ports)."""
+        replayer = self._make_replayer(src_port_filter={12345})
+        eth = _icmp_packet(b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", b"ping")
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+    def test_empty_set_no_filtering(self):
+        replayer = self._make_replayer(src_port_filter=set(), dst_port_filter=set())
+        eth = _udp_packet(b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data")
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+    def test_port_filter_over_ipv6(self):
+        replayer = self._make_replayer(src_port_filter={12345})
+        eth = _udp6_packet(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"data")
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x86DD, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+
+class TestIpv6ExtensionHeaders:
+    """Tests for IPv6 extension header walking."""
+
+    def _make_replayer(self, **kwargs):
+        from boat.trace_replay import TraceReplayer
+        params = {"buses": ["eth0"], "speed": 1.0}
+        params.update(kwargs)
+        return TraceReplayer(**params)
+
+    def test_walk_udp_no_extensions(self):
+        """No extension headers: actual protocol is UDP directly."""
+        replayer = self._make_replayer()
+        eth = _udp_packet(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12345, 30490, b"data")
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        assert len(replayer._reconstruct_ip_packet(frame)) > 0
+
+    def test_walk_hbh_before_udp(self):
+        """Hop-by-Hop extension (0) followed by UDP is correctly identified."""
+        replayer = self._make_replayer(protocol_filter={17})
+        eth = _ipv6_with_hbh(
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+            b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02",
+            12345, 30490, b"hbhtest")
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x86DD, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert len(result) > 0
+
+
+class TestIpFragment:
+    """Tests for IPv4 fragmentation handling."""
+
+    def _make_replayer(self, **kwargs):
+        from boat.trace_replay import TraceReplayer
+        params = {"buses": ["eth0"], "speed": 1.0,
+                  "replay_src_ip": "10.0.0.1", "replay_dst_ip": "10.0.0.2"}
+        params.update(kwargs)
+        return TraceReplayer(**params)
+
+    def test_first_fragment_reconstructed(self):
+        """First fragment (offset=0, MF=1) is processed, IP rewritten."""
+        replayer = self._make_replayer()
+        payload = b"\x30\x39\x77\x1a\x00\x0e\x00\x00" + b"data_payload"
+        eth = _ipv4_frag(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", payload,
+            identification=0x1234, frag_offset=0, more_frags=True)
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert len(result) > 0
+        # IP should be rewritten
+        assert result[12:16] == b"\x0a\x00\x00\x01"  # 10.0.0.1
+        assert result[16:20] == b"\x0a\x00\x00\x02"  # 10.0.0.2
+        # Fragment flags/offset should be preserved
+        frag_field = (result[6] << 8) | result[7]
+        assert frag_field & 0x2000  # MF flag still set
+        assert (frag_field & 0x1FFF) == 0  # offset still 0
+
+    def test_non_first_fragment_passthrough(self):
+        """Non-first fragment (offset>0) is rebuilt with IP rewrite, payload as-is."""
+        replayer = self._make_replayer()
+        payload = b"continuation_data_here"
+        eth = _ipv4_frag(
+            b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", payload,
+            identification=0x1234, frag_offset=2, more_frags=True, protocol=17)
+        from boat.trace_replay import EthernetPcapFrame
+        frame = EthernetPcapFrame(1.0, eth[0:6], eth[6:12], 0x0800, eth[14:])
+        result = replayer._reconstruct_ip_packet(frame)
+        assert len(result) > 0
+        assert result[12:16] == b"\x0a\x00\x00\x01"
+        assert result[16:20] == b"\x0a\x00\x00\x02"
+        # Fragment offset should be preserved (in 8-byte units)
+        frag_field = (result[6] << 8) | result[7]
+        assert (frag_field & 0x1FFF) == 2  # offset 2 in 8-byte units
+        assert frag_field & 0x2000  # MF flag still set
+        # Payload should be unchanged
+        assert result[20:] == payload
