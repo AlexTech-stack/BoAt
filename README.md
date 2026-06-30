@@ -25,45 +25,12 @@ BoAt is a tick-based simulation gateway that bridges virtual and physical CAN/Et
 
 ## Quick start
 
+See [boat-platform/README.md](boat-platform/README.md) for build prerequisites, build & run instructions.
+
 ```bash
-# Prerequisites (Ubuntu)
-sudo apt install cmake ninja-build g++ libacl1-dev
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Build
-cd boat-platform
-cmake --preset debug && cmake --build --preset debug
-
-# Setup virtual CAN
-sudo modprobe vcan
-sudo ip link add vcan0 type vcan && sudo ip link set vcan0 up
-
-# Launch
+# One-line summary
+cd boat-platform && cmake --preset debug && cmake --build --preset debug
 BOAT_CAN_INTERFACES=vcan0 ./build/debug/src/gateway/grpc_gateway/boat_gateway
-
-# In another terminal
-pip install -e boat-platform/sdk/python[dev] && pip install -e boat-platform/cli
-boat can list-buses
-```
-
-## Repository structure
-
-```
-├── boat-platform/       # C++20 core, gRPC gateway, HIL bridge, plugins
-│   ├── src/core/        # Simulation engine, scheduler, signal router
-│   ├── src/gateway/     # gRPC server (boat_gateway binary)
-│   ├── src/hil/         # CAN/Ethernet drivers, PDU router, bus registries
-│   ├── src/plugins/     # Built-in plugins (vehicle_dynamics, can_tp, someip, ...)
-│   ├── src/store/       # SQLite event & trace stores
-│   ├── src/ipc/         # gRPC, iceoryx2 SHM, UDS
-│   ├── src/replay/      # Deterministic replay engine
-│   ├── proto/           # 15 protobuf definitions
-│   ├── sdk/python/      # boat-py package
-│   ├── cli/             # boat-cli package
-│   └── config/          # PDU database JSON files
-├── ui/                  # 10 web dashboards (FastAPI)
-├── traces/              # Trace output (gitignored)
-└── spec/                # AUTOSAR specification reference (local)
 ```
 
 ## Learn more
@@ -71,4 +38,5 @@ boat can list-buses
 - [Project overview](boat-platform/docs/project.html)
 - [Architecture](boat-platform/docs/architecture/system-architecture.md)
 - [API specification](boat-platform/docs/api/api-specification.md)
+- [Project plan](boat-platform/project-plan.md)
 - [AGENTS.md](AGENTS.md) — Build, run, and development reference

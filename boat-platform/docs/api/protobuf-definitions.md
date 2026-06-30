@@ -4,80 +4,36 @@
 
 - Root path: `proto/boat/v1/`
 - Package namespace: `boat.v1`
-- Canonical source-of-truth files:
-  - `simulation.proto`
-  - `signal.proto`
-  - `scenario.proto`
-  - `replay.proto`
-  - `plugin.proto`
-  - `metrics.proto`
-  - `trace.proto`
-  - `fault.proto`
-  - `common.proto`
+- 15 proto files defining 13 gRPC services:
+
+| File | Service | RPCs |
+|---|---|---|
+| `simulation.proto` | SimulationService | 9 |
+| `signal.proto` | SignalService | 3 |
+| `scenario.proto` | ScenarioService | 5 |
+| `replay.proto` | ReplayService | 8 |
+| `plugin.proto` | PluginService | 4 |
+| `metrics.proto` | MetricsService | 2 |
+| `trace.proto` | TraceService | 4 |
+| `fault.proto` | FaultService | 2 |
+| `can.proto` | CanService | 3 |
+| `ethernet.proto` | EthernetService | 3 |
+| `bus.proto` | BusService | 2 |
+| `pdu.proto` | PduService | 10 |
+| `debug.proto` | DebugService | 1 |
+| `common.proto` | — | Shared messages (PaginationRequest, UUID, etc.) |
+| `control.proto` | — | Control messages (StartCommand, etc.) |
 
 ## Service-to-Method Map
 
-### `SimulationService` (`simulation.proto`)
+### BusService (`bus.proto`)
 
-- `CreateSimulation`
-- `StartSimulation`
-- `PauseSimulation`
-- `StepSimulation`
-- `ResetSimulation`
-- `StopSimulation`
-- `GetSimulationState`
-- `WatchSimulation` (server streaming)
-- `ListSimulations`
+- `Publish`
+- `Subscribe` (server streaming)
 
-### `SignalService` (`signal.proto`)
+### CanService (`can.proto`)
 
-- `InjectSignal`
-- `SubscribeSignals` (server streaming)
-- `GetSignalHistory`
-
-### `ScenarioService` (`scenario.proto`)
-
-- `CreateScenario`
-- `GetScenario`
-- `ListScenarios`
-- `ValidateScenario`
-- `DeleteScenario`
-
-### `ReplayService` (`replay.proto`)
-
-- `StartReplay`
-- `SeekReplay`
-- `StreamReplay` (server streaming)
-- `ReplayControlResponse.replay_id` is returned by `StartReplay` and used as the required session key for `SeekReplay` and `StreamReplay`.
-
-### `PluginService` (`plugin.proto`)
-
-- `RegisterPlugin`
-- `ListPlugins`
-- `GetPluginInfo`
-- `UnloadPlugin`
-
-### `MetricsService` (`metrics.proto`)
-
-- `GetMetrics`
-- `StreamMetrics` (server streaming)
-
-### `TraceService` (`trace.proto`)
-
-- `GetTrace`
-- `ListTraces`
-- `StreamTrace` (server streaming)
-
-### `FaultService` (`fault.proto`)
-
-- `InjectFault`
-- `ListFaults`
-
-### `CanService` (`can.proto`)
-
-- `SendCanFrame`
-- `SubscribeCanFrames` (server streaming)
-- `ListBuses` — returns `CanBusInfo` per interface (driver, state, FD support, bitrate)
+- `SendCanFrame` — returns `CanBusInfo` per interface (driver, state, FD support, bitrate)
 
 ```protobuf
 message CanBusInfo {
@@ -89,16 +45,94 @@ message CanBusInfo {
 }
 ```
 
-### `EthernetService` (`ethernet.proto`)
+### DebugService (`debug.proto`)
+
+- `StreamEvents` (server streaming)
+
+### EthernetService (`ethernet.proto`)
 
 - `SendFrame`
 - `SubscribeFrames` (server streaming)
 - `ListInterfaces`
 
+### FaultService (`fault.proto`)
+
+- `InjectFault`
+- `ListFaults`
+
+### MetricsService (`metrics.proto`)
+
+- `GetMetrics`
+- `StreamMetrics` (server streaming)
+
+### PduService (`pdu.proto`)
+
+- `SendPdu`
+- `SubscribePdus` (server streaming)
+- `ConfigureRoute`
+- `ListRoutes`
+- `ConfigureContainer`
+- `ConfigureGroup`
+- `EnableGroup`
+- `DisableGroup`
+- `ListGroups`
+- `RemoveRoute`
+
+### PluginService (`plugin.proto`)
+
+- `RegisterPlugin`
+- `ListPlugins`
+- `GetPluginInfo`
+- `UnloadPlugin`
+
+### ReplayService (`replay.proto`)
+
+- `StartReplay` — returns `ReplayControlResponse.replay_id` (session key for subsequent calls)
+- `SeekReplay`
+- `StreamReplay` (server streaming)
+- `PauseReplay`
+- `ResumeReplay`
+- `StopReplay`
+- `ImportTraceData`
+- `StartReplayFromEvents`
+
+### ScenarioService (`scenario.proto`)
+
+- `CreateScenario`
+- `GetScenario`
+- `ListScenarios`
+- `ValidateScenario`
+- `DeleteScenario`
+
+### SignalService (`signal.proto`)
+
+- `InjectSignal`
+- `SubscribeSignals` (server streaming)
+- `GetSignalHistory`
+
+### SimulationService (`simulation.proto`)
+
+- `CreateSimulation`
+- `StartSimulation`
+- `PauseSimulation`
+- `StepSimulation`
+- `ResetSimulation`
+- `StopSimulation`
+- `GetSimulationState`
+- `WatchSimulation` (server streaming)
+- `ListSimulations`
+
+### TraceService (`trace.proto`)
+
+- `GetTrace`
+- `ListTraces`
+- `StreamTrace` (server streaming)
+- `MarkStep`
+
 ## Shared Message Patterns
 
 - Common identifiers use UUID strings.
-- Paging uses `page_size` and `page_token`.
+- Paging uses `page_size` and `page_token` (defined in `common.proto`).
 - State enums include `IDLE`, `RUNNING`, `PAUSED`, `STOPPED`, `ERROR`.
 - Event payload values are represented with `oneof`.
 - Streaming messages include tick and wall-time references for ordering.
@@ -127,4 +161,3 @@ protoc -I proto \
   --plugin=protoc-gen-grpc="$(which grpc_cpp_plugin)" \
   proto/boat/v1/*.proto
 ```
-
