@@ -31,7 +31,7 @@ _TcpOnEventCb = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int, ctypes.c_i
 class TcpHandle:
     """High-level wrapper around the TCP plugin's C API."""
 
-    def __init__(self, so_path: str) -> None:
+    def __init__(self, so_path: str, config_json: bytes = b'{}') -> None:
         self._lib = ctypes.CDLL(so_path)
 
         # Resolve ABI
@@ -47,12 +47,16 @@ class TcpHandle:
         self._tcp_connect = self._lib.tcp_connect
         self._tcp_connect.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
                                        ctypes.c_uint16, ctypes.c_char_p,
-                                       ctypes.c_uint16]
+                                       ctypes.c_uint16,
+                                       _TcpOnDataCb, _TcpOnEventCb,
+                                       ctypes.c_void_p]
         self._tcp_connect.restype = ctypes.c_int
 
         self._tcp_listen = self._lib.tcp_listen
         self._tcp_listen.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
-                                      ctypes.c_uint16]
+                                      ctypes.c_uint16,
+                                      _TcpOnDataCb, _TcpOnEventCb,
+                                      ctypes.c_void_p]
         self._tcp_listen.restype = ctypes.c_int
 
         self._tcp_send = self._lib.tcp_send
@@ -74,6 +78,16 @@ class TcpHandle:
         self._tcp_abort.argtypes = [ctypes.c_void_p, ctypes.c_int]
         self._tcp_abort.restype = ctypes.c_int
 
+        # Call the vtable's initialize to start TX/RX threads
+        # BoatPlugin struct: { vtable* (8), ctx* (8) }
+        vtable_ptr = ctypes.c_void_p.from_address(self._bp).value
+        # BoatPluginVTable: { initialize* (8) at offset 0, ... }
+        init_fn_ptr = ctypes.c_void_p.from_address(vtable_ptr).value
+        init_fn = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_char_p)(init_fn_ptr)
+        init_fn(self._ctx, config_json)
+
+        # Keep ctypes callback objects alive (prevent GC)
+        self._cb_refs: list = []
         # Python-side callbacks keyed by id
         self._callbacks: dict[int, tuple] = {}
         self._lock = threading.Lock()
@@ -86,22 +100,25 @@ class TcpHandle:
     # ── Public API ─────────────────────────────────────────────────────────
 
     def connect(self, src_ip: str, src_port: int,
-                dst_ip: str, dst_port: int) -> int:
+                dst_ip: str, dst_port: int,
+                on_data=None, on_event=None, user_ctx=None) -> int:
         """Open an outgoing TCP connection. Returns conn_id."""
         return self._tcp_connect(
-            self._ctx,
-            src_ip.encode(),
-            ctypes.c_uint16(src_port),
-            dst_ip.encode(),
-            ctypes.c_uint16(dst_port),
+            self._ctx, src_ip.encode(), ctypes.c_uint16(src_port),
+            dst_ip.encode(), ctypes.c_uint16(dst_port),
+            self._make_data_cb(on_data) if on_data else None,
+            self._make_event_cb(on_event) if on_event else None,
+            user_ctx,
         )
 
-    def listen(self, bind_ip: str, bind_port: int) -> int:
+    def listen(self, bind_ip: str, bind_port: int,
+               on_data=None, on_event=None, user_ctx=None) -> int:
         """Start listening for incoming TCP connections. Returns listener_id."""
         return self._tcp_listen(
-            self._ctx,
-            bind_ip.encode(),
-            ctypes.c_uint16(bind_port),
+            self._ctx, bind_ip.encode(), ctypes.c_uint16(bind_port),
+            self._make_data_cb(on_data) if on_data else None,
+            self._make_event_cb(on_event) if on_event else None,
+            user_ctx,
         )
 
     def send(self, conn_id: int, data: bytes) -> int:
@@ -109,42 +126,26 @@ class TcpHandle:
         buf = (ctypes.c_uint8 * len(data)).from_buffer_copy(data)
         return self._tcp_send(self._ctx, conn_id, buf, len(data))
 
-    def set_callbacks(
-        self,
-        obj_id: int,
-        on_data: Optional[Callable[[int, bytes], None]] = None,
-        on_event: Optional[Callable[[int, int], None]] = None,
-    ) -> None:
-        """Register callbacks for a connection or listener.
+    def _make_data_cb(self, on_data):
+        def _cb(user_ctx, cid, data_ptr, length):
+            if on_data:
+                data = ctypes.string_at(data_ptr, length)
+                on_data(cid, data)
+        obj = _TcpOnDataCb(_cb)
+        self._cb_refs.append(obj)
+        return obj
 
-        Args:
-            obj_id: conn_id or listener_id from connect()/listen()
-            on_data: called with (conn_id, data_bytes) when data arrives
-            on_event: called with (conn_id, event_type) for lifecycle events
-        """
-        with self._lock:
-            self._callbacks[obj_id] = (on_data, on_event)
+    def _make_event_cb(self, on_event):
+        def _cb(user_ctx, cid, event):
+            if on_event:
+                on_event(cid, event)
+        obj = _TcpOnEventCb(_cb)
+        self._cb_refs.append(obj)
+        return obj
 
-        # Need to keep the ctypes callable objects alive
-        def _make_data_cb(oid: int) -> _TcpOnDataCb:
-            @_TcpOnDataCb
-            def _cb(user_ctx, cid, data_ptr, length):
-                cb_tuple = self._callbacks.get(oid)
-                if cb_tuple and cb_tuple[0]:
-                    data = ctypes.string_at(data_ptr, length)
-                    cb_tuple[0](cid, data)
-            return _cb
-
-        def _make_event_cb(oid: int) -> _TcpOnEventCb:
-            @_TcpOnEventCb
-            def _cb(user_ctx, cid, event):
-                cb_tuple = self._callbacks.get(oid)
-                if cb_tuple and cb_tuple[1]:
-                    cb_tuple[1](cid, event)
-            return _cb
-
-        data_cb = _make_data_cb(obj_id)
-        event_cb = _make_event_cb(obj_id)
+    def set_callbacks(self, obj_id, on_data=None, on_event=None):
+        data_cb = self._make_data_cb(on_data) if on_data else None
+        event_cb = self._make_event_cb(on_event) if on_event else None
         self._tcp_set_callbacks(self._ctx, obj_id, data_cb, event_cb, None)
 
     def close(self, conn_id: int) -> int:

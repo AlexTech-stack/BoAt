@@ -86,6 +86,7 @@ struct TcpListener {
   std::array<uint8_t, 16> bind_ip{};
   int       af{AF_INET};
   uint16_t  bind_port{0};
+  TcpOnData  on_data{nullptr};
   TcpOnEvent on_event{nullptr};
   void*      user_ctx{nullptr};
 };
@@ -95,6 +96,11 @@ struct TcpListener {
 struct TcpPlugin {
   BoatEthPublishFn  eth_publish_fn{nullptr};
   void*             eth_publisher_ctx{nullptr};
+  int               raw_sock{-1};
+  int               raw_ifindex{-1};
+  std::string       raw_iface;
+  std::thread       raw_rx_thread;
+  std::atomic<bool> raw_rx_running{false};
 
   std::unordered_map<int, TcpConnection> connections;
   std::unordered_map<int, TcpListener>  listeners;
@@ -119,8 +125,12 @@ uint32_t    boat_plugin_abi_version();
 
 // Public C API
 int  tcp_connect(void* ctx, const char* src_ip, uint16_t src_port,
-                  const char* dst_ip, uint16_t dst_port);
-int  tcp_listen(void* ctx, const char* bind_ip, uint16_t bind_port);
+                  const char* dst_ip, uint16_t dst_port,
+                  TcpOnData on_data, TcpOnEvent on_event,
+                  void* user_ctx);
+int  tcp_listen(void* ctx, const char* bind_ip, uint16_t bind_port,
+                TcpOnData on_data, TcpOnEvent on_event,
+                void* user_ctx);
 int  tcp_send(void* ctx, int conn_id, const uint8_t* data, uint32_t len);
 void tcp_set_callbacks(void* ctx, int id,
                         TcpOnData on_data, TcpOnEvent on_event,
