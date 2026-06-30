@@ -595,12 +595,39 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
             }
             conn.my_ack = seq + tcp_payload_len;
           }
-          if (flags & 0x01 && conn.state == btcp::TCP_ESTABLISHED) {  // FIN
-            conn.state = btcp::TCP_CLOSE_WAIT;
-            conn.my_ack = seq + 1;
-            if (conn.on_event)
-              conn.on_event(conn.user_ctx, conn.conn_id,
-                            btcp::TCP_EVENT_CLOSED);
+          if (flags & 0x01) {  // FIN
+            if (conn.state == btcp::TCP_ESTABLISHED) {
+              conn.state = btcp::TCP_CLOSE_WAIT;
+              conn.my_ack = seq + 1;
+              if (conn.on_event)
+                conn.on_event(conn.user_ctx, conn.conn_id,
+                              btcp::TCP_EVENT_CLOSED);
+            } else if (conn.state == btcp::TCP_FIN_WAIT_1 ||
+                       conn.state == btcp::TCP_FIN_WAIT_2) {
+              conn.my_ack = seq + 1;
+              // Send ACK for the remote FIN
+              std::vector<uint8_t> a_seg;
+              if (af == AF_INET) {
+                a_seg = btcp::BuildIp4TcpSegment(
+                    conn.src_ip.data(), conn.dst_ip.data(),
+                    conn.src_port, conn.dst_port,
+                    conn.my_seq, conn.my_ack,
+                    nullptr, 0, btcp::TCP_FLAG_ACK, 65535);
+              } else {
+                a_seg = btcp::BuildIp6TcpSegment(
+                    conn.src_ip.data(), conn.dst_ip.data(),
+                    conn.src_port, conn.dst_port,
+                    conn.my_seq, conn.my_ack,
+                    nullptr, 0, btcp::TCP_FLAG_ACK, 65535);
+              }
+              plugin->mutex.unlock();
+              SendRaw(plugin, a_seg);
+              plugin->mutex.lock();
+              conn.state = btcp::TCP_TIME_WAIT;
+              if (conn.on_event)
+                conn.on_event(conn.user_ctx, conn.conn_id,
+                              btcp::TCP_EVENT_CLOSED);
+            }
           }
           if (flags & 0x04) {  // RST
             conn.state = btcp::TCP_CLOSED;
