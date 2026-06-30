@@ -179,6 +179,12 @@ class TraceReplayer:
                         the map fall back to the default behavior
                         (source = auto-detected from interface, destination =
                         broadcast).  Empty dict = default behavior.
+        tcp_plugin_path: Path to the shared library for TCP replay
+                         (e.g. ``"build/debug/src/plugins/tcp/tcp.so"``).
+                         When set, TCP packets from the pcap are replayed
+                         statefully through the plugin rather than being
+                         sent as raw packets.  Protocol filter is applied
+                         against next-header 6 (TCP).
     """
 
     def __init__(
@@ -204,6 +210,7 @@ class TraceReplayer:
         src_port_filter: Optional[set[int]] = None,
         dst_port_filter: Optional[set[int]] = None,
         mac_map: Optional[dict[str, str]] = None,
+        tcp_plugin_path: Optional[str] = None,
     ) -> None:
         self.gateway          = gateway
         self.buses            = buses or []
@@ -226,6 +233,9 @@ class TraceReplayer:
         self.src_port_filter  = src_port_filter or set()
         self.dst_port_filter  = dst_port_filter or set()
         self.mac_map          = mac_map or {}
+        self.tcp_plugin_path  = tcp_plugin_path
+        self._tcp_plugin      = None  # lazy-loaded TcpHandle
+        self._tcp_streams     = {}    # key -> list of (payload, is_fin)
         self._stub            = None
         self._replay_stub     = None
 
@@ -364,6 +374,17 @@ class TraceReplayer:
                 if is_eth:
                     if self.ethertype_filter and msg.ethertype not in self.ethertype_filter:
                         continue
+                    # Check for TCP — if a plugin is configured, buffer for stateful replay
+                    payload = msg.payload
+                    is_tcp = False
+                    if self.tcp_plugin_path:
+                        if msg.ethertype == 0x0800 and len(payload) >= 20:
+                            is_tcp = (payload[9] == 6)
+                        elif msg.ethertype == 0x86DD and len(payload) >= 40:
+                            is_tcp = (payload[6] == 6)
+                    if is_tcp:
+                        self._buffer_tcp_frame(msg)
+                        continue
                     raw = self._reconstruct_ip_packet(msg)
                     if not raw:
                         continue
@@ -388,7 +409,78 @@ class TraceReplayer:
                 result.extend(header)
                 result.extend(raw)
 
+        if self._tcp_streams:
+            self._replay_tcp_streams()
         return bytes(result)
+
+    def _buffer_tcp_frame(self, frame: EthernetPcapFrame) -> None:
+        """Buffer a TCP frame by stream for later stateful replay."""
+        payload = frame.payload
+        if frame.ethertype == 0x0800:
+            src_ip = payload[12:16]
+            dst_ip = payload[16:20]
+            protocol = payload[9]
+            ihl = (payload[0] & 0x0F) * 4
+            tcp_start = ihl
+        else:
+            src_ip = payload[8:24]
+            dst_ip = payload[24:40]
+            protocol = payload[6]
+            tcp_start = 40
+
+        if protocol != 6 or len(payload) < tcp_start + 20:
+            return
+
+        tcp = payload[tcp_start:]
+        src_port = (tcp[0] << 8) | tcp[1]
+        dst_port = (tcp[2] << 8) | tcp[3]
+        data_off = ((tcp[12] >> 4) & 0x0F) * 4
+        tcp_data = tcp[data_off:]
+        flags = tcp[13]
+        is_fin = bool(flags & 0x01)
+        is_syn = bool(flags & 0x02)
+
+        # Apply IP map to get the rewritten IPs
+        orig_src_str = str(ipaddress.ip_address(src_ip))
+        orig_dst_str = str(ipaddress.ip_address(dst_ip))
+        mapped_src = self.ip_map.get(orig_src_str, self.replay_src_ip or orig_src_str)
+        mapped_dst = self.ip_map.get(orig_dst_str, self.replay_dst_ip or orig_dst_str)
+
+        # IP + port based stream key (after rewrite)
+        key = (mapped_src, mapped_dst, src_port, dst_port)
+        if key not in self._tcp_streams:
+            self._tcp_streams[key] = {
+                "src_ip": mapped_src,
+                "dst_ip": mapped_dst,
+                "src_port": src_port,
+                "dst_port": dst_port,
+                "payloads": [],
+                "syn": is_syn,
+                "fin": is_fin,
+            }
+        if tcp_data:
+            self._tcp_streams[key]["payloads"].append(tcp_data)
+
+    def _replay_tcp_streams(self) -> None:
+        """Replay buffered TCP streams through the TCP plugin."""
+        if not self._tcp_streams:
+            return
+        from boat.tcp import TcpHandle as _TcpHandle
+        self._tcp_plugin = _TcpHandle(self.tcp_plugin_path)
+
+        for key, stream in self._tcp_streams.items():
+            conn_id = self._tcp_plugin.connect(
+                stream["src_ip"], stream["src_port"],
+                stream["dst_ip"], stream["dst_port"],
+            )
+            if conn_id < 0:
+                continue
+
+            for data in stream["payloads"]:
+                self._tcp_plugin.send(conn_id, data)
+
+            if stream["fin"]:
+                self._tcp_plugin.close(conn_id)
 
     def _reconstruct_ip_packet(self, frame: EthernetPcapFrame) -> bytes:
         """Reconstruct an IP packet with user-specified addresses.
