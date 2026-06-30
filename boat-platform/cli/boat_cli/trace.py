@@ -245,6 +245,14 @@ def cmd_replay(
                              "Accepts decimal (17) or name (udp, tcp, icmp, icmpv6). "
                              "Applied by number regardless of IP version. "
                              "Example: udp,icmp,58"),
+    src_ip_filter: str | None = typer.Option(None, "--src-ip-filter",
+                        help="Comma-separated source IP addresses to filter by (applied after "
+                             "IP mapping). Only packets whose rewritten source IP is in this "
+                             "set are replayed. Example: 192.168.0.100"),
+    dst_ip_filter: str | None = typer.Option(None, "--dst-ip-filter",
+                        help="Comma-separated destination IP addresses to filter by (applied "
+                             "after IP mapping). Only packets whose rewritten destination IP "
+                             "is in this set are replayed. Example: 192.168.0.101"),
 ) -> None:
     """Replay a trace file (.asc, .blf, .pcap) through the gateway."""
     try:
@@ -284,6 +292,13 @@ def cmd_replay(
         protocol_set = {_resolve_value(s.strip(), _PROTOCOL_NAMES)
                         for s in protocol.split(",") if s.strip()}
 
+    src_ip_filter_set: set[str] | None = None
+    if src_ip_filter:
+        src_ip_filter_set = {s.strip() for s in src_ip_filter.split(",") if s.strip()}
+    dst_ip_filter_set: set[str] | None = None
+    if dst_ip_filter:
+        dst_ip_filter_set = {s.strip() for s in dst_ip_filter.split(",") if s.strip()}
+
     def _on_frame(idx: int, msg) -> None:
         if verbose:
             if server_side:
@@ -315,6 +330,8 @@ def cmd_replay(
         ip_map           = ip_map_dict,
         ethertype_filter = ethertype_set,
         protocol_filter  = protocol_set,
+        src_ip_filter     = src_ip_filter_set,
+        dst_ip_filter     = dst_ip_filter_set,
     )
 
     speed_label = f"{speed}x" if speed > 0 else "max"
