@@ -1,6 +1,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -9,6 +10,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <arpa/inet.h>
 
 #include <grpcpp/grpcpp.h>
 
@@ -263,10 +266,45 @@ int main() {
                          src_mac[0], src_mac[1], src_mac[2],
                          src_mac[3], src_mac[4], src_mac[5]);
           }
+          uint16_t ethertype = static_cast<uint16_t>(event_type & 0xFFFF);
+          int af = (ethertype == 0x86DD) ? AF_INET6 : AF_INET;
+          int ip_len = (ethertype == 0x86DD) ? 16 : 4;
+          int src_off = (ethertype == 0x86DD) ? 8 : 12;
+          int dst_off = src_off + ip_len;
           boat::hil::EthernetFrame eth_frame{};
-          std::memcpy(eth_frame.src_mac, src_mac.data(), 6);
-          std::memset(eth_frame.dst_mac, 0xFF, 6);
-          eth_frame.ethertype = static_cast<std::uint16_t>(event_type & 0xFFFF);
+          if (!cfg.mac_map.empty()) {
+            char ip_buf[INET6_ADDRSTRLEN];
+            inet_ntop(af, payload.data() + src_off, ip_buf, sizeof(ip_buf));
+            auto it = cfg.mac_map.find(ip_buf);
+            if (it != cfg.mac_map.end()) {
+              unsigned int m[6];
+              if (std::sscanf(it->second.c_str(), "%02x:%02x:%02x:%02x:%02x:%02x",
+                              &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
+                for (int i = 0; i < 6; ++i) eth_frame.src_mac[i] = static_cast<uint8_t>(m[i]);
+              } else {
+                std::memcpy(eth_frame.src_mac, src_mac.data(), 6);
+              }
+            } else {
+              std::memcpy(eth_frame.src_mac, src_mac.data(), 6);
+            }
+            inet_ntop(af, payload.data() + dst_off, ip_buf, sizeof(ip_buf));
+            it = cfg.mac_map.find(ip_buf);
+            if (it != cfg.mac_map.end()) {
+              unsigned int m[6];
+              if (std::sscanf(it->second.c_str(), "%02x:%02x:%02x:%02x:%02x:%02x",
+                              &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
+                for (int i = 0; i < 6; ++i) eth_frame.dst_mac[i] = static_cast<uint8_t>(m[i]);
+              } else {
+                std::memset(eth_frame.dst_mac, 0xFF, 6);
+              }
+            } else {
+              std::memset(eth_frame.dst_mac, 0xFF, 6);
+            }
+          } else {
+            std::memcpy(eth_frame.src_mac, src_mac.data(), 6);
+            std::memset(eth_frame.dst_mac, 0xFF, 6);
+          }
+          eth_frame.ethertype = ethertype;
           eth_frame.payload.assign(payload.begin(), payload.end());
           eth_registry.SendFrame(cfg.eth_iface, eth_frame);
         } else if (event_type >= boat::replay::kReplayPduEventBase &&

@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 namespace boat::replay {
 
@@ -41,6 +42,7 @@ struct ReplayConfig {
   double speed_multiplier{1.0};
   std::uint64_t start_tick{0};
   std::string eth_iface;
+  std::unordered_map<std::string, std::string> mac_map;
 };
 
 class ReplayController {

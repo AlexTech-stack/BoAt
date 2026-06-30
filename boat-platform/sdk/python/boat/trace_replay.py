@@ -173,6 +173,12 @@ class TraceReplayer:
                          is in this set are replayed.  Only applies to UDP/TCP
                          and only to unfragmented or first-fragment packets.
                          Empty set = no filtering.
+        mac_map:        Mapping of rewritten IP → MAC address (e.g.
+                        ``{"192.168.0.100": "02:de:ad:be:ef:01"}``).  Applied
+                        in the C++ forwarder after IP rewriting.  IPs not in
+                        the map fall back to the default behavior
+                        (source = auto-detected from interface, destination =
+                        broadcast).  Empty dict = default behavior.
     """
 
     def __init__(
@@ -197,6 +203,7 @@ class TraceReplayer:
         dst_ip_filter: Optional[set[str]] = None,
         src_port_filter: Optional[set[int]] = None,
         dst_port_filter: Optional[set[int]] = None,
+        mac_map: Optional[dict[str, str]] = None,
     ) -> None:
         self.gateway          = gateway
         self.buses            = buses or []
@@ -218,6 +225,7 @@ class TraceReplayer:
         self.dst_ip_filter    = dst_ip_filter or set()
         self.src_port_filter  = src_port_filter or set()
         self.dst_port_filter  = dst_port_filter or set()
+        self.mac_map          = mac_map or {}
         self._stub            = None
         self._replay_stub     = None
 
@@ -296,15 +304,17 @@ class TraceReplayer:
 
         speed_mult = 1_000_000.0 if self.speed == 0 else self.speed
         eth_iface = self.eth_iface or (self.buses[0] if self.buses else "")
-        start_resp = replay_stub.StartReplay(
-            replay_pb2.StartReplayRequest(
-                trace_id=trace_id,
-                simulation_id=self.simulation_id,
-                speed=replay_pb2.REPLAY_SPEED_ACCELERATED,
-                speed_multiplier=speed_mult,
-                eth_iface=eth_iface,
-            )
+        start_req = replay_pb2.StartReplayRequest(
+            trace_id=trace_id,
+            simulation_id=self.simulation_id,
+            speed=replay_pb2.REPLAY_SPEED_ACCELERATED,
+            speed_multiplier=speed_mult,
+            eth_iface=eth_iface,
         )
+        if self.mac_map:
+            for ip_str, mac_str in self.mac_map.items():
+                start_req.mac_map[ip_str] = mac_str
+        start_resp = replay_stub.StartReplay(start_req)
 
         if not start_resp.accepted:
             raise TraceReplayError(f"StartReplay rejected: {start_resp.error.message}")

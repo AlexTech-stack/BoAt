@@ -1584,3 +1584,38 @@ class TestIpFragment:
         assert frag_field & 0x2000  # MF flag still set
         # Payload should be unchanged
         assert result[20:] == payload
+
+
+class TestMacMap:
+    """Tests for mac_map parameter (passed to C++ forwarder via gRPC)."""
+
+    def test_mac_map_stored_on_replayer(self):
+        """mac_map dict is stored on TraceReplayer."""
+        from boat.trace_replay import TraceReplayer
+        mm = {"192.168.0.100": "02:de:ad:be:ef:01",
+              "192.168.0.101": "02:de:ad:be:ef:02"}
+        replayer = TraceReplayer(buses=["eth0"], speed=1.0, mac_map=mm)
+        assert replayer.mac_map == mm
+
+    def test_mac_map_empty_default(self):
+        """Empty mac_map defaults to empty dict (C++ uses fallback)."""
+        from boat.trace_replay import TraceReplayer
+        replayer = TraceReplayer(buses=["eth0"], speed=1.0)
+        assert replayer.mac_map == {}
+
+    def test_mac_map_passed_in_request(self):
+        """mac_map is included in StartReplayRequest."""
+        from boat.trace_replay import TraceReplayer
+        from boat.v1 import replay_pb2
+        replayer = TraceReplayer(
+            buses=["eth0"], speed=1.0,
+            mac_map={"10.0.0.1": "aa:bb:cc:dd:ee:01"},
+        )
+        req = replay_pb2.StartReplayRequest(
+            trace_id="test", speed=replay_pb2.REPLAY_SPEED_ACCELERATED,
+            eth_iface="eth0",
+        )
+        for ip_str, mac_str in replayer.mac_map.items():
+            req.mac_map[ip_str] = mac_str
+        assert req.mac_map["10.0.0.1"] == "aa:bb:cc:dd:ee:01"
+        assert len(req.mac_map) == 1
