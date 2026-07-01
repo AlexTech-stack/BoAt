@@ -40,12 +40,11 @@ def main() -> None:
     config = '{{"iface": "{}"}}'.format(iface)
     tcp = TcpHandle(so_path, config.encode())
 
-    # Block incoming SYN at iptables INPUT so the kernel doesn't see it
-    # (our raw socket still receives the frame pre-netfilter)
-    rule = f"INPUT -p tcp --dport {bind_port} --syn -j DROP"
+    # Block kernel RST for our port
+    rule = f"OUTPUT -p tcp --tcp-flags RST RST --sport {bind_port} -j DROP"
     if subprocess.run(["iptables", "-C"] + rule.split(), capture_output=True).returncode != 0:
         subprocess.run(["iptables", "-A"] + rule.split(), check=True)
-        print(f"[SRV] iptables: blocking SYN for port {bind_port}", flush=True)
+        print(f"[SRV] iptables: added RST block for port {bind_port}", flush=True)
 
     echo_count: dict[int, int] = {}
 
