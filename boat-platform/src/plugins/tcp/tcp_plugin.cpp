@@ -490,7 +490,10 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
         conn.state = btcp::TCP_SYN_RCVD;
         conn.mss = plugin->default_mss;
         conn.user_ctx = listener.user_ctx;
+        conn.on_data  = listener.on_data;
         conn.on_event = listener.on_event;
+        std::fprintf(stderr, "[TCP] accepted conn on_data=%p on_event=%p\n",
+                     (void*)conn.on_data, (void*)conn.on_event);
 
         // Send SYN-ACK
         auto mss_opt = btcp::BuildMssOption(static_cast<uint16_t>(conn.mss));
@@ -590,6 +593,8 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
               (void)ack;
             }
             if (tcp_payload_len > 0 && conn.on_data) {
+              std::fprintf(stderr, "[TCP] calling on_data for cid=%d len=%u\n",
+                           conn.conn_id, tcp_payload_len);
               conn.on_data(conn.user_ctx, conn.conn_id,
                            tcp_data, tcp_payload_len);
             }
@@ -791,8 +796,11 @@ extern "C" int tcp_listen(void* ctx, const char* bind_ip, uint16_t bind_port,
   listener.af = af;
   ParseIp(bind_ip, af, listener.bind_ip);
   listener.bind_port = bind_port;
+  listener.on_data = on_data;
   listener.on_event = on_event;
   listener.user_ctx = user_ctx;
+  std::fprintf(stderr, "[TCP] tcp_listen: on_data=%p on_event=%p\n",
+               (void*)on_data, (void*)on_event);
 
   int lid = listener.listener_id;
   {

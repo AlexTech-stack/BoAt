@@ -99,24 +99,33 @@ class TcpHandle:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    def connect(self, src_ip: str, src_port: int,
-                dst_ip: str, dst_port: int,
-                on_data=None, on_event=None, user_ctx=None) -> int:
+    def _cb_ptr(self, cb):
+        """Return a c_void_p for a callback, or NULL pointer."""
+        if cb is None:
+            return ctypes.c_void_p(0)
+        return ctypes.cast(cb, ctypes.c_void_p)
+
+    def connect(self, src_ip, src_port, dst_ip, dst_port,
+                on_data=None, on_event=None, user_ctx=None):
         data_cb = self._make_data_cb(on_data) if on_data else None
         event_cb = self._make_event_cb(on_event) if on_event else None
         return self._tcp_connect(
             self._ctx, src_ip.encode(), ctypes.c_uint16(src_port),
             dst_ip.encode(), ctypes.c_uint16(dst_port),
-            data_cb, event_cb, user_ctx,
+            self._cb_ptr(data_cb),
+            self._cb_ptr(event_cb),
+            ctypes.c_void_p(user_ctx or 0),
         )
 
-    def listen(self, bind_ip: str, bind_port: int,
-               on_data=None, on_event=None, user_ctx=None) -> int:
+    def listen(self, bind_ip, bind_port,
+               on_data=None, on_event=None, user_ctx=None):
         data_cb = self._make_data_cb(on_data) if on_data else None
         event_cb = self._make_event_cb(on_event) if on_event else None
         return self._tcp_listen(
             self._ctx, bind_ip.encode(), ctypes.c_uint16(bind_port),
-            data_cb, event_cb, user_ctx,
+            self._cb_ptr(data_cb),
+            self._cb_ptr(event_cb),
+            ctypes.c_void_p(user_ctx or 0),
         )
 
     def send(self, conn_id: int, data: bytes) -> int:
