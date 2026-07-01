@@ -114,7 +114,7 @@ static void SendRaw(btcp::TcpPlugin* plugin, const std::vector<uint8_t>& seg) {
   std::array<uint8_t, 6> resolved_mac{};
   resolved_mac.fill(0xFF);  // default: broadcast
   {
-    std::lock_guard<std::mutex> lock(plugin->arp_mutex);
+    std::lock_guard<std::recursive_mutex> lock(plugin->arp_mutex);
     std::string ip_key(reinterpret_cast<const char*>(dst_ip), ip_len);
     auto it = plugin->arp_cache.find(ip_key);
     if (it != plugin->arp_cache.end()) {
@@ -196,7 +196,7 @@ static void RawRxLoop(btcp::TcpPlugin* plugin) {
       uint16_t etype = (n >= 14) ? static_cast<uint16_t>((buf[12] << 8) | buf[13]) : 0;
       std::fprintf(stderr, "[TCP-RX] recv %zd bytes etype=0x%04x ifindex=%d\n",
                    n, etype, addr.sll_ifindex);
-      std::lock_guard<std::mutex> lock(plugin->mutex);
+      std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
       ProcessFrame(plugin, buf, static_cast<size_t>(n));
     }
   }
@@ -239,7 +239,7 @@ static int tp_initialize(void* ctx, const char* config_json) {
   plugin->running.store(true);
   plugin->tx_thread = std::thread([plugin]() {
     while (plugin->running.load()) {
-      std::unique_lock<std::mutex> lock(plugin->mutex);
+      std::unique_lock<std::recursive_mutex> lock(plugin->mutex);
       plugin->tx_cv.wait_for(lock, std::chrono::milliseconds(100));
 
       auto now = std::chrono::steady_clock::now();
@@ -342,7 +342,7 @@ static void tp_shutdown(void* ctx) {
     plugin->raw_sock = -1;
   }
 
-  std::lock_guard<std::mutex> lock(plugin->mutex);
+  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
   for (auto& [id, conn] : plugin->connections) {
     (void)id;
     conn.state = btcp::TCP_CLOSED;
@@ -701,7 +701,7 @@ static void tp_on_eth_frame(void* ctx, const BoatEthFrame* frame,
   (void)iface;
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
   if (!plugin || !frame) return;
-  std::lock_guard<std::mutex> lock(plugin->mutex);
+  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
   HandleIncoming(plugin, frame->payload, frame->payload_len, frame->ethertype);
 }
 
@@ -795,7 +795,7 @@ extern "C" int tcp_connect(void* ctx, const char* src_ip, uint16_t src_port,
 
   int nid = conn.conn_id;
   {
-    std::lock_guard<std::mutex> lock(plugin->mutex);
+    std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
     conn.unacked_segment = seg;
     conn.retransmit_at = std::chrono::steady_clock::now() +
                          std::chrono::milliseconds(plugin->retry_ms);
@@ -830,7 +830,7 @@ extern "C" int tcp_listen(void* ctx, const char* bind_ip, uint16_t bind_port,
 
   int lid = listener.listener_id;
   {
-    std::lock_guard<std::mutex> lock(plugin->mutex);
+    std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
     plugin->listeners[lid] = std::move(listener);
   }
   return lid;
@@ -841,7 +841,7 @@ extern "C" int tcp_send(void* ctx, int conn_id,
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
   if (!plugin) return -1;
 
-  std::lock_guard<std::mutex> lock(plugin->mutex);
+  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
   auto it = plugin->connections.find(conn_id);
   if (it == plugin->connections.end()) return -1;
   // Send even if connection is closing/RST'd (fire-and-forget)
@@ -857,7 +857,7 @@ extern "C" void tcp_set_callbacks(void* ctx, int id,
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
   if (!plugin) return;
 
-  std::lock_guard<std::mutex> lock(plugin->mutex);
+  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
   auto cit = plugin->connections.find(id);
   if (cit != plugin->connections.end()) {
     cit->second.on_data = on_data;
@@ -876,7 +876,7 @@ extern "C" int tcp_close(void* ctx, int conn_id) {
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
   if (!plugin) return -1;
 
-  std::lock_guard<std::mutex> lock(plugin->mutex);
+  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
   auto it = plugin->connections.find(conn_id);
   if (it == plugin->connections.end()) return -1;
 
@@ -914,7 +914,7 @@ extern "C" int tcp_abort(void* ctx, int conn_id) {
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
   if (!plugin) return -1;
 
-  std::lock_guard<std::mutex> lock(plugin->mutex);
+  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
   auto it = plugin->connections.find(conn_id);
   if (it == plugin->connections.end()) return -1;
 
