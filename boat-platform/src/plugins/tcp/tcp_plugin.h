@@ -101,16 +101,16 @@ struct TcpPlugin {
   std::string       raw_iface;
   std::thread       raw_rx_thread;
   std::atomic<bool> raw_rx_running{false};
-  std::mutex        arp_mutex;
+  std::recursive_mutex        arp_mutex;
   // Cache: dst_ip_bytes + af → mac_bytes
   std::unordered_map<std::string, std::array<uint8_t, 6>> arp_cache;
 
   std::unordered_map<int, TcpConnection> connections;
   std::unordered_map<int, TcpListener>  listeners;
   int next_id{1};
-  std::mutex  mutex;
+  std::recursive_mutex  mutex;
   std::thread tx_thread;
-  std::condition_variable tx_cv;
+  std::condition_variable_any tx_cv;
   std::atomic<bool> running{false};
 
   uint32_t retry_ms{1000};
