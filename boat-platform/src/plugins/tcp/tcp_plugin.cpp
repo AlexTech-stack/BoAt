@@ -759,7 +759,7 @@ extern "C" int tcp_connect(void* ctx, const char* src_ip, uint16_t src_port,
   conn.af = af;
   ParseIp(src_ip, af, conn.src_ip);
   ParseIp(dst_ip, af, conn.dst_ip);
-  conn.src_port = src_port;
+  conn.src_port = (src_port == 0) ? static_cast<uint16_t>(40000 + (Rand32() % 20000)) : src_port;
   conn.dst_port = dst_port;
   conn.my_seq = Rand32();
   conn.my_ack = 0;
