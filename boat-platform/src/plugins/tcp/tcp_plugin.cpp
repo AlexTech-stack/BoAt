@@ -599,6 +599,26 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
                            tcp_data, tcp_payload_len);
             }
             conn.my_ack = seq + tcp_payload_len;
+            // Send reactive ACK for received data
+            if (tcp_payload_len > 0) {
+              std::vector<uint8_t> ack_seg;
+              if (af == AF_INET) {
+                ack_seg = btcp::BuildIp4TcpSegment(
+                    conn.src_ip.data(), conn.dst_ip.data(),
+                    conn.src_port, conn.dst_port,
+                    conn.my_seq, conn.my_ack,
+                    nullptr, 0, btcp::TCP_FLAG_ACK, 65535);
+              } else {
+                ack_seg = btcp::BuildIp6TcpSegment(
+                    conn.src_ip.data(), conn.dst_ip.data(),
+                    conn.src_port, conn.dst_port,
+                    conn.my_seq, conn.my_ack,
+                    nullptr, 0, btcp::TCP_FLAG_ACK, 65535);
+              }
+              plugin->mutex.unlock();
+              SendRaw(plugin, ack_seg);
+              plugin->mutex.lock();
+            }
           }
           if (flags & 0x01) {  // FIN
             if (conn.state == btcp::TCP_ESTABLISHED) {
