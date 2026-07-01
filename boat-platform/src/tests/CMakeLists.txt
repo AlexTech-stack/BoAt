@@ -142,6 +142,17 @@ target_include_directories(boat_hil_ethernet PRIVATE ${CMAKE_SOURCE_DIR}/src/hil
 target_link_libraries(boat_hil_ethernet PRIVATE boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_hil_ethernet)
 
+# ── TCP Plugin ───────────────────────────────────────────────────────────────
+
+add_executable(boat_unit_tcp_options unit/test_tcp_options.cpp)
+target_include_directories(boat_unit_tcp_options PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/plugins/tcp
+    ${CMAKE_SOURCE_DIR}/sdk/cpp/include
+)
+target_compile_features(boat_unit_tcp_options PRIVATE cxx_std_20)
+target_link_libraries(boat_unit_tcp_options PRIVATE Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_tcp_options)
+
 # ── Test Harness (P6) ────────────────────────────────────────────────────────
 
 add_boat_test(boat_test_harness unit/test_harness_example.cpp)

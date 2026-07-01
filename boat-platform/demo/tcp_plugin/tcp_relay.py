@@ -9,7 +9,6 @@ Example:
 from __future__ import annotations
 
 import os
-import queue
 import signal
 import subprocess
 import sys
@@ -58,16 +57,40 @@ def main() -> None:
         subprocess.run(["iptables", "-D"] + ipt_rule.split(), capture_output=True)
 
     stop = threading.Event()
-    work_q: queue.Queue[tuple] = queue.Queue()
-
-    # Track inbound CID -> outbound CID (only touched from main loop)
     in_to_out: dict[int, int] = {}
 
     def on_data(cid: int, data: bytes) -> None:
-        work_q.put(("data", cid, data))
+        out_cid = in_to_out.get(cid)
+        if out_cid is not None:
+            ret = tcp.send(out_cid, data)
+            if ret > 0:
+                print(f"[RELAY] {cid} -> {out_cid}  forwarded {ret} bytes: {data.hex()}", flush=True)
+            else:
+                print(f"[RELAY] {cid} -> {out_cid}  send returned {ret}", flush=True)
+        else:
+            print(f"[RELAY] {cid}  no outbound connection, dropping {len(data)} bytes", flush=True)
 
     def on_event(cid: int, event: int) -> None:
-        work_q.put(("event", cid, event))
+        if event == 0:  # TCP_EVENT_CONNECTED
+            out_cid = tcp.connect(listen_ip, 0, relay_dst_ip, relay_dst_port)
+            in_to_out[cid] = out_cid
+            print(f"[RELAY] inbound conn={cid} ACCEPTED → outbound conn={out_cid}  {listen_ip}:* -> {relay_dst_ip}:{relay_dst_port}", flush=True)
+
+        elif event == 1:  # TCP_EVENT_CLOSED
+            out_cid = in_to_out.pop(cid, None)
+            if out_cid is not None:
+                tcp.close(out_cid)
+                print(f"[RELAY] inbound conn={cid} CLOSED, closed outbound conn={out_cid}", flush=True)
+            else:
+                print(f"[RELAY] inbound conn={cid} CLOSED", flush=True)
+
+        elif event == 4:  # TCP_EVENT_ERROR
+            out_cid = in_to_out.pop(cid, None)
+            if out_cid is not None:
+                tcp.abort(out_cid)
+                print(f"[RELAY] inbound conn={cid} ERROR, aborted outbound conn={out_cid}", flush=True)
+            else:
+                print(f"[RELAY] inbound conn={cid} ERROR", flush=True)
 
     lid = tcp.listen(listen_ip, listen_port, on_data=on_data, on_event=on_event)
     print(f"[RELAY] Listening on {listen_ip}:{listen_port} (iface={iface}, lid={lid})", flush=True)
@@ -79,47 +102,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, on_sigint)
 
     while not stop.is_set():
-        try:
-            item = work_q.get(timeout=0.5)
-        except queue.Empty:
-            continue
-
-        kind = item[0]
-
-        if kind == "event":
-            cid, event = item[1], item[2]
-            if event == 0:  # TCP_EVENT_CONNECTED
-                out_cid = tcp.connect(listen_ip, 0, relay_dst_ip, relay_dst_port)
-                in_to_out[cid] = out_cid
-                print(f"[RELAY] inbound conn={cid} ACCEPTED → outbound conn={out_cid}  {listen_ip}:* -> {relay_dst_ip}:{relay_dst_port}", flush=True)
-
-            elif event == 1:  # TCP_EVENT_CLOSED
-                out_cid = in_to_out.pop(cid, None)
-                if out_cid is not None:
-                    tcp.close(out_cid)
-                    print(f"[RELAY] inbound conn={cid} CLOSED, closed outbound conn={out_cid}", flush=True)
-                else:
-                    print(f"[RELAY] inbound conn={cid} CLOSED", flush=True)
-
-            elif event == 4:  # TCP_EVENT_ERROR
-                out_cid = in_to_out.pop(cid, None)
-                if out_cid is not None:
-                    tcp.abort(out_cid)
-                    print(f"[RELAY] inbound conn={cid} ERROR, aborted outbound conn={out_cid}", flush=True)
-                else:
-                    print(f"[RELAY] inbound conn={cid} ERROR", flush=True)
-
-        elif kind == "data":
-            cid, data = item[1], item[2]
-            out_cid = in_to_out.get(cid)
-            if out_cid is not None:
-                ret = tcp.send(out_cid, data)
-                if ret > 0:
-                    print(f"[RELAY] {cid} -> {out_cid}  forwarded {ret} bytes: {data.hex()}", flush=True)
-                else:
-                    print(f"[RELAY] {cid} -> {out_cid}  send returned {ret}", flush=True)
-            else:
-                print(f"[RELAY] {cid}  no outbound connection, dropping {len(data)} bytes", flush=True)
+        time.sleep(0.5)
 
     cleanup()
     print("[RELAY] Stopped")

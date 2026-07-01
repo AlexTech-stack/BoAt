@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -34,10 +35,12 @@ constexpr int TCP_EVENT_ERROR     = 4;
 
 enum TcpState : uint8_t {
   TCP_CLOSED,
+  TCP_LISTEN,
   TCP_SYN_SENT,
   TCP_SYN_RCVD,
   TCP_ESTABLISHED,
   TCP_CLOSE_WAIT,
+  TCP_CLOSING,
   TCP_LAST_ACK,
   TCP_FIN_WAIT_1,
   TCP_FIN_WAIT_2,
@@ -77,6 +80,24 @@ struct TcpConnection {
   void*      user_ctx{nullptr};
 
   int       mss{1460};
+
+  // Peer-advertised receive window
+  uint32_t  peer_window{65535};
+
+  // Keepalive
+  std::chrono::steady_clock::time_point last_activity;
+  int keepalive_probes_sent{0};
+
+  // Zero-window probe (persist timer)
+  bool persist_active{false};
+  std::chrono::steady_clock::time_point persist_at;
+  int persist_count{0};
+
+  // Out-of-order receive buffer: seq_start → {seq_start, data}
+  std::map<uint32_t, std::vector<uint8_t>> receive_buffer;
+
+  // TIME_WAIT expiry
+  std::chrono::steady_clock::time_point time_wait_until{};
 };
 
 // ── Listener state ────────────────────────────────────────────────────────
@@ -108,15 +129,41 @@ struct TcpPlugin {
   std::unordered_map<int, TcpConnection> connections;
   std::unordered_map<int, TcpListener>  listeners;
   int next_id{1};
-  std::mutex  mutex;
+  std::recursive_mutex  mutex;
   std::thread tx_thread;
-  std::condition_variable tx_cv;
+  std::condition_variable_any tx_cv;
   std::atomic<bool> running{false};
 
   uint32_t retry_ms{1000};
   uint32_t max_retries{5};
   int      default_mss{1460};
+  uint16_t rx_window{65535};  // advertised receive window
+  bool     nagle_enabled{true};
+  uint32_t keepalive_idle_ms{7200000};
+  uint32_t keepalive_interval_ms{75000};
+  uint32_t keepalive_retry_count{9};
+  uint32_t time_wait_ms{120000};  // 2*MSL
 };
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+// Parse MSS option from TCP options. Returns the MSS value or 536 (RFC 1122
+// default) if no MSS option is present.
+inline uint16_t ParseMssOption(const uint8_t* options, uint32_t opt_len) {
+  uint32_t offset = 0;
+  while (offset < opt_len) {
+    uint8_t kind = options[offset];
+    if (kind == 0) break;
+    if (kind == 1) { ++offset; continue; }
+    if (offset + 1 >= opt_len) break;
+    uint8_t len = options[offset + 1];
+    if (kind == 2 && len == 4 && offset + 4 <= opt_len) {
+      return static_cast<uint16_t>((options[offset + 2] << 8) | options[offset + 3]);
+    }
+    offset += len;
+  }
+  return 536;
+}
 
 // ── Extern "C" ABI (implemented in tcp_plugin.cpp) ────────────────────────
 
