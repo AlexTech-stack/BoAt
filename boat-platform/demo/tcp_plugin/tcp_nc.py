@@ -58,7 +58,7 @@ def main() -> None:
 
     # ── Server mode ───────────────────────────────────────────────────────
     if server_mode:
-        rule = f"INPUT -p tcp --dport {target_port} --syn -j DROP"
+        rule = f"OUTPUT -p tcp --tcp-flags RST RST --sport {target_port} -j DROP"
         if subprocess.run(["iptables", "-C"] + rule.split(), capture_output=True).returncode != 0:
             subprocess.run(["iptables", "-A"] + rule.split(), check=True)
 

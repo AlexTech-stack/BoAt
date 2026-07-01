@@ -45,18 +45,22 @@ def main() -> None:
     config = '{{"iface": "{}"}}'.format(iface)
     tcp = TcpHandle(so_path, config.encode())
 
-    # Block incoming SYN at iptables INPUT so the kernel doesn't see it
-    rule = f"INPUT -p tcp --dport {bind_port} --syn -j DROP"
-    if subprocess.run(["iptables", "-C"] + rule.split(), capture_output=True).returncode != 0:
-        subprocess.run(["iptables", "-A"] + rule.split(), check=True)
-        print(f"[SRV] iptables: blocking SYN for port {bind_port}", flush=True)
-
+    # Block kernel RST for our port (raw socket bypasses kernel TCP stack)
+    ipt_rule = f"OUTPUT -p tcp --tcp-flags RST RST --sport {bind_port} -j DROP"
+    subprocess.run(["iptables", "-C"] + ipt_rule.split(),
+                   capture_output=True)
+    if subprocess.run(["iptables", "-C"] + ipt_rule.split(),
+                      capture_output=True).returncode != 0:
+        subprocess.run(["iptables", "-A"] + ipt_rule.split(), check=True)
+        print(f"[SRV] Added iptables rule: {ipt_rule}", flush=True)
     def cleanup():
-        subprocess.run(["iptables", "-D"] + rule.split(), capture_output=True)
+        subprocess.run(["iptables", "-D"] + ipt_rule.split(),
+                       capture_output=True)
+
+    stop = threading.Event()
 
     # Per-connection data tracking
     conn_data: dict[int, bytearray] = {}
-    stop = threading.Event()
 
     def on_data(cid: int, data: bytes) -> None:
         if cid not in conn_data:
