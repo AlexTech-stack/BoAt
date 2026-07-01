@@ -650,11 +650,15 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
               plugin->mutex.lock();
               conn.state = btcp::TCP_TIME_WAIT;
               if (conn.on_event)
-              conn.on_event(conn.user_ctx, conn.conn_id,
-                            btcp::TCP_EVENT_CLOSED);
+                conn.on_event(conn.user_ctx, conn.conn_id,
+                              btcp::TCP_EVENT_CLOSED);
             }
           }
-          if (flags & 0x04) {  // RST — ignored (kernel RST on raw socket port)
+          if (flags & 0x04) {  // RST
+            conn.state = btcp::TCP_CLOSED;
+            if (conn.on_event)
+              conn.on_event(conn.user_ctx, conn.conn_id,
+                            btcp::TCP_EVENT_RST);
           }
           break;
 
@@ -666,7 +670,11 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
               conn.on_event(conn.user_ctx, conn.conn_id,
                             btcp::TCP_EVENT_CONNECTED);
           }
-          if (flags & 0x04) {  // RST — ignored (kernel RST on raw socket port)
+          if (flags & 0x04) {  // RST
+            conn.state = btcp::TCP_CLOSED;
+            if (conn.on_event)
+              conn.on_event(conn.user_ctx, conn.conn_id,
+                            btcp::TCP_EVENT_RST);
           }
           break;
 
