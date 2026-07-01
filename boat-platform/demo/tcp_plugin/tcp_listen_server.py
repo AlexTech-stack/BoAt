@@ -9,9 +9,10 @@ Examples:
 """
 from __future__ import annotations
 
-import sys
 import os
 import signal
+import subprocess
+import sys
 import threading
 import time
 
@@ -44,6 +45,18 @@ def main() -> None:
     config = '{{"iface": "{}"}}'.format(iface)
     tcp = TcpHandle(so_path, config.encode())
 
+    # Block kernel RST for our port (raw socket bypasses kernel TCP stack)
+    ipt_rule = f"OUTPUT -p tcp --tcp-flags RST RST --sport {bind_port} -j DROP"
+    subprocess.run(["iptables", "-C"] + ipt_rule.split(),
+                   capture_output=True)
+    if subprocess.run(["iptables", "-C"] + ipt_rule.split(),
+                      capture_output=True).returncode != 0:
+        subprocess.run(["iptables", "-A"] + ipt_rule.split(), check=True)
+        print(f"[SRV] Added iptables rule: {ipt_rule}", flush=True)
+    def cleanup():
+        subprocess.run(["iptables", "-D"] + ipt_rule.split(),
+                       capture_output=True)
+
     stop = threading.Event()
 
     # Per-connection data tracking
@@ -69,10 +82,13 @@ def main() -> None:
     print("[SRV] Press Ctrl+C to stop", flush=True)
 
     # Run until SIGINT
-    signal.signal(signal.SIGINT, lambda s, f: stop.set())
+    def on_sigint(s, f):
+        stop.set()
+    signal.signal(signal.SIGINT, on_sigint)
     while not stop.is_set():
         time.sleep(0.5)
 
+    cleanup()
     print("[SRV] Stopped")
 
 
