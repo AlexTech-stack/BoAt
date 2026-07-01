@@ -14,6 +14,7 @@ Examples:
 from __future__ import annotations
 
 import os
+import random
 import select
 import signal
 import subprocess
@@ -33,17 +34,21 @@ def main() -> None:
     if server_mode:
         args.remove("-l")
 
-    if len(args) < 5:
-        print("Usage:")
-        print(f"  {sys.argv[0]} [-l] <iface> <src_ip> <dst_ip|bind_ip> <port>")
-        print()
-        print("  -l   server mode (listen)")
-        sys.exit(1)
-
-    iface = args[1]
-    src_ip = args[2]
-    target_ip = args[3]
-    target_port = int(args[4])
+    if server_mode:
+        if len(args) < 4:
+            print("Server mode usage: <iface> <bind_ip> <port>")
+            sys.exit(1)
+        iface = args[1]
+        bind_ip = args[2]
+        bind_port = int(args[3])
+    else:
+        if len(args) < 5:
+            print("Client mode usage: <iface> <src_ip> <dst_ip> <port>")
+            sys.exit(1)
+        iface = args[1]
+        src_ip = args[2]
+        target_ip = args[3]
+        target_port = int(args[4])
 
     repo_root = os.path.join(os.path.dirname(__file__), "..", "..")
     so_path = os.path.join(repo_root, "build", "debug", "src", "plugins", "tcp", "tcp.so")
@@ -58,7 +63,7 @@ def main() -> None:
 
     # ── Server mode ───────────────────────────────────────────────────────
     if server_mode:
-        rule = f"INPUT -p tcp --dport {target_port} --syn -j DROP"
+        rule = f"INPUT -p tcp --dport {bind_port} --syn -j DROP"
         if subprocess.run(["iptables", "-C"] + rule.split(), capture_output=True).returncode != 0:
             subprocess.run(["iptables", "-A"] + rule.split(), check=True)
 
@@ -66,8 +71,8 @@ def main() -> None:
             sys.stdout.buffer.write(data)
             sys.stdout.flush()
 
-        lid = tcp.listen(target_ip, target_port, on_data=on_data)
-        print(f"[NC] Listening on {target_ip}:{target_port} (lid={lid})", flush=True)
+        lid = tcp.listen(bind_ip, bind_port, on_data=on_data)
+        print(f"[NC] Listening on {bind_ip}:{bind_port} (lid={lid})", flush=True)
 
         signal.signal(signal.SIGINT, lambda s, f: stop.set())
         while not stop.is_set():
@@ -93,7 +98,7 @@ def main() -> None:
         sys.stdout.buffer.write(data)
         sys.stdout.flush()
 
-    cid = tcp.connect(src_ip, 0, target_ip, target_port, on_data=on_data, on_event=on_event)
+    cid = tcp.connect(src_ip, random.randint(40000, 60000), target_ip, target_port, on_data=on_data, on_event=on_event)
     if not connected.wait(timeout=10):
         print("[NC] Connection timed out", file=sys.stderr, flush=True)
         sys.exit(1)

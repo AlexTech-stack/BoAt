@@ -10,6 +10,7 @@ Examples:
 from __future__ import annotations
 
 import os
+import random
 import sys
 import threading
 import time
@@ -55,7 +56,8 @@ def main() -> None:
         elif event == 4:
             done.set()
 
-    cid = tcp.connect(src_ip, 0, dst_ip, dst_port, on_data=on_data, on_event=on_event)
+    src_port = random.randint(40000, 60000)
+    cid = tcp.connect(src_ip, src_port, dst_ip, dst_port, on_data=on_data, on_event=on_event)
     print(f"[HTTP] Connecting {src_ip}:{cid} → {dst_ip}:{dst_port} ...", flush=True)
 
     if not connected.wait(timeout=5):
