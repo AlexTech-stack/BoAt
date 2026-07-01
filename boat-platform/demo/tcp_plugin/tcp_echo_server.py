@@ -45,10 +45,7 @@ def main() -> None:
     rule = f"INPUT -p tcp --dport {bind_port} --syn -j DROP"
     if subprocess.run(["iptables", "-C"] + rule.split(), capture_output=True).returncode != 0:
         subprocess.run(["iptables", "-A"] + rule.split(), check=True)
-        print(f"[ECHO] iptables: blocking SYN for port {bind_port}", flush=True)
-
-    def cleanup() -> None:
-        subprocess.run(["iptables", "-D"] + rule.split(), capture_output=True)
+        print(f"[SRV] iptables: blocking SYN for port {bind_port}", flush=True)
 
     echo_count: dict[int, int] = {}
 

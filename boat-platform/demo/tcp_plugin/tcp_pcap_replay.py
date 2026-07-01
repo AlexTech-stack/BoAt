@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import sys
-import threading
 import time
 
 SDK_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "sdk", "python")
@@ -42,9 +41,6 @@ def main() -> None:
     iface = sys.argv[1]
     src_ip = sys.argv[2]
     pcap_path = sys.argv[3]
-    if pcap_path.startswith("--"):
-        print(f"Error: missing pcap file path (got '{pcap_path}')")
-        sys.exit(1)
     ip_map = parse_ip_map(
         sys.argv[sys.argv.index("--ip-map") + 1] if "--ip-map" in sys.argv else None
     )
@@ -70,7 +66,6 @@ def main() -> None:
 
     with EthernetPcapReader(pcap_path) as reader:
         for frame in reader:
-            total_frames += 1
             payload = frame.payload
             if frame.ethertype == 0x0800:
                 if len(payload) < 20:
@@ -137,20 +132,12 @@ def main() -> None:
               f"{stream['dst_ip']}:{stream['dst_port']}  "
               f"({len(stream['payloads'])} segments, syn={stream['syn']})", flush=True)
 
-        connected = threading.Event()
-        def on_event(cid: int, event: int) -> None:
-            if event == 0:
-                connected.set()
         conn_id = tcp.connect(
             src_ip, stream["src_port"],
             stream["dst_ip"], stream["dst_port"],
-            on_event=on_event,
         )
         if conn_id < 0:
             print(f"[PCAP]   Failed to connect", flush=True)
-            continue
-        if not connected.wait(timeout=5):
-            print(f"[PCAP]   Connection timed out", flush=True)
             continue
 
         for i, data in enumerate(stream["payloads"]):
