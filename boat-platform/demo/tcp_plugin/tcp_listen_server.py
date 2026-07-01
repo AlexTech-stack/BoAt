@@ -53,21 +53,20 @@ def main() -> None:
         if cid not in conn_data:
             conn_data[cid] = bytearray()
         conn_data[cid].extend(data)
-        # Print hex as data arrives
-        print(f"[SRV] conn={cid}  {len(data)} bytes: {data.hex()}")
+        print(f"[SRV] conn={cid}  {len(data)} bytes: {data.hex()}", flush=True)
 
     def on_event(cid: int, event: int) -> None:
         if event == 0:  # TCP_EVENT_CONNECTED
-            print(f"[SRV] conn={cid} ACCEPTED")
+            print(f"[SRV] conn={cid} ACCEPTED", flush=True)
         elif event == 1:  # TCP_EVENT_CLOSED
             total = len(conn_data.pop(cid, bytearray()))
-            print(f"[SRV] conn={cid} CLOSED (received {total} bytes)")
+            print(f"[SRV] conn={cid} CLOSED (received {total} bytes)", flush=True)
         elif event == 4:  # TCP_EVENT_ERROR
-            print(f"[SRV] conn={cid} ERROR")
+            print(f"[SRV] conn={cid} ERROR", flush=True)
 
     lid = tcp.listen(bind_ip, bind_port, on_data=on_data, on_event=on_event)
-    print(f"[SRV] Listening on {bind_ip}:{bind_port} (iface={iface}, lid={lid})")
-    print("[SRV] Press Ctrl+C to stop")
+    print(f"[SRV] Listening on {bind_ip}:{bind_port} (iface={iface}, lid={lid})", flush=True)
+    print("[SRV] Press Ctrl+C to stop", flush=True)
 
     # Run until SIGINT
     signal.signal(signal.SIGINT, lambda s, f: stop.set())
