@@ -5,7 +5,7 @@ import warnings
 
 from boat.v1 import replay_pb2 as boat_dot_v1_dot_replay__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class ReplayServiceStub(object):
+class ReplayServiceStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -76,7 +76,7 @@ class ReplayServiceStub(object):
                 _registered_method=True)
 
 
-class ReplayServiceServicer(object):
+class ReplayServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def StartReplay(self, request, context):
@@ -178,7 +178,7 @@ def add_ReplayServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class ReplayService(object):
+class ReplayService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod

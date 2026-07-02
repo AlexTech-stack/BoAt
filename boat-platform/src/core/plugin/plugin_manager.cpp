@@ -1,5 +1,6 @@
 #include "plugin/plugin_manager.h"
 
+#include <cstring>
 #include <stdexcept>
 
 #ifdef _WIN32
@@ -28,6 +29,10 @@ void PluginManager::SetBusPublisher(BusPublishFn fn) {
 
 void PluginManager::SetPduPublisher(PduPublishFn fn) {
   pdu_publisher_fn_ = std::move(fn);
+}
+
+void PluginManager::SetFramePublisher(FramePublishFn fn) {
+  frame_publisher_fn_ = std::move(fn);
 }
 
 PluginHandle PluginManager::Load(const std::string& so_path, const std::string& config_json) {
@@ -151,6 +156,18 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
         fn_shared.get());
     handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
+
+  // v8: Wire the unified frame publisher if the plugin supports it.
+  if (plugin->vtable->set_frame_publisher != nullptr && frame_publisher_fn_) {
+    auto fn_shared = std::make_shared<FramePublishFn>(frame_publisher_fn_);
+    plugin->vtable->set_frame_publisher(
+        plugin->ctx,
+        [](void* pctx, const BoatFrame* frame) {
+          if (frame != nullptr) (*static_cast<FramePublishFn*>(pctx))(*frame);
+        },
+        fn_shared.get());
+    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
+  }
   {
     std::lock_guard<std::mutex> lock(mutex_);
     plugins_[handle.name] = handle;
@@ -227,6 +244,51 @@ void PluginManager::DispatchEthFrame(const BoatEthFrame& frame, const std::strin
   for (auto* plugin : snapshot) {
     if (plugin->vtable->on_eth_frame != nullptr) {
       plugin->vtable->on_eth_frame(plugin->ctx, &frame, iface.c_str());
+    }
+  }
+}
+
+void PluginManager::DispatchFrame(const BoatFrame& frame) {
+  std::vector<BoatPlugin*> snapshot;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    snapshot.reserve(plugins_.size());
+    for (auto& [name, handle] : plugins_) {
+      (void)name;
+      snapshot.push_back(handle.plugin);
+    }
+  }
+  for (auto* plugin : snapshot) {
+    auto* const vt = plugin->vtable;
+    if (vt->on_frame != nullptr) {
+      // v8 path — plugin handles the unified frame directly
+      vt->on_frame(plugin->ctx, &frame);
+    } else {
+      // v7 fallback — dispatch to legacy CAN / Ethernet callbacks
+      if (vt->on_can_frame != nullptr &&
+          (frame.bus_type == BOAT_BUS_CAN || frame.bus_type == BOAT_BUS_CANFD)) {
+        BoatCanFrame cf{};
+        cf.can_id = frame.meta.can.can_id;
+        cf.dlc    = frame.meta.can.dlc;
+        cf.flags  = frame.meta.can.flags;
+        const auto copy_len = frame.payload_len > 64 ? 64U : frame.payload_len;
+        if (frame.payload && copy_len > 0) {
+          std::memcpy(cf.data, frame.payload, copy_len);
+        }
+        vt->on_can_frame(plugin->ctx, &cf,
+                         frame.iface ? frame.iface : "");
+      }
+      if (vt->on_eth_frame != nullptr &&
+          frame.bus_type == BOAT_BUS_ETHERNET) {
+        BoatEthFrame ef{};
+        std::memcpy(ef.dst_mac, frame.meta.eth.dst_mac, 6);
+        std::memcpy(ef.src_mac, frame.meta.eth.src_mac, 6);
+        ef.ethertype   = frame.meta.eth.ethertype;
+        ef.payload     = frame.payload;
+        ef.payload_len = frame.payload_len;
+        vt->on_eth_frame(plugin->ctx, &ef,
+                         frame.iface ? frame.iface : "");
+      }
     }
   }
 }

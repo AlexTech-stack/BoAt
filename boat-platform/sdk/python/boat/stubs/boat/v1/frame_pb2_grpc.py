@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from boat.v1 import bus_pb2 as boat_dot_v1_dot_bus__pb2
+from boat.v1 import frame_pb2 as boat_dot_v1_dot_frame__pb2
 
 GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
@@ -18,14 +18,14 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in boat/v1/bus_pb2_grpc.py depends on'
+        + ' but the generated code in boat/v1/frame_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class BusServiceStub:
+class FrameServiceStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -34,59 +34,59 @@ class BusServiceStub:
         Args:
             channel: A grpc.Channel.
         """
-        self.Publish = channel.unary_unary(
-                '/boat.v1.BusService/Publish',
-                request_serializer=boat_dot_v1_dot_bus__pb2.BusPublishRequest.SerializeToString,
-                response_deserializer=boat_dot_v1_dot_bus__pb2.BusPublishResponse.FromString,
+        self.SendFrame = channel.unary_unary(
+                '/boat.v1.FrameService/SendFrame',
+                request_serializer=boat_dot_v1_dot_frame__pb2.SendFrameRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_frame__pb2.SendFrameResponse.FromString,
                 _registered_method=True)
-        self.Subscribe = channel.unary_stream(
-                '/boat.v1.BusService/Subscribe',
-                request_serializer=boat_dot_v1_dot_bus__pb2.BusSubscribeRequest.SerializeToString,
-                response_deserializer=boat_dot_v1_dot_bus__pb2.BusSignal.FromString,
+        self.SubscribeFrames = channel.unary_stream(
+                '/boat.v1.FrameService/SubscribeFrames',
+                request_serializer=boat_dot_v1_dot_frame__pb2.SubscribeFramesRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_frame__pb2.Frame.FromString,
                 _registered_method=True)
 
 
-class BusServiceServicer:
+class FrameServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
-    def Publish(self, request, context):
+    def SendFrame(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def Subscribe(self, request, context):
+    def SubscribeFrames(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
 
-def add_BusServiceServicer_to_server(servicer, server):
+def add_FrameServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'Publish': grpc.unary_unary_rpc_method_handler(
-                    servicer.Publish,
-                    request_deserializer=boat_dot_v1_dot_bus__pb2.BusPublishRequest.FromString,
-                    response_serializer=boat_dot_v1_dot_bus__pb2.BusPublishResponse.SerializeToString,
+            'SendFrame': grpc.unary_unary_rpc_method_handler(
+                    servicer.SendFrame,
+                    request_deserializer=boat_dot_v1_dot_frame__pb2.SendFrameRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_frame__pb2.SendFrameResponse.SerializeToString,
             ),
-            'Subscribe': grpc.unary_stream_rpc_method_handler(
-                    servicer.Subscribe,
-                    request_deserializer=boat_dot_v1_dot_bus__pb2.BusSubscribeRequest.FromString,
-                    response_serializer=boat_dot_v1_dot_bus__pb2.BusSignal.SerializeToString,
+            'SubscribeFrames': grpc.unary_stream_rpc_method_handler(
+                    servicer.SubscribeFrames,
+                    request_deserializer=boat_dot_v1_dot_frame__pb2.SubscribeFramesRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_frame__pb2.Frame.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'boat.v1.BusService', rpc_method_handlers)
+            'boat.v1.FrameService', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('boat.v1.BusService', rpc_method_handlers)
+    server.add_registered_method_handlers('boat.v1.FrameService', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class BusService:
+class FrameService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def Publish(request,
+    def SendFrame(request,
             target,
             options=(),
             channel_credentials=None,
@@ -99,9 +99,9 @@ class BusService:
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/boat.v1.BusService/Publish',
-            boat_dot_v1_dot_bus__pb2.BusPublishRequest.SerializeToString,
-            boat_dot_v1_dot_bus__pb2.BusPublishResponse.FromString,
+            '/boat.v1.FrameService/SendFrame',
+            boat_dot_v1_dot_frame__pb2.SendFrameRequest.SerializeToString,
+            boat_dot_v1_dot_frame__pb2.SendFrameResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -113,7 +113,7 @@ class BusService:
             _registered_method=True)
 
     @staticmethod
-    def Subscribe(request,
+    def SubscribeFrames(request,
             target,
             options=(),
             channel_credentials=None,
@@ -126,9 +126,9 @@ class BusService:
         return grpc.experimental.unary_stream(
             request,
             target,
-            '/boat.v1.BusService/Subscribe',
-            boat_dot_v1_dot_bus__pb2.BusSubscribeRequest.SerializeToString,
-            boat_dot_v1_dot_bus__pb2.BusSignal.FromString,
+            '/boat.v1.FrameService/SubscribeFrames',
+            boat_dot_v1_dot_frame__pb2.SubscribeFramesRequest.SerializeToString,
+            boat_dot_v1_dot_frame__pb2.Frame.FromString,
             options,
             channel_credentials,
             insecure,

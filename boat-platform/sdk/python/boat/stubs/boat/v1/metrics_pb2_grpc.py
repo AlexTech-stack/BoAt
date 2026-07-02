@@ -5,7 +5,7 @@ import warnings
 
 from boat.v1 import metrics_pb2 as boat_dot_v1_dot_metrics__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class MetricsServiceStub(object):
+class MetricsServiceStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -46,7 +46,7 @@ class MetricsServiceStub(object):
                 _registered_method=True)
 
 
-class MetricsServiceServicer(object):
+class MetricsServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def GetMetrics(self, request, context):
@@ -82,7 +82,7 @@ def add_MetricsServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class MetricsService(object):
+class MetricsService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod

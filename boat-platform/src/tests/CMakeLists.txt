@@ -40,6 +40,10 @@ add_executable(boat_unit_fault_injector unit/test_fault_injector.cpp)
 target_link_libraries(boat_unit_fault_injector PRIVATE boat_core Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_fault_injector)
 
+add_executable(boat_unit_frame unit/test_frame.cpp)
+target_link_libraries(boat_unit_frame PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_frame)
+
 add_executable(boat_unit_sqlite_event_store unit/test_sqlite_event_store.cpp)
 target_link_libraries(boat_unit_sqlite_event_store PRIVATE boat_core boat_store Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_sqlite_event_store)

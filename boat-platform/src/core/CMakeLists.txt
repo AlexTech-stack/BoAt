@@ -1,4 +1,5 @@
 add_library(boat_core STATIC
+  frame.cpp
   scheduler/sim_clock.cpp
   scheduler/tick_scheduler.cpp
   signal/signal_router.cpp

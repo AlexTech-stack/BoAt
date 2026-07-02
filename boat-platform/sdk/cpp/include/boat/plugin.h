@@ -3,7 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define BOAT_PLUGIN_ABI_VERSION 7
+#include "boat/frame.h"
+
+#define BOAT_PLUGIN_ABI_VERSION 7 /* v8 fields appended; bump to 8 at cleanup */
 
 #ifdef __cplusplus
 extern "C" {
@@ -83,6 +85,22 @@ typedef struct BoatPluginVTable {
   /* Optional (v6) — set to NULL if the plugin does not publish PDU frames.
      The host wires this to PduRouter::SendPdu(). */
   void (*set_pdu_publisher)(void* ctx, BoatPduPublishFn fn, void* publisher_ctx);
+
+  /* ── v8 fields (appended; NULL ⇒ core falls back to v7 dispatch) ─── */
+
+  /* Host → Plugin: deliver a unified BoatFrame.
+     Replaces on_can_frame + on_eth_frame for v8-capable plugins. */
+  BoatFrameReceiveFn on_frame;
+
+  /* Plugin → Host: publish a unified BoatFrame onto the bus.
+     Replaces set_can_publisher + set_eth_publisher. */
+  void (*set_frame_publisher)(void* ctx, BoatFramePublishFn fn,
+                              void* publisher_ctx);
+
+  /* Optional: plugin declares which bus types it handles.
+     Returns a JSON array string, e.g. "[\"can\",\"eth\"]".
+     "" or NULL means "accept all". */
+  BoatDeclaredBusesFn declared_buses;
 } BoatPluginVTable;
 
 typedef struct BoatPlugin {

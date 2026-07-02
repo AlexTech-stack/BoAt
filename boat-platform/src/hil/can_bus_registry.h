@@ -12,6 +12,8 @@
 #include "hal/hal_driver.h"
 #include "hil_bridge.h"
 
+#include "core/frame.h"
+
 namespace boat::hil {
 
 /* Manages a set of named CAN bridges (one per interface).
@@ -23,6 +25,9 @@ class CanBusRegistry {
   using RxCallbackId = std::size_t;
   /* Callback receives the frame and the interface it arrived on. */
   using RxCallback = std::function<void(const CanFrame&, const std::string& iface)>;
+
+  /* ── Unified frame subscriber (v8) ────────────────────────────────── */
+  using FrameRxCallback = std::function<void(const boat::core::Frame&)>;
 
   /* Open driver, start bridge, register it under iface.
      Returns true on success; false if the driver fails to open (entry not added). */
@@ -41,6 +46,10 @@ class CanBusRegistry {
      Returns an ID that must be passed to Unsubscribe when done. */
   RxCallbackId Subscribe(const std::string& iface_filter, RxCallback cb);
   void Unsubscribe(RxCallbackId id);
+
+  /* Subscribe to all CAN frames delivered as unified core::Frame objects. */
+  RxCallbackId SubscribeFrame(FrameRxCallback cb);
+  void UnsubscribeFrame(RxCallbackId id);
 
   std::vector<std::string> Interfaces() const;
   bool Has(const std::string& iface) const;
@@ -71,6 +80,10 @@ class CanBusRegistry {
   std::mutex subs_mutex_;
   std::unordered_map<RxCallbackId, Subscription> subscriptions_;
   RxCallbackId next_id_{0};
+
+  std::mutex frame_subs_mutex_;
+  std::unordered_map<RxCallbackId, FrameRxCallback> frame_subscriptions_;
+  RxCallbackId next_frame_id_{0};
 };
 
 }  // namespace boat::hil

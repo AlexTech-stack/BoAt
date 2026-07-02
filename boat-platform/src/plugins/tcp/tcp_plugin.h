@@ -115,8 +115,8 @@ struct TcpListener {
 // ── Plugin state ──────────────────────────────────────────────────────────
 
 struct TcpPlugin {
-  BoatEthPublishFn  eth_publish_fn{nullptr};
-  void*             eth_publisher_ctx{nullptr};
+  BoatFramePublishFn frame_publish_fn{nullptr};
+  void*              frame_publisher_ctx{nullptr};
   int               raw_sock{-1};
   int               raw_ifindex{-1};
   std::string       raw_iface;
@@ -173,20 +173,7 @@ BoatPlugin* boat_plugin_create();
 void        boat_plugin_destroy(BoatPlugin* plugin);
 uint32_t    boat_plugin_abi_version();
 
-// Public C API
-int  tcp_connect(void* ctx, const char* src_ip, uint16_t src_port,
-                  const char* dst_ip, uint16_t dst_port,
-                  TcpOnData on_data, TcpOnEvent on_event,
-                  void* user_ctx);
-int  tcp_listen(void* ctx, const char* bind_ip, uint16_t bind_port,
-                TcpOnData on_data, TcpOnEvent on_event,
-                void* user_ctx);
-int  tcp_send(void* ctx, int conn_id, const uint8_t* data, uint32_t len);
-void tcp_set_callbacks(void* ctx, int id,
-                        TcpOnData on_data, TcpOnEvent on_event,
-                        void* user_ctx);
-int  tcp_close(void* ctx, int conn_id);
-int  tcp_abort(void* ctx, int conn_id);
+extern "C" uint32_t boat_plugin_abi_version();
 
 }  // extern "C"
 

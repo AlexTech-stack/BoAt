@@ -41,6 +41,9 @@ using BusPublishFn = std::function<void(const char* name, double value)>;
 /* Signature for delivering a PDU frame from a plugin to the PduRouter. */
 using PduPublishFn = std::function<void(const BoatPduFrame& frame)>;
 
+/* v8: Signature for delivering a unified BoatFrame from a plugin to the bus. */
+using FramePublishFn = std::function<void(const BoatFrame& frame)>;
+
 class PluginManager {
  public:
   /* Set before loading plugins.  Every plugin that exposes set_publisher will
@@ -70,6 +73,17 @@ class PluginManager {
   void DispatchCanFrame(const BoatCanFrame& frame, const std::string& iface);
   /* Deliver an incoming Ethernet frame to every plugin that implements on_eth_frame. */
   void DispatchEthFrame(const BoatEthFrame& frame, const std::string& iface);
+
+  /* ── v8 unified frame dispatch ─────────────────────────────────────── */
+
+  /* Set before loading plugins.  Every plugin that exposes set_frame_publisher
+     will receive a trampoline that delegates to this function. */
+  void SetFramePublisher(FramePublishFn fn);
+
+  /* Deliver a unified BoatFrame to every plugin.
+     Uses v8 on_frame if available, falls back to v7 on_can_frame / on_eth_frame. */
+  void DispatchFrame(const BoatFrame& frame);
+
   void ShutdownAll();
   [[nodiscard]] std::vector<std::string> List() const;
 
@@ -81,6 +95,7 @@ class PluginManager {
   EthPublishFn eth_publisher_fn_;
   BusPublishFn bus_publisher_fn_;
   PduPublishFn pdu_publisher_fn_;
+  FramePublishFn frame_publisher_fn_;
 };
 
 }  // namespace boat::core

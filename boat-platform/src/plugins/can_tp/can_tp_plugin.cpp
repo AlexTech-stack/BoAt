@@ -76,13 +76,13 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
 
       const uint8_t dlc = conn->config.can_dlc;
       const uint32_t max_payload = dlc;
+      const bool is_fd = (conn->config.can_dlc > 8);
 
       // Build and send one CF
-      BoatCanFrame cf{};
-      cf.can_id = conn->source_addr;
+      uint8_t cf_buf[64];
       uint8_t idx = 0;
       if (conn->config.extended_addressing) {
-        cf.data[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
+        cf_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
       }
       uint8_t seq;
       uint32_t chunk;
@@ -93,15 +93,23 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
             std::min(conn->tx_buffer.size() - conn->tx_offset,
                      static_cast<size_t>(max_payload - 1)));
       }
-      cf.data[idx++] = kPciCf | (seq & 0x0F);
+      cf_buf[idx++] = kPciCf | (seq & 0x0F);
       {
         std::lock_guard<std::mutex> lock(plugin->tx_mutex);
-        std::memcpy(cf.data + idx, conn->tx_buffer.data() + conn->tx_offset,
+        std::memcpy(cf_buf + idx, conn->tx_buffer.data() + conn->tx_offset,
                     chunk);
       }
-      cf.dlc = static_cast<uint8_t>(idx + chunk);
+      const uint8_t cf_dlc = static_cast<uint8_t>(idx + chunk);
 
-      plugin->can_publish_fn(plugin->can_publisher_ctx, &cf);
+      BoatFrame cf{};
+      cf.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
+      cf.payload      = cf_buf;
+      cf.payload_len  = cf_dlc;
+      cf.meta.can.can_id = conn->source_addr;
+      cf.meta.can.dlc    = cf_dlc;
+      cf.meta.can.flags  = is_fd ? 0x04 : 0;
+
+      plugin->frame_publish_fn(plugin->frame_publisher_ctx, &cf);
 
       {
         std::lock_guard<std::mutex> lock(plugin->tx_mutex);
@@ -175,11 +183,11 @@ void tp_shutdown(void* ctx) {
   plugin->connections.clear();
 }
 
-void tp_set_can_publisher(void* ctx, BoatCanPublishFn fn, void* publisher_ctx) {
+void tp_set_frame_publisher(void* ctx, BoatFramePublishFn fn, void* publisher_ctx) {
   auto* plugin = static_cast<CanTpPlugin*>(ctx);
   if (plugin == nullptr) return;
-  plugin->can_publish_fn    = fn;
-  plugin->can_publisher_ctx = publisher_ctx;
+  plugin->frame_publish_fn    = fn;
+  plugin->frame_publisher_ctx = publisher_ctx;
 }
 
 void tp_set_pdu_publisher(void* ctx, BoatPduPublishFn fn, void* publisher_ctx) {
@@ -191,27 +199,32 @@ void tp_set_pdu_publisher(void* ctx, BoatPduPublishFn fn, void* publisher_ctx) {
 
 // ── ISO 15765-2 receive path ─────────────────────────────────────────────────
 
-void tp_on_can_frame(void* ctx, const BoatCanFrame* frame, const char* iface) {
+void tp_on_frame(void* ctx, const BoatFrame* frame) {
   auto* plugin = static_cast<CanTpPlugin*>(ctx);
-  if (plugin == nullptr || frame == nullptr || frame->dlc < 1) return;
+  if (plugin == nullptr || frame == nullptr || frame->payload_len < 1) return;
 
-  if (iface != nullptr && iface != plugin->iface) return;
+  // Only handle CAN and CAN-FD frames
+  if (frame->bus_type != BOAT_BUS_CAN && frame->bus_type != BOAT_BUS_CANFD) return;
+
+  if (frame->iface != nullptr && frame->iface != plugin->iface) return;
 
   // ── Self-sent filter ─────────────────────────────────────────────────────
   // Internally-dispatched frames carry BOAT_CAN_FLAG_SELF_SENT, set by the
   // CanBusRegistry when a plugin sends a frame.  Drop them immediately —
   // they are our own sends looped back via DispatchRx, not peer frames.
-  if (frame->flags & BOAT_CAN_FLAG_SELF_SENT) return;
+  if (frame->meta.can.flags & BOAT_CAN_FLAG_SELF_SENT) return;
 
-  const uint8_t pci_byte = frame->data[0];
+  const uint8_t pci_byte = frame->payload[0];
   const uint8_t pci_type = pci_byte & kPciMask;
-  const uint8_t* data = frame->data;
-  const uint8_t  dlc  = frame->dlc;
+  const uint8_t* data = frame->payload;
+  const size_t  dlc  = frame->payload_len;
 
   // ── Find connection by target_addr ───────────────────────────────────────
   // Only frames from the peer (on target_addr) are processed.
-  NsduConnection* conn = find_by_target(plugin, frame->can_id);
+  NsduConnection* conn = find_by_target(plugin, frame->meta.can.can_id);
   if (conn == nullptr) return;  // unknown — silently drop
+
+  const bool is_fd = (conn->config.can_dlc > 8);
 
   if (pci_type == kPciFc) {
     // ── Flow Control from peer ─────────────────────────────────────────────
@@ -251,9 +264,9 @@ void tp_on_can_frame(void* ctx, const BoatCanFrame* frame, const char* iface) {
   if (pci_type == kPciSf) {
     // Single Frame
     const uint8_t sf_len = pci_byte & 0x0F;
-    const uint32_t offset = conn->config.extended_addressing ? 2 : 1;
-    const uint32_t payload_len = dlc > offset ? dlc - offset : 0;
-    const uint32_t actual_len = std::min(static_cast<uint32_t>(sf_len), payload_len);
+    const size_t offset = conn->config.extended_addressing ? 2 : 1;
+    const size_t payload_len = dlc > offset ? dlc - offset : 0;
+    const size_t actual_len = std::min(static_cast<size_t>(sf_len), payload_len);
 
     if (plugin->pdu_publish_fn == nullptr) return;
     BoatPduFrame pf{};
@@ -270,24 +283,32 @@ void tp_on_can_frame(void* ctx, const BoatCanFrame* frame, const char* iface) {
     const uint32_t ff_len = ((static_cast<uint32_t>(pci_byte & 0x0F)) << 8) |
                              static_cast<uint32_t>(data[1]);
 
-    const uint32_t offset = conn->config.extended_addressing ? 3 : 2;
-    const uint32_t first_chunk = dlc > offset ? dlc - offset : 0;
+    const size_t offset = conn->config.extended_addressing ? 3 : 2;
+    const size_t first_chunk = dlc > offset ? dlc - offset : 0;
 
     if (ff_len > conn->config.rx_buffer_size) {
       // ── Overflow: send FC with Overflow status ──────────────────────────
       conn->rx_state = NsduConnection::RX_IDLE;
-      if (plugin->can_publish_fn == nullptr) return;
-      BoatCanFrame fc{};
-      fc.can_id = conn->source_addr;
+      if (plugin->frame_publish_fn == nullptr) return;
+
+      uint8_t fc_buf[64];
       uint8_t idx = 0;
       if (conn->config.extended_addressing) {
-        fc.data[idx++] = 0x00;
+        fc_buf[idx++] = 0x00;
       }
-      fc.data[idx++] = kPciFc | kFcOverflow;
-      fc.data[idx++] = 0;  // BS (don't care for overflow)
-      fc.data[idx++] = 0;  // STmin (don't care for overflow)
-      fc.dlc = static_cast<uint8_t>(idx);
-      plugin->can_publish_fn(plugin->can_publisher_ctx, &fc);
+      fc_buf[idx++] = kPciFc | kFcOverflow;
+      fc_buf[idx++] = 0;  // BS (don't care for overflow)
+      fc_buf[idx++] = 0;  // STmin (don't care for overflow)
+
+      BoatFrame fc{};
+      fc.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
+      fc.payload      = fc_buf;
+      fc.payload_len  = idx;
+      fc.meta.can.can_id = conn->source_addr;
+      fc.meta.can.dlc    = static_cast<uint8_t>(idx);
+      fc.meta.can.flags  = is_fd ? 0x04 : 0;
+
+      plugin->frame_publish_fn(plugin->frame_publisher_ctx, &fc);
       return;
     }
 
@@ -301,18 +322,26 @@ void tp_on_can_frame(void* ctx, const BoatCanFrame* frame, const char* iface) {
     conn->rx_state = NsduConnection::RX_WAIT_CF;
 
     // Send Flow Control (Continue) with configured BS and STmin
-    if (plugin->can_publish_fn == nullptr) return;
-    BoatCanFrame fc{};
-    fc.can_id = conn->source_addr;
+    if (plugin->frame_publish_fn == nullptr) return;
+
+    uint8_t fc_buf[64];
     uint8_t idx = 0;
     if (conn->config.extended_addressing) {
-      fc.data[idx++] = 0x00;
+      fc_buf[idx++] = 0x00;
     }
-    fc.data[idx++] = kPciFc | kFcContinue;
-    fc.data[idx++] = conn->config.block_size;  // BS (0 = unlimited)
-    fc.data[idx++] = conn->config.st_min;      // STmin
-    fc.dlc = static_cast<uint8_t>(idx);
-    plugin->can_publish_fn(plugin->can_publisher_ctx, &fc);
+    fc_buf[idx++] = kPciFc | kFcContinue;
+    fc_buf[idx++] = conn->config.block_size;  // BS (0 = unlimited)
+    fc_buf[idx++] = conn->config.st_min;      // STmin
+
+    BoatFrame fc{};
+    fc.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
+    fc.payload      = fc_buf;
+    fc.payload_len  = idx;
+    fc.meta.can.can_id = conn->source_addr;
+    fc.meta.can.dlc    = static_cast<uint8_t>(idx);
+    fc.meta.can.flags  = is_fd ? 0x04 : 0;
+
+    plugin->frame_publish_fn(plugin->frame_publisher_ctx, &fc);
     return;
   }
 
@@ -324,8 +353,8 @@ void tp_on_can_frame(void* ctx, const BoatCanFrame* frame, const char* iface) {
       conn->rx_state = NsduConnection::RX_IDLE;
       return;  // sequence error
     }
-    const uint32_t offset = conn->config.extended_addressing ? 2 : 1;
-    const uint32_t chunk = dlc > offset ? dlc - offset : 0;
+    const size_t offset = conn->config.extended_addressing ? 2 : 1;
+    const size_t chunk = dlc > offset ? dlc - offset : 0;
     conn->rx_buffer.insert(conn->rx_buffer.end(), data + offset, data + offset + chunk);
 
     if (conn->rx_buffer.size() >= conn->rx_expected_len) {
@@ -344,22 +373,34 @@ void tp_on_can_frame(void* ctx, const BoatCanFrame* frame, const char* iface) {
       ++conn->rx_cf_count;
       if (conn->config.block_size > 0 &&
           (conn->rx_cf_count % conn->config.block_size) == 0) {
-        if (plugin->can_publish_fn == nullptr) return;
-        BoatCanFrame fc{};
-        fc.can_id = conn->source_addr;
+        if (plugin->frame_publish_fn == nullptr) return;
+
+        uint8_t fc_buf[64];
         uint8_t fcidx = 0;
         if (conn->config.extended_addressing) {
-          fc.data[fcidx++] = 0x00;
+          fc_buf[fcidx++] = 0x00;
         }
-        fc.data[fcidx++] = kPciFc | kFcContinue;
-        fc.data[fcidx++] = conn->config.block_size;
-        fc.data[fcidx++] = conn->config.st_min;
-        fc.dlc = fcidx;
-        plugin->can_publish_fn(plugin->can_publisher_ctx, &fc);
+        fc_buf[fcidx++] = kPciFc | kFcContinue;
+        fc_buf[fcidx++] = conn->config.block_size;
+        fc_buf[fcidx++] = conn->config.st_min;
+
+        BoatFrame fc{};
+        fc.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
+        fc.payload      = fc_buf;
+        fc.payload_len  = fcidx;
+        fc.meta.can.can_id = conn->source_addr;
+        fc.meta.can.dlc    = static_cast<uint8_t>(fcidx);
+        fc.meta.can.flags  = is_fd ? 0x04 : 0;
+
+        plugin->frame_publish_fn(plugin->frame_publisher_ctx, &fc);
       }
     }
     return;
   }
+}
+
+const char* can_tp_declared_buses(void* /*ctx*/) {
+  return "[\"can\"]";
 }
 
 }  // anonymous namespace
@@ -399,7 +440,7 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
                     const uint8_t* data, uint32_t len) {
   auto* plugin = static_cast<CanTpPlugin*>(tp_ctx);
   if (plugin == nullptr || data == nullptr) return -1;
-  if (plugin->can_publish_fn == nullptr) return -1;
+  if (plugin->frame_publish_fn == nullptr) return -1;
 
   if (len == 0) return -1;
 
@@ -426,37 +467,54 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
 
   const uint8_t dlc = conn->config.can_dlc;
   const uint32_t max_payload = dlc;
+  const bool is_fd = (conn->config.can_dlc > 8);
 
   if (len <= 7) {
     // Single Frame — send directly, no state machine needed
-    BoatCanFrame sf{};
-    sf.can_id = conn->source_addr;
+    uint8_t sf_buf[64];
     uint8_t idx = 0;
     if (conn->config.extended_addressing) {
-      sf.data[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
+      sf_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
     }
-    sf.data[idx++] = kPciSf | static_cast<uint8_t>(len);
-    std::memcpy(sf.data + idx, data, len);
-    sf.dlc = static_cast<uint8_t>(idx + len);
-    plugin->can_publish_fn(plugin->can_publisher_ctx, &sf);
+    sf_buf[idx++] = kPciSf | static_cast<uint8_t>(len);
+    std::memcpy(sf_buf + idx, data, len);
+    const uint8_t sf_dlc = static_cast<uint8_t>(idx + len);
+
+    BoatFrame sf{};
+    sf.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
+    sf.payload      = sf_buf;
+    sf.payload_len  = sf_dlc;
+    sf.meta.can.can_id = conn->source_addr;
+    sf.meta.can.dlc    = sf_dlc;
+    sf.meta.can.flags  = is_fd ? 0x04 : 0;
+
+    plugin->frame_publish_fn(plugin->frame_publisher_ctx, &sf);
     return 1;
   }
 
   // Multi-frame: send FF, then CFs via TX thread
 
   // First Frame
-  BoatCanFrame ff{};
-  ff.can_id = conn->source_addr;
+  uint8_t ff_buf[64];
   uint8_t idx = 0;
   if (conn->config.extended_addressing) {
-    ff.data[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
+    ff_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
   }
-  ff.data[idx++] = kPciFf | static_cast<uint8_t>((len >> 8) & 0x0F);
-  ff.data[idx++] = static_cast<uint8_t>(len & 0xFF);
+  ff_buf[idx++] = kPciFf | static_cast<uint8_t>((len >> 8) & 0x0F);
+  ff_buf[idx++] = static_cast<uint8_t>(len & 0xFF);
   const uint32_t ff_payload = std::min(len, max_payload - 2);
-  std::memcpy(ff.data + idx, data, ff_payload);
-  ff.dlc = static_cast<uint8_t>(idx + ff_payload);
-  plugin->can_publish_fn(plugin->can_publisher_ctx, &ff);
+  std::memcpy(ff_buf + idx, data, ff_payload);
+  const uint8_t ff_dlc = static_cast<uint8_t>(idx + ff_payload);
+
+  BoatFrame ff{};
+  ff.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
+  ff.payload      = ff_buf;
+  ff.payload_len  = ff_dlc;
+  ff.meta.can.can_id = conn->source_addr;
+  ff.meta.can.dlc    = ff_dlc;
+  ff.meta.can.flags  = is_fd ? 0x04 : 0;
+
+  plugin->frame_publish_fn(plugin->frame_publisher_ctx, &ff);
 
   // Initialize TX state machine
   {
@@ -483,12 +541,15 @@ extern "C" BoatPlugin* boat_plugin_create() {
     vt.on_tick             = &tp_on_tick;
     vt.shutdown            = &tp_shutdown;
     vt.set_publisher       = nullptr;
-    vt.set_can_publisher   = &tp_set_can_publisher;
-    vt.on_can_frame        = &tp_on_can_frame;
+    vt.set_can_publisher   = nullptr;
+    vt.on_can_frame        = nullptr;
     vt.set_eth_publisher   = nullptr;
     vt.on_eth_frame        = nullptr;
     vt.set_bus_publisher   = nullptr;
     vt.set_pdu_publisher   = &tp_set_pdu_publisher;
+    vt.on_frame            = &tp_on_frame;
+    vt.set_frame_publisher = &tp_set_frame_publisher;
+    vt.declared_buses      = &can_tp_declared_buses;
     return vt;
   }();
 

@@ -21,6 +21,7 @@
 #include "debug_service_impl.h"
 #include "ethernet_bus_registry.h"
 #include "ethernet_service_impl.h"
+#include "frame_service_impl.h"
 #include "rpc_audit_interceptor.h"
 #include "rpc_audit_log.h"
 #include "fault_service_impl.h"
@@ -225,6 +226,56 @@ int main() {
     node_manager.SetBusPublisher([&signal_bus](const char* name, double value) {
       signal_bus.Publish(name, value);
     });
+
+    // v8: Wire the unified frame publisher for node plugins.
+    node_manager.SetFramePublisher([&can_registry, &eth_registry](const BoatFrame& f) {
+      switch (f.bus_type) {
+        case BOAT_BUS_CAN:
+        case BOAT_BUS_CANFD: {
+          boat::hil::CanFrame cf{};
+          cf.can_id = f.meta.can.can_id;
+          cf.dlc    = f.meta.can.dlc;
+          cf.flags  = f.meta.can.flags;
+          const auto copy_len = f.payload_len > 64 ? 64U : f.payload_len;
+          if (f.payload && copy_len > 0) std::memcpy(cf.data, f.payload, copy_len);
+          if (f.iface && f.iface[0])
+            can_registry.SendFrame(f.iface, cf);
+          else
+            can_registry.SendFrameAll(cf);
+          break;
+        }
+        case BOAT_BUS_ETHERNET: {
+          boat::hil::EthernetFrame ef{};
+          std::memcpy(ef.dst_mac, f.meta.eth.dst_mac, 6);
+          std::memcpy(ef.src_mac, f.meta.eth.src_mac, 6);
+          ef.ethertype = f.meta.eth.ethertype;
+          ef.vlan_id   = f.meta.eth.vlan_id;
+          if (f.payload && f.payload_len > 0)
+            ef.payload.assign(f.payload, f.payload + f.payload_len);
+          if (f.iface && f.iface[0])
+            eth_registry.SendFrame(f.iface, ef);
+          else
+            eth_registry.SendFrameAll(ef);
+          break;
+        }
+        default:
+          // TCP / PDU frames — routed through node_manager.DispatchFrame in Phase 3/4
+          break;
+      }
+    });
+
+    // v8: Forward CAN/Eth frames to node plugins via unified dispatch.
+    can_registry.SubscribeFrame([&node_manager](const boat::core::Frame& f) {
+      BoatFrame abi{};
+      f.ToAbi(&abi);
+      node_manager.DispatchFrame(abi);
+    });
+    eth_registry.SubscribeFrame([&node_manager](const boat::core::Frame& f) {
+      BoatFrame abi{};
+      f.ToAbi(&abi);
+      node_manager.DispatchFrame(abi);
+    });
+
     // Load node plugins from BOAT_NODE_PLUGINS env var.
     // Entries are separated by comma.  Each entry may optionally specify a
     // JSON config separated by '?':
@@ -410,6 +461,7 @@ int main() {
   boat::gateway::CanServiceImpl can_impl(ctx);
   boat::gateway::PduServiceImpl pdu_impl(ctx);
   boat::gateway::DebugServiceImpl debug_impl(audit_log);
+  boat::gateway::FrameServiceImpl frame_impl(ctx);
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort("0.0.0.0:50051", grpc::InsecureServerCredentials());
@@ -433,6 +485,7 @@ int main() {
   builder.RegisterService(&can_impl);
   builder.RegisterService(&pdu_impl);
   builder.RegisterService(&debug_impl);
+  builder.RegisterService(&frame_impl);
 
   g_server = builder.BuildAndStart();
   g_scheduler = &sim.scheduler();
