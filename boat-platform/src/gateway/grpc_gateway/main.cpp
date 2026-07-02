@@ -30,7 +30,7 @@
 #include "hil/can/physical_can_driver.h"
 #include "hil/ethernet/virtual_ethernet_driver.h"
 #include "hil/ethernet/raw_socket_ethernet_driver.h"
-#include "pdu/pdu_router.h"
+#include "pdu/pdu_types.h"
 #include "pdu/tick_timer.h"
 #include "pdu_service_impl.h"
 #include "metrics_service_impl.h"
@@ -304,13 +304,9 @@ int main() {
     }
   }
 
-  // PduRouter must be created before the node tick thread so it can be
-  // captured for OnTick() calls and PDU publisher wiring.
-  boat::hil::PduRouter pdu_router(can_registry, eth_registry);
-
   // Register replay forwarder: bridges replayed events to CAN/Ethernet/PDU bus registries
   replay_controller.SetEventForwarder(
-      [&can_registry, &eth_registry, &pdu_router, &replay_controller](
+      [&can_registry, &eth_registry, &node_manager, &replay_controller](
           std::uint32_t event_type, std::uint64_t tick,
           const std::vector<std::uint8_t>& payload) {
         if (event_type >= boat::replay::kReplayEthEventBase &&
@@ -372,7 +368,12 @@ int main() {
         } else if (event_type >= boat::replay::kReplayPduEventBase &&
                    event_type < boat::replay::kReplayPduEventBase + 0x10000) {
           const std::uint32_t pdu_id = event_type & 0xFFFF;
-          pdu_router.SendPdu(pdu_id, payload);
+          BoatFrame bf{};
+          bf.bus_type = BOAT_BUS_PDU;
+          bf.meta.pdu.pdu_id = pdu_id;
+          bf.payload = const_cast<uint8_t*>(payload.data());
+          bf.payload_len = payload.size();
+          node_manager.DispatchFrame(bf);
         } else if (event_type <= 0x1FFFFFFF) {
           boat::hil::CanFrame can_frame{};
           can_frame.can_id = event_type;
@@ -386,11 +387,15 @@ int main() {
       });
 
   // Wire the PDU publisher so plugins (e.g. CanTp) can deliver reassembled
-  // I-PDUs into the PduRouter.
-  node_manager.SetPduPublisher([&pdu_router](const BoatPduFrame& f) {
+  // I-PDUs into the frame bus (handled by PduRouter plugin if loaded).
+  node_manager.SetPduPublisher([&node_manager](const BoatPduFrame& f) {
     if (f.payload == nullptr) return;
-    std::vector<uint8_t> payload(f.payload, f.payload + f.payload_len);
-    pdu_router.SendPdu(f.pdu_id, payload);
+    BoatFrame bf{};
+    bf.bus_type = BOAT_BUS_PDU;
+    bf.meta.pdu.pdu_id = f.pdu_id;
+    bf.payload = const_cast<uint8_t*>(f.payload);
+    bf.payload_len = f.payload_len;
+    node_manager.DispatchFrame(bf);
   });
 
   // Start a background tick thread for node plugins and PDU transmission engine.
@@ -422,15 +427,12 @@ int main() {
 
     auto timer = boat::hil::TickTimer::Create(tick_ns);
     g_node_tick_running.store(true, std::memory_order_release);
-    std::thread([&node_manager, &pdu_router, timer = std::move(timer)]() {
+    std::thread([&node_manager, timer = std::move(timer)]() {
       std::uint64_t tick = 0;
       while (g_node_tick_running.load(std::memory_order_acquire)) {
         if (!timer->WaitForNextTick()) break;
         node_manager.TickAll(tick++);
-        // Drive the PDU transmission engine with monotonic ms for schedule timing
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            timer->Elapsed()).count();
-        pdu_router.OnTick(static_cast<std::uint64_t>(elapsed));
+        // PduRouter plugin handles its own OnTick via PluginManager::TickAll
       }
     }).detach();
   }
@@ -444,9 +446,48 @@ int main() {
       .replay_controller = replay_controller,
       .can_bus_registry = can_registry,
       .ethernet_bus_registry = eth_registry,
-      .pdu_router = pdu_router,
+      .plugin_manager = node_manager,
       .audit_log = audit_log,
   };
+
+  // Auto-load the PduRouter plugin and register its service.
+  // PDUs are routed when the plugin is loaded; if it fails to load,
+  // PDU RPCs will return NOT_FOUND gracefully.
+  {
+    const char* pdu_path =
+        "./build/debug/src/plugins/pdu_router/pdu_router.so";
+    // Also check source tree paths for convenience.
+    if (std::ifstream(pdu_path).good() ||
+        ((pdu_path = "./src/plugins/pdu_router/pdu_router.so"),
+         std::ifstream(pdu_path).good()) ||
+        ((pdu_path = "pdu_router.so"), std::ifstream(pdu_path).good())) {
+      try {
+        auto handle = node_manager.Load(
+            pdu_path,
+            "{}");
+        // Register the PduRouter as a service provider so PduServiceImpl
+        // can delegate to it.
+        if (handle.plugin && handle.plugin->vtable &&
+            handle.plugin->ctx) {
+          // PduRouterPlugin wraps PduRouter which implements IPduRouter.
+          // Access PduRouterPlugin::router through the context.
+          // The context is a PduRouterPlugin*, and PduRouterPlugin::router
+          // is the first field, so &((PduRouterPlugin*)ctx)->router == ctx.
+          node_manager.RegisterService(
+              "pdu_router",
+              static_cast<boat::core::IPduRouter*>(handle.plugin->ctx));
+          std::fprintf(stderr, "[Gateway] PduRouter plugin loaded, "
+                       "PDU routing available\n");
+        }
+      } catch (const std::exception& ex) {
+        std::fprintf(stderr, "[Gateway] PduRouter plugin not available: "
+                     "%s (PDU RPCs will return NOT_FOUND)\n", ex.what());
+      }
+    } else {
+      std::fprintf(stderr, "[Gateway] PduRouter plugin .so not found; "
+                   "PDU RPCs will return NOT_FOUND\n");
+    }
+  }
 
   boat::gateway::BusServiceImpl      bus_impl(audit_log, signal_bus);
   boat::gateway::EthernetServiceImpl ethernet_impl(ctx);

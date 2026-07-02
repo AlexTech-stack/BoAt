@@ -319,4 +319,15 @@ std::vector<std::string> PluginManager::List() const {
   return names;
 }
 
+void PluginManager::RegisterService(const std::string& name, void* service) {
+  std::lock_guard<std::mutex> lock(services_mutex_);
+  services_[name] = service;
+}
+
+void* PluginManager::FindService(const std::string& name) const {
+  std::lock_guard<std::mutex> lock(services_mutex_);
+  auto it = services_.find(name);
+  return (it != services_.end()) ? it->second : nullptr;
+}
+
 }  // namespace boat::core
