@@ -1,5 +1,8 @@
 """Base class for Python CAN nodes.
 
+.. deprecated:: v8
+   Use ``FrameNode`` with ``bus_types=["CAN"]`` instead.
+
 A CAN node connects to the BoAt gateway, subscribes to CAN frames, and can
 send frames in response.  Subclass CanNode, override on_frame(), then call
 run() or run_background().
@@ -18,6 +21,7 @@ Example::
 from __future__ import annotations
 
 import threading
+import warnings
 from typing import Any
 
 import grpc
@@ -42,6 +46,9 @@ class CanNode:
         iface_filter: str = "",
         sim_id: str = "",
     ) -> None:
+        warnings.warn(
+            "CanNode is deprecated. Use FrameNode(bus_types=['CAN']) instead.",
+            DeprecationWarning, stacklevel=2)
         self._client = BoAtClient(address)
         self._iface_filter = iface_filter
         self._sim_id = sim_id

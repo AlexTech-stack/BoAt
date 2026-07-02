@@ -33,7 +33,9 @@ PluginServiceImpl::PluginServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
 grpc::Status PluginServiceImpl::RegisterPlugin(grpc::ServerContext*, const boat::v1::RegisterPluginRequest* request,
                                                boat::v1::PluginResponse* response) {
   try {
-    const auto handle = ctx_.sim.plugin_manager().Load(request->path(), "{}");
+    const std::string config = request->config_json().empty()
+                                   ? "{}" : request->config_json();
+    const auto handle = ctx_.sim.plugin_manager().Load(request->path(), config);
     auto* plugin = response->mutable_plugin();
     plugin->set_plugin_id(handle.name);
     plugin->set_name(handle.name);

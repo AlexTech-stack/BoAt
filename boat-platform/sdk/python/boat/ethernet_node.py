@@ -30,6 +30,7 @@ Sending a frame::
 from __future__ import annotations
 
 import threading
+import warnings
 from typing import Any
 
 import grpc
@@ -53,6 +54,9 @@ class EthernetNode:
         iface_filter: str = "",
         ethertype_filter: int = 0,
     ) -> None:
+        warnings.warn(
+            "EthernetNode is deprecated. Use FrameNode(bus_types=['ETHERNET']) instead.",
+            DeprecationWarning, stacklevel=2)
         self._client = BoAtClient(address)
         self._iface_filter = iface_filter
         self._ethertype_filter = ethertype_filter
