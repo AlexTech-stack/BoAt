@@ -4,7 +4,7 @@
 
 - Root path: `proto/boat/v1/`
 - Package namespace: `boat.v1`
-- 15 proto files defining 13 gRPC services:
+- 16 proto files defining 14 gRPC services:
 
 | File | Service | RPCs |
 |---|---|---|
@@ -16,6 +16,7 @@
 | `metrics.proto` | MetricsService | 2 |
 | `trace.proto` | TraceService | 4 |
 | `fault.proto` | FaultService | 2 |
+| `frame.proto` | FrameService | 2 |
 | `can.proto` | CanService | 3 |
 | `ethernet.proto` | EthernetService | 3 |
 | `bus.proto` | BusService | 2 |
