@@ -67,21 +67,19 @@ const char* pdu_router_declared_buses(void* /*ctx*/) {
   return "[\"can\",\"eth\"]";
 }
 
-BoatPluginVTable gVTable = {
-    &pdu_router_initialize,
-    &pdu_router_on_tick,
-    &pdu_router_shutdown,
-    nullptr,                      // set_publisher
-    nullptr,                      // set_can_publisher
-    nullptr,                      // on_can_frame
-    nullptr,                      // set_eth_publisher
-    nullptr,                      // on_eth_frame
-    nullptr,                      // set_bus_publisher
-    nullptr,                      // set_pdu_publisher
-    &pdu_router_on_frame,         // v8 on_frame
-    &pdu_router_set_frame_publisher, // v8 set_frame_publisher
-    &pdu_router_declared_buses,   // v8 declared_buses
-};
+BoatPluginVTable gVTable = [] {
+  BoatPluginVTable vt{};
+  vt.initialize          = &pdu_router_initialize;
+  vt.on_tick             = &pdu_router_on_tick;
+  vt.shutdown            = &pdu_router_shutdown;
+  vt.set_publisher       = nullptr;
+  vt.set_bus_publisher   = nullptr;
+  vt.set_pdu_publisher   = nullptr;
+  vt.on_frame            = &pdu_router_on_frame;
+  vt.set_frame_publisher = &pdu_router_set_frame_publisher;
+  vt.declared_buses      = &pdu_router_declared_buses;
+  return vt;
+}();
 
 }  // namespace
 

@@ -56,8 +56,6 @@ extern "C" BoatPlugin* boat_plugin_create() {
     vt.on_tick              = &responder_on_tick;
     vt.shutdown             = &responder_shutdown;
     vt.set_publisher        = nullptr;
-    vt.set_can_publisher    = nullptr;  // replaced by v8
-    vt.on_can_frame         = nullptr;  // replaced by v8
     vt.set_frame_publisher  = &responder_set_frame_publisher;
     vt.on_frame             = &responder_on_frame;
     vt.declared_buses       = &responder_declared_buses;

@@ -115,59 +115,72 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
           ev.value     = value;
           sim_.signal_router().Publish(ev);
         });
-    sim_.plugin_manager().SetCanPublisher(
-        [this](const BoatCanFrame& boat_frame, const std::string& plugin_iface) {
-          boat::hil::CanFrame frame{};
-          frame.can_id = boat_frame.can_id;
-          frame.dlc    = boat_frame.dlc;
-          frame.flags  = boat_frame.flags;
-          std::memset(frame.data, 0, sizeof(frame.data));
-          std::memcpy(frame.data, boat_frame.data, boat_frame.dlc);
-          if (!plugin_iface.empty()) {
-            can_registry_.SendFrame(plugin_iface, frame);
-          } else {
-            can_registry_.SendFrameAll(frame);
+    // v8: Wire unified frame publisher for simulation-scoped plugins.
+    sim_.plugin_manager().SetFramePublisher(
+        [this](const BoatFrame& f) {
+          switch (f.bus_type) {
+            case BOAT_BUS_CAN:
+            case BOAT_BUS_CANFD: {
+              boat::hil::CanFrame cf{};
+              cf.can_id = f.meta.can.can_id;
+              cf.dlc    = f.meta.can.dlc;
+              cf.flags  = f.meta.can.flags;
+              const auto copy_len = f.payload_len > 64 ? 64U : f.payload_len;
+              if (f.payload && copy_len > 0) std::memcpy(cf.data, f.payload, copy_len);
+              if (f.iface && f.iface[0])
+                can_registry_.SendFrame(f.iface, cf);
+              else
+                can_registry_.SendFrameAll(cf);
+              break;
+            }
+            case BOAT_BUS_ETHERNET: {
+              boat::hil::EthernetFrame ef{};
+              std::memcpy(ef.dst_mac, f.meta.eth.dst_mac, 6);
+              std::memcpy(ef.src_mac, f.meta.eth.src_mac, 6);
+              ef.ethertype = f.meta.eth.ethertype;
+              ef.vlan_id   = f.meta.eth.vlan_id;
+              if (f.payload && f.payload_len > 0)
+                ef.payload.assign(f.payload, f.payload + f.payload_len);
+              if (f.iface && f.iface[0])
+                eth_registry_.SendFrame(f.iface, ef);
+              else
+                eth_registry_.SendFrameAll(ef);
+              break;
+            }
+            default:
+              break;
           }
         });
-    sim_.plugin_manager().SetEthPublisher(
-        [this](const BoatEthFrame& boat_frame) {
-          boat::hil::EthernetFrame frame{};
-          std::memcpy(frame.dst_mac, boat_frame.dst_mac, 6);
-          std::memcpy(frame.src_mac, boat_frame.src_mac, 6);
-          frame.ethertype = boat_frame.ethertype;
-          frame.payload.assign(boat_frame.payload, boat_frame.payload + boat_frame.payload_len);
-          eth_registry_.SendFrameAll(frame);
-        });
-    // Subscribe to all incoming CAN frames and dispatch them to plugins.
+    // v8: Subscribe to all frames and dispatch via unified DispatchFrame.
     if (can_rx_sub_id_.has_value()) {
       can_registry_.Unsubscribe(*can_rx_sub_id_);
     }
     can_rx_sub_id_ = can_registry_.Subscribe(
         "",  // all interfaces
         [this](const boat::hil::CanFrame& f, const std::string& iface) {
-          BoatCanFrame boat_frame{};
-          boat_frame.can_id = f.can_id;
-          boat_frame.dlc    = f.dlc;
-          boat_frame.flags  = f.flags;
-          std::memset(boat_frame.data, 0, sizeof(boat_frame.data));
-          std::memcpy(boat_frame.data, f.data, f.dlc);
-          sim_.plugin_manager().DispatchCanFrame(boat_frame, iface);
+          (void)iface;
+          std::vector<uint8_t> payload(f.data, f.data + f.dlc);
+          const bool is_fd = (f.flags & boat::hil::kCanFdFlagFdf) != 0;
+          auto core_frame = boat::core::Frame::FromCan("", f.can_id, f.dlc, f.flags,
+                                                        std::move(payload), is_fd);
+          BoatFrame abi{};
+          core_frame.ToAbi(&abi);
+          sim_.plugin_manager().DispatchFrame(abi);
         });
-    // Subscribe to all incoming Ethernet frames and dispatch them to plugins.
     if (eth_rx_sub_id_.has_value()) {
       eth_registry_.Unsubscribe(*eth_rx_sub_id_);
     }
     eth_rx_sub_id_ = eth_registry_.Subscribe(
-        "",  // all interfaces
-        0,   // all ethertypes
+        "", 0,
         [this](const boat::hil::EthernetFrame& f, const std::string& iface) {
-          BoatEthFrame boat_frame{};
-          std::memcpy(boat_frame.dst_mac, f.dst_mac, 6);
-          std::memcpy(boat_frame.src_mac, f.src_mac, 6);
-          boat_frame.ethertype   = f.ethertype;
-          boat_frame.payload     = const_cast<uint8_t*>(f.payload.data());
-          boat_frame.payload_len = f.payload.size();
-          sim_.plugin_manager().DispatchEthFrame(boat_frame, iface);
+          (void)iface;
+          auto core_frame = boat::core::Frame::FromEthernet(
+              "", const_cast<uint8_t*>(f.dst_mac), const_cast<uint8_t*>(f.src_mac),
+              f.ethertype, f.vlan_id,
+              nullptr, 0, nullptr, f.payload);
+          BoatFrame abi{};
+          core_frame.ToAbi(&abi);
+          sim_.plugin_manager().DispatchFrame(abi);
         });
     for (const auto& plugin_ref : scenario.plugins) {
       try {

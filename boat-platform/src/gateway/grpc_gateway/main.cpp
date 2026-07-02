@@ -181,48 +181,6 @@ int main() {
   // startup and run independently of any simulation lifecycle.
   boat::core::PluginManager node_manager;
   {
-    node_manager.SetCanPublisher([&can_registry](const BoatCanFrame& f,
-                                                 const std::string& plugin_iface) {
-      boat::hil::CanFrame frame{};
-      frame.can_id = f.can_id;
-      frame.dlc    = f.dlc;
-      std::memcpy(frame.data, f.data, f.dlc);
-      if (!plugin_iface.empty()) {
-        can_registry.SendFrame(plugin_iface, frame);
-      } else {
-        can_registry.SendFrameAll(frame);
-      }
-    });
-    // Dispatch incoming CAN frames to all loaded nodes.
-    can_registry.Subscribe("", [&node_manager](const boat::hil::CanFrame& f,
-                                               const std::string& iface) {
-      BoatCanFrame bf{};
-      bf.can_id = f.can_id;
-      bf.dlc    = f.dlc;
-      bf.flags  = f.flags;
-      std::memcpy(bf.data, f.data, f.dlc);
-      node_manager.DispatchCanFrame(bf, iface);
-    });
-    // Dispatch incoming Ethernet frames to all loaded nodes.
-    eth_registry.Subscribe("", 0, [&node_manager](const boat::hil::EthernetFrame& f,
-                                                  const std::string& iface) {
-      BoatEthFrame bf{};
-      std::memcpy(bf.dst_mac, f.dst_mac, 6);
-      std::memcpy(bf.src_mac, f.src_mac, 6);
-      bf.ethertype   = f.ethertype;
-      bf.payload     = const_cast<uint8_t*>(f.payload.data());
-      bf.payload_len = f.payload.size();
-      node_manager.DispatchEthFrame(bf, iface);
-    });
-    // Wire the always-on bus-signal publisher for node plugins.
-    node_manager.SetEthPublisher([&eth_registry](const BoatEthFrame& f) {
-      boat::hil::EthernetFrame ef{};
-      std::memcpy(ef.dst_mac, f.dst_mac, 6);
-      std::memcpy(ef.src_mac, f.src_mac, 6);
-      ef.ethertype   = f.ethertype;
-      ef.payload.assign(f.payload, f.payload + f.payload_len);
-      eth_registry.SendFrameAll(ef);
-    });
     node_manager.SetBusPublisher([&signal_bus](const char* name, double value) {
       signal_bus.Publish(name, value);
     });

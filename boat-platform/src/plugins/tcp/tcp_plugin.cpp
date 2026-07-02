@@ -1001,10 +1001,6 @@ extern "C" BoatPlugin* boat_plugin_create() {
   vtable->on_tick           = tp_on_tick;
   vtable->shutdown          = tp_shutdown;
   vtable->set_publisher     = nullptr;
-  vtable->set_can_publisher = nullptr;
-  vtable->on_can_frame      = nullptr;
-  vtable->set_eth_publisher = nullptr;             // v7 → replaced by v8
-  vtable->on_eth_frame      = nullptr;             // v7 → replaced by v8
   vtable->set_bus_publisher = nullptr;
   vtable->set_pdu_publisher = nullptr;
   vtable->on_frame          = tp_on_frame;         // v8
