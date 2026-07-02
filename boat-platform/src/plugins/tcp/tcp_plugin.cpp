@@ -81,19 +81,20 @@ static bool ResolveMac(const std::string& iface, const uint8_t* ip_bytes, int af
 }
 
 static void SendRaw(btcp::TcpPlugin* plugin, const std::vector<uint8_t>& seg) {
-  if (plugin->eth_publish_fn) {
-    BoatEthFrame ef{};
-    std::memset(ef.dst_mac, 0xFF, 6);
-    std::memset(ef.src_mac, 0x02, 6);
-    ef.src_mac[5] = 0x01;
-    ef.ethertype = (seg[0] >> 4 == 6) ? 0x86DD : 0x0800;
-    ef.payload = const_cast<uint8_t*>(seg.data());
-    ef.payload_len = seg.size();
-    plugin->eth_publish_fn(plugin->eth_publisher_ctx, &ef);
+  if (plugin->frame_publish_fn) {
+    BoatFrame bf{};
+    bf.bus_type = BOAT_BUS_ETHERNET;
+    std::memset(bf.meta.eth.dst_mac, 0xFF, 6);
+    std::memset(bf.meta.eth.src_mac, 0x02, 6);
+    bf.meta.eth.src_mac[5] = 0x01;
+    bf.meta.eth.ethertype = (seg[0] >> 4 == 6) ? 0x86DD : 0x0800;
+    bf.payload = const_cast<uint8_t*>(seg.data());
+    bf.payload_len = seg.size();
+    plugin->frame_publish_fn(plugin->frame_publisher_ctx, &bf);
     return;
   }
   std::fprintf(stderr, "[TCP-SEND] method=%s seg_size=%zu iface=%s\n",
-               plugin->eth_publish_fn ? "gateway" : "raw",
+               plugin->frame_publish_fn ? "gateway" : "raw",
                seg.size(), plugin->raw_iface.c_str());
   // Fallback: send via raw AF_PACKET socket
   if (plugin->raw_iface.empty()) {
@@ -430,8 +431,8 @@ static int tp_initialize(void* ctx, const char* config_json) {
 
   // Start standalone raw socket RX when not wired to the gateway
   std::fprintf(stderr, "[TCP] tp_initialize: eth_publish_fn=%p raw_iface=%s\n",
-               (void*)plugin->eth_publish_fn, plugin->raw_iface.c_str());
-  if (!plugin->eth_publish_fn && !plugin->raw_iface.empty() &&
+               (void*)plugin->frame_publish_fn, plugin->raw_iface.c_str());
+  if (!plugin->frame_publish_fn && !plugin->raw_iface.empty() &&
       FallbackRawSocket(plugin, plugin->raw_iface.c_str()) >= 0) {
     std::fprintf(stderr, "[TCP] Raw socket opened fd=%d ifindex=%d\n",
                  plugin->raw_sock, plugin->raw_ifindex);
@@ -440,7 +441,7 @@ static int tp_initialize(void* ctx, const char* config_json) {
     std::fprintf(stderr, "[TCP] Raw RX thread started\n");
   } else {
     std::fprintf(stderr, "[TCP] No raw RX: publish=%p iface=%s\n",
-                 (void*)plugin->eth_publish_fn, plugin->raw_iface.c_str());
+                 (void*)plugin->frame_publish_fn, plugin->raw_iface.c_str());
   }
 
   return 0;
@@ -477,12 +478,12 @@ static void tp_shutdown(void* ctx) {
   plugin->listeners.clear();
 }
 
-static void tp_set_eth_publisher(void* ctx, BoatEthPublishFn fn,
-                                  void* publisher_ctx) {
+static void tp_set_frame_publisher(void* ctx, BoatFramePublishFn fn,
+                                    void* publisher_ctx) {
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
-  if (!plugin) return;
-  plugin->eth_publish_fn = fn;
-  plugin->eth_publisher_ctx = publisher_ctx;
+  if (plugin == nullptr) return;
+  plugin->frame_publish_fn   = fn;
+  plugin->frame_publisher_ctx = publisher_ctx;
 }
 
 // Internal: process an incoming frame (raw payload + ethertype)
@@ -978,14 +979,17 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
   tcp_rx_done:;
 }
 
-// Vtable-compatible wrapper for gateway dispatch
-static void tp_on_eth_frame(void* ctx, const BoatEthFrame* frame,
-                             const char* iface) {
-  (void)iface;
+// Vtable-compatible wrapper for gateway dispatch (v8)
+static void tp_on_frame(void* ctx, const BoatFrame* frame) {
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
   if (!plugin || !frame) return;
+  if (frame->bus_type != BOAT_BUS_ETHERNET) return;
   std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
-  HandleIncoming(plugin, frame->payload, frame->payload_len, frame->ethertype);
+  HandleIncoming(plugin, frame->payload, frame->payload_len, frame->meta.eth.ethertype);
+}
+
+const char* tcp_declared_buses(void* /*ctx*/) {
+  return "[\"eth\"]";
 }
 
 // ── ABI exports ────────────────────────────────────────────────────────────
@@ -999,10 +1003,13 @@ extern "C" BoatPlugin* boat_plugin_create() {
   vtable->set_publisher     = nullptr;
   vtable->set_can_publisher = nullptr;
   vtable->on_can_frame      = nullptr;
-  vtable->set_eth_publisher = tp_set_eth_publisher;
-  vtable->on_eth_frame      = tp_on_eth_frame;
+  vtable->set_eth_publisher = nullptr;             // v7 → replaced by v8
+  vtable->on_eth_frame      = nullptr;             // v7 → replaced by v8
   vtable->set_bus_publisher = nullptr;
   vtable->set_pdu_publisher = nullptr;
+  vtable->on_frame          = tp_on_frame;         // v8
+  vtable->set_frame_publisher = tp_set_frame_publisher;  // v8
+  vtable->declared_buses    = tcp_declared_buses;  // v8
 
   auto* bp = new BoatPlugin();
   bp->vtable = vtable;
@@ -1024,209 +1031,3 @@ extern "C" uint32_t boat_plugin_abi_version() {
   return BOAT_PLUGIN_ABI_VERSION;
 }
 
-// ── C API ──────────────────────────────────────────────────────────────────
-
-extern "C" int tcp_connect(void* ctx, const char* src_ip, uint16_t src_port,
-                            const char* dst_ip, uint16_t dst_port,
-                            btcp::TcpOnData on_data,
-                            btcp::TcpOnEvent on_event,
-                            void* user_ctx) {
-  auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
-  if (!plugin) return -1;
-
-  int af = ResolveAf(src_ip);
-  if (af == AF_UNSPEC || ResolveAf(dst_ip) == AF_UNSPEC) return -1;
-
-  btcp::TcpConnection conn;
-  conn.conn_id = NextId(plugin);
-  conn.af = af;
-  ParseIp(src_ip, af, conn.src_ip);
-  ParseIp(dst_ip, af, conn.dst_ip);
-  conn.src_port = (src_port == 0) ? static_cast<uint16_t>(40000 + (Rand32() % 20000)) : src_port;
-  conn.dst_port = dst_port;
-  conn.my_seq = Rand32();
-  conn.my_ack = 0;
-  conn.state = btcp::TCP_SYN_SENT;
-  conn.mss = plugin->default_mss;
-
-  std::fprintf(stderr, "[TCP-CONNECT] sending SYN on %s plugin=%p\n",
-               plugin->raw_iface.c_str(), (void*)plugin);
-  // Build SYN
-  auto mss_opt = btcp::BuildMssOption(static_cast<uint16_t>(conn.mss));
-  std::vector<uint8_t> seg;
-  if (af == AF_INET) {
-    seg = btcp::BuildIp4TcpSegment(
-        conn.src_ip.data(), conn.dst_ip.data(),
-        conn.src_port, conn.dst_port,
-        conn.my_seq, conn.my_ack,
-        nullptr, 0,
-        btcp::TCP_FLAG_SYN, plugin->rx_window,
-        mss_opt.data(), static_cast<uint32_t>(mss_opt.size()));
-  } else {
-    seg = btcp::BuildIp6TcpSegment(
-        conn.src_ip.data(), conn.dst_ip.data(),
-        conn.src_port, conn.dst_port,
-        conn.my_seq, conn.my_ack,
-        nullptr, 0,
-        btcp::TCP_FLAG_SYN, plugin->rx_window,
-        mss_opt.data(), static_cast<uint32_t>(mss_opt.size()));
-  }
-  conn.on_data  = on_data;
-  conn.on_event = on_event;
-  conn.user_ctx = user_ctx;
-  conn.my_seq += 1;
-
-  int nid = conn.conn_id;
-  {
-    std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
-    conn.unacked_segment = seg;
-    conn.retransmit_at = std::chrono::steady_clock::now() +
-                         std::chrono::milliseconds(plugin->retry_ms);
-    conn.retry_count = 0;
-    plugin->connections[nid] = std::move(conn);
-  }
-
-  SendRaw(plugin, seg);
-  return nid;
-}
-
-extern "C" int tcp_listen(void* ctx, const char* bind_ip, uint16_t bind_port,
-                           btcp::TcpOnData on_data,
-                           btcp::TcpOnEvent on_event,
-                           void* user_ctx) {
-  auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
-  if (!plugin) return -1;
-
-  int af = ResolveAf(bind_ip);
-  if (af == AF_UNSPEC) return -1;
-
-  btcp::TcpListener listener;
-  listener.listener_id = NextId(plugin);
-  listener.af = af;
-  ParseIp(bind_ip, af, listener.bind_ip);
-  listener.bind_port = bind_port;
-  listener.on_data = on_data;
-  listener.on_event = on_event;
-  listener.user_ctx = user_ctx;
-  std::fprintf(stderr, "[TCP] tcp_listen: on_data=%p on_event=%p\n",
-               (void*)on_data, (void*)on_event);
-
-  int lid = listener.listener_id;
-  {
-    std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
-    plugin->listeners[lid] = std::move(listener);
-  }
-  return lid;
-}
-
-extern "C" int tcp_send(void* ctx, int conn_id,
-                         const uint8_t* data, uint32_t len) {
-  auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
-  if (!plugin) return -1;
-
-  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
-  auto it = plugin->connections.find(conn_id);
-  if (it == plugin->connections.end()) return -1;
-  // Send even if connection is closing/RST'd (fire-and-forget)
-  it->second.send_buffer.insert(it->second.send_buffer.end(), data, data + len);
-  plugin->tx_cv.notify_one();
-  return static_cast<int>(len);
-}
-
-extern "C" void tcp_set_callbacks(void* ctx, int id,
-                                   btcp::TcpOnData on_data,
-                                   btcp::TcpOnEvent on_event,
-                                   void* user_ctx) {
-  auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
-  if (!plugin) return;
-
-  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
-  auto cit = plugin->connections.find(id);
-  if (cit != plugin->connections.end()) {
-    cit->second.on_data = on_data;
-    cit->second.on_event = on_event;
-    cit->second.user_ctx = user_ctx;
-    return;
-  }
-  auto lit = plugin->listeners.find(id);
-  if (lit != plugin->listeners.end()) {
-    lit->second.on_event = on_event;
-    lit->second.user_ctx = user_ctx;
-  }
-}
-
-extern "C" int tcp_close(void* ctx, int conn_id) {
-  auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
-  if (!plugin) return -1;
-
-  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
-  auto it = plugin->connections.find(conn_id);
-  if (it == plugin->connections.end()) return -1;
-
-  auto& conn = it->second;
-  // Send FIN
-  std::vector<uint8_t> seg;
-  if (conn.af == AF_INET) {
-    seg = btcp::BuildIp4TcpSegment(
-        conn.src_ip.data(), conn.dst_ip.data(),
-        conn.src_port, conn.dst_port,
-        conn.my_seq, conn.my_ack,
-        nullptr, 0, btcp::TCP_FLAG_FIN | btcp::TCP_FLAG_ACK, plugin->rx_window);
-  } else {
-    seg = btcp::BuildIp6TcpSegment(
-        conn.src_ip.data(), conn.dst_ip.data(),
-        conn.src_port, conn.dst_port,
-        conn.my_seq, conn.my_ack,
-        nullptr, 0, btcp::TCP_FLAG_FIN | btcp::TCP_FLAG_ACK, plugin->rx_window);
-  }
-  conn.my_seq += 1;
-  if (conn.state == btcp::TCP_ESTABLISHED || conn.state == btcp::TCP_SYN_RCVD) {
-    conn.state = btcp::TCP_FIN_WAIT_1;
-  } else if (conn.state == btcp::TCP_CLOSE_WAIT) {
-    conn.state = btcp::TCP_LAST_ACK;
-  } else {
-    return -1;
-  }
-  conn.unacked_segment = seg;
-  conn.retransmit_at = std::chrono::steady_clock::now() +
-                       std::chrono::milliseconds(plugin->retry_ms);
-  conn.retry_count = 0;
-
-  plugin->mutex.unlock();
-  SendRaw(plugin, seg);
-  plugin->mutex.lock();
-
-  return 0;
-}
-
-extern "C" int tcp_abort(void* ctx, int conn_id) {
-  auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
-  if (!plugin) return -1;
-
-  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
-  auto it = plugin->connections.find(conn_id);
-  if (it == plugin->connections.end()) return -1;
-
-  auto& conn = it->second;
-  std::vector<uint8_t> seg;
-  if (conn.af == AF_INET) {
-    seg = btcp::BuildIp4TcpSegment(
-        conn.src_ip.data(), conn.dst_ip.data(),
-        conn.src_port, conn.dst_port,
-        conn.my_seq, conn.my_ack,
-        nullptr, 0, btcp::TCP_FLAG_RST, plugin->rx_window);
-  } else {
-    seg = btcp::BuildIp6TcpSegment(
-        conn.src_ip.data(), conn.dst_ip.data(),
-        conn.src_port, conn.dst_port,
-        conn.my_seq, conn.my_ack,
-        nullptr, 0, btcp::TCP_FLAG_RST, plugin->rx_window);
-  }
-  conn.state = btcp::TCP_CLOSED;
-
-  plugin->mutex.unlock();
-  SendRaw(plugin, seg);
-  plugin->mutex.lock();
-
-  return 0;
-}

@@ -97,6 +97,18 @@ void EthernetBusRegistry::Unsubscribe(RxCallbackId id) {
   subscriptions_.erase(id);
 }
 
+EthernetBusRegistry::RxCallbackId EthernetBusRegistry::SubscribeFrame(FrameRxCallback cb) {
+  std::lock_guard<std::mutex> lock(frame_subs_mutex_);
+  const RxCallbackId id = next_frame_id_++;
+  frame_subscriptions_[id] = std::move(cb);
+  return id;
+}
+
+void EthernetBusRegistry::UnsubscribeFrame(RxCallbackId id) {
+  std::lock_guard<std::mutex> lock(frame_subs_mutex_);
+  frame_subscriptions_.erase(id);
+}
+
 std::vector<std::string> EthernetBusRegistry::Interfaces() const {
   std::lock_guard<std::mutex> lock(ifaces_mutex_);
   std::vector<std::string> names;
@@ -144,6 +156,35 @@ void EthernetBusRegistry::DispatchRx(const EthernetFrame& frame,
   }
   for (const auto& cb : to_call) {
     cb(frame, iface);
+  }
+
+  // Deliver to unified-frame subscribers.
+  std::vector<FrameRxCallback> frame_cbs;
+  {
+    std::lock_guard<std::mutex> lock(frame_subs_mutex_);
+    frame_cbs.reserve(frame_subscriptions_.size());
+    for (const auto& [id, cb] : frame_subscriptions_) {
+      (void)id;
+      frame_cbs.push_back(cb);
+    }
+  }
+  if (!frame_cbs.empty()) {
+    uint8_t ip_version = 0;
+    if (!frame.src_ip.empty()) {
+      ip_version = (frame.src_ip.size() == 4) ? 4U : 6U;
+    }
+    auto core_frame = boat::core::Frame::FromEthernet(
+        iface,
+        const_cast<uint8_t*>(frame.dst_mac),
+        const_cast<uint8_t*>(frame.src_mac),
+        frame.ethertype, frame.vlan_id,
+        frame.src_ip.empty() ? nullptr : frame.src_ip.data(), ip_version,
+        frame.dst_ip.empty() ? nullptr : frame.dst_ip.data(),
+        frame.payload);
+    core_frame.set_timestamp_ns(frame.timestamp_ns);
+    for (const auto& cb : frame_cbs) {
+      cb(core_frame);
+    }
   }
 }
 

@@ -6,8 +6,8 @@
    On each matching frame, publishes 0x234 with payload 0x1122334455667788
    on all registered CAN buses. */
 struct CanResponderPlugin {
-  BoatCanPublishFn can_publish_fn{nullptr};
-  void* can_publisher_ctx{nullptr};
+  BoatFramePublishFn frame_publish_fn{nullptr};
+  void* frame_publisher_ctx{nullptr};
 };
 
 extern "C" BoatPlugin* boat_plugin_create();

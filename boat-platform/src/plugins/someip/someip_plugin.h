@@ -21,8 +21,8 @@ struct SomeipService {
 
 /* SOME/IP plugin state. */
 struct SomeipPlugin {
-  BoatEthPublishFn  eth_publish_fn{nullptr};
-  void*             eth_publisher_ctx{nullptr};
+  BoatFramePublishFn frame_publish_fn{nullptr};
+  void*              frame_publisher_ctx{nullptr};
 
   // Locally-offered services
   std::unordered_map<uint16_t, SomeipService> local_services;

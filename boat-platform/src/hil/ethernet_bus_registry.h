@@ -12,6 +12,8 @@
 
 #include "ethernet/ethernet_frame.h"
 
+#include "core/frame.h"
+
 namespace boat::hil {
 
 /* Manages a set of named Ethernet interfaces (one driver per interface).
@@ -50,6 +52,10 @@ class EthernetBusRegistry {
                          RxCallback         cb);
   void Unsubscribe(RxCallbackId id);
 
+  using FrameRxCallback = std::function<void(const boat::core::Frame&)>;
+  RxCallbackId SubscribeFrame(FrameRxCallback cb);
+  void UnsubscribeFrame(RxCallbackId id);
+
   std::vector<std::string> Interfaces() const;
   bool Has(const std::string& iface) const;
 
@@ -77,6 +83,10 @@ class EthernetBusRegistry {
   std::mutex                                    subs_mutex_;
   std::unordered_map<RxCallbackId, Subscription> subscriptions_;
   RxCallbackId next_id_{0};
+
+  std::mutex                                    frame_subs_mutex_;
+  std::unordered_map<RxCallbackId, FrameRxCallback> frame_subscriptions_;
+  RxCallbackId next_frame_id_{0};
 };
 
 }  // namespace boat::hil
