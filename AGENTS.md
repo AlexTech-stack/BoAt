@@ -3,31 +3,34 @@
 ## Repository structure
 
 - **`boat-platform/`** — Main platform (C++20, CMake+Ninja, gRPC)
-  - `src/core/` — Simulation engine (scheduler, signal router, determinism, plugin mgr)
+  - `src/core/` — Simulation engine (scheduler, signal router, determinism, plugin mgr, `core::Frame`)
   - `src/gateway/grpc_gateway/` — gRPC server → `boat_gateway` binary, listens on `0.0.0.0:50051`
-  - `src/hil/` — HIL bridge (CAN/Ethernet drivers, PDU router, bus registries)
+  - `src/hil/` — HIL bridge (CAN/Ethernet drivers, bus registries, tick timer)
     - `can/` — `SocketCanDriver` (raw AF_CAN/SOCK_RAW), `PhysicalCanDriver` (sysfs-probing physical HW)
     - `virtual/` — `VirtualCanDriver` (SocketCan wrapper for vcan*)
+    - `ethernet/` — Ethernet drivers (virtual multicast, raw AF_PACKET)
     - `pdu/com/` — COM signal library (bit pack/unpack, E2E CRC, Intel/Motorola)
-    - `pdu/transmission_engine.h/.cpp` — Cyclic/OnChange/Mixed transmission scheduler
     - `pdu/tick_timer.h/.cpp` — Dual-backend tick timer (sleep_for / timerfd)
   - `src/store/` — SQLite event/trace/config stores
   - `src/ipc/` — Inter-process comm (gRPC, iceoryx2 SHM, UDS)
-  - `src/plugins/` — Built-in plugins
+  - `src/plugins/` — Built-in plugins (all v8 ABI, `on_frame`/`set_frame_publisher`)
+    - `pdu_router/` — PduRouter plugin (routes PDUs over CAN/Ethernet, transmission engine, deadline monitoring, groups)
     - `vehicle_dynamics/` — Simulated vehicle (speed/RPM, CAN + ETH output)
     - `sensor_model/` — Sensor simulation (LIDAR/CAMERA/RADAR)
     - `network_sim/` — Network bus load simulation
     - `can_responder/` — CAN frame responder (0x123 → 0x234)
     - `can_tp/` — ISO 15765-2 CAN Transport Protocol (segmentation/reassembly)
     - `someip/` — SOME/IP middleware (service discovery stub, request/response)
+    - `tcp/` — TCP transport plugin (gateway-resident, config-driven)
   - `src/replay/` — Replay engine
-  - `proto/boat/v1/` — 15 protobuf definitions defining all gRPC services
-  - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, CAN/ETH nodes, trace tools)
+  - `proto/boat/v1/` — 16 protobuf definitions defining all gRPC services
+  - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
   - `sdk/cpp/include/boat/` — C++ SDK headers
-    - `plugin.h` — Plugin ABI v7 (BOAT_CAN_FLAG_SELF_SENT, per-interface CAN publish)
+    - `plugin.h` — Plugin ABI v8 (unified `on_frame`, `set_frame_publisher`, `declared_buses`)
+    - `frame.h` — Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU bus types)
     - `can_tp.h` — Standalone CanTp C API (can_tp_send, can_tp_configure)
     - `someip.h` — SOME/IP protocol constants
-  - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|can|eth|pdu|can-tp|...`)
+  - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|frame|can|eth|pdu|can-tp|plugin|...`)
   - `config/` — PDU database JSON files
   - `demo/` — Demo node scripts (not web UI)
 - **`ui/`** — 7 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, recorder:8083, control_panel, debug, system_dashboard)
@@ -61,6 +64,20 @@ BOAT_CAN_INTERFACES=can0,can1,vcan0 ./build/debug/src/gateway/grpc_gateway/boat_
 
 # Enable CAN FD (optional, requires FD-capable hardware)
 sudo ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on
+
+# Run gateway with plugins (PduRouter for PDU routing + CanTp for transport)
+BOAT_CAN_INTERFACES=vcan0 \
+  BOAT_NODE_PLUGINS=./build/debug/src/plugins/pdu_router/pdu_router.so,\
+./build/debug/src/plugins/can_tp/can_tp.so?{\"iface\":\"vcan0\"} \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway
+
+# Run gateway with all plugins
+BOAT_CAN_INTERFACES=vcan0 \
+  BOAT_NODE_PLUGINS=./build/debug/src/plugins/pdu_router/pdu_router.so,\
+./build/debug/src/plugins/can_tp/can_tp.so?{\"iface\":\"vcan0\"},\
+./build/debug/src/plugins/vehicle_dynamics/vehicle_dynamics.so,\
+./build/debug/src/plugins/tcp/tcp.so?{\"mode\":\"server\",\"listen_port\":8080,\"iface\":\"eth0\"} \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
 ## CAN Hardware Integration
@@ -81,6 +98,11 @@ boat --json can list-buses
 # Detect available CAN hardware on the host (no gateway required)
 boat can detect
 boat --json can detect
+
+# v8: Unified frame send/subscribe (preferred over boat can/boat eth)
+boat frame send --bus-type can --can-id 0x123 --iface vcan0 --data AABBCCDD
+boat frame subscribe --bus-types can
+boat frame send --bus-type ethernet --ethertype 0x0800 --dst-ip 10.0.0.1 --data AABB
 ```
 
 The `boat can detect` command scans `/sys/class/net/` for CAN interfaces and identifies:
@@ -116,12 +138,16 @@ bash boat-platform/sdk/python/boat/stubs/generate_stubs.sh
 # CLI
 boat --help
 boat sim init|start|pause|step|stop
-boat can send|listen
+boat frame send|subscribe
+boat can send|listen           # deprecated — use 'boat frame' instead
 boat scenario create|validate|get|list
 
 # SDK (programmatic)
 from boat.client import BoAtClient
+from boat.frame_node import FrameNode
 client = BoAtClient("localhost:50051")
+node = FrameNode("localhost:50051")
+node.send_can("vcan0", 0x123, b"hello")
 ```
 
 ## UI services
@@ -135,15 +161,16 @@ Each service is a standalone `python3 ui/<name>.py` FastAPI/uvicorn app with emb
 
 ## Quirks & gotchas
 
-- **Plugin ABI v8** (in development on `ABI_v8_frame_unification_and_major-refactor`):
-  - Unified `BoatFrame` type replaces `BoatCanFrame` + `BoatEthFrame`
-  - New vtable fields: `on_frame`, `set_frame_publisher`, `declared_buses`
-  - v7 fallback still works — old plugins continue to function
-  - `PduRouter` is now a plugin (`pdu_router.so`), loaded by the gateway
+- **Plugin ABI v8** (current, on `ABI_v8_frame_unification_and_major-refactor`):
+  - Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU)
+  - Plugin vtable (9 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`
+  - `BOAT_PLUGIN_ABI_VERSION = 8` — v7 plugins rejected with clear error
+  - `PduRouter` is a plugin (`pdu_router.so`), loaded by the gateway
   - `FrameService` gRPC provides unified send/subscribe for all bus types
   - `boat frame send` / `boat frame subscribe` CLI replaces `boat can` / `boat eth`
-  - TCP plugin C API removed; use FrameService for TCP traffic
-  - Full plan: `todo/ABI_v8_Plan.md`
+  - TCP plugin uses v8 ABI (config-driven, gateway-resident); old C API removed
+  - `BoatCanFrame`, `BoatEthFrame` and their associated typedefs are removed
+  - Full plan: `todo/ABI_v8_Plan.md`; cleanup: `todo/ABI_v8_Plan_Cleanup.md`
 
 - Gateway binary path: `build/{preset}/src/gateway/grpc_gateway/boat_gateway`
 - `boat` CLI entry point (boat_cli/main.py): Typer app with subcommands. Uses `BoAtClient(address)` from `boat-py`.
@@ -261,7 +288,7 @@ uint32_t crc32 = E2eCrc32(data, len);
 
 ### CanTp — CAN Transport Protocol (Plugin)
 
-ISO 15765-2 segmentation/reassembly for PDUs larger than 8 bytes. Operates as a `BOAT_NODE_PLUGINS` node plugin with its own C API.
+ISO 15765-2 segmentation/reassembly for PDUs larger than 8 bytes. Operates as a `BOAT_NODE_PLUGINS` node plugin using the v8 ABI (`on_frame`/`set_frame_publisher`) with its own C API for external configuration.
 
 Each connection represents a session between `source_addr` (this node) and
 `target_addr` (peer node).  Both IDs must be configured so that the plugin
