@@ -135,21 +135,19 @@ void vehicle_shutdown(void* ctx) {
   plugin->rpm = 0.0;
 }
 
-BoatPluginVTable kVehicleDynamicsVTable = {
-    &vehicle_initialize,
-    &vehicle_on_tick,
-    &vehicle_shutdown,
-    &vehicle_set_publisher,
-    /* set_can_publisher */ nullptr,      // v7 → replaced
-    /* on_can_frame      */ nullptr,
-    /* set_eth_publisher */ nullptr,      // v7 → replaced
-    /* on_eth_frame      */ nullptr,
-    &vehicle_set_bus_publisher,
-    /* set_pdu_publisher */ nullptr,
-    /* on_frame           */ nullptr,     // v8 — no receive
-    &vehicle_set_frame_publisher,         // v8
-    /* declared_buses     */ nullptr,     // no receive, no filter needed
-};
+BoatPluginVTable kVehicleDynamicsVTable = [] {
+  BoatPluginVTable vt{};
+  vt.initialize          = &vehicle_initialize;
+  vt.on_tick             = &vehicle_on_tick;
+  vt.shutdown            = &vehicle_shutdown;
+  vt.set_publisher       = &vehicle_set_publisher;
+  vt.set_bus_publisher   = &vehicle_set_bus_publisher;
+  vt.set_pdu_publisher   = nullptr;
+  vt.on_frame            = nullptr;
+  vt.set_frame_publisher = &vehicle_set_frame_publisher;
+  vt.declared_buses      = nullptr;
+  return vt;
+}();
 
 }  // namespace
 

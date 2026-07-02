@@ -180,10 +180,6 @@ extern "C" BoatPlugin* boat_plugin_create() {
     vt.on_tick             = &someip_on_tick;
     vt.shutdown            = &someip_shutdown;
     vt.set_publisher       = nullptr;
-    vt.set_can_publisher   = nullptr;
-    vt.on_can_frame        = nullptr;
-    vt.set_eth_publisher   = nullptr;       // v7 → replaced
-    vt.on_eth_frame        = nullptr;       // v7 → replaced
     vt.set_bus_publisher   = nullptr;
     vt.set_pdu_publisher   = nullptr;
     vt.on_frame            = &someip_on_frame;

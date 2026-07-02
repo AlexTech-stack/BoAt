@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -13,14 +14,6 @@ namespace boat::core {
 
 void PluginManager::SetPublisher(SignalPublishFn fn) {
   publisher_fn_ = std::move(fn);
-}
-
-void PluginManager::SetCanPublisher(CanPublishFn fn) {
-  can_publisher_fn_ = std::move(fn);
-}
-
-void PluginManager::SetEthPublisher(EthPublishFn fn) {
-  eth_publisher_fn_ = std::move(fn);
 }
 
 void PluginManager::SetBusPublisher(BusPublishFn fn) {
@@ -57,7 +50,9 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
   const std::uint32_t abi_version = abi_fn();
   if (abi_version != BOAT_PLUGIN_ABI_VERSION) {
     dlclose(dl_handle);
-    throw std::runtime_error("Plugin ABI version mismatch");
+    throw std::runtime_error(
+        "Plugin ABI version mismatch (" + std::to_string(abi_version) +
+        " != " + std::to_string(BOAT_PLUGIN_ABI_VERSION) + ")");
   }
 
   BoatPlugin* plugin = create_fn();
@@ -78,7 +73,7 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
 
   PluginHandle handle{dl_handle, plugin, so_path, abi_version, destroy_fn, {}};
 
-  // Wire the signal publisher if the plugin supports it.
+  // Wire signal publisher.
   if (plugin->vtable->set_publisher != nullptr && publisher_fn_) {
     auto fn_shared = std::make_shared<SignalPublishFn>(publisher_fn_);
     plugin->vtable->set_publisher(
@@ -90,50 +85,7 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
     handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
 
-  // Wire the CAN publisher if the plugin supports it.
-  if (plugin->vtable->set_can_publisher != nullptr && can_publisher_fn_) {
-    // Parse the plugin's configured interface from its config JSON.
-    std::string plugin_iface;
-    auto key_pos = config_json.find("\"iface\"");
-    if (key_pos != std::string::npos) {
-      auto val_pos = config_json.find('"', key_pos + 7);
-      if (val_pos != std::string::npos) {
-        auto end_pos = config_json.find('"', val_pos + 1);
-        if (end_pos != std::string::npos) {
-          plugin_iface = config_json.substr(val_pos + 1, end_pos - val_pos - 1);
-        }
-      }
-    }
-    struct CanPublishBinding {
-      CanPublishFn fn;
-      std::string  iface;
-    };
-    auto binding = std::make_shared<CanPublishBinding>(
-        CanPublishBinding{can_publisher_fn_, std::move(plugin_iface)});
-    plugin->vtable->set_can_publisher(
-        plugin->ctx,
-        [](void* pctx, const BoatCanFrame* frame) {
-          if (frame == nullptr) return;
-          auto* b = static_cast<CanPublishBinding*>(pctx);
-          b->fn(*frame, b->iface);
-        },
-        static_cast<void*>(binding.get()));
-    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(binding));
-  }
-
-  // Wire the Ethernet publisher if the plugin supports it.
-  if (plugin->vtable->set_eth_publisher != nullptr && eth_publisher_fn_) {
-    auto fn_shared = std::make_shared<EthPublishFn>(eth_publisher_fn_);
-    plugin->vtable->set_eth_publisher(
-        plugin->ctx,
-        [](void* pctx, const BoatEthFrame* frame) {
-          if (frame != nullptr) (*static_cast<EthPublishFn*>(pctx))(*frame);
-        },
-        fn_shared.get());
-    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
-  }
-
-  // Wire the bus-signal publisher if the plugin supports it.
+  // Wire bus-signal publisher.
   if (plugin->vtable->set_bus_publisher != nullptr && bus_publisher_fn_) {
     auto fn_shared = std::make_shared<BusPublishFn>(bus_publisher_fn_);
     plugin->vtable->set_bus_publisher(
@@ -145,7 +97,7 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
     handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
 
-  // Wire the PDU publisher if the plugin supports it.
+  // Wire PDU publisher.
   if (plugin->vtable->set_pdu_publisher != nullptr && pdu_publisher_fn_) {
     auto fn_shared = std::make_shared<PduPublishFn>(pdu_publisher_fn_);
     plugin->vtable->set_pdu_publisher(
@@ -157,7 +109,7 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
     handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
 
-  // v8: Wire the unified frame publisher if the plugin supports it.
+  // v8: Wire unified frame publisher.
   if (plugin->vtable->set_frame_publisher != nullptr && frame_publisher_fn_) {
     auto fn_shared = std::make_shared<FramePublishFn>(frame_publisher_fn_);
     plugin->vtable->set_frame_publisher(
@@ -181,13 +133,10 @@ void PluginManager::Unload(const std::string& name) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = plugins_.find(name);
-    if (it == plugins_.end()) {
-      return;
-    }
+    if (it == plugins_.end()) return;
     handle = std::move(it->second);
     plugins_.erase(it);
   }
-
 #ifndef _WIN32
   if (handle.plugin != nullptr) {
     handle.destroy_fn(handle.plugin);
@@ -195,7 +144,6 @@ void PluginManager::Unload(const std::string& name) {
   if (handle.dl_handle != nullptr) {
     dlclose(handle.dl_handle);
   }
-  // publisher_contexts freed automatically when handle goes out of scope
 #endif
 }
 
@@ -214,40 +162,6 @@ void PluginManager::TickAll(std::uint64_t tick) {
   }
 }
 
-void PluginManager::DispatchCanFrame(const BoatCanFrame& frame, const std::string& iface) {
-  std::vector<BoatPlugin*> snapshot;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    snapshot.reserve(plugins_.size());
-    for (auto& [name, handle] : plugins_) {
-      (void)name;
-      snapshot.push_back(handle.plugin);
-    }
-  }
-  for (auto* plugin : snapshot) {
-    if (plugin->vtable->on_can_frame != nullptr) {
-      plugin->vtable->on_can_frame(plugin->ctx, &frame, iface.c_str());
-    }
-  }
-}
-
-void PluginManager::DispatchEthFrame(const BoatEthFrame& frame, const std::string& iface) {
-  std::vector<BoatPlugin*> snapshot;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    snapshot.reserve(plugins_.size());
-    for (auto& [name, handle] : plugins_) {
-      (void)name;
-      snapshot.push_back(handle.plugin);
-    }
-  }
-  for (auto* plugin : snapshot) {
-    if (plugin->vtable->on_eth_frame != nullptr) {
-      plugin->vtable->on_eth_frame(plugin->ctx, &frame, iface.c_str());
-    }
-  }
-}
-
 void PluginManager::DispatchFrame(const BoatFrame& frame) {
   std::vector<BoatPlugin*> snapshot;
   {
@@ -259,36 +173,8 @@ void PluginManager::DispatchFrame(const BoatFrame& frame) {
     }
   }
   for (auto* plugin : snapshot) {
-    auto* const vt = plugin->vtable;
-    if (vt->on_frame != nullptr) {
-      // v8 path — plugin handles the unified frame directly
-      vt->on_frame(plugin->ctx, &frame);
-    } else {
-      // v7 fallback — dispatch to legacy CAN / Ethernet callbacks
-      if (vt->on_can_frame != nullptr &&
-          (frame.bus_type == BOAT_BUS_CAN || frame.bus_type == BOAT_BUS_CANFD)) {
-        BoatCanFrame cf{};
-        cf.can_id = frame.meta.can.can_id;
-        cf.dlc    = frame.meta.can.dlc;
-        cf.flags  = frame.meta.can.flags;
-        const auto copy_len = frame.payload_len > 64 ? 64U : frame.payload_len;
-        if (frame.payload && copy_len > 0) {
-          std::memcpy(cf.data, frame.payload, copy_len);
-        }
-        vt->on_can_frame(plugin->ctx, &cf,
-                         frame.iface ? frame.iface : "");
-      }
-      if (vt->on_eth_frame != nullptr &&
-          frame.bus_type == BOAT_BUS_ETHERNET) {
-        BoatEthFrame ef{};
-        std::memcpy(ef.dst_mac, frame.meta.eth.dst_mac, 6);
-        std::memcpy(ef.src_mac, frame.meta.eth.src_mac, 6);
-        ef.ethertype   = frame.meta.eth.ethertype;
-        ef.payload     = frame.payload;
-        ef.payload_len = frame.payload_len;
-        vt->on_eth_frame(plugin->ctx, &ef,
-                         frame.iface ? frame.iface : "");
-      }
+    if (plugin->vtable->on_frame != nullptr) {
+      plugin->vtable->on_frame(plugin->ctx, &frame);
     }
   }
 }

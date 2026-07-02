@@ -72,11 +72,13 @@ void network_shutdown(void* ctx) {
   plugin->frame_count = 0;
 }
 
-BoatPluginVTable kNetworkSimVTable = {
-    &network_initialize,
-    &network_on_tick,
-    &network_shutdown,
-};
+BoatPluginVTable kNetworkSimVTable = [] {
+  BoatPluginVTable vt{};
+  vt.initialize = &network_initialize;
+  vt.on_tick    = &network_on_tick;
+  vt.shutdown   = &network_shutdown;
+  return vt;
+}();
 
 }  // namespace
 

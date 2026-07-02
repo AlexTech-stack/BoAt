@@ -33,8 +33,7 @@ TEST_CASE("PluginManager thread safety under concurrent access", "[unit][plugin_
 
   // Wire a no-op publisher so the setter path is exercised
   manager.SetPublisher([](const char*, std::uint64_t, double) {});
-  manager.SetCanPublisher([](const BoatCanFrame&, const std::string&) {});
-  manager.SetEthPublisher([](const BoatEthFrame&) {});
+  manager.SetFramePublisher([](const BoatFrame&) {});
   manager.SetBusPublisher([](const char*, double) {});
   manager.SetPduPublisher([](const BoatPduFrame&) {});
 
@@ -44,8 +43,7 @@ TEST_CASE("PluginManager thread safety under concurrent access", "[unit][plugin_
   std::thread ticker([&]() {
     while (!done.load(std::memory_order_acquire)) {
       manager.TickAll(1);
-      manager.DispatchCanFrame(BoatCanFrame{}, "vcan0");
-      manager.DispatchEthFrame(BoatEthFrame{}, "veth0");
+      manager.DispatchFrame(BoatFrame{});
     }
   });
 

@@ -83,11 +83,13 @@ void sensor_shutdown(void* ctx) {
   plugin->noise_stddev = 0.0;
 }
 
-BoatPluginVTable kSensorModelVTable = {
-    &sensor_initialize,
-    &sensor_on_tick,
-    &sensor_shutdown,
-};
+BoatPluginVTable kSensorModelVTable = [] {
+  BoatPluginVTable vt{};
+  vt.initialize = &sensor_initialize;
+  vt.on_tick    = &sensor_on_tick;
+  vt.shutdown   = &sensor_shutdown;
+  return vt;
+}();
 
 }  // namespace
 
