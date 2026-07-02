@@ -10,9 +10,15 @@ plugin_app = typer.Typer()
 
 
 @plugin_app.command("register")
-def register_plugin(ctx: typer.Context, path: str = typer.Option(..., "--path")) -> None:
-    response = ctx.obj["client"].plugin.RegisterPlugin(plugin_pb2.RegisterPluginRequest(path=path))
-    print_table(["plugin_id", "name"], [[response.plugin.plugin_id, response.plugin.name]], ctx.obj["json_mode"])
+def register_plugin(ctx: typer.Context,
+                    path: str = typer.Option(..., "--path"),
+                    config: str = typer.Option("", "--config", "-c",
+                       help="JSON config string for the plugin")) -> None:
+    response = ctx.obj["client"].plugin.RegisterPlugin(
+        plugin_pb2.RegisterPluginRequest(path=path, config_json=config))
+    print_table(["plugin_id", "name"],
+                [[response.plugin.plugin_id, response.plugin.name]],
+                ctx.obj["json_mode"])
 
 
 @plugin_app.command("list")

@@ -11,7 +11,7 @@ message Plugin {
   bool loaded = 4;
 }
 
-message RegisterPluginRequest { string path = 1; }
+message RegisterPluginRequest { string path = 1; string config_json = 2; }
 message ListPluginsRequest { PaginationRequest page = 1; }
 message GetPluginInfoRequest { string plugin_id = 1; }
 message UnloadPluginRequest { string plugin_id = 1; }

@@ -135,6 +135,16 @@ Each service is a standalone `python3 ui/<name>.py` FastAPI/uvicorn app with emb
 
 ## Quirks & gotchas
 
+- **Plugin ABI v8** (in development on `ABI_v8_frame_unification_and_major-refactor`):
+  - Unified `BoatFrame` type replaces `BoatCanFrame` + `BoatEthFrame`
+  - New vtable fields: `on_frame`, `set_frame_publisher`, `declared_buses`
+  - v7 fallback still works — old plugins continue to function
+  - `PduRouter` is now a plugin (`pdu_router.so`), loaded by the gateway
+  - `FrameService` gRPC provides unified send/subscribe for all bus types
+  - `boat frame send` / `boat frame subscribe` CLI replaces `boat can` / `boat eth`
+  - TCP plugin C API removed; use FrameService for TCP traffic
+  - Full plan: `todo/ABI_v8_Plan.md`
+
 - Gateway binary path: `build/{preset}/src/gateway/grpc_gateway/boat_gateway`
 - `boat` CLI entry point (boat_cli/main.py): Typer app with subcommands. Uses `BoAtClient(address)` from `boat-py`.
 - `python3 -m boat` dispatches: subcommands `can|pdu|eth|db` → `boat/cmd.py` (one-shot), anything else → `boat/cli.py` (interactive REPL).
