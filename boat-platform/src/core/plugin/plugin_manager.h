@@ -87,6 +87,14 @@ class PluginManager {
   void ShutdownAll();
   [[nodiscard]] std::vector<std::string> List() const;
 
+  /* ── Service provider registry ─────────────────────────────────────── */
+
+  /* Register a plugin-provided service for later lookup. */
+  void RegisterService(const std::string& name, void* service);
+
+  /* Look up a plugin-provided service by name. Returns nullptr if not found. */
+  [[nodiscard]] void* FindService(const std::string& name) const;
+
  private:
   mutable std::mutex mutex_;
   std::map<std::string, PluginHandle> plugins_;
@@ -96,6 +104,9 @@ class PluginManager {
   BusPublishFn bus_publisher_fn_;
   PduPublishFn pdu_publisher_fn_;
   FramePublishFn frame_publisher_fn_;
+
+  mutable std::mutex services_mutex_;
+  std::map<std::string, void*> services_;
 };
 
 }  // namespace boat::core

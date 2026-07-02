@@ -13,7 +13,7 @@
 #include "gateway/grpc_gateway/gateway_context.h"
 #include "gateway/grpc_gateway/replay_service_impl.h"
 #include "gateway/grpc_gateway/rpc_audit_log.h"
-#include "pdu/pdu_router.h"
+#include "core/plugin/plugin_manager.h"
 #include "replay_engine/replay_engine.h"
 #include "scenario/scenario_loader.h"
 #include "simulation/simulation_context.h"
@@ -59,7 +59,7 @@ struct IntegrationFixture {
   boat::replay::ReplayController replay_controller{trace_store, event_store, sim.event_bus()};
   boat::hil::CanBusRegistry can_registry;
   boat::hil::EthernetBusRegistry eth_registry;
-  boat::hil::PduRouter pdu_router{can_registry, eth_registry};
+  boat::core::PluginManager plugin_manager;
   boat::gateway::RpcAuditLog audit_log;
   boat::gateway::GatewayContext ctx{
       .sim = sim,
@@ -70,7 +70,7 @@ struct IntegrationFixture {
       .replay_controller = replay_controller,
       .can_bus_registry = can_registry,
       .ethernet_bus_registry = eth_registry,
-      .pdu_router = pdu_router,
+      .plugin_manager = plugin_manager,
       .audit_log = audit_log,
   };
   boat::gateway::ReplayServiceImpl replay_service{ctx};

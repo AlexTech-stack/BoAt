@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rpc_audit_log.h"
+#include "core/plugin/plugin_manager.h"
 #include "core/scenario/scenario_loader.h"
 #include "core/signal/signal_bus.h"
 #include "core/simulation/simulation_context.h"
@@ -13,7 +14,6 @@
 namespace boat::hil {
 class CanBusRegistry;
 class EthernetBusRegistry;
-class PduRouter;
 }  // namespace boat::hil
 
 namespace boat::gateway {
@@ -28,7 +28,7 @@ struct GatewayContext {
   boat::replay::ReplayController& replay_controller;
   boat::hil::CanBusRegistry& can_bus_registry;
   boat::hil::EthernetBusRegistry& ethernet_bus_registry;
-  boat::hil::PduRouter& pdu_router;
+  boat::core::PluginManager& plugin_manager;
   RpcAuditLog& audit_log;
 };
 
