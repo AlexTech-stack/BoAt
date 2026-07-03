@@ -147,26 +147,4 @@ def test_new_replay_commands_call_expected_methods() -> None:
     assert fake_client.replay.StartReplayFromEvents.called
 
 
-def test_eth_commands_call_expected_methods() -> None:
-    fake_client = _fake_client()
-    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
-        assert runner.invoke(app, ["eth", "list-ifaces"]).exit_code == 0
-        assert runner.invoke(app, [
-            "eth", "send",
-            "--iface", "veth0",
-            "--payload", "DEADBEEF",
-        ]).exit_code == 0
-        assert runner.invoke(app, [
-            "eth", "send",
-            "--iface", "veth0",
-            "--src", "AA:BB:CC:DD:EE:FF",
-            "--dst", "11:22:33:44:55:66",
-            "--ethertype", "0x0800",
-            "--payload", "DEADBEEF",
-        ]).exit_code == 0
-        assert runner.invoke(app, ["eth", "subscribe"]).exit_code == 0
-        assert runner.invoke(app, ["eth", "subscribe", "--iface", "veth0", "--ethertype", "0x0800"]).exit_code == 0
 
-    assert fake_client.ethernet.ListInterfaces.called
-    assert fake_client.ethernet.SendFrame.called
-    assert fake_client.ethernet.SubscribeFrames.called

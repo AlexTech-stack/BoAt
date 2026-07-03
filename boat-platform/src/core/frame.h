@@ -68,7 +68,7 @@ using FrameMeta = std::variant<std::monostate, CanMeta, EthMeta, TcpMeta, PduMet
 class Frame {
  public:
   enum class BusType : uint8_t {
-    kUnspecified = 0,
+    kUnspecified = BOAT_BUS_UNSPECIFIED,
     kCan      = BOAT_BUS_CAN,
     kCanFd    = BOAT_BUS_CANFD,
     kEthernet = BOAT_BUS_ETHERNET,
