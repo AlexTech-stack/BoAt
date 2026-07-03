@@ -6,11 +6,12 @@
 /* Bus-type discriminator for the unified BoatFrame.
    Values match the proto enum in boat/v1/frame.proto. */
 typedef enum BoatBusType {
-  BOAT_BUS_CAN      = 0,
-  BOAT_BUS_CANFD    = 1,
-  BOAT_BUS_ETHERNET = 2,
-  BOAT_BUS_TCP      = 3,
-  BOAT_BUS_PDU      = 4,
+  BOAT_BUS_UNSPECIFIED = 0,
+  BOAT_BUS_CAN         = 1,
+  BOAT_BUS_CANFD       = 2,
+  BOAT_BUS_ETHERNET    = 3,
+  BOAT_BUS_TCP         = 4,
+  BOAT_BUS_PDU         = 5,
 } BoatBusType;
 
 /* CAN metadata — valid when bus_type is BOAT_BUS_CAN or BOAT_BUS_CANFD.

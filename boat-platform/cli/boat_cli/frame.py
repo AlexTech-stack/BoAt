@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 import grpc
@@ -25,15 +26,32 @@ def _parse_int(value: str) -> int:
     return int(value)
 
 
+def _pick_iface(bus_type: str) -> str:
+    """Return the first matching interface when none is specified."""
+    net_sys = "/sys/class/net"
+    try:
+        ifaces = sorted(os.listdir(net_sys))
+    except FileNotFoundError:
+        return ""
+    if bus_type.upper() in ("CAN", "CANFD"):
+        for name in ifaces:
+            if name.startswith("vcan") or name.startswith("can"):
+                return name
+    elif bus_type.upper() == "ETHERNET":
+        for name in ifaces:
+            if name.startswith("veth") or name.startswith("eth"):
+                return name
+    return ""
+
+
 @frame_app.command("send")
 def send_frame(
     ctx: typer.Context,
     bus_type: str = typer.Option(
         ..., "--bus-type", "-b", help="CAN, CANFD, ETHERNET, TCP, or PDU"),
-    iface: str = typer.Option("", "--iface", "-i", help="Interface name"),
+    iface: str = typer.Option("", "--iface", "-i", help="Interface name (auto-selected if omitted)"),
     can_id: str = typer.Option("0", "--can-id", help="CAN identifier (decimal or 0x hex)"),
     data: str = typer.Option(..., "--data", "-d", help="Payload hex, e.g. AABBCCDD"),
-    fd: bool = typer.Option(False, "--fd", help="Send as CAN FD"),
     ethertype: str = typer.Option("0", "--ethertype", help="Ethernet EtherType (decimal or 0x hex)"),
     dst_mac: str = typer.Option("", "--dst-mac", help="Destination MAC (xx:xx:xx:xx:xx:xx)"),
     src_mac: str = typer.Option("", "--src-mac", help="Source MAC"),
@@ -75,6 +93,9 @@ def send_frame(
                      f"Valid: {', '.join(bt_map.keys())}")
         sys.exit(1)
 
+    if not iface:
+        iface = _pick_iface(bus_type)
+
     frame = frame_pb2.Frame()
     frame.bus_type = bt
     frame.iface = iface
@@ -83,7 +104,7 @@ def send_frame(
     if bt in (frame_pb2.Frame.CAN, frame_pb2.Frame.CANFD):
         frame.can.can_id = can_id_int
         frame.can.dlc = len(payload)
-        frame.can.flags = 0x04 if fd else 0  # FDF flag for FD frames
+        frame.can.flags = 0x04 if bt == frame_pb2.Frame.CANFD else 0  # FDF flag for FD frames
     elif bt == frame_pb2.Frame.ETHERNET:
         frame.eth.dst_mac = _parse_hex(dst_mac) if dst_mac else b"\x00" * 6
         frame.eth.src_mac = _parse_hex(src_mac) if src_mac else b"\x00" * 6
