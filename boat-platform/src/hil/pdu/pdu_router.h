@@ -33,7 +33,7 @@ namespace boat::hil {
 class PduRouter : public boat::core::IPduRouter {
  public:
   PduRouter(CanBusRegistry& can, EthernetBusRegistry& eth);
-  PduRouter() = default;  // plugin mode — use SetFramePublisher
+  PduRouter();  // plugin mode — use SetFramePublisher
   ~PduRouter();
 
   // Plugin mode: set the single frame publisher for CAN/Eth/PDU output.
