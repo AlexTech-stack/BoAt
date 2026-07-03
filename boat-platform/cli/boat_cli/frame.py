@@ -8,7 +8,10 @@ import sys
 import grpc
 import typer
 
+from boat.v1 import can_pb2
 from boat.v1 import frame_pb2
+
+from boat.client import BoAtClient
 
 from .output import print_error
 
@@ -26,21 +29,23 @@ def _parse_int(value: str) -> int:
     return int(value)
 
 
-def _pick_iface(bus_type: str) -> str:
-    """Return the first matching interface when none is specified."""
-    net_sys = "/sys/class/net"
-    try:
-        ifaces = sorted(os.listdir(net_sys))
-    except FileNotFoundError:
-        return ""
+def _pick_iface(client: BoAtClient, bus_type: str) -> str:
+    """Return the first registered gateway interface when none is specified."""
     if bus_type.upper() in ("CAN", "CANFD"):
-        for name in ifaces:
-            if name.startswith("vcan") or name.startswith("can"):
-                return name
+        try:
+            resp = client.can.ListBuses(can_pb2.ListBusesRequest())
+            if resp.buses:
+                return resp.buses[0].iface
+        except grpc.RpcError:
+            pass
     elif bus_type.upper() == "ETHERNET":
-        for name in ifaces:
-            if name.startswith("veth") or name.startswith("eth"):
-                return name
+        try:
+            from boat.v1 import ethernet_pb2
+            resp = client.ethernet.ListInterfaces(ethernet_pb2.ListEthernetInterfacesRequest())
+            if resp.ifaces:
+                return resp.ifaces[0]
+        except (grpc.RpcError, AttributeError):
+            pass
     return ""
 
 
@@ -94,7 +99,7 @@ def send_frame(
         sys.exit(1)
 
     if not iface:
-        iface = _pick_iface(bus_type)
+        iface = _pick_iface(client, bus_type)
 
     frame = frame_pb2.Frame()
     frame.bus_type = bt
@@ -191,5 +196,41 @@ def subscribe_frames(
     except grpc.RpcError as e:
         if e.code() == grpc.StatusCode.CANCELLED:
             return
+        print_error(f"RPC error [{e.code().name}]: {e.details()}")
+        sys.exit(1)
+
+
+@frame_app.command("list-ifaces")
+def list_ifaces(ctx: typer.Context) -> None:
+    """List all interfaces the gateway has access to (CAN + Ethernet)."""
+    client = ctx.obj["client"]
+
+    try:
+        from boat.v1 import ethernet_pb2
+
+        can_resp = client.can.ListBuses(can_pb2.ListBusesRequest())
+        eth_resp = client.ethernet.ListInterfaces(
+            ethernet_pb2.ListEthernetInterfacesRequest())
+
+        from .output import print_table
+
+        rows = []
+        for bus in can_resp.buses:
+            rows.append((
+                bus.iface,
+                "CAN",
+                bus.driver,
+                bus.state,
+                "yes" if bus.fd_support else "no",
+            ))
+        for name in eth_resp.ifaces:
+            rows.append((name, "ETHERNET", "", "", ""))
+
+        print_table(
+            ["iface", "type", "driver", "state", "fd"],
+            rows,
+            ctx.obj["json_mode"],
+        )
+    except grpc.RpcError as e:
         print_error(f"RPC error [{e.code().name}]: {e.details()}")
         sys.exit(1)
