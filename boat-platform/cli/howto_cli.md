@@ -50,9 +50,7 @@ boat sim          Simulation lifecycle (create, start, pause, step, stop, state,
 boat scenario     Scenario management (create, get, list, delete, validate)
 boat replay       Trace replay (start, seek, stream, pause, resume, stop, from-events)
 boat frame        Unified frame send/subscribe (CAN, CANFD, Ethernet, TCP, PDU)
-boat can          CAN commands (list-buses, detect, send, subscribe) — deprecated, use `boat frame`
 boat can-tp       CAN Transport Protocol (configure, send) — ISO 15765-2
-boat eth          Ethernet commands (list-ifaces, send, subscribe) — deprecated, use `boat frame`
 boat pdu          PDU routing (send, route, remove-route, container, group, list-routes, subscribe)
 boat plugin       Plugin management (register, list, info, unload)
 boat db           PDU database inspection (list, show, signal-routes)
@@ -85,11 +83,14 @@ boat sim stop --simulation-id <id>
 ### 2. Sending and Receiving Frames
 
 ```bash
-# Send a CAN frame
-boat frame send --bus-type can --can-id 0x123 --iface vcan0 --data AABBCCDD
+# Send a CAN frame (interface auto-selected to e.g. vcan0 if omitted)
+boat frame send --bus-type can --can-id 0x123 --data AABBCCDD
 
-# Send a CAN FD frame
-boat frame send --bus-type canfd --can-id 0x123 --iface vcan0 --data 00112233445566778899AABBCCDDEEFF --fd true
+# Send a CAN FD frame (bus type determines FD flag, no separate --fd flag)
+boat frame send --bus-type canfd --can-id 0x123 --data 00112233445566778899AABBCCDDEEFF
+
+# Explicit interface selection
+boat frame send --bus-type can --can-id 0x123 --iface can0 --data AABBCCDD
 
 # Send an Ethernet frame
 boat frame send --bus-type ethernet --ethertype 0x0800 --dst-ip 10.0.0.1 --data AABB
@@ -100,20 +101,7 @@ boat frame subscribe --bus-types ethernet
 boat frame subscribe --bus-types can,ethernet
 ```
 
-### 3. CAN Hardware Detection
-
-```bash
-# List CAN interfaces registered on the gateway
-boat can list-buses
-
-# Detect available CAN hardware on this host (no gateway needed)
-boat can detect
-
-# JSON output for scripting
-boat --json can detect
-```
-
-### 4. PDU Routing (requires PduRouter plugin on the gateway)
+### 3. PDU Routing (requires PduRouter plugin on the gateway)
 
 ```bash
 # Configure a route
@@ -128,7 +116,7 @@ boat pdu enable-group --id 1
 boat pdu list-groups
 ```
 
-### 5. CAN Transport Protocol (ISO 15765-2)
+### 4. CAN Transport Protocol (ISO 15765-2)
 
 ```bash
 # Configure a CanTp session
@@ -138,7 +126,7 @@ boat can-tp configure --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8
 boat can-tp send --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 --data 0123456789ABCDEF...
 ```
 
-### 6. PDU Database Inspection
+### 5. PDU Database Inspection
 
 ```bash
 # List available databases
@@ -151,7 +139,7 @@ boat db show --db pdu_db.json
 boat db signal-routes --db pdu_db.json --signal MotorSpeed
 ```
 
-### 7. Trace Recording & Replay
+### 6. Trace Recording & Replay
 
 ```bash
 # Start recording
@@ -164,7 +152,7 @@ boat trace stop
 boat replay start --trace-id <id>
 ```
 
-### 8. AI Assistants
+### 7. AI Assistants
 
 AI commands use an LLM backend (default: Ollama with `qwen2.5-coder:3b`):
 
@@ -188,14 +176,13 @@ Add `--json` to any command for script-friendly output:
 
 ```bash
 boat --json sim list
-boat --json can list-buses
 boat --json pdu list-routes
 ```
 
 Output is a JSON array of objects — pipe to `jq` for filtering:
 
 ```bash
-boat --json can list-buses | jq '.[] | select(.driver == "vcan")'
+boat --json pdu list-routes | jq '.[] | select(.transport == "CAN")'
 ```
 
 ## Shell Completion
