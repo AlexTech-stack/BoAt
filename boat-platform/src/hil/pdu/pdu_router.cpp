@@ -9,6 +9,12 @@ namespace boat::hil {
 
 // ── Construction / destruction ────────────────────────────────────────────────
 
+PduRouter::PduRouter()
+    : tx_engine_(std::make_unique<TransmissionEngine>(
+          [this](uint32_t pid, const std::vector<uint8_t>& pl) {
+            return SendPdu(pid, pl);
+          })) {}
+
 PduRouter::PduRouter(CanBusRegistry& can, EthernetBusRegistry& eth)
     : can_(&can), eth_(&eth),
       tx_engine_(std::make_unique<TransmissionEngine>(

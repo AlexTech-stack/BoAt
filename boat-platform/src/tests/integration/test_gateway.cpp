@@ -19,6 +19,7 @@
 #include "gateway/grpc_gateway/simulation_service_impl.h"
 #include "can_bus_registry.h"
 #include "ethernet_bus_registry.h"
+#include "pdu/pdu_router.h"
 #include "core/plugin/plugin_manager.h"
 #include "gateway/grpc_gateway/rpc_audit_log.h"
 #include "replay_engine/replay_engine.h"
@@ -161,6 +162,10 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
 
   // ── PDU Group integration RPC tests ──────────────────────────────────────
   {
+    // Create and register a PduRouter for the test
+    boat::hil::PduRouter test_pdu_router(can_registry, eth_registry);
+    plugin_manager.RegisterService("pdu_router", &test_pdu_router);
+
     auto pdu_stub = boat::v1::PduService::NewStub(channel);
 
     // Configure a route (no physical interface needed for config)

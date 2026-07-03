@@ -408,45 +408,6 @@ int main() {
       .audit_log = audit_log,
   };
 
-  // Auto-load the PduRouter plugin and register its service.
-  // PDUs are routed when the plugin is loaded; if it fails to load,
-  // PDU RPCs will return NOT_FOUND gracefully.
-  {
-    const char* pdu_path =
-        "./build/debug/src/plugins/pdu_router/pdu_router.so";
-    // Also check source tree paths for convenience.
-    if (std::ifstream(pdu_path).good() ||
-        ((pdu_path = "./src/plugins/pdu_router/pdu_router.so"),
-         std::ifstream(pdu_path).good()) ||
-        ((pdu_path = "pdu_router.so"), std::ifstream(pdu_path).good())) {
-      try {
-        auto handle = node_manager.Load(
-            pdu_path,
-            "{}");
-        // Register the PduRouter as a service provider so PduServiceImpl
-        // can delegate to it.
-        if (handle.plugin && handle.plugin->vtable &&
-            handle.plugin->ctx) {
-          // PduRouterPlugin wraps PduRouter which implements IPduRouter.
-          // Access PduRouterPlugin::router through the context.
-          // The context is a PduRouterPlugin*, and PduRouterPlugin::router
-          // is the first field, so &((PduRouterPlugin*)ctx)->router == ctx.
-          node_manager.RegisterService(
-              "pdu_router",
-              static_cast<boat::core::IPduRouter*>(handle.plugin->ctx));
-          std::fprintf(stderr, "[Gateway] PduRouter plugin loaded, "
-                       "PDU routing available\n");
-        }
-      } catch (const std::exception& ex) {
-        std::fprintf(stderr, "[Gateway] PduRouter plugin not available: "
-                     "%s (PDU RPCs will return NOT_FOUND)\n", ex.what());
-      }
-    } else {
-      std::fprintf(stderr, "[Gateway] PduRouter plugin .so not found; "
-                   "PDU RPCs will return NOT_FOUND\n");
-    }
-  }
-
   boat::gateway::BusServiceImpl      bus_impl(audit_log, signal_bus);
   boat::gateway::EthernetServiceImpl ethernet_impl(ctx);
   boat::gateway::SimulationServiceImpl simulation_impl(sim, can_registry, eth_registry);
