@@ -49,7 +49,7 @@ Place them before the subcommand. Every subcommand below accepts these flags.
 boat sim          Simulation lifecycle (create, start, pause, step, stop, state, list, watch)
 boat scenario     Scenario management (create, get, list, delete, validate)
 boat replay       Trace replay (start, seek, stream, pause, resume, stop, from-events)
-boat frame        Unified frame send/subscribe (CAN, CANFD, Ethernet, TCP, PDU)
+boat frame        Unified frame send/subscribe, list-ifaces (CAN, CANFD, Ethernet, TCP, PDU)
 boat can-tp       CAN Transport Protocol (configure, send) — ISO 15765-2
 boat pdu          PDU routing (send, route, remove-route, container, group, list-routes, subscribe)
 boat plugin       Plugin management (register, list, info, unload)
@@ -80,7 +80,17 @@ boat sim start --simulation-id <id>
 boat sim stop --simulation-id <id>
 ```
 
-### 2. Sending and Receiving Frames
+### 2. Listing Available Interfaces
+
+```bash
+# Show all CAN and Ethernet interfaces registered on the gateway
+boat frame list-ifaces
+
+# JSON output for scripting
+boat --json frame list-ifaces
+```
+
+### 3. Sending and Receiving Frames
 
 ```bash
 # Send a CAN frame (interface auto-selected to e.g. vcan0 if omitted)
@@ -101,7 +111,7 @@ boat frame subscribe --bus-types ethernet
 boat frame subscribe --bus-types can,ethernet
 ```
 
-### 3. PDU Routing (requires PduRouter plugin on the gateway)
+### 4. PDU Routing (requires PduRouter plugin on the gateway)
 
 ```bash
 # Configure a route
@@ -116,7 +126,7 @@ boat pdu enable-group --id 1
 boat pdu list-groups
 ```
 
-### 4. CAN Transport Protocol (ISO 15765-2)
+### 5. CAN Transport Protocol (ISO 15765-2)
 
 ```bash
 # Configure a CanTp session
@@ -126,7 +136,7 @@ boat can-tp configure --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8
 boat can-tp send --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 --data 0123456789ABCDEF...
 ```
 
-### 5. PDU Database Inspection
+### 6. PDU Database Inspection
 
 ```bash
 # List available databases
@@ -139,7 +149,7 @@ boat db show --db pdu_db.json
 boat db signal-routes --db pdu_db.json --signal MotorSpeed
 ```
 
-### 6. Trace Recording & Replay
+### 7. Trace Recording & Replay
 
 ```bash
 # Start recording
@@ -152,7 +162,7 @@ boat trace stop
 boat replay start --trace-id <id>
 ```
 
-### 7. AI Assistants
+### 8. AI Assistants
 
 AI commands use an LLM backend (default: Ollama with `qwen2.5-coder:3b`):
 
