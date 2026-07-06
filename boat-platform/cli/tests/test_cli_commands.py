@@ -111,7 +111,7 @@ def test_replay_and_plugin_commands_call_expected_methods() -> None:
     with patch("boat_cli.main.BoAtClient", return_value=fake_client):
         assert runner.invoke(app, ["replay", "start", "--trace", "trace-1"]).exit_code == 0
         assert runner.invoke(app, ["replay", "seek", "--tick", "10"]).exit_code == 0
-        assert runner.invoke(app, ["replay", "stream"]).exit_code == 0
+        assert runner.invoke(app, ["replay", "stream", "--trace", "trace-1"]).exit_code == 0
         assert runner.invoke(app, ["plugin", "register", "--path", "libdemo.so"]).exit_code == 0
         assert runner.invoke(app, ["plugin", "list"]).exit_code == 0
         assert runner.invoke(app, ["plugin", "info", "p1"]).exit_code == 0

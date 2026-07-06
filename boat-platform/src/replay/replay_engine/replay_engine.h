@@ -10,12 +10,14 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace boat::replay {
 
@@ -43,6 +45,7 @@ struct ReplayConfig {
   std::uint64_t start_tick{0};
   std::string eth_iface;
   std::unordered_map<std::string, std::string> mac_map;
+  int loop_delay_ms{0};  // ms gap between loop passes; 0 = no loop
 };
 
 class ReplayController {
@@ -60,7 +63,19 @@ class ReplayController {
   void Resume();
   void Stop();
   bool HasError() const;
+  bool IsRunning() const { return running_.load(); }
   std::string LastError() const;
+
+  struct ReplayEventEntry {
+    std::uint64_t tick;
+    std::string payload;
+  };
+
+  /// Thread-safe: push a replay event onto the internal queue.
+  void PushEvent(std::uint64_t tick, std::string payload);
+
+  /// Thread-safe: consume (pop) all queued replay events.
+  std::vector<ReplayEventEntry> ConsumeEvents();
 
   using EventForwarder = std::function<void(std::uint32_t event_type, std::uint64_t tick,
                                             const std::vector<std::uint8_t>& payload)>;
@@ -92,6 +107,11 @@ class ReplayController {
   std::atomic<std::uint64_t> requested_seek_tick_{0};
   std::atomic<bool> seek_pending_{false};
   std::string last_error_;
+
+  // Replay event queue — used by StreamReplay to consume events without going
+  // through the EventBus (avoids race between publishing and subscribing).
+  std::deque<ReplayEventEntry> event_queue_;
+  std::mutex event_queue_mutex_;
 
   // TickTimer-based absolute-time scheduling (drift-free).
   std::unique_ptr<boat::hil::TickTimer> tick_timer_;

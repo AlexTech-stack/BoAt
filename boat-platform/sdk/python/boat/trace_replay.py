@@ -241,13 +241,14 @@ class TraceReplayer:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def replay(self, path: str | Path, loop: bool = False, server_side: bool = False) -> int:
+    def replay(self, path: str | Path, loop: int | None = None, server_side: bool = False) -> int:
         """Replay a trace file.
 
         Args:
             path: Path to a ``.asc``, ``.blf``, or ``.pcap`` file.
-            loop: If *True* replay the file indefinitely until the process is
-                  interrupted.
+            loop: If set, replay the file in a loop with N ms gap between the
+                  last message of one run and the first message of the next run.
+                  ``None`` or omitted means play once.
             server_side: If *True*, upload the trace and use the gateway's
                          ReplayService for server-side playback.  Automatically
                          enabled for ``.pcap`` files.
@@ -263,25 +264,36 @@ class TraceReplayer:
         if path.suffix.lower() == ".pcap" and not server_side:
             server_side = True
         if server_side:
-            return self.replay_server_side(path, loop=loop)
+            return self.replay_server_side(path, loop_delay_ms=loop or 0)
 
         stub = self._get_stub()
         total = 0
+        last_msg_wall: float | None = None
         while True:
-            total += self._replay_once(stub, path, total == 0)
-            if not loop:
+            offset = 0.0
+            if last_msg_wall is not None and loop is not None:
+                target = last_msg_wall + loop / 1000.0
+                now = time.monotonic()
+                offset = max(0.0, target - now)
+            run_sent, last_msg_wall = self._replay_once(
+                stub, path, initial_offset_sec=offset
+            )
+            total += run_sent
+            if loop is None:
                 break
         return total
 
-    def replay_server_side(self, path: str | Path, loop: bool = False) -> int:
+    def replay_server_side(self, path: str | Path, loop_delay_ms: int = 0) -> int:
         """Replay a trace file using the gateway's ReplayService.
 
         Converts the trace to the internal binary format, uploads it via
         ImportTraceData, then plays back using StartReplay + StreamReplay.
+        When *loop_delay_ms* > 0 the C++ engine loops the trace with that gap
+        between passes until ``StopReplay`` is called.
 
         Args:
             path: Path to an ``.asc`` or ``.blf`` file.
-            loop: If *True* replay the file indefinitely.
+            loop_delay_ms: ms gap between loop passes; 0 = single pass.
 
         Returns:
             Total number of frames replayed.
@@ -294,7 +306,7 @@ class TraceReplayer:
         path = Path(path)
         trace_id = path.stem
 
-        binary_data = self._convert_to_binary(path)
+        binary_data = self.convert_to_binary(path)
 
         replay_stub = self._get_replay_stub()
 
@@ -320,6 +332,7 @@ class TraceReplayer:
             speed=replay_pb2.REPLAY_SPEED_ACCELERATED,
             speed_multiplier=speed_mult,
             eth_iface=eth_iface,
+            loop_delay_ms=loop_delay_ms,
         )
         if self.mac_map:
             for ip_str, mac_str in self.mac_map.items():
@@ -329,32 +342,27 @@ class TraceReplayer:
         if not start_resp.accepted:
             raise TraceReplayError(f"StartReplay rejected: {start_resp.error.message}")
 
-        replay_id = start_resp.replay_id
         total = 0
-        while True:
-            stream = replay_stub.StreamReplay(
-                replay_pb2.StreamReplayRequest(replay_id=replay_id)
-            )
-            pass_total = 0
-            try:
-                for event in stream:
-                    pass_total += 1
-                    total += 1
-                    if self.on_frame is not None:
-                        self.on_frame(pass_total, event)
-            except Exception:
-                pass
-            if not loop:
-                break
+        stream = replay_stub.StreamReplay(
+            replay_pb2.StreamReplayRequest(replay_id=start_resp.replay_id)
+        )
+        for event in stream:
+            total += 1
+            if self.on_frame is not None:
+                self.on_frame(total, event)
 
         return total
 
     # ── Internals ──────────────────────────────────────────────────────────────
 
-    def _convert_to_binary(self, path: Path) -> bytes:
+    def convert_to_binary(self, path: Path) -> bytes:
         """Convert a trace file to the gateway's internal binary trace format.
 
         Handles both CAN (ASC/BLF) and Ethernet (pcap) sources.
+
+        Filters (set via constructor args) are applied during conversion:
+        ``channel_filter``, ``id_filter``, ``ip_map``, ``ethertype_filter``,
+        ``protocol_filter``.
         """
         reader = self._open_reader(path)
         result = bytearray()
@@ -842,8 +850,18 @@ class TraceReplayer:
             "Supported: .pcap, .asc, .blf"
         )
 
-    def _replay_once(self, stub, path: Path, is_first: bool) -> int:
-        """Stream one pass through *path*, return frame count."""
+    def _replay_once(self, stub, path: Path, initial_offset_sec: float = 0.0) -> tuple[int, float | None]:
+        """Stream one pass through *path*.
+
+        Args:
+            initial_offset_sec: Seconds to wait before the first message so that
+                it fires at the correct offset from a previous run's last message.
+
+        Returns:
+            (frame_count, last_msg_wall_time) where *last_msg_wall_time* is
+            ``time.monotonic()`` when the last message was sent, or *None* if
+            no messages were sent.
+        """
         from boat.v1 import can_pb2
 
         sent            = 0
@@ -871,6 +889,8 @@ class TraceReplayer:
                     wait        = delta_trace / self.speed - delta_wall
                     if wait > 0:
                         time.sleep(wait)
+                elif self.speed > 0 and initial_offset_sec > 0:
+                    time.sleep(initial_offset_sec)
 
                 prev_trace_ts = msg.timestamp
                 prev_wall_ts  = time.monotonic()
@@ -910,4 +930,4 @@ class TraceReplayer:
 
                 sent += 1
 
-        return sent
+        return sent, prev_wall_ts
