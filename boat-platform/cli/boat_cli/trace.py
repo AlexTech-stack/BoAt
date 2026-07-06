@@ -205,8 +205,9 @@ def cmd_replay(
                              "interface. Default: vcan0"),
     speed:   float = typer.Option(1.0,  "--speed",  "-s",
                         help="Playback speed multiplier (1.0=real-time, 0=max)"),
-    loop:    bool  = typer.Option(False, "--loop",   "-l",
-                        help="Loop the file indefinitely"),
+    loop:    Optional[int] = typer.Option(None, "--loop", "-l",
+                        help="Loop the file with N ms gap between the last message of one "
+                             "run and the first message of the next. Omit to replay once."),
     sim_id:  str   = typer.Option("",   "--sim-id",
                         help="Simulation ID forwarded with every frame"),
     verbose: bool  = typer.Option(False, "--verbose", "-v",
@@ -275,6 +276,7 @@ def cmd_replay(
         print_error(f"Cannot import boat SDK: {e}")
         raise typer.Exit(1)
 
+    file = file.resolve()
     if not file.exists():
         print_error(f"File not found: {file}")
         raise typer.Exit(1)
@@ -371,7 +373,7 @@ def cmd_replay(
     ch_label = f" ch={channel}" if channel is not None else ""
     typer.echo(
         f"Replaying {file.name} → {gateway}  "
-        f"[mode={mode_label}  speed={speed_label}  loop={loop}{ch_label}"
+        f"[mode={mode_label}  speed={speed_label}  loop={loop or 'off'}{ch_label}"
         f"  buses={bus_list or ['vcan0']}"
         f"{'  pcap' if is_pcap else ''}]"
     )

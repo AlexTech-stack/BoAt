@@ -17,6 +17,7 @@ message StartReplayRequest {
   double speed_multiplier = 4;
   string eth_iface = 5;
   map<string, string> mac_map = 6;
+  int32 loop_delay_ms = 7;  // ms gap between runs; 0 or unset = no loop
 }
 message SeekReplayRequest { string replay_id = 1; uint64 tick = 2; }
 message StreamReplayRequest { string replay_id = 1; }
@@ -42,7 +43,7 @@ message StartReplayFromEventsRequest {
 message ReplayEvent {
   string replay_id = 1;
   uint64 tick = 2;
-  string payload = 3;
+  bytes payload = 3;
 }
 
 message ReplayControlResponse {

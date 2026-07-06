@@ -449,7 +449,7 @@ class TestConvertToBinary:
             12345, 30490, b"SOMEIP_DATA",
         )
         p = self._pcap_bytes([eth])
-        binary = replayer._convert_to_binary(p)
+        binary = replayer.convert_to_binary(p)
         p.unlink()
 
         # Each record: 28-byte header + payload
@@ -475,7 +475,7 @@ class TestConvertToBinary:
             _udp_packet(b"\x0a\x00\x00\x01", b"\x0a\x00\x00\x02", 12346, 30491, b"bb"),
         ]
         p = self._pcap_bytes(frames)
-        binary = replayer._convert_to_binary(p)
+        binary = replayer.convert_to_binary(p)
         p.unlink()
 
         # Should have 2 trace records
@@ -685,7 +685,7 @@ class TestConvertToBinaryIp6:
             12345, 30490, b"IPV6_DATA",
         )
         p = self._pcap_bytes([eth])
-        binary = replayer._convert_to_binary(p)
+        binary = replayer.convert_to_binary(p)
         p.unlink()
 
         assert len(binary) >= 28
@@ -715,7 +715,7 @@ class TestConvertToBinaryIp6:
             33333, 44444, b"v6data",
         )
         p = self._pcap_bytes([ipv4_eth, ipv6_eth])
-        binary = replayer._convert_to_binary(p)
+        binary = replayer.convert_to_binary(p)
         p.unlink()
 
         offset = 0
@@ -1019,7 +1019,7 @@ class TestIpFilterAndMap:
         data = _make_pcap([eth1, eth2])
         p = Path(tempfile.NamedTemporaryFile(suffix=".pcap", delete=False).name)
         p.write_bytes(data)
-        binary = replayer._convert_to_binary(p)
+        binary = replayer.convert_to_binary(p)
         p.unlink()
 
         # Should have exactly 1 record (frame 2 was filtered out)
@@ -1065,7 +1065,7 @@ class TestEthertypeFilter:
             12345, 30490, b"v6",
         )
         p = self._pcap_bytes([ipv4_eth, ipv6_eth])
-        binary = replayer._convert_to_binary(p)
+        binary = replayer.convert_to_binary(p)
         p.unlink()
 
         offset = 0
@@ -1093,7 +1093,7 @@ class TestEthertypeFilter:
             12345, 30490, b"v6",
         )
         p = self._pcap_bytes([ipv4_eth, ipv6_eth])
-        binary = replayer._convert_to_binary(p)
+        binary = replayer.convert_to_binary(p)
         p.unlink()
 
         offset = 0
@@ -1121,7 +1121,7 @@ class TestEthertypeFilter:
             12345, 30490, b"v6",
         )
         p = self._pcap_bytes([ipv4_eth, ipv6_eth])
-        binary = replayer._convert_to_binary(p)
+        binary = replayer.convert_to_binary(p)
         p.unlink()
 
         offset = 0
@@ -1298,7 +1298,7 @@ class TestEthertypeAndProtocolFilter:
         data = _make_pcap([udp_v4, icmp_v4, udp_v6])
         p = Path(tempfile.NamedTemporaryFile(suffix=".pcap", delete=False).name)
         p.write_bytes(data)
-        binary = replayer._convert_to_binary(p)
+        binary = replayer.convert_to_binary(p)
         p.unlink()
 
         offset = 0

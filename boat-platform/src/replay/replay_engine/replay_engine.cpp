@@ -192,105 +192,140 @@ void ReplayController::ReplayLoop() {
       return;
     }
 
-    std::size_t offset = 0;
-    while (running_.load() && offset + sizeof(boat::store::TraceRecordHeader) <= mapped_trace_.size()) {
-      {
-        std::unique_lock<std::mutex> lock(pause_mutex_);
-        pause_cv_.wait(lock, [this] {
-          return !running_.load() || !paused_.load() || seek_pending_.load();
-        });
-        if (!running_.load()) {
-          break;
+    const bool looping = active_config_.loop_delay_ms > 0;
+
+    do {
+      std::size_t offset = 0;
+      std::chrono::steady_clock::time_point last_record_time;
+      bool has_records = false;
+
+      while (running_.load() && offset + sizeof(boat::store::TraceRecordHeader) <= mapped_trace_.size()) {
+        {
+          std::unique_lock<std::mutex> lock(pause_mutex_);
+          pause_cv_.wait(lock, [this] {
+            return !running_.load() || !paused_.load() || seek_pending_.load();
+          });
+          if (!running_.load()) {
+            break;
+          }
+        }
+
+        if (seek_pending_.exchange(false)) {
+          const auto target_tick = requested_seek_tick_.load();
+          SeekToTick(target_tick, offset);
+          current_tick_.store(target_tick);
+          // Reset absolute-timing baseline so the target tick fires immediately.
+          replay_base_time_ = std::chrono::steady_clock::now();
+          replay_base_tick_ = target_tick;
+          continue;
+        }
+
+        boat::store::TraceRecordHeader header{};
+        std::memcpy(&header, mapped_trace_.data() + offset, sizeof(header));
+        offset += sizeof(header);
+        if (header.magic != kTraceMagic) {
+          throw std::runtime_error("invalid trace record magic");
+        }
+
+        if (offset + header.payload_size > mapped_trace_.size()) {
+          throw std::runtime_error("trace record payload out of bounds");
+        }
+
+        // Absolute-time deadline for this record's tick.
+        // t_deadline = t_base + (tick - tick_base) * tick_duration / multiplier
+        double speed_multiplier = active_config_.speed_multiplier;
+        if (speed_multiplier <= 0.0) {
+          speed_multiplier = 1.0;
+        }
+        if (active_config_.speed == ReplaySpeed::REAL_TIME ||
+            active_config_.speed == ReplaySpeed::ACCELERATED) {
+          const auto tick_offset_ns = static_cast<double>(
+              (header.tick - replay_base_tick_) * tick_duration_.count());
+          const auto deadline_offset = std::chrono::nanoseconds(
+              static_cast<std::uint64_t>(tick_offset_ns / speed_multiplier));
+          tick_timer_->WaitUntil(replay_base_time_ + deadline_offset);
+        }
+
+        last_record_time = std::chrono::steady_clock::now();
+        has_records = true;
+
+        std::vector<std::uint8_t> payload(header.payload_size);
+        if (header.payload_size > 0U) {
+          std::memcpy(payload.data(), mapped_trace_.data() + offset, header.payload_size);
+        }
+        offset += header.payload_size;
+
+        {
+          std::lock_guard<std::mutex> lock(forwarder_mutex_);
+          if (event_forwarder_) {
+            event_forwarder_(header.event_type, header.tick, payload);
+          }
+        }
+
+        boat::core::BusEvent event;
+        event.type = header.event_type;
+        event.tick = header.tick;
+        event.payload = boat::core::UnknownPayload{header.event_type, payload};
+        event_bus_.Publish(std::move(event));
+
+        boat::core::BusEvent replay_event;
+        replay_event.type = kReplayBusEventType;
+        replay_event.tick = header.tick;
+        replay_event.payload =
+            payload.empty() ? std::string{} : std::string(reinterpret_cast<const char*>(payload.data()), payload.size());
+        event_bus_.Publish(std::move(replay_event));
+
+        // Push to internal queue so StreamReplay can consume events directly
+        // (no race with EventBus subscription).
+        {
+          std::lock_guard<std::mutex> lock(event_queue_mutex_);
+          event_queue_.push_back({header.tick,
+              payload.empty() ? std::string{} : std::string(reinterpret_cast<const char*>(payload.data()), payload.size())});
+        }
+
+        boat::store::EventRecord record;
+        record.id = std::to_string(header.tick) + "_" + std::to_string(header.event_type);
+        record.simulation_id = active_config_.trace_id;
+        record.tick = header.tick;
+        record.wall_time_ns = header.wall_time_ns;
+        record.signal_id = std::to_string(header.event_type);
+        record.value_type = 0;
+        record.value_blob = std::move(payload);
+        record.tags = "{}";
+        std::array<boat::store::EventRecord, 1> batch{record};
+        event_store_.InsertBatch(std::span<const boat::store::EventRecord>(batch));
+
+        current_tick_.store(header.tick);
+
+        if (active_config_.speed == ReplaySpeed::STEP_BY_STEP) {
+          paused_.store(true);
+          std::unique_lock<std::mutex> lock(pause_mutex_);
+          pause_cv_.wait(lock, [this] {
+            return !running_.load() || !paused_.load() || seek_pending_.load();
+          });
+          if (!running_.load()) {
+            break;
+          }
         }
       }
 
-      if (seek_pending_.exchange(false)) {
-        const auto target_tick = requested_seek_tick_.load();
-        SeekToTick(target_tick, offset);
-        current_tick_.store(target_tick);
-        // Reset absolute-timing baseline so the target tick fires immediately.
-        replay_base_time_ = std::chrono::steady_clock::now();
-        replay_base_tick_ = target_tick;
-        continue;
+      if (!running_.load()) {
+        break;
       }
 
-      boat::store::TraceRecordHeader header{};
-      std::memcpy(&header, mapped_trace_.data() + offset, sizeof(header));
-      offset += sizeof(header);
-      if (header.magic != kTraceMagic) {
-        throw std::runtime_error("invalid trace record magic");
-      }
-
-      if (offset + header.payload_size > mapped_trace_.size()) {
-        throw std::runtime_error("trace record payload out of bounds");
-      }
-
-      // Absolute-time deadline for this record's tick.
-      // t_deadline = t_base + (tick - tick_base) * tick_duration / multiplier
-      double speed_multiplier = active_config_.speed_multiplier;
-      if (speed_multiplier <= 0.0) {
-        speed_multiplier = 1.0;
-      }
-      if (active_config_.speed == ReplaySpeed::REAL_TIME ||
-          active_config_.speed == ReplaySpeed::ACCELERATED) {
-        const auto tick_offset_ns = static_cast<double>(
-            (header.tick - replay_base_tick_) * tick_duration_.count());
-        const auto deadline_offset = std::chrono::nanoseconds(
-            static_cast<std::uint64_t>(tick_offset_ns / speed_multiplier));
-        tick_timer_->WaitUntil(replay_base_time_ + deadline_offset);
-      }
-
-      std::vector<std::uint8_t> payload(header.payload_size);
-      if (header.payload_size > 0U) {
-        std::memcpy(payload.data(), mapped_trace_.data() + offset, header.payload_size);
-      }
-      offset += header.payload_size;
-
-      {
-        std::lock_guard<std::mutex> lock(forwarder_mutex_);
-        if (event_forwarder_) {
-          event_forwarder_(header.event_type, header.tick, payload);
+      if (looping && has_records) {
+        // Wait so the first message of the next pass fires loop_delay_ms
+        // after the last message of this pass.
+        auto target = last_record_time + std::chrono::milliseconds(active_config_.loop_delay_ms);
+        auto now = std::chrono::steady_clock::now();
+        if (target > now) {
+          std::this_thread::sleep_for(target - now);
         }
+        // Reset baseline so the first record of the next pass fires immediately.
+        replay_base_time_ = target;
+        replay_base_tick_ = active_config_.start_tick;
       }
-
-      boat::core::BusEvent event;
-      event.type = header.event_type;
-      event.tick = header.tick;
-      event.payload = boat::core::UnknownPayload{header.event_type, payload};
-      event_bus_.Publish(std::move(event));
-
-      boat::core::BusEvent replay_event;
-      replay_event.type = kReplayBusEventType;
-      replay_event.tick = header.tick;
-      replay_event.payload =
-          payload.empty() ? std::string{} : std::string(reinterpret_cast<const char*>(payload.data()), payload.size());
-      event_bus_.Publish(std::move(replay_event));
-
-      boat::store::EventRecord record;
-      record.id = std::to_string(header.tick) + "_" + std::to_string(header.event_type);
-      record.simulation_id = active_config_.trace_id;
-      record.tick = header.tick;
-      record.wall_time_ns = header.wall_time_ns;
-      record.signal_id = std::to_string(header.event_type);
-      record.value_type = 0;
-      record.value_blob = std::move(payload);
-      record.tags = "{}";
-      std::array<boat::store::EventRecord, 1> batch{record};
-      event_store_.InsertBatch(std::span<const boat::store::EventRecord>(batch));
-
-      current_tick_.store(header.tick);
-
-      if (active_config_.speed == ReplaySpeed::STEP_BY_STEP) {
-        paused_.store(true);
-        std::unique_lock<std::mutex> lock(pause_mutex_);
-        pause_cv_.wait(lock, [this] {
-          return !running_.load() || !paused_.load() || seek_pending_.load();
-        });
-        if (!running_.load()) {
-          break;
-        }
-      }
-    }
+    } while (running_.load() && looping);
   } catch (const std::exception& ex) {
     {
       std::lock_guard<std::mutex> lock(error_mutex_);
@@ -314,6 +349,22 @@ void ReplayController::ReplayLoop() {
   paused_.store(false);
   running_.store(false);
   pause_cv_.notify_all();
+}
+
+void ReplayController::PushEvent(std::uint64_t tick, std::string payload) {
+  std::lock_guard<std::mutex> lock(event_queue_mutex_);
+  event_queue_.push_back({tick, std::move(payload)});
+}
+
+std::vector<ReplayController::ReplayEventEntry> ReplayController::ConsumeEvents() {
+  std::lock_guard<std::mutex> lock(event_queue_mutex_);
+  std::vector<ReplayEventEntry> result;
+  result.reserve(event_queue_.size());
+  while (!event_queue_.empty()) {
+    result.push_back(std::move(event_queue_.front()));
+    event_queue_.pop_front();
+  }
+  return result;
 }
 
 }  // namespace boat::replay
