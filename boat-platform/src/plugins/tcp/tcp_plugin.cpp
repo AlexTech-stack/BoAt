@@ -82,15 +82,15 @@ static bool ResolveMac(const std::string& iface, const uint8_t* ip_bytes, int af
 
 static void SendRaw(btcp::TcpPlugin* plugin, const std::vector<uint8_t>& seg) {
   if (plugin->frame_publish_fn) {
-    BoatFrame bf{};
-    bf.bus_type = BOAT_BUS_ETHERNET;
-    std::memset(bf.meta.eth.dst_mac, 0xFF, 6);
-    std::memset(bf.meta.eth.src_mac, 0x02, 6);
-    bf.meta.eth.src_mac[5] = 0x01;
-    bf.meta.eth.ethertype = (seg[0] >> 4 == 6) ? 0x86DD : 0x0800;
-    bf.payload = const_cast<uint8_t*>(seg.data());
-    bf.payload_len = seg.size();
-    plugin->frame_publish_fn(plugin->frame_publisher_ctx, &bf);
+    uint8_t dst_mac[6], src_mac[6];
+    std::memset(dst_mac, 0xFF, 6);
+    std::memset(src_mac, 0x02, 6);
+    src_mac[5] = 0x01;
+    auto bf = BoatFrameOwner::Ethernet(
+        plugin->raw_iface, dst_mac, src_mac,
+        (seg[0] >> 4 == 6) ? 0x86DD : 0x0800, 0,
+        std::vector<uint8_t>(seg.begin(), seg.end()));
+    plugin->frame_publish_fn(plugin->frame_publisher_ctx, bf.get());
     return;
   }
   std::fprintf(stderr, "[TCP-SEND] method=%s seg_size=%zu iface=%s\n",
