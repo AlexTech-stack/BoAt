@@ -90,4 +90,110 @@ typedef const char* (*BoatDeclaredBusesFn)(void* ctx);
 
 #ifdef __cplusplus
 }
+
+#include <cstring>
+#include <string>
+#include <vector>
+
+/* ── C++ inline init helpers (fill a stack-allocated BoatFrame) ───── */
+
+inline void BoatFrameInitCan(BoatFrame* f, const char* iface,
+                              uint32_t can_id, uint8_t dlc, uint8_t flags,
+                              const uint8_t* payload, size_t payload_len,
+                              bool is_fd = false) noexcept {
+  std::memset(f, 0, sizeof(*f));
+  f->bus_type = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
+  f->iface = iface;
+  f->meta.can.can_id = can_id;
+  f->meta.can.dlc = dlc;
+  f->meta.can.flags = flags;
+  f->payload = const_cast<uint8_t*>(payload);
+  f->payload_len = payload_len;
+}
+
+inline void BoatFrameInitEthernet(BoatFrame* f, const char* iface,
+                                   const uint8_t dst_mac[6],
+                                   const uint8_t src_mac[6],
+                                   uint16_t ethertype, uint16_t vlan_id,
+                                   const uint8_t* payload,
+                                   size_t payload_len) noexcept {
+  std::memset(f, 0, sizeof(*f));
+  f->bus_type = BOAT_BUS_ETHERNET;
+  f->iface = iface;
+  std::memcpy(f->meta.eth.dst_mac, dst_mac, 6);
+  std::memcpy(f->meta.eth.src_mac, src_mac, 6);
+  f->meta.eth.ethertype = ethertype;
+  f->meta.eth.vlan_id = vlan_id;
+  f->payload = const_cast<uint8_t*>(payload);
+  f->payload_len = payload_len;
+}
+
+inline void BoatFrameInitPdu(BoatFrame* f, const char* iface,
+                              uint32_t pdu_id, const uint8_t* payload,
+                              size_t payload_len) noexcept {
+  std::memset(f, 0, sizeof(*f));
+  f->bus_type = BOAT_BUS_PDU;
+  f->iface = iface;
+  f->meta.pdu.pdu_id = pdu_id;
+  f->payload = const_cast<uint8_t*>(payload);
+  f->payload_len = payload_len;
+}
+
+/* ── C++ owning BoatFrame wrapper (RAII) ───────────────────────────── */
+
+class BoatFrameOwner {
+ public:
+  static BoatFrameOwner Can(std::string iface, uint32_t can_id, uint8_t dlc,
+                             uint8_t flags, std::vector<uint8_t> payload,
+                             bool is_fd = false) noexcept {
+    BoatFrameOwner owner;
+    owner.iface_ = std::move(iface);
+    owner.payload_ = std::move(payload);
+    BoatFrameInitCan(&owner.frame_, owner.iface_.c_str(), can_id, dlc, flags,
+                     owner.payload_.data(), owner.payload_.size(), is_fd);
+    return owner;
+  }
+
+  static BoatFrameOwner CanFd(std::string iface, uint32_t can_id, uint8_t dlc,
+                               uint8_t flags,
+                               std::vector<uint8_t> payload) noexcept {
+    return Can(std::move(iface), can_id, dlc, flags, std::move(payload), true);
+  }
+
+  static BoatFrameOwner Ethernet(std::string iface,
+                                  const uint8_t dst_mac[6],
+                                  const uint8_t src_mac[6],
+                                  uint16_t ethertype, uint16_t vlan_id,
+                                  std::vector<uint8_t> payload) noexcept {
+    BoatFrameOwner owner;
+    owner.iface_ = std::move(iface);
+    owner.payload_ = std::move(payload);
+    BoatFrameInitEthernet(&owner.frame_, owner.iface_.c_str(),
+                          dst_mac, src_mac, ethertype, vlan_id,
+                          owner.payload_.data(), owner.payload_.size());
+    return owner;
+  }
+
+  static BoatFrameOwner Pdu(std::string iface, uint32_t pdu_id,
+                             std::vector<uint8_t> payload) noexcept {
+    BoatFrameOwner owner;
+    owner.iface_ = std::move(iface);
+    owner.payload_ = std::move(payload);
+    BoatFrameInitPdu(&owner.frame_, owner.iface_.c_str(), pdu_id,
+                     owner.payload_.data(), owner.payload_.size());
+    return owner;
+  }
+
+  const BoatFrame* operator->() const noexcept { return &frame_; }
+  BoatFrame* operator->() noexcept { return &frame_; }
+  const BoatFrame* get() const noexcept { return &frame_; }
+  BoatFrame* get() noexcept { return &frame_; }
+
+ private:
+  BoatFrameOwner() = default;
+  std::string iface_;
+  std::vector<uint8_t> payload_;
+  BoatFrame frame_{};
+};
+
 #endif

@@ -33,14 +33,13 @@ void responder_on_frame(void* ctx, const BoatFrame* frame) {
 
   if (plugin->frame_publish_fn == nullptr) return;
 
-  BoatFrame response{};
-  response.bus_type    = BOAT_BUS_CAN;
-  response.payload     = const_cast<uint8_t*>(kPayload);
-  response.payload_len = 8;
-  response.meta.can.can_id = kRespondCanId;
-  response.meta.can.dlc    = 8;
-  response.meta.can.flags  = 0;
-  plugin->frame_publish_fn(plugin->frame_publisher_ctx, &response);
+  {
+    auto response = BoatFrameOwner::Can(
+        frame->iface ? frame->iface : "",
+        kRespondCanId, 8, 0,
+        std::vector<uint8_t>(kPayload, kPayload + 8));
+    plugin->frame_publish_fn(plugin->frame_publisher_ctx, response.get());
+  }
 }
 
 const char* responder_declared_buses(void* /*ctx*/) {

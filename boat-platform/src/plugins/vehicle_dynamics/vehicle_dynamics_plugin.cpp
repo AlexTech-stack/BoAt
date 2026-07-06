@@ -64,22 +64,18 @@ void vehicle_on_tick(void* ctx, uint64_t tick) {
     };
 
     // CAN 0x100 — speed
-    BoatFrame sf{};
-    sf.bus_type    = BOAT_BUS_CAN;
-    sf.payload     = speed_buf;
-    sf.payload_len = 4;
-    sf.meta.can.can_id = 0x100;
-    sf.meta.can.dlc    = 4;
-    plugin->frame_publish_fn(plugin->frame_publisher_ctx, &sf);
+    {
+      auto sf = BoatFrameOwner::Can("", 0x100, 4, 0,
+                                     std::vector<uint8_t>(speed_buf, speed_buf + 4));
+      plugin->frame_publish_fn(plugin->frame_publisher_ctx, sf.get());
+    }
 
     // CAN 0x101 — rpm
-    BoatFrame rf{};
-    rf.bus_type    = BOAT_BUS_CAN;
-    rf.payload     = rpm_buf;
-    rf.payload_len = 4;
-    rf.meta.can.can_id = 0x101;
-    rf.meta.can.dlc    = 4;
-    plugin->frame_publish_fn(plugin->frame_publisher_ctx, &rf);
+    {
+      auto rf = BoatFrameOwner::Can("", 0x101, 4, 0,
+                                     std::vector<uint8_t>(rpm_buf, rpm_buf + 4));
+      plugin->frame_publish_fn(plugin->frame_publisher_ctx, rf.get());
+    }
 
     // Ethernet — 8-byte payload (speed + rpm)
     std::vector<uint8_t> payload(8);
@@ -88,14 +84,14 @@ void vehicle_on_tick(void* ctx, uint64_t tick) {
     payload[4] = rpm_buf[0];   payload[5] = rpm_buf[1];
     payload[6] = rpm_buf[2];   payload[7] = rpm_buf[3];
 
-    BoatFrame ef{};
-    ef.bus_type    = BOAT_BUS_ETHERNET;
-    ef.payload     = payload.data();
-    ef.payload_len = payload.size();
-    std::memset(ef.meta.eth.dst_mac, 0xFF, 6);
-    std::memset(ef.meta.eth.src_mac, 0x02, 6);
-    ef.meta.eth.ethertype = 0x0800;
-    plugin->frame_publish_fn(plugin->frame_publisher_ctx, &ef);
+    {
+      uint8_t dst_mac[6], src_mac[6];
+      std::memset(dst_mac, 0xFF, 6);
+      std::memset(src_mac, 0x02, 6);
+      auto ef = BoatFrameOwner::Ethernet("", dst_mac, src_mac,
+                                          0x0800, 0, std::move(payload));
+      plugin->frame_publish_fn(plugin->frame_publisher_ctx, ef.get());
+    }
   }
 
   // Bus-signal publishing

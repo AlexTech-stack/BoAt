@@ -101,15 +101,11 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
       }
       const uint8_t cf_dlc = static_cast<uint8_t>(idx + chunk);
 
-      BoatFrame cf{};
-      cf.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
-      cf.payload      = cf_buf;
-      cf.payload_len  = cf_dlc;
-      cf.meta.can.can_id = conn->source_addr;
-      cf.meta.can.dlc    = cf_dlc;
-      cf.meta.can.flags  = is_fd ? 0x04 : 0;
-
-      plugin->frame_publish_fn(plugin->frame_publisher_ctx, &cf);
+      auto cf = BoatFrameOwner::Can(
+          plugin->iface, conn->source_addr,
+          cf_dlc, static_cast<uint8_t>(is_fd ? 0x04 : 0),
+          std::vector<uint8_t>(cf_buf, cf_buf + cf_dlc), is_fd);
+      plugin->frame_publish_fn(plugin->frame_publisher_ctx, cf.get());
 
       {
         std::lock_guard<std::mutex> lock(plugin->tx_mutex);
@@ -300,15 +296,14 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
       fc_buf[idx++] = 0;  // BS (don't care for overflow)
       fc_buf[idx++] = 0;  // STmin (don't care for overflow)
 
-      BoatFrame fc{};
-      fc.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
-      fc.payload      = fc_buf;
-      fc.payload_len  = idx;
-      fc.meta.can.can_id = conn->source_addr;
-      fc.meta.can.dlc    = static_cast<uint8_t>(idx);
-      fc.meta.can.flags  = is_fd ? 0x04 : 0;
-
-      plugin->frame_publish_fn(plugin->frame_publisher_ctx, &fc);
+      {
+        auto fc = BoatFrameOwner::Can(
+            plugin->iface, conn->source_addr,
+            static_cast<uint8_t>(idx),
+            static_cast<uint8_t>(is_fd ? 0x04 : 0),
+            std::vector<uint8_t>(fc_buf, fc_buf + idx), is_fd);
+        plugin->frame_publish_fn(plugin->frame_publisher_ctx, fc.get());
+      }
       return;
     }
 
@@ -333,15 +328,14 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     fc_buf[idx++] = conn->config.block_size;  // BS (0 = unlimited)
     fc_buf[idx++] = conn->config.st_min;      // STmin
 
-    BoatFrame fc{};
-    fc.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
-    fc.payload      = fc_buf;
-    fc.payload_len  = idx;
-    fc.meta.can.can_id = conn->source_addr;
-    fc.meta.can.dlc    = static_cast<uint8_t>(idx);
-    fc.meta.can.flags  = is_fd ? 0x04 : 0;
-
-    plugin->frame_publish_fn(plugin->frame_publisher_ctx, &fc);
+    {
+      auto fc = BoatFrameOwner::Can(
+          plugin->iface, conn->source_addr,
+          static_cast<uint8_t>(idx),
+          static_cast<uint8_t>(is_fd ? 0x04 : 0),
+          std::vector<uint8_t>(fc_buf, fc_buf + idx), is_fd);
+      plugin->frame_publish_fn(plugin->frame_publisher_ctx, fc.get());
+    }
     return;
   }
 
@@ -384,15 +378,12 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
         fc_buf[fcidx++] = conn->config.block_size;
         fc_buf[fcidx++] = conn->config.st_min;
 
-        BoatFrame fc{};
-        fc.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
-        fc.payload      = fc_buf;
-        fc.payload_len  = fcidx;
-        fc.meta.can.can_id = conn->source_addr;
-        fc.meta.can.dlc    = static_cast<uint8_t>(fcidx);
-        fc.meta.can.flags  = is_fd ? 0x04 : 0;
-
-        plugin->frame_publish_fn(plugin->frame_publisher_ctx, &fc);
+        auto fc = BoatFrameOwner::Can(
+            plugin->iface, conn->source_addr,
+            static_cast<uint8_t>(fcidx),
+            static_cast<uint8_t>(is_fd ? 0x04 : 0),
+            std::vector<uint8_t>(fc_buf, fc_buf + fcidx), is_fd);
+        plugin->frame_publish_fn(plugin->frame_publisher_ctx, fc.get());
       }
     }
     return;
@@ -480,15 +471,13 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
     std::memcpy(sf_buf + idx, data, len);
     const uint8_t sf_dlc = static_cast<uint8_t>(idx + len);
 
-    BoatFrame sf{};
-    sf.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
-    sf.payload      = sf_buf;
-    sf.payload_len  = sf_dlc;
-    sf.meta.can.can_id = conn->source_addr;
-    sf.meta.can.dlc    = sf_dlc;
-    sf.meta.can.flags  = is_fd ? 0x04 : 0;
-
-    plugin->frame_publish_fn(plugin->frame_publisher_ctx, &sf);
+    {
+      auto sf = BoatFrameOwner::Can(
+          plugin->iface, conn->source_addr,
+          sf_dlc, static_cast<uint8_t>(is_fd ? 0x04 : 0),
+          std::vector<uint8_t>(sf_buf, sf_buf + sf_dlc), is_fd);
+      plugin->frame_publish_fn(plugin->frame_publisher_ctx, sf.get());
+    }
     return 1;
   }
 
@@ -506,15 +495,13 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
   std::memcpy(ff_buf + idx, data, ff_payload);
   const uint8_t ff_dlc = static_cast<uint8_t>(idx + ff_payload);
 
-  BoatFrame ff{};
-  ff.bus_type     = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
-  ff.payload      = ff_buf;
-  ff.payload_len  = ff_dlc;
-  ff.meta.can.can_id = conn->source_addr;
-  ff.meta.can.dlc    = ff_dlc;
-  ff.meta.can.flags  = is_fd ? 0x04 : 0;
-
-  plugin->frame_publish_fn(plugin->frame_publisher_ctx, &ff);
+  {
+    auto ff = BoatFrameOwner::Can(
+        plugin->iface, conn->source_addr,
+        ff_dlc, static_cast<uint8_t>(is_fd ? 0x04 : 0),
+        std::vector<uint8_t>(ff_buf, ff_buf + ff_dlc), is_fd);
+    plugin->frame_publish_fn(plugin->frame_publisher_ctx, ff.get());
+  }
 
   // Initialize TX state machine
   {

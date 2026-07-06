@@ -155,14 +155,12 @@ void someip_on_frame(void* ctx, const BoatFrame* frame) {
       auto eth_frame = BuildSomeipUdpFrame(udp_dst, udp_src,
                                             response_payload.data(),
                                             response_payload.size());
-      BoatFrame response{};
-      response.bus_type    = BOAT_BUS_ETHERNET;
-      response.payload     = eth_frame.data();
-      response.payload_len = eth_frame.size();
-      std::memcpy(response.meta.eth.dst_mac, eth.src_mac, 6);
-      std::memcpy(response.meta.eth.src_mac, eth.dst_mac, 6);
-      response.meta.eth.ethertype = eth.ethertype;
-      plugin->frame_publish_fn(plugin->frame_publisher_ctx, &response);
+      {
+        auto response = BoatFrameOwner::Ethernet(
+            "", eth.src_mac, eth.dst_mac,
+            eth.ethertype, 0, std::move(eth_frame));
+        plugin->frame_publish_fn(plugin->frame_publisher_ctx, response.get());
+      }
     }
   }
 }
