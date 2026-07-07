@@ -97,7 +97,7 @@ OEM engineers, Tier-1 suppliers, open-source community contributors, CI/CD autom
 | R08 | No TLS on gRPC port by default | Medium | Medium | The gateway binds to 0.0.0.0:50051 with no transport security. Any process on the network can send gRPC calls. No authentication, no authorization layer implemented. |
 | R09 | Determinism broken by FP in plugins | Medium | High | Core engine avoids FP, but plugins (vehicle_dynamics, sensor_model) use it freely. No `-ffloat-store` or `-frounding-math` compiler flags enforced. CI determinism test is scenario-level — a plugin FP regression could slip through if the scenario doesn't exercise that path. |
 | R10 | iceoryx2 API instability on upgrade | Medium | High | Pinned to v0.4.1 via GIT_TAG. The wrapper layer (ShmPublisher/ShmSubscriber) reduces surface area but doesn't eliminate risk. Upgrading to v0.5+ may require non-trivial adaptation. iceoryx2 is pre-1.0 and its C++ API has no stability promise. |
-| R11 | Plugin ABI breakage | Medium | High | ABI v7 checked at dlopen (plugin_manager.cpp:53). Mismatched .so is rejected, which prevents silent breakage but leaves the user with a hard error and no fallback path. |
+| R11 | Plugin ABI breakage | Medium | High | ABI v8 checked at dlopen (plugin_manager.cpp:53). Mismatched .so is rejected, which prevents silent breakage but leaves the user with a hard error and no fallback path (v7 fallbacks were removed in the v8 cleanup). |
 | R12 | vcan-only CI misses hardware-specific failures | Medium | Medium | CI runs exclusively on virtual CAN (vcan0). Real hardware behaviors — bus-off recovery, error frames, arbitration timing, cable fault, signal degradation — are never exercised in CI. HIL tests require a self-hosted runner with physical hardware. |
 
 ## Governance

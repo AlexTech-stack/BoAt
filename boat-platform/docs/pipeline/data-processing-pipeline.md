@@ -38,10 +38,15 @@ sequenceDiagram
   - value threshold
 - Filters are compiled to predicates at subscription time to avoid per-event string parsing.
 
-## Replay
+## Replay (ABI v8, plugin-based)
 
-- `ReplayEngine` reads binary traces using `mmap`.
-- Events are reconstructed onto the `EventBus` at original tick timestamps.
+- `ReplayController` reads binary traces using `mmap`. Each record is a
+  length-delimited `boat.v1.Frame` protobuf.
+- Records are converted to `core::Frame` and dispatched through
+  `PluginManager::DispatchFrame()` at original timestamps (absolute-time
+  `timerfd` scheduling). The built-in `FrameForwarderPlugin` receives each frame
+  via `on_frame` and forwards it to the CAN/Ethernet bus registries; `SELF_SENT`
+  flags prevent dispatch loops.
 - Determinism controls:
   - fixed RNG seed
   - fixed tick order

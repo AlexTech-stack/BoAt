@@ -400,9 +400,13 @@
   ┌─────────────────────────────────────────────────────┐
   │              BoAt Gateway  (:50051 gRPC)             │
   │                                                     │
-  │  CanService  EthernetService  PduService  ...       │
-  │       │            │               │                │
-  │  CanBusRegistry  EthernetBusRegistry  PduRouter     │
+  │  FrameService  CanService  PduService  ...          │
+  │       │                                             │
+  │  PluginManager ── DispatchFrame(BoatFrame) ──┐      │
+  │       │                                      ▼      │
+  │  [ pdu_router  frame_forwarder  can_tp  tcp  ... ]  │  ← v8 plugins (.so)
+  │       │            │                                │
+  │  CanBusRegistry  EthernetBusRegistry                │
   │       │            │                                │
   │  [vcan0] [vcan1]  [veth0] [raw:enxABC] [veth1]     │
   └─────────────────────────────────────────────────────┘
@@ -419,6 +423,15 @@
   Clients — CLI, Python nodes, or any gRPC client — connect on TCP port <code>50051</code>.
 </p>
 
+<p>
+  <strong>ABI v8:</strong> the gateway dispatches every frame — regardless of bus type —
+  through <code>PluginManager::DispatchFrame()</code> as a unified <code>BoatFrame</code>.
+  Plugins receive frames via <code>on_frame</code> and publish via
+  <code>set_frame_publisher</code>. The built-in <code>FrameForwarderPlugin</code> bridges
+  dispatched frames to the bus registries. Even PDU routing is now a plugin
+  (<code>pdu_router.so</code>) rather than gateway-core logic.
+</p>
+
 <h3>Bus Registries</h3>
 <table>
   <tr><th>Registry</th><th>Driver types</th><th>Notes</th></tr>
@@ -426,12 +439,15 @@
   <tr><td>EthernetBusRegistry</td><td>VirtualEthernetDriver (multicast UDP), RawSocketEthernetDriver (AF_PACKET)</td><td>Virtual or physical NIC</td></tr>
 </table>
 
-<h3>PDU Router</h3>
+<h3>PDU Router (plugin)</h3>
 <p>
-  The <code>PduRouter</code> sits on top of both registries and maps 32-bit PDU IDs to physical
-  transports. Routes are added at runtime via <code>ConfigureRoute</code>. When a PDU is sent,
-  the router looks up the route and forwards it as a CAN frame or an Ethernet UDP/IpduM datagram.
-  Incoming frames are parsed back to PDU frames and delivered to all active <code>SubscribePdus</code> streams.
+  As of ABI v8 the <code>PduRouter</code> is a runtime plugin (<code>pdu_router.so</code>), not
+  gateway-core logic. It registers itself as the <code>IPduRouter</code> service, and
+  <code>PduServiceImpl</code> delegates to it via <code>FindService("pdu_router")</code>. It maps
+  32-bit PDU IDs to physical transports; routes are added at runtime via <code>ConfigureRoute</code>.
+  When a PDU is sent, the router looks up the route and forwards it as a CAN frame or an Ethernet
+  UDP/IpduM datagram (published through <code>set_frame_publisher</code>). Incoming frames are parsed
+  back to PDU frames and delivered to all active <code>SubscribePdus</code> streams.
 </p>
 
 <!-- ═══ QUICK START ═══ -->
@@ -1659,8 +1675,9 @@ boat trace replay traces/motor_test_*.asc --buses vcan0 --speed 2.0</code></pre>
 
 <table>
   <tr><th>Service</th><th>Proto file</th><th>Key RPCs</th></tr>
-  <tr><td>CanService</td><td>can.proto</td><td>SendCanFrame, SubscribeCanFrames, ListBuses</td></tr>
-  <tr><td>EthernetService</td><td>ethernet.proto</td><td>SendFrame, SubscribeFrames, ListInterfaces</td></tr>
+  <tr><td>FrameService <em>(v8, unified)</em></td><td>frame.proto</td><td>SendFrame, SubscribeFrames — one send/subscribe surface for all bus types (CAN/CANFD/ETHERNET/PDU/TCP)</td></tr>
+  <tr><td>CanService <em>(legacy)</em></td><td>can.proto</td><td>SendCanFrame, SubscribeCanFrames, ListBuses</td></tr>
+  <tr><td>EthernetService <em>(legacy)</em></td><td>ethernet.proto</td><td>SendFrame, SubscribeFrames, ListInterfaces</td></tr>
   <tr><td>PduService</td><td>pdu.proto</td><td>SendPdu, SubscribePdus, ConfigureRoute, ListRoutes, ConfigureContainer, ConfigureGroup, EnableGroup, DisableGroup, ListGroups, RemoveRoute</td></tr>
   <tr><td>SimulationService</td><td>simulation.proto</td><td>Create/Start/Pause/Step/Reset/Stop/GetState/Watch/ListSimulations</td></tr>
   <tr><td>SignalService</td><td>signal.proto</td><td>InjectSignal, SubscribeSignals, GetSignalHistory</td></tr>
