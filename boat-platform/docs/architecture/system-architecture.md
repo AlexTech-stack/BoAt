@@ -69,15 +69,12 @@ boat-platform/
 │   ├── hil/                        # CAN/Ethernet registries, drivers, bus bridges,
 │   │                               #   PDU router sources (pdu_router.cpp, transmission_engine, ipdumcontainer, com, tick_timer)
 │   ├── gateway/grpc_gateway/       # gRPC server entry point, all service implementations
-│   └── plugins/                    # 8 built-in plugins (v8 ABI, all loaded at runtime):
+│   └── plugins/                    # built-in plugins (v8 ABI, loaded at runtime) —
+│       │                           #   stateful conversations / variation only:
 │       ├── pdu_router/             # PduRouter — PDU routing, transmission engine, groups, deadlines
-│       ├── vehicle_dynamics/       # Simulated vehicle speed/RPM, CAN + ETH output
-│       ├── sensor_model/           # Sensor simulation (LIDAR/CAMERA/RADAR)
-│       ├── network_sim/            # Network bus load simulation
-│       ├── can_responder/          # CAN frame responder (0x123 → 0x234)
 │       ├── can_tp/                 # ISO 15765-2 CAN Transport Protocol
 │       ├── someip/                 # SOME/IP middleware (service discovery stub)
-│       └── tcp/                    # TCP transport plugin (gateway-resident, config-driven)
+│       └── tcp/                    # TCP plugin (state machine; transmits via core Eth registry)
 ├── sdk/
 │   ├── cpp/include/boat/
 │   │   ├── plugin.h               # Plugin ABI v8 (9 vtable fields)

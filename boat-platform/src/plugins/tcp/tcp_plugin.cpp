@@ -81,6 +81,9 @@ static bool ResolveMac(const std::string& iface, const uint8_t* ip_bytes, int af
 }
 
 static void SendRaw(btcp::TcpPlugin* plugin, const std::vector<uint8_t>& seg) {
+  // In-gateway path (the normal case): the plugin owns only the TCP state
+  // machine and hands every segment to the core Ethernet registry through the
+  // frame publisher. It never touches the wire directly here.
   if (plugin->frame_publish_fn) {
     uint8_t dst_mac[6], src_mac[6];
     std::memset(dst_mac, 0xFF, 6);
@@ -93,10 +96,11 @@ static void SendRaw(btcp::TcpPlugin* plugin, const std::vector<uint8_t>& seg) {
     plugin->frame_publish_fn(plugin->frame_publisher_ctx, bf.get());
     return;
   }
-  std::fprintf(stderr, "[TCP-SEND] method=%s seg_size=%zu iface=%s\n",
-               plugin->frame_publish_fn ? "gateway" : "raw",
+  // Standalone fallback only (plugin loaded without a gateway frame publisher):
+  // transmit via a raw AF_PACKET socket. This path is never used inside the
+  // gateway, so there is no second wire path to reconcile there.
+  std::fprintf(stderr, "[TCP-SEND] standalone raw send seg_size=%zu iface=%s\n",
                seg.size(), plugin->raw_iface.c_str());
-  // Fallback: send via raw AF_PACKET socket
   if (plugin->raw_iface.empty()) {
     std::fprintf(stderr, "[TCP-SEND] no raw_iface, dropping\n");
     return;

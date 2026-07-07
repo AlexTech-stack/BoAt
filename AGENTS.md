@@ -13,17 +13,13 @@
     - `pdu/tick_timer.h/.cpp` — Dual-backend tick timer (sleep_for / timerfd)
   - `src/store/` — SQLite event/trace/config stores
   - `src/ipc/` — Inter-process comm (gRPC, iceoryx2 SHM, UDS)
-  - `src/plugins/` — Built-in plugins (all v8 ABI, `on_frame`/`set_frame_publisher`)
+  - `src/plugins/` — Built-in plugins (all v8 ABI, `on_frame`/`set_frame_publisher`).
+    Plugins own **stateful conversations / variation** only; stateless CAN/Ethernet
+    transport is core (see the `FrameSink` note under Replay).
     - `pdu_router/` — PduRouter plugin (routes PDUs over CAN/Ethernet, transmission engine, deadline monitoring, groups)
-    - `vehicle_dynamics/` — Simulated vehicle (speed/RPM, CAN + ETH output)
-    - `sensor_model/` — Sensor simulation (LIDAR/CAMERA/RADAR)
-    - `network_sim/` — Network bus load simulation
-    - `can_responder/` — CAN frame responder (0x123 → 0x234)
     - `can_tp/` — ISO 15765-2 CAN Transport Protocol (segmentation/reassembly)
     - `someip/` — SOME/IP middleware (service discovery stub, request/response)
-    - `tcp/` — TCP transport plugin (gateway-resident, config-driven)
-    - `frame_forwarder/` — Frame forwarder plugin (replay→HW bridge, always on)
-    - `can_io/` — Lightweight CAN I/O plugin (direct SocketCAN, no registry)
+    - `tcp/` — TCP transport plugin (state machine only; transmits via the core Eth registry when gateway-resident)
   - `src/replay/` — Replay engine
   - `proto/boat/v1/` — 16 protobuf definitions defining all gRPC services
   - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
@@ -73,11 +69,11 @@ BOAT_CAN_INTERFACES=vcan0 \
 ./build/debug/src/plugins/can_tp/can_tp.so?{\"iface\":\"vcan0\"} \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 
-# Run gateway with all plugins
+# Run gateway with all kept plugins
 BOAT_CAN_INTERFACES=vcan0 \
   BOAT_NODE_PLUGINS=./build/debug/src/plugins/pdu_router/pdu_router.so,\
 ./build/debug/src/plugins/can_tp/can_tp.so?{\"iface\":\"vcan0\"},\
-./build/debug/src/plugins/vehicle_dynamics/vehicle_dynamics.so,\
+./build/debug/src/plugins/someip/someip.so,\
 ./build/debug/src/plugins/tcp/tcp.so?{\"mode\":\"server\",\"listen_port\":8080,\"iface\":\"eth0\"} \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
@@ -344,15 +340,15 @@ BOAT_NODE_PLUGINS=./build/debug/src/plugins/someip/someip.so \
 
 Config: `{"sd_port": 30490}`. Registers offered services; responds to REQUEST messages with RESPONSE echoes.
 
-## Replay System (ABI v8) — Plugin-Based Architecture
+## Replay System (ABI v8) — Core-Sink Architecture
 
 The replay system reads trace files (.asc, .blf, .pcap), converts them to protobuf
-`boat.v1.Frame` records, and replays them through the plugin pipeline.
+`boat.v1.Frame` records, and transmits them through the single core `FrameSink`.
 
 ### Architecture overview
 
 ```
-Import                Replay Engine               Plugin Pipeline           Hardware
+Import                Replay Engine                Core Sink                 Hardware
 ───────             ───────────────             ──────────────────         ────────
 .asc/.blf/.pcap  →  convert_to_binary()     →  Frame protobuf records
                         │                          │
@@ -363,27 +359,24 @@ Import                Replay Engine               Plugin Pipeline           Hard
                    trace_store               ProtoToCoreFrame()
                       (mmap)                      │
                                                   ▼
-                                            core::Frame → ToAbi()
-                                                  │
+                                     replay_controller.SetEventForwarder
+                                                  │  (core::Frame)
                                                   ▼
-                                     PluginManager::DispatchFrame()
-                                                  │
-                                          ┌───────┴────────┐
-                                          │ FrameForwarder │ ← built-in plugin
-                                          │ Plugin.on_frame│   (always loaded)
-                                          └───────┬────────┘
-                                                  │ frame_publish_fn
-                                          ┌───────┴────────┐
-                                          │ SetFramePublisher lambda
-                                          │ BoatFrame → HW registry
-                                          └───────┬────────┘
+                                          ┌─────────────────┐
+                                          │ FrameSink::      │  single frame→wire sink
+                                          │ Publish()        │  (routes by bus_type)
+                                          └───────┬─────────┘
                                                   ▼
                                    can_registry.SendFrame(iface)
                                    eth_registry.SendFrame(iface)
-                                                  │
+                                                  │  writes wire + DispatchRx
                                                   ▼
-                                           Physical bus (vcan0, can1, eth0,...)
+                            Physical bus (vcan0, can1, eth0,...)  +  plugins' on_frame
 ```
+
+The registry's RX dispatch delivers each replayed frame to plugins' `on_frame`
+(tagged self-sent), so plugins still observe replayed traffic — no forwarder
+plugin is involved.
 
 ### Key components
 
@@ -402,17 +395,14 @@ The `Frame` message contains full bus-agnostic metadata: `bus_type`, `iface`,
 Ethernet metadata (`dst_mac`, `src_mac`, `ethertype`, `src_ip`, `dst_ip`,
 `ip_version`, `flags`).
 
-#### FrameForwarderPlugin (`src/plugins/frame_forwarder/`)
+#### FrameSink (`src/gateway/grpc_gateway/frame_sink.{h,cpp}`)
 
-A built-in plugin that forwards every `BoatFrame` dispatched by the plugin
-manager to the appropriate hardware bus. Loaded automatically at gateway
-startup (or via `BOAT_NODE_PLUGINS`).
-
-- **`on_frame`**: receives frames from `PluginManager::DispatchFrame()`
-- **Loopback prevention**: checks `BOAT_CAN_FLAG_SELF_SENT` (CAN) and
-  `BOAT_ETH_FLAG_SELF_SENT` (Ethernet) to avoid re-sending locally-generated
-  frames
-- **`declared_buses`**: `["can","canfd","eth","pdu","tcp"]`
+The single path a frame reaches a bus. It routes a `core::Frame` by `bus_type`
+to `CanBusRegistry` / `EthernetBusRegistry`. Every producer uses it — plugins
+(via `frame_publish_fn`), replay (`SetEventForwarder`), and gRPC
+`FrameService.SendFrame`. There is no forwarder plugin and no `can_io`
+direct-socket alternative. Loopback prevention lives in the registry send path
+(the one site that tags `BOAT_CAN_FLAG_SELF_SENT` / `BOAT_ETH_FLAG_SELF_SENT`).
 
 #### ReplayController (`src/replay/`)
 
@@ -461,54 +451,26 @@ boat trace replay trace.asc --server-side --loop 250 --verbose
 
 ### Loopback prevention
 
-Both CAN and Ethernet registries tag locally-sent frames to prevent infinite
-dispatch loops:
+The registry send path is the single site that tags locally-sent frames to
+prevent infinite dispatch loops:
 
 - **CAN**: `CanBusRegistry::SendFrame()` sets `BOAT_CAN_FLAG_SELF_SENT = 0x08`
-  in `CanFrame.flags`. Propagated through `core::Frame` → `BoatFrame.meta.can.flags`.
+  in `CanFrame.flags`, then `DispatchRx`. Propagates through `core::Frame` →
+  `BoatFrame.meta.can.flags`.
 - **Ethernet**: `EthernetBusRegistry::SendFrame()` sets
-  `BOAT_ETH_FLAG_SELF_SENT = 0x01` in `EthernetFrame.flags`. Propagated through
-  `core::Frame` → `BoatFrame.meta.eth.flags`.
+  `BOAT_ETH_FLAG_SELF_SENT = 0x01` in `EthernetFrame.flags`, then `DispatchRx`.
+  Propagates through `core::Frame` → `BoatFrame.meta.eth.flags`.
 
-The `FrameForwarderPlugin` checks these flags and skips self-sent frames.
+Plugins that only want wire RX check these flags in `on_frame` to skip their own
+echoes. Because there is no forwarder plugin re-transmitting frames, echo-safety
+is no longer per-plugin discipline — it's owned by the one registry send path.
 
-### Plugin loading
+### Frame dispatch filtering
 
-The `FrameForwarderPlugin` is auto-loaded at gateway startup unless already
-present in `BOAT_NODE_PLUGINS`. Set `BOAT_FRAME_FORWARDER_PATH` to override
-the default path (`./src/plugins/frame_forwarder/frame_forwarder.so`).
-
-```bash
-# With custom path
-BOAT_FRAME_FORWARDER_PATH=./build/release/src/plugins/frame_forwarder/frame_forwarder.so \
-  BOAT_CAN_INTERFACES=vcan0 \
-  ./build/debug/src/gateway/grpc_gateway/boat_gateway
-
-# Or include it in BOAT_NODE_PLUGINS explicitly
-BOAT_CAN_INTERFACES=vcan0 \
-  BOAT_NODE_PLUGINS=./build/debug/src/plugins/frame_forwarder/frame_forwarder.so,\
-./build/debug/src/plugins/pdu_router/pdu_router.so \
-  ./build/debug/src/gateway/grpc_gateway/boat_gateway
-```
-
-### CAN IO Plugin
-
-The `can_io` plugin is a lightweight alternative to `FrameForwarderPlugin` for
-CAN-only scenarios. It opens SocketCAN sockets directly and writes frames to
-the bus without going through `CanBusRegistry`. It also reads frames from the
-bus and injects them into the plugin pipeline via `on_tick`+`frame_publish_fn`
-(with `BOAT_CAN_FLAG_SELF_SENT` tag to prevent the `FrameForwarderPlugin` from
-re-sending).
-
-```bash
-# Load can_io instead of frame_forwarder (avoids double-send)
-# Set BOAT_CAN_INTERFACES="" to avoid conflict with the default CAN stack
-BOAT_CAN_INTERFACES="" \
-  BOAT_NODE_PLUGINS=./build/debug/src/plugins/can_io/can_io.so?{\"ifaces\":[\"vcan0\",\"can1\"]} \
-  ./build/debug/src/gateway/grpc_gateway/boat_gateway
-```
-
-When `can_io` is loaded, the `FrameForwarderPlugin` auto-load is skipped.
+`PluginManager::DispatchFrame()` calls `on_frame` **only** on plugins whose
+`declared_buses()` includes the frame's `bus_type` (parsed once at load into a
+bitmask). A plugin that declares nothing receives all bus types. This avoids
+fanning every frame out to every plugin.
 
 ## AUTOSAR specification reference
 

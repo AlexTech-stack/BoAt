@@ -154,12 +154,21 @@ grpc::Status FrameServiceImpl::SendFrame(grpc::ServerContext*,
       response->set_accepted(true);
       break;
     }
-    case boat::core::Frame::BusType::kTcp:
     case boat::core::Frame::BusType::kPdu: {
-      // TCP and PDU frames go through the plugin frame bus, not hardware registries.
-      // For now, return unsupported — handled in Part D (PDU dispatch / TCP redirect).
-      response->set_accepted(false);
+      // PDU frames are not a wire bus — dispatch to the plugin frame bus so the
+      // pdu_router plugin (if loaded) routes them onto their configured transport.
+      BoatFrame abi{};
+      frame.ToAbi(&abi);
+      ctx_.plugin_manager.DispatchFrame(abi);
+      response->set_accepted(true);
       break;
+    }
+    case boat::core::Frame::BusType::kTcp: {
+      // TCP is a stateful conversation, not a fire-and-forget frame: it is driven
+      // through the TCP plugin's own connection API, not raw FrameService.SendFrame.
+      return grpc::Status(
+          grpc::StatusCode::UNIMPLEMENTED,
+          "TCP is connection-oriented; use the TCP plugin, not FrameService.SendFrame");
     }
     default:
       response->set_accepted(false);
