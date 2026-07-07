@@ -209,15 +209,30 @@ int main() {
     });
 
     // Load node plugins from BOAT_NODE_PLUGINS env var.
-    // Entries are separated by comma.  Each entry may optionally specify a
-    // JSON config separated by '?':
-    //   ./can_tp.so?{"iface":"can0"},./can_tp.so?{"iface":"can1"}
+    // Entries are separated by commas.  Each entry may optionally append a JSON
+    // config with '?':
+    //   ./can_tp.so?{"iface":"can0"},./tcp.so?{"mode":"server","port":8080}
+    // The split is brace-aware so commas *inside* a {...} config do not split
+    // an entry.
     {
       const char* nodes_env = std::getenv("BOAT_NODE_PLUGINS");
       if (nodes_env != nullptr) {
-        std::istringstream ss(nodes_env);
-        std::string entry;
-        while (std::getline(ss, entry, ',')) {
+        std::vector<std::string> entries;
+        std::string cur;
+        int brace_depth = 0;
+        for (const char* c = nodes_env; *c != '\0'; ++c) {
+          if (*c == '{') ++brace_depth;
+          else if (*c == '}') { if (brace_depth > 0) --brace_depth; }
+          if (*c == ',' && brace_depth == 0) {
+            entries.push_back(cur);
+            cur.clear();
+          } else {
+            cur.push_back(*c);
+          }
+        }
+        entries.push_back(cur);
+
+        for (const auto& entry : entries) {
           if (entry.empty()) continue;
           auto qpos = entry.find('?');
           std::string so_path  = entry.substr(0, qpos);
