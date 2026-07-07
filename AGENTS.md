@@ -20,6 +20,7 @@
     - `can_tp/` — ISO 15765-2 CAN Transport Protocol (segmentation/reassembly)
     - `someip/` — SOME/IP middleware (service discovery stub, request/response)
     - `tcp/` — TCP transport plugin (state machine only; transmits via the core Eth registry when gateway-resident)
+    - `probe/` — gateway conformance probe (verifies delivery, declared_buses filtering, self-sent tagging, round-trip from inside the dispatch loop)
   - `src/replay/` — Replay engine
   - `proto/boat/v1/` — 16 protobuf definitions defining all gRPC services
   - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
@@ -339,6 +340,40 @@ BOAT_NODE_PLUGINS=./build/debug/src/plugins/someip/someip.so \
 ```
 
 Config: `{"sd_port": 30490}`. Registers offered services; responds to REQUEST messages with RESPONSE echoes.
+
+### Probe Plugin (gateway conformance)
+
+A test/diagnostic plugin that verifies the gateway's frame plumbing from *inside*
+the dispatch loop — things a gRPC client can't observe. Useful for HW bring-up.
+
+It checks: **delivery** (`on_frame` fires for declared buses), **filtering**
+(no deliveries for undeclared buses → `unexpected_bus` stays 0), **self-sent
+tagging** (a frame it publishes returns with `SELF_SENT` set), and **round-trip**
+(active mode injects a tagged CAN frame and asserts the self-sent echo arrives
+within a timeout — PASS/FAIL). Results go to stderr *and* the signal bus
+(`probe.rx_total`, `probe.self_echoes`, `probe.unexpected_bus`, `probe.checks_pass`,
+`probe.checks_fail`, …), watchable live via `boat`/dashboards.
+
+```bash
+# Passive observer (never injects — safe alongside real ECU traffic)
+BOAT_CAN_INTERFACES=vcan0 \
+  BOAT_NODE_PLUGINS=./build/debug/src/plugins/probe/probe.so?{\"mode\":\"passive\",\"buses\":[\"can\"]} \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway
+
+# Active self-test on vcan0 (injects probe frames, asserts self-sent echo)
+BOAT_CAN_INTERFACES=vcan0 \
+  BOAT_NODE_PLUGINS=./build/debug/src/plugins/probe/probe.so?{\"mode\":\"active\",\"iface\":\"vcan0\",\"probe_id\":\"0x7FF\",\"probe_period_ticks\":1000} \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway
+```
+
+Config keys: `iface` (default `vcan0`), `buses` (default `["can"]`), `mode`
+(`passive`|`active`|`both`, default `both`), `probe_id` (default `0x7FF`),
+`probe_period_ticks` (1000), `echo_timeout_ticks` (50), `report_period_ticks`
+(5000). It's also the canonical minimal v8 plugin example. Note: periods are in
+node ticks (tick length = `BOAT_NODE_TICK_MS`/`_US`).
+
+> Plugin config JSON may contain commas — `BOAT_NODE_PLUGINS` is split
+> brace-aware, so commas inside a `{...}` config do not split the entry.
 
 ## Replay System (ABI v8) — Core-Sink Architecture
 

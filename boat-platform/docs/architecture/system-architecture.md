@@ -74,7 +74,8 @@ boat-platform/
 │       ├── pdu_router/             # PduRouter — PDU routing, transmission engine, groups, deadlines
 │       ├── can_tp/                 # ISO 15765-2 CAN Transport Protocol
 │       ├── someip/                 # SOME/IP middleware (service discovery stub)
-│       └── tcp/                    # TCP plugin (state machine; transmits via core Eth registry)
+│       ├── tcp/                    # TCP plugin (state machine; transmits via core Eth registry)
+│       └── probe/                  # gateway conformance probe (delivery/filter/self-sent/round-trip)
 ├── sdk/
 │   ├── cpp/include/boat/
 │   │   ├── plugin.h               # Plugin ABI v8 (9 vtable fields)
