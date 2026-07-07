@@ -22,6 +22,7 @@
     - `can_tp/` — ISO 15765-2 CAN Transport Protocol (segmentation/reassembly)
     - `someip/` — SOME/IP middleware (service discovery stub, request/response)
     - `tcp/` — TCP transport plugin (gateway-resident, config-driven)
+    - `frame_forwarder/` — Frame forwarder plugin (replay→HW bridge, always on)
   - `src/replay/` — Replay engine
   - `proto/boat/v1/` — 16 protobuf definitions defining all gRPC services
   - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
@@ -30,7 +31,7 @@
     - `frame.h` — Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU bus types)
     - `can_tp.h` — Standalone CanTp C API (can_tp_send, can_tp_configure)
     - `someip.h` — SOME/IP protocol constants
-  - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|frame|can|eth|pdu|can-tp|plugin|...`)
+  - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|replay|frame|can|eth|pdu|can-tp|plugin|...`)
   - `config/` — PDU database JSON files
   - `demo/` — Demo node scripts (not web UI)
 - **`ui/`** — 7 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, recorder:8083, control_panel, debug, system_dashboard)
@@ -341,6 +342,153 @@ BOAT_NODE_PLUGINS=./build/debug/src/plugins/someip/someip.so \
 ```
 
 Config: `{"sd_port": 30490}`. Registers offered services; responds to REQUEST messages with RESPONSE echoes.
+
+## Replay System (ABI v8) — Plugin-Based Architecture
+
+The replay system reads trace files (.asc, .blf, .pcap), converts them to protobuf
+`boat.v1.Frame` records, and replays them through the plugin pipeline.
+
+### Architecture overview
+
+```
+Import                Replay Engine               Plugin Pipeline           Hardware
+───────             ───────────────             ──────────────────         ────────
+.asc/.blf/.pcap  →  convert_to_binary()     →  Frame protobuf records
+                        │                          │
+                        ▼                          ▼
+                 ImportTraceData gRPC      ReplayLoop parsing
+                        │                          │
+                        ▼                          ▼
+                   trace_store               ProtoToCoreFrame()
+                      (mmap)                      │
+                                                  ▼
+                                            core::Frame → ToAbi()
+                                                  │
+                                                  ▼
+                                     PluginManager::DispatchFrame()
+                                                  │
+                                          ┌───────┴────────┐
+                                          │ FrameForwarder │ ← built-in plugin
+                                          │ Plugin.on_frame│   (always loaded)
+                                          └───────┬────────┘
+                                                  │ frame_publish_fn
+                                          ┌───────┴────────┐
+                                          │ SetFramePublisher lambda
+                                          │ BoatFrame → HW registry
+                                          └───────┬────────┘
+                                                  ▼
+                                   can_registry.SendFrame(iface)
+                                   eth_registry.SendFrame(iface)
+                                                  │
+                                                  ▼
+                                           Physical bus (vcan0, can1, eth0,...)
+```
+
+### Key components
+
+#### Trace format
+
+Each event is stored as a length-delimited `boat.v1.Frame` protobuf record:
+```
+┌──────────────┬───────────────────┐
+│ uint32 len   │ Frame protobuf    │
+│ (4 bytes)    │ (variable)        │
+└──────────────┴───────────────────┘
+```
+
+The `Frame` message contains full bus-agnostic metadata: `bus_type`, `iface`,
+`timestamp_ns`, `payload`, plus CAN metadata (`can_id`, `dlc`, `flags`) or
+Ethernet metadata (`dst_mac`, `src_mac`, `ethertype`, `src_ip`, `dst_ip`,
+`ip_version`, `flags`).
+
+#### FrameForwarderPlugin (`src/plugins/frame_forwarder/`)
+
+A built-in plugin that forwards every `BoatFrame` dispatched by the plugin
+manager to the appropriate hardware bus. Loaded automatically at gateway
+startup (or via `BOAT_NODE_PLUGINS`).
+
+- **`on_frame`**: receives frames from `PluginManager::DispatchFrame()`
+- **Loopback prevention**: checks `BOAT_CAN_FLAG_SELF_SENT` (CAN) and
+  `BOAT_ETH_FLAG_SELF_SENT` (Ethernet) to avoid re-sending locally-generated
+  frames
+- **`declared_buses`**: `["can","canfd","eth","pdu","tcp"]`
+
+#### ReplayController (`src/replay/`)
+
+Manages the replay thread (`ReplayLoop`), timing (absolute-time `timerfd`
+scheduling), pause/resume/seek, loop with gap, and event buffering for
+gRPC streaming via `ConsumeEvents()`.
+
+### Usage
+
+#### Import
+```bash
+# Convert and upload a trace file with filters
+boat replay import trace.asc --trace-id myrun \
+  --channel 1                     # CAN channel filter
+  --id 0x100,0x200                # CAN ID filter
+  --ip-map 10.0.0.1=192.168.0.1  # IP rewriting (Ethernet)
+  --ethertype ipv4                # EtherType filter
+  --protocol udp                  # L4 protocol filter
+  --ip-filter 192.168.0.0/24      # Post-rewrite IP filter
+  --src-ip-filter 192.168.0.100   # Source IP filter
+  --dst-ip-filter 192.168.0.101   # Destination IP filter
+  --src-port 67,68                # Source port filter
+  --dst-port 30490                # Destination port filter
+  --replay-src-ip 10.0.0.1        # IP override for reconstruction
+  --replay-dst-ip 10.0.0.2        # IP override for reconstruction
+```
+
+#### Stream (replay)
+```bash
+# Replay an imported trace
+boat replay stream --trace myrun \
+  --speed accelerated             # real-time / accelerated / step
+  --multiplier 2.0                # speed factor
+  --loop 1000                     # loop with 1s gap between passes
+  --verbose                       # print per-frame hex
+  --buses vcan0,can1              # CAN interface mapping
+  --eth-iface eth0                # Ethernet target interface
+  --mac-map 192.168.0.1=02:de:ad:be:ef:01  # IP→MAC mappings
+```
+
+#### Legacy combined flow
+```bash
+# boat trace replay still works (combines import + replay)
+boat trace replay trace.asc --server-side --loop 250 --verbose
+```
+
+### Loopback prevention
+
+Both CAN and Ethernet registries tag locally-sent frames to prevent infinite
+dispatch loops:
+
+- **CAN**: `CanBusRegistry::SendFrame()` sets `BOAT_CAN_FLAG_SELF_SENT = 0x08`
+  in `CanFrame.flags`. Propagated through `core::Frame` → `BoatFrame.meta.can.flags`.
+- **Ethernet**: `EthernetBusRegistry::SendFrame()` sets
+  `BOAT_ETH_FLAG_SELF_SENT = 0x01` in `EthernetFrame.flags`. Propagated through
+  `core::Frame` → `BoatFrame.meta.eth.flags`.
+
+The `FrameForwarderPlugin` checks these flags and skips self-sent frames.
+
+### Plugin loading
+
+The `FrameForwarderPlugin` is auto-loaded at gateway startup unless already
+present in `BOAT_NODE_PLUGINS`. Set `BOAT_FRAME_FORWARDER_PATH` to override
+the default path (`./src/plugins/frame_forwarder/frame_forwarder.so`).
+
+```bash
+# With custom path
+BOAT_FRAME_FORWARDER_PATH=./build/release/src/plugins/frame_forwarder/frame_forwarder.so \
+  BOAT_CAN_INTERFACES=vcan0 \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway
+
+# Or include it in BOAT_NODE_PLUGINS explicitly
+BOAT_CAN_INTERFACES=vcan0 \
+  BOAT_NODE_PLUGINS=./build/debug/src/plugins/frame_forwarder/frame_forwarder.so,\
+./build/debug/src/plugins/pdu_router/pdu_router.so \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway
+```
 
 ## AUTOSAR specification reference
 

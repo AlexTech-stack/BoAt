@@ -9,10 +9,62 @@
 #include <stdexcept>
 #include <vector>
 
+#include "boat/v1/frame.pb.h"
+#include "core/frame.h"
+
 namespace boat::replay {
 namespace {
 
-constexpr std::uint32_t kTraceMagic = 0xB0A7B0A7;
+std::uint64_t FrameTimestampToMs(std::uint64_t timestamp_ns) {
+  return timestamp_ns / 1'000'000ULL;
+}
+
+boat::core::Frame ProtoToCoreFrame(const boat::v1::Frame& pf) {
+  std::string iface = pf.iface();
+  std::vector<std::uint8_t> payload(pf.payload().begin(), pf.payload().end());
+  std::uint64_t ts = pf.timestamp_ns();
+
+  boat::core::Frame f;
+  switch (pf.bus_type()) {
+    case boat::v1::Frame::CAN:
+    case boat::v1::Frame::CANFD: {
+      const auto& cm = pf.can();
+      f = boat::core::Frame::FromCan(
+          std::move(iface), cm.can_id(), static_cast<std::uint8_t>(cm.dlc()),
+          static_cast<std::uint8_t>(cm.flags()), std::move(payload),
+          pf.bus_type() == boat::v1::Frame::CANFD);
+      break;
+    }
+    case boat::v1::Frame::ETHERNET: {
+      const auto& em = pf.eth();
+      uint8_t dm[6]{}, sm[6]{};
+      std::memcpy(dm, em.dst_mac().data(), std::min(em.dst_mac().size(), 6UL));
+      std::memcpy(sm, em.src_mac().data(), std::min(em.src_mac().size(), 6UL));
+      const uint8_t* sip = em.src_ip().empty()
+                               ? nullptr
+                               : reinterpret_cast<const uint8_t*>(em.src_ip().data());
+      const uint8_t* dip = em.dst_ip().empty()
+                               ? nullptr
+                               : reinterpret_cast<const uint8_t*>(em.dst_ip().data());
+      f = boat::core::Frame::FromEthernet(
+          std::move(iface), dm, sm, static_cast<std::uint16_t>(em.ethertype()),
+          static_cast<std::uint16_t>(em.vlan_id()), sip,
+          static_cast<std::uint8_t>(em.ip_version()), dip,
+          std::move(payload));
+      break;
+    }
+    case boat::v1::Frame::PDU: {
+      const auto& pm = pf.pdu();
+      f = boat::core::Frame::FromPdu(std::move(iface), pm.pdu_id(),
+                                     std::move(payload));
+      break;
+    }
+    default:
+      break;
+  }
+  f.set_timestamp_ns(ts);
+  return f;
+}
 
 }  // namespace
 
@@ -48,30 +100,37 @@ void ReplayController::Start(const ReplayConfig& config) {
 
 void ReplayController::StartFromEvents(const boat::store::EventFilter& filter,
                                         const ReplayConfig& replay_cfg) {
+  // Event store replay now directly replays events without building a
+  // physical trace file.  The data is already in memory.
+  // For simplicity we create an in-memory protobuf trace here.
   const auto events = event_store_.Query(filter);
   if (events.empty()) {
     return;
   }
 
+  std::string trace_id = "evtstore_replay_" +
+                         filter.simulation_id.value_or("default") + "_" +
+                         std::to_string(events[0].tick);
+  std::string storage_path = "/tmp/" + trace_id + ".trace";
+
+  // Build a minimal protobuf-frame trace (CAN-only, with raw payload).
   std::vector<std::uint8_t> trace_data;
   for (const auto& event : events) {
-    boat::store::TraceRecordHeader header{};
-    header.magic = kTraceMagic;
-    header.event_type = static_cast<std::uint32_t>(event.tick);
-    header.tick = event.tick;
-    header.wall_time_ns = event.wall_time_ns;
-    header.payload_size = static_cast<std::uint32_t>(event.value_blob.size());
+    boat::v1::Frame proto;
+    proto.set_bus_type(boat::v1::Frame::CAN);
+    proto.set_timestamp_ns(event.wall_time_ns);
+    proto.set_payload(event.value_blob.data(), event.value_blob.size());
+    proto.mutable_can()->set_can_id(static_cast<std::uint32_t>(event.tick));
+    proto.mutable_can()->set_dlc(static_cast<std::uint32_t>(event.value_blob.size()));
+    proto.mutable_can()->set_flags(0);
 
-    trace_data.insert(trace_data.end(), reinterpret_cast<const std::uint8_t*>(&header),
-                      reinterpret_cast<const std::uint8_t*>(&header) + sizeof(header));
-    trace_data.insert(trace_data.end(), event.value_blob.begin(), event.value_blob.end());
+    std::string raw = proto.SerializeAsString();
+    std::uint32_t len = static_cast<std::uint32_t>(raw.size());
+    trace_data.insert(trace_data.end(),
+                       reinterpret_cast<const std::uint8_t*>(&len),
+                       reinterpret_cast<const std::uint8_t*>(&len) + sizeof(len));
+    trace_data.insert(trace_data.end(), raw.begin(), raw.end());
   }
-
-  const std::string trace_id = "evtstore_replay_" +
-                               filter.simulation_id.value_or("default") + "_" +
-                               std::to_string(events[0].tick);
-
-  const std::string storage_path = "/tmp/" + trace_id + ".trace";
 
   boat::store::TraceRecord meta;
   meta.id = trace_id;
@@ -136,9 +195,6 @@ const ReplayConfig& ReplayController::GetActiveConfig() const {
 }
 
 void ReplayController::ParseTickDurationFromEnv() {
-  //   BOAT_NODE_TICK_US=N   — set tick in μs (high-precision, overrides MS)
-  //   BOAT_NODE_TICK_MS=N   — set tick in ms (default 1)
-  // Same pattern as the gateway node tick in main.cpp.
   const char* us_env = std::getenv("BOAT_NODE_TICK_US");
   if (us_env != nullptr) {
     char* end = nullptr;
@@ -157,30 +213,28 @@ void ReplayController::ParseTickDurationFromEnv() {
       return;
     }
   }
-  // Default: 1ms.
   tick_duration_ = std::chrono::milliseconds(1);
 }
 
-bool ReplayController::SeekToTick(std::uint64_t tick, std::size_t& offset) const {
+bool ReplayController::SeekToTick(std::uint64_t target_tick, std::size_t& offset) const {
   offset = 0;
-  while (offset + sizeof(boat::store::TraceRecordHeader) <= mapped_trace_.size()) {
-    boat::store::TraceRecordHeader header{};
-    std::memcpy(&header, mapped_trace_.data() + offset, sizeof(header));
-    if (header.magic != kTraceMagic) {
-      throw std::runtime_error("invalid trace record magic");
+  while (offset + sizeof(std::uint32_t) <= mapped_trace_.size()) {
+    std::uint32_t record_len;
+    std::memcpy(&record_len, mapped_trace_.data() + offset, sizeof(record_len));
+    offset += sizeof(record_len);
+    if (record_len == 0 || offset + record_len > mapped_trace_.size()) {
+      throw std::runtime_error("invalid trace record length");
     }
-    offset += sizeof(header);
-    if (offset + header.payload_size > mapped_trace_.size()) {
-      throw std::runtime_error("trace record payload out of bounds");
+    boat::v1::Frame pf;
+    if (!pf.ParseFromArray(mapped_trace_.data() + offset, record_len)) {
+      throw std::runtime_error("invalid protobuf frame record");
     }
-    if (header.tick >= tick) {
-      offset -= sizeof(header);
+    offset += record_len;
+    if (FrameTimestampToMs(pf.timestamp_ns()) >= target_tick) {
+      offset -= (sizeof(record_len) + record_len);
       return true;
     }
-    offset += header.payload_size;
   }
-
-  // Tick beyond available records: place cursor at end.
   offset = mapped_trace_.size();
   return false;
 }
@@ -199,7 +253,7 @@ void ReplayController::ReplayLoop() {
       std::chrono::steady_clock::time_point last_record_time;
       bool has_records = false;
 
-      while (running_.load() && offset + sizeof(boat::store::TraceRecordHeader) <= mapped_trace_.size()) {
+      while (running_.load() && offset + sizeof(std::uint32_t) <= mapped_trace_.size()) {
         {
           std::unique_lock<std::mutex> lock(pause_mutex_);
           pause_cv_.wait(lock, [this] {
@@ -214,25 +268,28 @@ void ReplayController::ReplayLoop() {
           const auto target_tick = requested_seek_tick_.load();
           SeekToTick(target_tick, offset);
           current_tick_.store(target_tick);
-          // Reset absolute-timing baseline so the target tick fires immediately.
           replay_base_time_ = std::chrono::steady_clock::now();
           replay_base_tick_ = target_tick;
           continue;
         }
 
-        boat::store::TraceRecordHeader header{};
-        std::memcpy(&header, mapped_trace_.data() + offset, sizeof(header));
-        offset += sizeof(header);
-        if (header.magic != kTraceMagic) {
-          throw std::runtime_error("invalid trace record magic");
+        // ── Read length-delimited protobuf record ───────────────────────
+        std::uint32_t record_len;
+        std::memcpy(&record_len, mapped_trace_.data() + offset, sizeof(record_len));
+        offset += sizeof(record_len);
+        if (record_len == 0 || offset + record_len > mapped_trace_.size()) {
+          throw std::runtime_error("invalid trace record length");
         }
 
-        if (offset + header.payload_size > mapped_trace_.size()) {
-          throw std::runtime_error("trace record payload out of bounds");
+        boat::v1::Frame pf;
+        if (!pf.ParseFromArray(mapped_trace_.data() + offset, record_len)) {
+          throw std::runtime_error("invalid protobuf frame record");
         }
+        offset += record_len;
 
-        // Absolute-time deadline for this record's tick.
-        // t_deadline = t_base + (tick - tick_base) * tick_duration / multiplier
+        std::uint64_t tick = FrameTimestampToMs(pf.timestamp_ns());
+
+        // ── Absolute-time scheduling ────────────────────────────────────
         double speed_multiplier = active_config_.speed_multiplier;
         if (speed_multiplier <= 0.0) {
           speed_multiplier = 1.0;
@@ -240,7 +297,7 @@ void ReplayController::ReplayLoop() {
         if (active_config_.speed == ReplaySpeed::REAL_TIME ||
             active_config_.speed == ReplaySpeed::ACCELERATED) {
           const auto tick_offset_ns = static_cast<double>(
-              (header.tick - replay_base_tick_) * tick_duration_.count());
+              (tick - replay_base_tick_) * tick_duration_.count());
           const auto deadline_offset = std::chrono::nanoseconds(
               static_cast<std::uint64_t>(tick_offset_ns / speed_multiplier));
           tick_timer_->WaitUntil(replay_base_time_ + deadline_offset);
@@ -249,53 +306,48 @@ void ReplayController::ReplayLoop() {
         last_record_time = std::chrono::steady_clock::now();
         has_records = true;
 
-        std::vector<std::uint8_t> payload(header.payload_size);
-        if (header.payload_size > 0U) {
-          std::memcpy(payload.data(), mapped_trace_.data() + offset, header.payload_size);
-        }
-        offset += header.payload_size;
+        // ── Dispatch via core::Frame ────────────────────────────────────
+        auto core_frame = ProtoToCoreFrame(pf);
 
         {
           std::lock_guard<std::mutex> lock(forwarder_mutex_);
           if (event_forwarder_) {
-            event_forwarder_(header.event_type, header.tick, payload);
+            event_forwarder_(core_frame);
           }
         }
 
-        boat::core::BusEvent event;
-        event.type = header.event_type;
-        event.tick = header.tick;
-        event.payload = boat::core::UnknownPayload{header.event_type, payload};
-        event_bus_.Publish(std::move(event));
+        // ── Publish replay event for gRPC streaming ─────────────────────
+        std::string proto_bytes(reinterpret_cast<const char*>(mapped_trace_.data() + offset - record_len), record_len);
 
         boat::core::BusEvent replay_event;
         replay_event.type = kReplayBusEventType;
-        replay_event.tick = header.tick;
-        replay_event.payload =
-            payload.empty() ? std::string{} : std::string(reinterpret_cast<const char*>(payload.data()), payload.size());
+        replay_event.tick = tick;
+        replay_event.payload = proto_bytes;
         event_bus_.Publish(std::move(replay_event));
 
-        // Push to internal queue so StreamReplay can consume events directly
-        // (no race with EventBus subscription).
+        // ── Push to internal queue (StreamReplay) ───────────────────────
         {
           std::lock_guard<std::mutex> lock(event_queue_mutex_);
-          event_queue_.push_back({header.tick,
-              payload.empty() ? std::string{} : std::string(reinterpret_cast<const char*>(payload.data()), payload.size())});
+          event_queue_.push_back({tick, proto_bytes});
         }
 
-        boat::store::EventRecord record;
-        record.id = std::to_string(header.tick) + "_" + std::to_string(header.event_type);
-        record.simulation_id = active_config_.trace_id;
-        record.tick = header.tick;
-        record.wall_time_ns = header.wall_time_ns;
-        record.signal_id = std::to_string(header.event_type);
-        record.value_type = 0;
-        record.value_blob = std::move(payload);
-        record.tags = "{}";
-        std::array<boat::store::EventRecord, 1> batch{record};
-        event_store_.InsertBatch(std::span<const boat::store::EventRecord>(batch));
+        // ── Store in event store ────────────────────────────────────────
+        {
+          std::vector<std::uint8_t> payload_copy(proto_bytes.begin(), proto_bytes.end());
+          boat::store::EventRecord record;
+          record.id = std::to_string(tick) + "_" + std::to_string(pf.can().can_id());
+          record.simulation_id = active_config_.trace_id;
+          record.tick = tick;
+          record.wall_time_ns = static_cast<std::int64_t>(pf.timestamp_ns());
+          record.signal_id = std::to_string(pf.can().can_id());
+          record.value_type = 0;
+          record.value_blob = std::move(payload_copy);
+          record.tags = "{}";
+          std::array<boat::store::EventRecord, 1> batch{record};
+          event_store_.InsertBatch(std::span<const boat::store::EventRecord>(batch));
+        }
 
-        current_tick_.store(header.tick);
+        current_tick_.store(tick);
 
         if (active_config_.speed == ReplaySpeed::STEP_BY_STEP) {
           paused_.store(true);
@@ -314,14 +366,11 @@ void ReplayController::ReplayLoop() {
       }
 
       if (looping && has_records) {
-        // Wait so the first message of the next pass fires loop_delay_ms
-        // after the last message of this pass.
         auto target = last_record_time + std::chrono::milliseconds(active_config_.loop_delay_ms);
         auto now = std::chrono::steady_clock::now();
         if (target > now) {
           std::this_thread::sleep_for(target - now);
         }
-        // Reset baseline so the first record of the next pass fires immediately.
         replay_base_time_ = target;
         replay_base_tick_ = active_config_.start_tick;
       }

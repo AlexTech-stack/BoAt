@@ -1,0 +1,2 @@
+add_boat_plugin(frame_forwarder frame_forwarder_plugin.cpp)
+target_link_libraries(frame_forwarder PRIVATE boat_plugin_sdk)

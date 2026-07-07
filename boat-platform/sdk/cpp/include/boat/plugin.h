@@ -18,6 +18,10 @@ typedef void (*BoatPublishFn)(void* publisher_ctx, const char* signal_id,
 /* CAN FD flag constants — kept for self-sent detection in can_tp. */
 #define BOAT_CAN_FLAG_SELF_SENT 0x08
 
+/* Ethernet self-sent flag — set by EthernetBusRegistry when a frame was
+   sourced locally (loopback prevention). */
+#define BOAT_ETH_FLAG_SELF_SENT 0x01
+
 /* PDU frame type used by the PDU-publish callback.
    This is the mechanism for CanTp to deliver reassembled I-PDUs. */
 typedef struct BoatPduFrame {

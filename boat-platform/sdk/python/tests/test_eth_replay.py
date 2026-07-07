@@ -8,6 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sdk" / "python"))
 
+from boat.v1 import frame_pb2
+
 
 def _make_pcap(frames: list[bytes]) -> bytes:
     """Build a valid pcap file (DLT_EN10MB) with the given Ethernet frames."""
@@ -452,18 +454,19 @@ class TestConvertToBinary:
         binary = replayer.convert_to_binary(p)
         p.unlink()
 
-        # Each record: 28-byte header + payload
-        assert len(binary) >= 28
-        magic, event_type, tick, _, payload_size = struct.unpack_from("<IIQqI", binary, 0)
+        offset = 0
+        record_len = struct.unpack_from("<I", binary, offset)[0]
+        offset += 4
+        frame = frame_pb2.Frame()
+        frame.ParseFromString(binary[offset:offset + record_len])
+        offset += record_len
 
-        assert magic == 0xB0A7B0A7
-        assert event_type == 0xEE000000 | 0x0800  # eth base | ethertype
-        assert tick == 0
-        assert payload_size > 0
+        assert frame.bus_type == frame_pb2.Frame.ETHERNET
+        assert frame.eth.ethertype == 0x0800
+        assert frame.timestamp_ns // 1_000_000 == 0
+        assert len(frame.payload) > 0
 
-        # Payload should be the reconstructed IP packet
-        payload = binary[28:28 + payload_size]
-        assert len(payload) == payload_size
+        payload = frame.payload
         # Verify it's a valid IP packet with rewritten IPs
         assert payload[12:16] == b"\xc0\xa8\x01\x01"  # 192.168.1.1
         assert payload[16:20] == b"\xc0\xa8\x01\x64"  # 192.168.1.100
@@ -482,14 +485,12 @@ class TestConvertToBinary:
         offset = 0
         records = 0
         while offset < len(binary):
-            if offset + 28 > len(binary):
-                break
-            magic = struct.unpack_from("<I", binary, offset)[0]
-            if magic != 0xB0A7B0A7:
-                break
-            _, _, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
+            record_len = struct.unpack_from("<I", binary, offset)[0]
+            offset += 4
+            frame = frame_pb2.Frame()
+            frame.ParseFromString(binary[offset:offset + record_len])
+            offset += record_len
             records += 1
-            offset += 28 + payload_size
 
         assert records == 2
 
@@ -688,15 +689,20 @@ class TestConvertToBinaryIp6:
         binary = replayer.convert_to_binary(p)
         p.unlink()
 
-        assert len(binary) >= 28
-        magic, event_type, tick, _, payload_size = struct.unpack_from("<IIQqI", binary, 0)
-        assert magic == 0xB0A7B0A7
-        assert event_type == 0xEE000000 | 0x86DD  # eth base | ethertype IPv6
-        assert tick == 0
-        assert payload_size > 0
+        offset = 0
+        record_len = struct.unpack_from("<I", binary, offset)[0]
+        offset += 4
+        frame = frame_pb2.Frame()
+        frame.ParseFromString(binary[offset:offset + record_len])
+        offset += record_len
 
-        payload = binary[28:28 + payload_size]
-        assert len(payload) == payload_size
+        assert frame.bus_type == frame_pb2.Frame.ETHERNET
+        assert frame.eth.ethertype == 0x86DD
+        assert frame.timestamp_ns // 1_000_000 == 0
+        assert len(frame.payload) > 0
+
+        payload = frame.payload
+        assert len(payload) == len(frame.payload)
         assert payload[0] >> 4 == 6  # IPv6 version
         assert payload[6] == 17      # UDP
 
@@ -721,23 +727,19 @@ class TestConvertToBinaryIp6:
         offset = 0
         records = []
         while offset < len(binary):
-            if offset + 28 > len(binary):
-                break
-            magic = struct.unpack_from("<I", binary, offset)[0]
-            if magic != 0xB0A7B0A7:
-                break
-            _, event_type, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
-            records.append((event_type, payload_size))
-            offset += 28 + payload_size
+            record_len = struct.unpack_from("<I", binary, offset)[0]
+            offset += 4
+            frame = frame_pb2.Frame()
+            frame.ParseFromString(binary[offset:offset + record_len])
+            offset += record_len
+            records.append((frame, len(frame.payload)))
 
         assert len(records) == 2
-        assert records[0][0] == 0xEE000000 | 0x0800  # IPv4
-        assert records[1][0] == 0xEE000000 | 0x86DD  # IPv6
-        # Record layout: [header(28)] [payload(N)] [header(28)] [payload(M)]
-        payload4 = binary[28:28 + records[0][1]]
+        assert records[0][0].eth.ethertype == 0x0800  # IPv4
+        assert records[1][0].eth.ethertype == 0x86DD  # IPv6
+        payload4 = records[0][0].payload
         assert payload4[0] >> 4 == 4
-        off = 28 + records[0][1] + 28  # skip rec0 header+payload + rec1 header
-        payload6 = binary[off:off + records[1][1]]
+        payload6 = records[1][0].payload
         assert payload6[0] >> 4 == 6
         assert payload6[6] == 17  # UDP over IPv6
 
@@ -1026,14 +1028,12 @@ class TestIpFilterAndMap:
         offset = 0
         records = 0
         while offset < len(binary):
-            if offset + 28 > len(binary):
-                break
-            magic = struct.unpack_from("<I", binary, offset)[0]
-            if magic != 0xB0A7B0A7:
-                break
+            record_len = struct.unpack_from("<I", binary, offset)[0]
+            offset += 4
+            frame = frame_pb2.Frame()
+            frame.ParseFromString(binary[offset:offset + record_len])
+            offset += record_len
             records += 1
-            _, _, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
-            offset += 28 + payload_size
         assert records == 1
 
 
@@ -1071,14 +1071,12 @@ class TestEthertypeFilter:
         offset = 0
         ethertypes = []
         while offset < len(binary):
-            if offset + 28 > len(binary):
-                break
-            magic = struct.unpack_from("<I", binary, offset)[0]
-            if magic != 0xB0A7B0A7:
-                break
-            _, event_type, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
-            ethertypes.append(event_type & 0xFFFF)
-            offset += 28 + payload_size
+            record_len = struct.unpack_from("<I", binary, offset)[0]
+            offset += 4
+            frame = frame_pb2.Frame()
+            frame.ParseFromString(binary[offset:offset + record_len])
+            offset += record_len
+            ethertypes.append(frame.eth.ethertype)
         assert ethertypes == [0x0800]  # only IPv4
 
     def test_filter_ipv6_only(self):
@@ -1099,14 +1097,12 @@ class TestEthertypeFilter:
         offset = 0
         ethertypes = []
         while offset < len(binary):
-            if offset + 28 > len(binary):
-                break
-            magic = struct.unpack_from("<I", binary, offset)[0]
-            if magic != 0xB0A7B0A7:
-                break
-            _, event_type, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
-            ethertypes.append(event_type & 0xFFFF)
-            offset += 28 + payload_size
+            record_len = struct.unpack_from("<I", binary, offset)[0]
+            offset += 4
+            frame = frame_pb2.Frame()
+            frame.ParseFromString(binary[offset:offset + record_len])
+            offset += record_len
+            ethertypes.append(frame.eth.ethertype)
         assert ethertypes == [0x86DD]  # only IPv6
 
     def test_filter_empty_set_no_filtering(self):
@@ -1127,14 +1123,12 @@ class TestEthertypeFilter:
         offset = 0
         count = 0
         while offset < len(binary):
-            if offset + 28 > len(binary):
-                break
-            magic = struct.unpack_from("<I", binary, offset)[0]
-            if magic != 0xB0A7B0A7:
-                break
+            record_len = struct.unpack_from("<I", binary, offset)[0]
+            offset += 4
+            frame = frame_pb2.Frame()
+            frame.ParseFromString(binary[offset:offset + record_len])
+            offset += record_len
             count += 1
-            _, _, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
-            offset += 28 + payload_size
         assert count == 2  # both pass
 
 
@@ -1304,14 +1298,12 @@ class TestEthertypeAndProtocolFilter:
         offset = 0
         records = 0
         while offset < len(binary):
-            if offset + 28 > len(binary):
-                break
-            magic = struct.unpack_from("<I", binary, offset)[0]
-            if magic != 0xB0A7B0A7:
-                break
+            record_len = struct.unpack_from("<I", binary, offset)[0]
+            offset += 4
+            frame = frame_pb2.Frame()
+            frame.ParseFromString(binary[offset:offset + record_len])
+            offset += record_len
             records += 1
-            _, _, _, _, payload_size = struct.unpack_from("<IIQqI", binary, offset)
-            offset += 28 + payload_size
         assert records == 1  # only UDPv4 passes both filters
 
 

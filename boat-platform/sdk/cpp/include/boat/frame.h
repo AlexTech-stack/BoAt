@@ -30,7 +30,7 @@ typedef struct BoatEthMeta {
   uint16_t ethertype;
   uint16_t vlan_id;
   uint8_t  ip_version;   /* 4, 6, or 0 = no IP info */
-  uint8_t  _pad;         /* alignment */
+  uint8_t  flags;        /* BOAT_ETH_FLAG_SELF_SENT = 0x01 for loopback prevention */
   uint8_t  src_ip[16];   /* 4 bytes (v4) or 16 bytes (v6) */
   uint8_t  dst_ip[16];   /* same */
 } BoatEthMeta;

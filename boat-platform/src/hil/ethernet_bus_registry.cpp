@@ -62,7 +62,9 @@ bool EthernetBusRegistry::SendFrame(const std::string& iface,
   }
   // Always dispatch locally so gRPC subscribers receive the frame even when
   // the physical write fails (simulation mode still needs delivery).
-  DispatchRx(frame, iface);
+  EthernetFrame local = frame;
+  local.flags |= 0x01;   // BOAT_ETH_FLAG_SELF_SENT – loopback prevention
+  DispatchRx(local, iface);
   return written;
 }
 
@@ -76,8 +78,10 @@ void EthernetBusRegistry::SendFrameAll(const EthernetFrame& frame) {
       dispatched_ifaces.push_back(name);
     }
   }
+  EthernetFrame local = frame;
+  local.flags |= 0x01;   // BOAT_ETH_FLAG_SELF_SENT
   for (const auto& iface : dispatched_ifaces) {
-    DispatchRx(frame, iface);
+    DispatchRx(local, iface);
   }
 }
 
@@ -180,7 +184,7 @@ void EthernetBusRegistry::DispatchRx(const EthernetFrame& frame,
         frame.ethertype, frame.vlan_id,
         frame.src_ip.empty() ? nullptr : frame.src_ip.data(), ip_version,
         frame.dst_ip.empty() ? nullptr : frame.dst_ip.data(),
-        frame.payload);
+        frame.payload, frame.flags);
     core_frame.set_timestamp_ns(frame.timestamp_ns);
     for (const auto& cb : frame_cbs) {
       cb(core_frame);
