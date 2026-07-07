@@ -25,6 +25,7 @@
 #include "rpc_audit_interceptor.h"
 #include "rpc_audit_log.h"
 #include "fault_service_impl.h"
+#include "frame_sink.h"
 #include "gateway_context.h"
 #include "hil/virtual/virtual_can_driver.h"
 #include "hil/can/physical_can_driver.h"
@@ -176,6 +177,11 @@ int main() {
     }
   }
 
+  // The single core frame -> wire sink.  Every producer (plugins, replay, gRPC
+  // FrameService) transmits through this one path; the registries own loopback
+  // tagging and RX dispatch.
+  boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
+
   // Node manager: loads permanent always-on plugins from BOAT_NODE_PLUGINS
   // (comma-separated .so paths). These are wired to the CAN/Ethernet bus at
   // startup and run independently of any simulation lifecycle.
@@ -185,41 +191,9 @@ int main() {
       signal_bus.Publish(name, value);
     });
 
-    // v8: Wire the unified frame publisher for node plugins.
-    node_manager.SetFramePublisher([&can_registry, &eth_registry](const BoatFrame& f) {
-      switch (f.bus_type) {
-        case BOAT_BUS_CAN:
-        case BOAT_BUS_CANFD: {
-          boat::hil::CanFrame cf{};
-          cf.can_id = f.meta.can.can_id;
-          cf.dlc    = f.meta.can.dlc;
-          cf.flags  = f.meta.can.flags;
-          const auto copy_len = f.payload_len > 64 ? 64U : f.payload_len;
-          if (f.payload && copy_len > 0) std::memcpy(cf.data, f.payload, copy_len);
-          if (f.iface && f.iface[0])
-            can_registry.SendFrame(f.iface, cf);
-          else
-            can_registry.SendFrameAll(cf);
-          break;
-        }
-        case BOAT_BUS_ETHERNET: {
-          boat::hil::EthernetFrame ef{};
-          std::memcpy(ef.dst_mac, f.meta.eth.dst_mac, 6);
-          std::memcpy(ef.src_mac, f.meta.eth.src_mac, 6);
-          ef.ethertype = f.meta.eth.ethertype;
-          ef.vlan_id   = f.meta.eth.vlan_id;
-          if (f.payload && f.payload_len > 0)
-            ef.payload.assign(f.payload, f.payload + f.payload_len);
-          if (f.iface && f.iface[0])
-            eth_registry.SendFrame(f.iface, ef);
-          else
-            eth_registry.SendFrameAll(ef);
-          break;
-        }
-        default:
-          // TCP / PDU frames — routed through node_manager.DispatchFrame in Phase 3/4
-          break;
-      }
+    // v8: node plugins transmit frames through the single core sink.
+    node_manager.SetFramePublisher([&frame_sink](const BoatFrame& f) {
+      frame_sink.Publish(boat::core::Frame::FromAbi(f));
     });
 
     // v8: Forward CAN/Eth frames to node plugins via unified dispatch.
@@ -262,44 +236,13 @@ int main() {
     }
     }
 
-  // ── Auto-load the FrameForwarderPlugin ───────────────────────────────
-  // The forwarder plugin forwards frames dispatched through
-  // PluginManager::DispatchFrame to the hardware buses.
-  // It is skipped when can_io (or any other CAN-specialized plugin) is
-  // already loaded to avoid double-sending.
-  {
-    auto loaded_list = node_manager.List();
-    bool has_handler = false;
-    for (const auto& name : loaded_list) {
-      if (name.find("frame_forwarder") != std::string::npos ||
-          name.find("can_io") != std::string::npos) {
-        has_handler = true;
-        break;
-      }
-    }
-    if (!has_handler) {
-      const char* env_path = std::getenv("BOAT_FRAME_FORWARDER_PATH");
-      std::string fwd_path = env_path ? env_path
-                           : "./src/plugins/frame_forwarder/frame_forwarder.so";
-      try {
-        node_manager.Load(fwd_path, "{}");
-      } catch (const std::exception&) {
-        std::fprintf(stderr, "[Gateway] FrameForwarderPlugin not found at '%s'. "
-                             "Set BOAT_FRAME_FORWARDER_PATH or ensure it is "
-                             "in BOAT_NODE_PLUGINS.\n", fwd_path.c_str());
-      }
-    }
-  }
-
-  // Replay → plugin pipeline: every replayed frame is dispatched through the
-  // plugin manager.  The FrameForwarderPlugin (loaded as a built-in) receives
-  // each frame and forwards it to the appropriate hardware interface via its
-  // frame_publish_fn → SetFramePublisher → can/eth registry.
+  // Replay transmits each trace frame straight through the single core sink.
+  // The registry's RX dispatch then delivers it to node plugins' on_frame
+  // (tagged self-sent), so plugins still observe replayed traffic without a
+  // dedicated forwarder plugin in the loop.
   replay_controller.SetEventForwarder(
-      [&node_manager](const boat::core::Frame& core_frame) {
-        BoatFrame abi{};
-        core_frame.ToAbi(&abi);
-        node_manager.DispatchFrame(abi);
+      [&frame_sink](const boat::core::Frame& core_frame) {
+        frame_sink.Publish(core_frame);
       });
 
 
@@ -364,6 +307,7 @@ int main() {
       .can_bus_registry = can_registry,
       .ethernet_bus_registry = eth_registry,
       .plugin_manager = node_manager,
+      .frame_sink = frame_sink,
       .audit_log = audit_log,
   };
 

@@ -19,6 +19,10 @@ struct PluginHandle {
   std::uint32_t abi_version;
   boat_plugin_destroy_fn destroy_fn;
   std::vector<std::shared_ptr<void>> publisher_contexts;
+  // Bitmask of bus types this plugin handles (bit N = BOAT_BUS_* value N),
+  // parsed once from declared_buses() at load. All-ones = accept every bus
+  // type (plugin declared nothing). Used by DispatchFrame to pre-filter.
+  std::uint32_t declared_bus_mask = 0xFFFFFFFFu;
 };
 
 /* Signature for routing a signal value from a plugin. */

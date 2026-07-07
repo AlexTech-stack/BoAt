@@ -1,2 +1,0 @@
-add_boat_plugin(can_responder can_responder_plugin.cpp)
-target_link_libraries(can_responder PRIVATE boat_plugin_sdk)

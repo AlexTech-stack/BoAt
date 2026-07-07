@@ -12,6 +12,7 @@
 #include "boat/v1/signal.grpc.pb.h"
 #include "boat/v1/simulation.grpc.pb.h"
 #include "event_store/event_store.h"
+#include "gateway/grpc_gateway/frame_sink.h"
 #include "gateway/grpc_gateway/gateway_context.h"
 #include "gateway/grpc_gateway/pdu_service_impl.h"
 #include "gateway/grpc_gateway/scenario_service_impl.h"
@@ -44,6 +45,7 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   boat::hil::CanBusRegistry can_registry;  // no interfaces opened in unit tests
   boat::hil::EthernetBusRegistry eth_registry;
   boat::core::PluginManager plugin_manager;
+  boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
   boat::gateway::RpcAuditLog audit_log;
   sim.signal_router().SetFaultInjector(&sim.fault_injector());
 
@@ -57,6 +59,7 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
       .can_bus_registry = can_registry,
       .ethernet_bus_registry = eth_registry,
       .plugin_manager = plugin_manager,
+      .frame_sink = frame_sink,
       .audit_log = audit_log,
   };
 

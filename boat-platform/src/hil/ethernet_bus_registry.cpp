@@ -1,5 +1,7 @@
 #include "ethernet_bus_registry.h"
 
+#include <boat/plugin.h>
+
 #include <chrono>
 #include <cstdio>
 #include <utility>
@@ -63,7 +65,7 @@ bool EthernetBusRegistry::SendFrame(const std::string& iface,
   // Always dispatch locally so gRPC subscribers receive the frame even when
   // the physical write fails (simulation mode still needs delivery).
   EthernetFrame local = frame;
-  local.flags |= 0x01;   // BOAT_ETH_FLAG_SELF_SENT – loopback prevention
+  local.flags |= BOAT_ETH_FLAG_SELF_SENT;  // single loopback-prevention marker
   DispatchRx(local, iface);
   return written;
 }
@@ -79,7 +81,7 @@ void EthernetBusRegistry::SendFrameAll(const EthernetFrame& frame) {
     }
   }
   EthernetFrame local = frame;
-  local.flags |= 0x01;   // BOAT_ETH_FLAG_SELF_SENT
+  local.flags |= BOAT_ETH_FLAG_SELF_SENT;  // single loopback-prevention marker
   for (const auto& iface : dispatched_ifaces) {
     DispatchRx(local, iface);
   }
