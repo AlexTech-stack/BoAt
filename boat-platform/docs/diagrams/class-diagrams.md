@@ -14,26 +14,14 @@ classDiagram
       +shutdown()
     }
     class PduRouterPlugin
-    class FrameForwarderPlugin
-    class CanIoPlugin
     class CanTpPlugin
     class TcpPlugin
     class SomeIpPlugin
-    class VehicleDynamicsPlugin
-    class SensorModelPlugin
-    class NetworkSimPlugin
-    class CanResponderPlugin
 
     IPlugin <|-- PduRouterPlugin
-    IPlugin <|-- FrameForwarderPlugin
-    IPlugin <|-- CanIoPlugin
     IPlugin <|-- CanTpPlugin
     IPlugin <|-- TcpPlugin
     IPlugin <|-- SomeIpPlugin
-    IPlugin <|-- VehicleDynamicsPlugin
-    IPlugin <|-- SensorModelPlugin
-    IPlugin <|-- NetworkSimPlugin
-    IPlugin <|-- CanResponderPlugin
 ```
 
 `IPlugin` in this diagram maps to the C ABI dispatch table `BoatPluginVTable`
@@ -41,16 +29,17 @@ classDiagram
 is **8**; a plugin reporting an older version is rejected at `dlopen`.
 Implementations expose `boat_plugin_create`, `boat_plugin_destroy`, and
 `boat_plugin_abi_version` entry points and route lifecycle calls through that
-vtable. All plugins are loaded at runtime via `dlopen` — including the built-in
-ones (as of v8, `PduRouter` is a plugin, not part of the core gateway).
+vtable. Plugins own **stateful conversations / variation** only — the kept set is
+`pdu_router`, `can_tp` (ISO-TP), `tcp`, `someip`. Stateless CAN/Ethernet
+transport is core (the gateway `FrameSink` + bus registries), not a plugin.
 
 Key v8 methods:
-- `on_frame(BoatFrame)` — the plugin receives every frame dispatched by
-  `PluginManager::DispatchFrame()` (all bus types).
+- `on_frame(BoatFrame)` — the plugin receives frames dispatched by
+  `PluginManager::DispatchFrame()`, filtered to the bus types it declared.
 - `set_frame_publisher(fn)` — the gateway hands the plugin a callback it uses to
-  publish outbound frames back onto the bus.
+  publish outbound frames onto the bus (wired to the core `FrameSink`).
 - `declared_buses()` — the set of `bus_type`s a plugin handles
-  (e.g. `FrameForwarderPlugin` declares `["can","canfd","eth","pdu","tcp"]`).
+  (e.g. `pdu_router` declares `["can","eth"]`, `tcp` declares `["eth"]`).
 
 ## Unified Frame Type
 
@@ -94,8 +83,8 @@ holds bus-specific fields (CAN: `can_id`/`dlc`/`flags`; Ethernet:
 internal counterpart is `core::Frame` (`src/core/`), which crosses the ABI
 boundary via `core::Frame::ToAbi()`, and its wire/trace representation is the
 `boat.v1.Frame` protobuf. The self-sent flags (`BOAT_CAN_FLAG_SELF_SENT = 0x08`,
-`BOAT_ETH_FLAG_SELF_SENT = 0x01`) let `FrameForwarderPlugin` and `can_io` skip
-locally-generated frames and avoid dispatch loops.
+`BOAT_ETH_FLAG_SELF_SENT = 0x01`) are set in the registry send path so plugins
+can skip their own echoes in `on_frame` and avoid dispatch loops.
 
 ## Signal Router Hierarchy
 

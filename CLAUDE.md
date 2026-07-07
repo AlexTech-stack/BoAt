@@ -20,7 +20,7 @@ Read these before editing frame/plugin/replay code — they are cross-cutting in
 
 2. **Plugin ABI v8** (`sdk/cpp/include/boat/plugin.h`, `BOAT_PLUGIN_ABI_VERSION = 8`). v7 fallbacks are gone; a v7 plugin is **rejected at load with a clear error**. The vtable has 9 fields: `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`. New plugins should implement `on_frame` (receive) + `set_frame_publisher` (send) + `declared_buses` (which bus types it handles).
 
-3. **Everything-is-a-plugin dispatch.** The gateway routes frames through `PluginManager::DispatchFrame()`, which calls each loaded plugin's `on_frame`. Plugins publish outbound frames back through a `frame_publish_fn` set via `set_frame_publisher`. Two `PluginManager` instances still run concurrently (a simulation-scoped one driven by the tick scheduler, and an always-on node manager driven by its own tick thread for persistent plugins).
+3. **Core owns transport; plugins own conversations.** The gateway is a thin dispatcher. The **single `FrameSink`** (`src/gateway/grpc_gateway/frame_sink.{h,cpp}`) is the *only* path a frame reaches a bus — it routes by `bus_type` to `CanBusRegistry` / `EthernetBusRegistry`. Inbound frames go through `PluginManager::DispatchFrame()`, which calls `on_frame` **only on plugins whose `declared_buses` include that bus type** (pre-filtered at load — no O(N) fan-out). Plugins publish outbound frames back through a `frame_publish_fn` (wired to the `FrameSink`). Two `PluginManager` instances still run concurrently (a simulation-scoped one driven by the tick scheduler, and an always-on node manager driven by its own tick thread). The rule: **stateless transport (CAN/Ethernet frames on/off the wire) is core; stateful conversations (TCP, ISO-TP, PDU routing, SOME/IP) are plugins.**
 
 4. **PduRouter is now a plugin.** It moved out of core into `src/plugins/pdu_router/` (`pdu_router.so`) and is loaded like any other plugin — it is no longer auto-loaded into the gateway core. PDU routing, transmission engine, groups, and deadline monitoring live there. gRPC PDU calls are **delegated** to the plugin.
 
@@ -28,13 +28,13 @@ Read these before editing frame/plugin/replay code — they are cross-cutting in
 
 6. **Plugin config is data-driven.** Plugins take JSON config appended to their path as a query string: `plugin.so?{"iface":"vcan0"}`. TCP's old dedicated C API was removed — TCP is now a config-driven, gateway-resident v8 plugin (`tcp.so?{"mode":"server","listen_port":8080,...}`).
 
-7. **Plugin-based replay pipeline.** Replay no longer writes to buses directly. `ReplayController` (`src/replay/`) parses trace records into `core::Frame` and dispatches them through the plugin manager. A built-in **`FrameForwarderPlugin`** (`src/plugins/frame_forwarder/`, `declared_buses = can,canfd,eth,pdu,tcp`) receives each frame in `on_frame` and forwards it to the hardware registries (`CanBusRegistry` / `EthernetBusRegistry`). It is **auto-loaded at gateway startup** unless already in `BOAT_NODE_PLUGINS` (override its path with `BOAT_FRAME_FORWARDER_PATH`).
+7. **Replay pipeline.** Replay does not write to buses directly. `ReplayController` (`src/replay/`) parses trace records into `core::Frame` and transmits each through the single `FrameSink` (`replay_controller.SetEventForwarder`). The registry's RX dispatch then delivers replayed frames to plugins' `on_frame`, so plugins still observe replayed traffic. There is **no FrameForwarder plugin** — that indirection (and the `can_io` direct-SocketCAN alternative) was removed; the core `FrameSink` is the one path to the wire.
 
-8. **`can_io` plugin.** A lightweight CAN-only alternative that opens SocketCAN sockets **directly** (no `CanBusRegistry`), reading and writing frames itself. When `can_io` is loaded, the `FrameForwarderPlugin` auto-load is skipped (to avoid double-send); typically run it with `BOAT_CAN_INTERFACES=""`.
+8. **`FrameService.SendFrame` for non-wire buses.** Every producer — plugins, replay, and gRPC `FrameService.SendFrame` — transmits through the one `FrameSink`. TCP and PDU are not wire buses: a **TCP** send returns `UNIMPLEMENTED` (TCP is driven through the TCP plugin's connection API, not raw frame send); a **PDU** send is dispatched to the `pdu_router` plugin via `PluginManager::DispatchFrame`.
 
 9. **Determinism remains the hard invariant.** The `boat_determinism_seed` test runs the same seed twice and asserts **bit-identical** output. Don't introduce unseeded randomness or nondeterministic ordering in core/scheduling/replay code.
 
-**Loopback prevention** ties several of these together: registries tag locally-sent frames — CAN sets `BOAT_CAN_FLAG_SELF_SENT` (0x08), Ethernet sets `BOAT_ETH_FLAG_SELF_SENT` (0x01) — the flag propagates through `core::Frame` into `BoatFrame.meta`, and `FrameForwarderPlugin`/`can_io` skip self-sent frames to break dispatch loops. Preserve this when touching frame flow.
+**Loopback prevention:** the registry send path is the **single site** that tags locally-sent frames — `BOAT_CAN_FLAG_SELF_SENT` (0x08) / `BOAT_ETH_FLAG_SELF_SENT` (0x01) — so plugins can tell their own echoes from wire RX in `on_frame`. Keep this tagging in the registry (not scattered across plugins) when touching frame flow.
 
 ## Build & test
 
@@ -72,7 +72,7 @@ Interfaces are inspected at startup: `vcan*` → `VirtualCanDriver`, others → 
 sudo modprobe vcan
 sudo ip link add vcan0 type vcan && sudo ip link set vcan0 up
 
-# Bare gateway (FrameForwarderPlugin auto-loads) — gRPC on 0.0.0.0:50051
+# Bare gateway (core FrameSink handles CAN/Eth) — gRPC on 0.0.0.0:50051
 BOAT_CAN_INTERFACES=vcan0 ./build/debug/src/gateway/grpc_gateway/boat_gateway
 
 # With PDU routing + transport plugins (note per-plugin JSON config)
@@ -81,7 +81,7 @@ BOAT_CAN_INTERFACES=vcan0 \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
-Key env vars: `BOAT_CAN_INTERFACES` / `BOAT_ETH_INTERFACES`, `BOAT_NODE_PLUGINS`, `BOAT_FRAME_FORWARDER_PATH` (override auto-loaded forwarder), `BOAT_NODE_TICK_MS` / `BOAT_NODE_TICK_US` (tick = minimum cycle time), `BOAT_HIL_ENABLED=1` (HIL tests).
+Key env vars: `BOAT_CAN_INTERFACES` / `BOAT_ETH_INTERFACES`, `BOAT_NODE_PLUGINS`, `BOAT_NODE_TICK_MS` / `BOAT_NODE_TICK_US` (tick = minimum cycle time), `BOAT_HIL_ENABLED=1` (HIL tests).
 
 ## Python CLI / SDK (v8 surface)
 

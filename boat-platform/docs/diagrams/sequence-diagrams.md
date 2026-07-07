@@ -64,11 +64,12 @@ sequenceDiagram
     SignalSvc-->>Client: StreamSignalValue
 ```
 
-## 4) Deterministic Replay Flow (ABI v8, plugin-based)
+## 4) Deterministic Replay Flow (ABI v8, core sink)
 
-Replay no longer injects events directly into the core. It parses trace records
-into `core::Frame` and dispatches them through the plugin manager; the built-in
-`FrameForwarderPlugin` forwards each frame to the hardware bus registries.
+Replay no longer injects events directly into the core, nor through a forwarder
+plugin. It parses trace records into `core::Frame` and transmits each through the
+single `FrameSink`, which routes to the bus registries. The registry's RX
+dispatch then delivers replayed frames to plugins' `on_frame`.
 
 ```mermaid
 sequenceDiagram
@@ -76,8 +77,7 @@ sequenceDiagram
     participant ReplaySvc as ReplayService
     participant Replay as ReplayController
     participant Store as TraceStore
-    participant PM as PluginManager
-    participant FF as FrameForwarderPlugin
+    participant Sink as FrameSink
     participant Reg as Can/Eth Registry
     participant Bus as Hardware Bus
 
@@ -87,11 +87,10 @@ sequenceDiagram
     loop Replay ticks (timerfd-scheduled)
         Store-->>Replay: next boat.v1.Frame record
         Replay->>Replay: ProtoToCoreFrame() -> core::Frame
-        Replay->>PM: DispatchFrame(frame.ToAbi())
-        PM->>FF: on_frame(BoatFrame)
-        FF->>FF: skip if SELF_SENT flag set
-        FF->>Reg: frame_publish_fn -> SendFrame(iface)
+        Replay->>Sink: Publish(core::Frame)
+        Sink->>Reg: SendFrame(iface) by bus_type
         Reg->>Bus: write frame (vcan0 / can1 / eth0)
+        Reg-->>Reg: DispatchRx(self-sent) -> plugins' on_frame
     end
     Replay-->>ReplaySvc: ConsumeEvents()
     ReplaySvc-->>Client: StreamReplay events

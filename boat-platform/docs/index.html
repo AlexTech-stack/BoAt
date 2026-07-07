@@ -402,13 +402,13 @@
   │                                                     │
   │  FrameService  CanService  PduService  ...          │
   │       │                                             │
-  │  PluginManager ── DispatchFrame(BoatFrame) ──┐      │
-  │       │                                      ▼      │
-  │  [ pdu_router  frame_forwarder  can_tp  tcp  ... ]  │  ← v8 plugins (.so)
-  │       │            │                                │
-  │  CanBusRegistry  EthernetBusRegistry                │
-  │       │            │                                │
-  │  [vcan0] [vcan1]  [veth0] [raw:enxABC] [veth1]     │
+  │  FrameSink ──────────── single frame→wire sink      │
+  │       │            ▲                                 │
+  │  CanBusRegistry  EthernetBusRegistry ── DispatchRx ─┐│
+  │       │            │                                ▼│
+  │  [vcan0] [vcan1]  [veth0] [raw:enxABC]   plugins    ││
+  │                                  [ pdu_router can_tp ││
+  │                                    tcp  someip ]  on_frame
   └─────────────────────────────────────────────────────┘
          ▲                      ▲
          │ gRPC                 │ gRPC
@@ -424,12 +424,12 @@
 </p>
 
 <p>
-  <strong>ABI v8:</strong> the gateway dispatches every frame — regardless of bus type —
-  through <code>PluginManager::DispatchFrame()</code> as a unified <code>BoatFrame</code>.
-  Plugins receive frames via <code>on_frame</code> and publish via
-  <code>set_frame_publisher</code>. The built-in <code>FrameForwarderPlugin</code> bridges
-  dispatched frames to the bus registries. Even PDU routing is now a plugin
-  (<code>pdu_router.so</code>) rather than gateway-core logic.
+  <strong>ABI v8:</strong> the core owns the stateless transport substrate — the single
+  <code>FrameSink</code> is the only path a frame reaches a bus, and every producer
+  (plugins, replay, <code>FrameService.SendFrame</code>) transmits through it. Inbound frames
+  are dispatched to plugins' <code>on_frame</code>, filtered to the bus types each plugin
+  declares. Plugins own stateful conversations only (TCP, ISO-TP, PDU routing, SOME/IP);
+  even PDU routing is a plugin (<code>pdu_router.so</code>) rather than gateway-core logic.
 </p>
 
 <h3>Bus Registries</h3>
