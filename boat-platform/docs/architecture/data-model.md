@@ -58,7 +58,18 @@ FaultEvent
   target_signal: UUID
   fault_type: ENUM(STUCK|NOISE|DROPOUT|INVERT)
   parameters: map<string,string>
+
+Frame  (ABI v8 unified frame — src/core Frame / boat.v1.Frame / BoatFrame)
+  bus_type: ENUM(CAN|CANFD|ETH|PDU|TCP)   # single type for all buses
+  iface: String                            # e.g. vcan0, can1, eth0
+  timestamp_ns: uint64
+  payload: bytes
+  meta: oneof(CanMeta|EthMeta)             # can_id/dlc/flags OR macs/ips/ethertype/flags
 ```
+
+The `Frame` entity replaces the pre-v8 `BoatCanFrame` / `BoatEthFrame` split.
+It is the unit exchanged across the plugin ABI (`on_frame` /
+`set_frame_publisher`), persisted in traces, and streamed by `FrameService`.
 
 ## Storage Mapping
 
@@ -67,6 +78,15 @@ FaultEvent
 - `Event` maps to `events` table.
 - `Trace` maps to `traces` table.
 - `Plugin`, `Signal`, and `FaultEvent` are embedded in scenario definitions and/or plugin registry metadata.
+
+## Trace format (ABI v8)
+
+- Binary traces are a stream of length-delimited `boat.v1.Frame` protobuf
+  records: `uint32 len` (4 bytes) followed by the serialized `Frame`.
+- `Frame` carries bus-agnostic metadata (`bus_type`, `iface`, `timestamp_ns`,
+  `payload`) plus CAN or Ethernet specifics, so a single trace can hold mixed
+  CAN/CAN-FD/Ethernet traffic. Import converts `.asc` / `.blf` / `.pcap` into
+  this format.
 
 ## HIL Event Type Registration
 

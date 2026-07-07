@@ -513,12 +513,16 @@
         <div class="feat-icon">🔌</div>
         <div class="feat-title">Stable Plugin SDK</div>
         <div class="feat-desc">
-          C ABI v7 plugin interface with C++ convenience wrappers. Plugins expose
+          C ABI v8 plugin interface with C++ convenience wrappers. Plugins expose
           <code style="font-family:var(--mono);font-size:11px">initialize</code>,
           <code style="font-family:var(--mono);font-size:11px">on_tick</code>,
-          <code style="font-family:var(--mono);font-size:11px">on_can_frame</code>, and
-          <code style="font-family:var(--mono);font-size:11px">shutdown</code> hooks.
-          Load shared objects at runtime without recompilation.
+          <code style="font-family:var(--mono);font-size:11px">on_frame</code>,
+          <code style="font-family:var(--mono);font-size:11px">set_frame_publisher</code>, and
+          <code style="font-family:var(--mono);font-size:11px">shutdown</code> hooks, operating on
+          the unified <code style="font-family:var(--mono);font-size:11px">BoatFrame</code> type
+          (CAN/CAN-FD/Ethernet/PDU/TCP). Load shared objects at runtime without
+          recompilation. Even PDU routing ships as a plugin
+          (<code style="font-family:var(--mono);font-size:11px">pdu_router.so</code>).
         </div>
       </div>
 
@@ -527,7 +531,8 @@
         <div class="feat-title">gRPC API Gateway</div>
         <div class="feat-desc">
           Full gRPC service surface: SimulationService, SignalService, ScenarioService,
-          ReplayService, FaultService, MetricsService, TraceService, CanService, and
+          ReplayService, FaultService, MetricsService, TraceService, the unified
+          FrameService (send/subscribe across all bus types), CanService, and
           the always-on BusService.
         </div>
       </div>
@@ -642,7 +647,7 @@
     <p>
       <strong>Key components:</strong> <code>boat-core</code> (C++20 tick scheduler, signal router, determinism engine),
       <code>boat-gateway</code> (gRPC server, node manager),
-      <code>boat-plugin-sdk</code> (C ABI v7 plugin interface),
+      <code>boat-plugin-sdk</code> (C ABI v8 plugin interface, unified <code>BoatFrame</code>),
       <code>boat-hil</code> (CAN/Ethernet drivers, PDU router),
       <code>boat-py</code> (Python SDK),
       <code>boat-cli</code> (CLI tool).

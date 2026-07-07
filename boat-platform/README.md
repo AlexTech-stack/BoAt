@@ -84,7 +84,7 @@ This "double-tick" design serves two distinct use cases:
 
 Both managers use the same C ABI (`BoatPluginVTable`) and can load the same `.so` files. A plugin can be loaded into both managers simultaneously (e.g. a vehicle dynamics node that runs persistently while a test simulation loads additional signal-processing plugins).
 
-The node tick thread also drives `PduRouter::OnTick()` for the PDU transmission engine, ensuring scheduled CAN/Ethernet frames are sent on time even outside simulation.
+The node tick thread also ticks the `pdu_router` plugin (via its `on_tick`), driving the PDU transmission engine so scheduled CAN/Ethernet frames are sent on time even outside simulation. As of ABI v8 the PDU router is itself a node plugin (`pdu_router.so`) rather than gateway-core logic.
 
 ## Known issues
 
