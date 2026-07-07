@@ -23,6 +23,7 @@
     - `someip/` — SOME/IP middleware (service discovery stub, request/response)
     - `tcp/` — TCP transport plugin (gateway-resident, config-driven)
     - `frame_forwarder/` — Frame forwarder plugin (replay→HW bridge, always on)
+    - `can_io/` — Lightweight CAN I/O plugin (direct SocketCAN, no registry)
   - `src/replay/` — Replay engine
   - `proto/boat/v1/` — 16 protobuf definitions defining all gRPC services
   - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
@@ -489,6 +490,25 @@ BOAT_CAN_INTERFACES=vcan0 \
 ./build/debug/src/plugins/pdu_router/pdu_router.so \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
+
+### CAN IO Plugin
+
+The `can_io` plugin is a lightweight alternative to `FrameForwarderPlugin` for
+CAN-only scenarios. It opens SocketCAN sockets directly and writes frames to
+the bus without going through `CanBusRegistry`. It also reads frames from the
+bus and injects them into the plugin pipeline via `on_tick`+`frame_publish_fn`
+(with `BOAT_CAN_FLAG_SELF_SENT` tag to prevent the `FrameForwarderPlugin` from
+re-sending).
+
+```bash
+# Load can_io instead of frame_forwarder (avoids double-send)
+# Set BOAT_CAN_INTERFACES="" to avoid conflict with the default CAN stack
+BOAT_CAN_INTERFACES="" \
+  BOAT_NODE_PLUGINS=./build/debug/src/plugins/can_io/can_io.so?{\"ifaces\":[\"vcan0\",\"can1\"]} \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway
+```
+
+When `can_io` is loaded, the `FrameForwarderPlugin` auto-load is skipped.
 
 ## AUTOSAR specification reference
 
