@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BoAt is a deterministic automotive simulation and testing platform (SIL/HIL/CI). Its core is a **tick-based simulation gateway** (`boat_gateway`, C++20) that bridges virtual and physical CAN/Ethernet networks, exposes a **gRPC API**, and is driven by a **Python SDK (`boat-py`) and CLI (`boat-cli`)**. Node/transport logic is loaded as **C-ABI `.so` plugins**.
 
-The bulk of the code lives under `boat-platform/`. `AGENTS.md` is the detailed feature reference (already updated for v8); the v8 migration is documented phase-by-phase in `todo/ABI_v8_Plan*.md`. This file focuses on the big picture and the commands you need most.
+The bulk of the code lives under `boat-platform/`. `AGENTS.md` is the detailed feature reference (already updated for v8), and `boat-platform/docs/architecture/system-architecture.md` covers the v8 architecture in depth. This file focuses on the big picture and the commands you need most.
 
 > **Status: Work In Progress.** APIs, config, and behavior change without notice.
 
@@ -109,7 +109,7 @@ Programmatic: `from boat.client import BoAtClient` / `from boat.frame_node impor
 - **`vcan*` vs physical** driver selection is decided at gateway startup — new driver behavior usually belongs in `VirtualCanDriver` vs `PhysicalCanDriver`.
 - `add_boat_plugin()` (`cmake/BoAtPlugin.cmake`) is the macro for registering a new plugin target; `BoAtProto.cmake` wraps protobuf generation.
 - Coverage: `gcovr --root . --exclude build/ --xml coverage.xml`. Packaging: `cpack -G "TGZ;DEB;RPM"`. Docker: `ghcr.io/boat-platform/boat-platform:*`.
-- System-test process/reports: `test/Structure.md`, `todo/Systemtest.md`, `todo/Testruns/`. LLM cost-control guidance: `boat-platform/docs/ai/llm-cost-control.md`.
+- System-test structure/conventions: `test/Structure.md`. LLM cost-control guidance: `boat-platform/docs/ai/llm-cost-control.md`.
 
 ## AUTOSAR spec reference
 

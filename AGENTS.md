@@ -172,7 +172,7 @@ Each service is a standalone `python3 ui/<name>.py` FastAPI/uvicorn app with emb
   - `boat frame send` / `boat frame subscribe` CLI replaces `boat can` / `boat eth`
   - TCP plugin uses v8 ABI (config-driven, gateway-resident); old C API removed
   - `BoatCanFrame`, `BoatEthFrame` and their associated typedefs are removed
-  - Full plan: `todo/ABI_v8_Plan.md`; cleanup: `todo/ABI_v8_Plan_Cleanup.md`
+  - Architecture reference: `boat-platform/docs/architecture/system-architecture.md`
 
 - Gateway binary path: `build/{preset}/src/gateway/grpc_gateway/boat_gateway`
 - `boat` CLI entry point (boat_cli/main.py): Typer app with subcommands. Uses `BoAtClient(address)` from `boat-py`.
