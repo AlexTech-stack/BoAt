@@ -263,19 +263,21 @@ int main() {
     }
 
   // ── Auto-load the FrameForwarderPlugin ───────────────────────────────
-  // The forwarder plugin is required for replay: replayed frames are
-  // dispatched through PluginManager::DispatchFrame, and this plugin
-  // forwards them to the hardware buses.
+  // The forwarder plugin forwards frames dispatched through
+  // PluginManager::DispatchFrame to the hardware buses.
+  // It is skipped when can_io (or any other CAN-specialized plugin) is
+  // already loaded to avoid double-sending.
   {
     auto loaded_list = node_manager.List();
-    bool has_forwarder = false;
+    bool has_handler = false;
     for (const auto& name : loaded_list) {
-      if (name.find("frame_forwarder") != std::string::npos) {
-        has_forwarder = true;
+      if (name.find("frame_forwarder") != std::string::npos ||
+          name.find("can_io") != std::string::npos) {
+        has_handler = true;
         break;
       }
     }
-    if (!has_forwarder) {
+    if (!has_handler) {
       const char* env_path = std::getenv("BOAT_FRAME_FORWARDER_PATH");
       std::string fwd_path = env_path ? env_path
                            : "./src/plugins/frame_forwarder/frame_forwarder.so";
