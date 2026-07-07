@@ -15,7 +15,7 @@ void CanMeta::ToAbi(BoatCanMeta* out) const {
 }
 
 EthMeta::EthMeta(const BoatEthMeta& m)
-    : ethertype(m.ethertype), vlan_id(m.vlan_id), ip_version(m.ip_version) {
+    : ethertype(m.ethertype), vlan_id(m.vlan_id), ip_version(m.ip_version), flags(m.flags) {
   std::memcpy(dst_mac, m.dst_mac, 6);
   std::memcpy(src_mac, m.src_mac, 6);
   std::memcpy(src_ip, m.src_ip, sizeof(src_ip));
@@ -28,7 +28,7 @@ void EthMeta::ToAbi(BoatEthMeta* out) const {
   out->ethertype  = ethertype;
   out->vlan_id    = vlan_id;
   out->ip_version = ip_version;
-  out->_pad       = 0;
+  out->flags      = flags;
   std::memcpy(out->src_ip, src_ip, sizeof(src_ip));
   std::memcpy(out->dst_ip, dst_ip, sizeof(dst_ip));
 }
@@ -100,13 +100,15 @@ Frame Frame::FromEthernet(std::string iface,
                           uint16_t ethertype, uint16_t vlan_id,
                           const uint8_t* src_ip, uint8_t ip_version,
                           const uint8_t* dst_ip,
-                          std::vector<uint8_t> payload) {
+                          std::vector<uint8_t> payload,
+                          uint8_t flags) {
   EthMeta m;
   std::memcpy(m.dst_mac, dst_mac, 6);
   std::memcpy(m.src_mac, src_mac, 6);
   m.ethertype  = ethertype;
   m.vlan_id    = vlan_id;
   m.ip_version = ip_version;
+  m.flags      = flags;
   const size_t ip_len = (ip_version == 4) ? 4U : 16U;
   if (src_ip) std::memcpy(m.src_ip, src_ip, ip_len);
   if (dst_ip) std::memcpy(m.dst_ip, dst_ip, ip_len);

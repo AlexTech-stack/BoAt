@@ -47,12 +47,6 @@ from typing import Callable, List, Optional
 _CANFD_BRS = 0x01   # bit-rate switch
 _CANFD_FDF = 0x04   # FD frame
 
-# Internal trace format magic number
-_TRACE_MAGIC = 0xB0A7B0A7
-
-# Replay Ethernet event type base (matches kReplayEthEventBase in C++)
-_REPLAY_ETH_EVENT_BASE = 0xEE000000
-
 # IPv6 extension header numbers that should be walked to find the actual L4 protocol.
 _IPv6_EXTENSION_HEADERS = {0, 43, 44, 50, 51, 60, 135}
 
@@ -358,45 +352,70 @@ class TraceReplayer:
     def convert_to_binary(self, path: Path) -> bytes:
         """Convert a trace file to the gateway's internal binary trace format.
 
-        Handles both CAN (ASC/BLF) and Ethernet (pcap) sources.
+        Each event is serialized as a length-delimited ``boat.v1.Frame``
+        protobuf message (``uint32 length`` + ``bytes``).  The Frame carries
+        the full bus-agnostic metadata (interface, timestamps, payload,
+        CAN/Ethernet/PDU metadata) so the replay engine can dispatch directly
+        through ``PluginManager::DispatchFrame``.
 
-        Filters (set via constructor args) are applied during conversion:
-        ``channel_filter``, ``id_filter``, ``ip_map``, ``ethertype_filter``,
-        ``protocol_filter``.
+        Handles both CAN (ASC/BLF) and Ethernet (pcap) sources.
         """
+        from boat.v1 import frame_pb2
+
         reader = self._open_reader(path)
         result = bytearray()
-        first_ts: Optional[float] = None
         is_eth = isinstance(reader, EthernetPcapReader)
 
         with reader:
             for msg in reader:
-                ts = msg.timestamp
-                if first_ts is None:
-                    first_ts = ts
-                relative_ts = ts - first_ts
-
-                tick = int(relative_ts * 1000)
-                wall_time_ns = int(relative_ts * 1_000_000_000)
-
                 if is_eth:
                     if self.ethertype_filter and msg.ethertype not in self.ethertype_filter:
                         continue
-                    # Check for TCP — if a plugin is configured, buffer for stateful replay
-                    payload = msg.payload
+                    payload_bytes = msg.payload
                     is_tcp = False
                     if self.tcp_plugin_path:
-                        if msg.ethertype == 0x0800 and len(payload) >= 20:
-                            is_tcp = (payload[9] == 6)
-                        elif msg.ethertype == 0x86DD and len(payload) >= 40:
-                            is_tcp = (payload[6] == 6)
+                        if msg.ethertype == 0x0800 and len(payload_bytes) >= 20:
+                            is_tcp = (payload_bytes[9] == 6)
+                        elif msg.ethertype == 0x86DD and len(payload_bytes) >= 40:
+                            is_tcp = (payload_bytes[6] == 6)
                     if is_tcp:
                         self._buffer_tcp_frame(msg)
                         continue
                     raw = self._reconstruct_ip_packet(msg)
                     if not raw:
                         continue
-                    event_type = _REPLAY_ETH_EVENT_BASE | (msg.ethertype & 0xFFFF)
+
+                    # Extract rewritten IPs from the reconstructed header.
+                    if msg.ethertype == 0x0800 and len(raw) >= 20:
+                        src_ip = raw[12:16]
+                        dst_ip = raw[16:20]
+                        ip_ver = 4
+                    elif msg.ethertype == 0x86DD and len(raw) >= 40:
+                        src_ip = raw[8:24]
+                        dst_ip = raw[24:40]
+                        ip_ver = 6
+                    else:
+                        src_ip = b""
+                        dst_ip = b""
+                        ip_ver = 0
+
+                    eth_iface = self.eth_iface or (self.buses[0] if self.buses else "")
+
+                    proto = frame_pb2.Frame(
+                        bus_type=frame_pb2.Frame.ETHERNET,
+                        iface=eth_iface,
+                        timestamp_ns=int(msg.timestamp * 1_000_000_000),
+                        payload=raw,
+                        eth=frame_pb2.EthMetadata(
+                            dst_mac=bytes(msg.dst_mac),
+                            src_mac=bytes(msg.src_mac),
+                            ethertype=msg.ethertype,
+                            vlan_id=0,
+                            src_ip=src_ip,
+                            dst_ip=dst_ip,
+                            ip_version=ip_ver,
+                        ),
+                    )
                 else:
                     ch = getattr(msg, "channel", None)
                     if self.channel_filter is not None and ch != self.channel_filter:
@@ -404,18 +423,30 @@ class TraceReplayer:
                     if self.id_filter and msg.arbitration_id not in self.id_filter:
                         continue
                     raw = bytes(msg.data)
-                    event_type = msg.arbitration_id
 
-                header = struct.pack(
-                    "<IIQqI",
-                    _TRACE_MAGIC,
-                    event_type,
-                    tick,
-                    wall_time_ns,
-                    len(raw),
-                )
-                result.extend(header)
-                result.extend(raw)
+                    flags = 0
+                    if getattr(msg, "is_fd", False):
+                        flags |= _CANFD_FDF
+                    if getattr(msg, "bitrate_switch", False):
+                        flags |= _CANFD_BRS
+
+                    iface = self._iface_for_channel(getattr(msg, "channel", 1) or 1)
+
+                    proto = frame_pb2.Frame(
+                        bus_type=frame_pb2.Frame.CANFD if flags else frame_pb2.Frame.CAN,
+                        iface=iface,
+                        timestamp_ns=int(msg.timestamp * 1_000_000_000),
+                        payload=raw,
+                        can=frame_pb2.CanMetadata(
+                            can_id=msg.arbitration_id,
+                            dlc=len(msg.data),
+                            flags=flags,
+                        ),
+                    )
+
+                data = proto.SerializeToString()
+                result.extend(struct.pack("<I", len(data)))
+                result.extend(data)
 
         if self._tcp_streams:
             self._replay_tcp_streams()

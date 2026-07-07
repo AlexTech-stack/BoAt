@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "boat/v1/frame.pb.h"
 #include "event/event_bus.h"
 #include "event_store/event_store.h"
 #include "replay_engine/replay_engine.h"
@@ -21,22 +22,22 @@ using namespace boat::store;
 
 namespace {
 
-constexpr std::uint32_t kTraceMagic = 0xB0A7B0A7;
-
-std::vector<std::uint8_t> MakeTraceRecord(std::uint32_t event_type, std::uint64_t tick,
+std::vector<std::uint8_t> MakeTraceRecord(std::uint32_t can_id, std::uint64_t tick_ms,
                                           const std::vector<std::uint8_t>& payload) {
-  TraceRecordHeader header{};
-  header.magic = kTraceMagic;
-  header.event_type = event_type;
-  header.tick = tick;
-  header.wall_time_ns = static_cast<std::int64_t>(tick * 1'000'000ULL);
-  header.payload_size = static_cast<std::uint32_t>(payload.size());
+  boat::v1::Frame proto;
+  proto.set_bus_type(boat::v1::Frame::CAN);
+  proto.set_timestamp_ns(tick_ms * 1'000'000ULL);
+  proto.set_payload(payload.data(), payload.size());
+  proto.mutable_can()->set_can_id(can_id);
+  proto.mutable_can()->set_dlc(static_cast<std::uint32_t>(payload.size()));
+  proto.mutable_can()->set_flags(0);
 
-  std::vector<std::uint8_t> record(sizeof(header) + payload.size());
-  std::memcpy(record.data(), &header, sizeof(header));
-  if (!payload.empty()) {
-    std::memcpy(record.data() + sizeof(header), payload.data(), payload.size());
-  }
+  std::string raw = proto.SerializeAsString();
+  std::uint32_t len = static_cast<std::uint32_t>(raw.size());
+
+  std::vector<std::uint8_t> record(sizeof(len) + raw.size());
+  std::memcpy(record.data(), &len, sizeof(len));
+  std::memcpy(record.data() + sizeof(len), raw.data(), raw.size());
   return record;
 }
 
@@ -147,10 +148,8 @@ TEST_CASE("ReplayController publishes events on EventBus", "[unit][replay]") {
   auto trace_data = BuildSequentialTrace(200, 2);
   trace_store.traces["bus_test"] = trace_data;
 
-  std::atomic<int> original_events{0};
   std::atomic<int> replay_events{0};
 
-  event_bus.Subscribe(100, [&](const boat::core::BusEvent&) { ++original_events; });
   event_bus.Subscribe(kReplayBusEventType, [&](const boat::core::BusEvent&) { ++replay_events; });
 
   ReplayConfig config;
@@ -163,7 +162,6 @@ TEST_CASE("ReplayController publishes events on EventBus", "[unit][replay]") {
   event_bus.Dispatch();
   controller.Stop();
 
-  REQUIRE(original_events.load() >= 2);
   REQUIRE(replay_events.load() >= 2);
 }
 
@@ -286,10 +284,8 @@ TEST_CASE("ReplayController Seek jumps to requested tick", "[unit][replay]") {
 
   REQUIRE_FALSE(controller.HasError());
   bool found_150 = false;
-  bool found_before_150 = false;
   for (const auto& e : event_store.inserted) {
     if (e.tick == 150) found_150 = true;
-    if (e.tick < 150) found_before_150 = true;
   }
   REQUIRE(found_150);
 }

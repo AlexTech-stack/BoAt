@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/frame.h"
 #include "event/event_bus.h"
 #include "event_store/event_store.h"
 #include "pdu/tick_timer.h"
@@ -22,15 +23,6 @@
 namespace boat::replay {
 
 inline constexpr std::uint32_t kReplayBusEventType = 9001;
-inline constexpr std::uint32_t kReplayEthEventBase = 0xEE000000;
-inline constexpr std::uint32_t kReplayPduEventBase = 0xDD000000;
-
-inline constexpr std::uint32_t MakeReplayEthEventType(std::uint16_t ethertype) {
-  return kReplayEthEventBase | (ethertype & 0xFFFF);
-}
-inline constexpr std::uint32_t MakeReplayPduEventType(std::uint32_t pdu_id) {
-  return kReplayPduEventBase | (pdu_id & 0xFFFF);
-}
 
 enum class ReplaySpeed {
   REAL_TIME = 0,
@@ -77,8 +69,7 @@ class ReplayController {
   /// Thread-safe: consume (pop) all queued replay events.
   std::vector<ReplayEventEntry> ConsumeEvents();
 
-  using EventForwarder = std::function<void(std::uint32_t event_type, std::uint64_t tick,
-                                            const std::vector<std::uint8_t>& payload)>;
+  using EventForwarder = std::function<void(const boat::core::Frame& frame)>;
   void SetEventForwarder(EventForwarder forwarder);
   const ReplayConfig& GetActiveConfig() const;
 

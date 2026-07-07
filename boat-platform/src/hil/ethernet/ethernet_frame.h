@@ -13,6 +13,7 @@ struct EthernetFrame {
   uint64_t             timestamp_ns{0};
   uint16_t             vlan_id{0};     // 802.1Q VID: 0 = untagged, 1-4094 = tagged
   uint8_t              vlan_pcp{0};    // 802.1Q Priority Code Point (0-7)
+  uint8_t              flags{0};       // BOAT_ETH_FLAG_SELF_SENT = 0x01 for loopback prevention
   // Populated on receive when ethertype is 0x0800 (IPv4) or 0x86DD (IPv6).
   // Informational on send — callers are responsible for correct IP headers in payload.
   std::vector<uint8_t> src_ip;         // 4 bytes (IPv4) or 16 bytes (IPv6); empty if non-IP

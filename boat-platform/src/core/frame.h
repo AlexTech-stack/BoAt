@@ -28,7 +28,7 @@ struct EthMeta {
   uint16_t ethertype   = 0;
   uint16_t vlan_id     = 0;
   uint8_t  ip_version  = 0;  // 4 or 6; 0 = none
-  uint8_t  _pad        = 0;
+  uint8_t  flags       = 0;  // BOAT_ETH_FLAG_SELF_SENT etc.
   uint8_t  src_ip[16]  = {}; // 4 bytes (v4) or 16 (v6)
   uint8_t  dst_ip[16]  = {};
 
@@ -109,7 +109,8 @@ class Frame {
                             uint16_t ethertype, uint16_t vlan_id,
                             const uint8_t* src_ip, uint8_t ip_version,
                             const uint8_t* dst_ip,
-                            std::vector<uint8_t> payload);
+                            std::vector<uint8_t> payload,
+                            uint8_t flags = 0);
 
   static Frame FromTcp(std::string iface,
                        const uint8_t* src_ip, uint8_t ip_version,

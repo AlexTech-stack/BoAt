@@ -260,89 +260,46 @@ int main() {
         }
       }
     }
+    }
+
+  // ── Auto-load the FrameForwarderPlugin ───────────────────────────────
+  // The forwarder plugin is required for replay: replayed frames are
+  // dispatched through PluginManager::DispatchFrame, and this plugin
+  // forwards them to the hardware buses.
+  {
+    auto loaded_list = node_manager.List();
+    bool has_forwarder = false;
+    for (const auto& name : loaded_list) {
+      if (name.find("frame_forwarder") != std::string::npos) {
+        has_forwarder = true;
+        break;
+      }
+    }
+    if (!has_forwarder) {
+      const char* env_path = std::getenv("BOAT_FRAME_FORWARDER_PATH");
+      std::string fwd_path = env_path ? env_path
+                           : "./src/plugins/frame_forwarder/frame_forwarder.so";
+      try {
+        node_manager.Load(fwd_path, "{}");
+      } catch (const std::exception&) {
+        std::fprintf(stderr, "[Gateway] FrameForwarderPlugin not found at '%s'. "
+                             "Set BOAT_FRAME_FORWARDER_PATH or ensure it is "
+                             "in BOAT_NODE_PLUGINS.\n", fwd_path.c_str());
+      }
+    }
   }
 
-  // Register replay forwarder: bridges replayed events to CAN/Ethernet/PDU bus registries
+  // Replay → plugin pipeline: every replayed frame is dispatched through the
+  // plugin manager.  The FrameForwarderPlugin (loaded as a built-in) receives
+  // each frame and forwards it to the appropriate hardware interface via its
+  // frame_publish_fn → SetFramePublisher → can/eth registry.
   replay_controller.SetEventForwarder(
-      [&can_registry, &eth_registry, &node_manager, &replay_controller](
-          std::uint32_t event_type, std::uint64_t tick,
-          const std::vector<std::uint8_t>& payload) {
-        if (event_type >= boat::replay::kReplayEthEventBase &&
-            event_type < boat::replay::kReplayEthEventBase + 0x10000) {
-          const auto& cfg = replay_controller.GetActiveConfig();
-          if (cfg.eth_iface.empty()) {
-            return;
-          }
-          const auto src_mac = ReadInterfaceMac(cfg.eth_iface);
-          static bool mac_logged = false;
-          if (!mac_logged) {
-            mac_logged = true;
-            std::fprintf(stderr, "[Replay] iface=%s src_mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
-                         cfg.eth_iface.c_str(),
-                         src_mac[0], src_mac[1], src_mac[2],
-                         src_mac[3], src_mac[4], src_mac[5]);
-          }
-          uint16_t ethertype = static_cast<uint16_t>(event_type & 0xFFFF);
-          int af = (ethertype == 0x86DD) ? AF_INET6 : AF_INET;
-          int ip_len = (ethertype == 0x86DD) ? 16 : 4;
-          int src_off = (ethertype == 0x86DD) ? 8 : 12;
-          int dst_off = src_off + ip_len;
-          boat::hil::EthernetFrame eth_frame{};
-          if (!cfg.mac_map.empty()) {
-            char ip_buf[INET6_ADDRSTRLEN];
-            inet_ntop(af, payload.data() + src_off, ip_buf, sizeof(ip_buf));
-            auto it = cfg.mac_map.find(ip_buf);
-            if (it != cfg.mac_map.end()) {
-              unsigned int m[6];
-              if (std::sscanf(it->second.c_str(), "%02x:%02x:%02x:%02x:%02x:%02x",
-                              &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
-                for (int i = 0; i < 6; ++i) eth_frame.src_mac[i] = static_cast<uint8_t>(m[i]);
-              } else {
-                std::memcpy(eth_frame.src_mac, src_mac.data(), 6);
-              }
-            } else {
-              std::memcpy(eth_frame.src_mac, src_mac.data(), 6);
-            }
-            inet_ntop(af, payload.data() + dst_off, ip_buf, sizeof(ip_buf));
-            it = cfg.mac_map.find(ip_buf);
-            if (it != cfg.mac_map.end()) {
-              unsigned int m[6];
-              if (std::sscanf(it->second.c_str(), "%02x:%02x:%02x:%02x:%02x:%02x",
-                              &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
-                for (int i = 0; i < 6; ++i) eth_frame.dst_mac[i] = static_cast<uint8_t>(m[i]);
-              } else {
-                std::memset(eth_frame.dst_mac, 0xFF, 6);
-              }
-            } else {
-              std::memset(eth_frame.dst_mac, 0xFF, 6);
-            }
-          } else {
-            std::memcpy(eth_frame.src_mac, src_mac.data(), 6);
-            std::memset(eth_frame.dst_mac, 0xFF, 6);
-          }
-          eth_frame.ethertype = ethertype;
-          eth_frame.payload.assign(payload.begin(), payload.end());
-          eth_registry.SendFrame(cfg.eth_iface, eth_frame);
-        } else if (event_type >= boat::replay::kReplayPduEventBase &&
-                   event_type < boat::replay::kReplayPduEventBase + 0x10000) {
-          const std::uint32_t pdu_id = event_type & 0xFFFF;
-          BoatFrame bf{};
-          bf.bus_type = BOAT_BUS_PDU;
-          bf.meta.pdu.pdu_id = pdu_id;
-          bf.payload = const_cast<uint8_t*>(payload.data());
-          bf.payload_len = payload.size();
-          node_manager.DispatchFrame(bf);
-        } else if (event_type <= 0x1FFFFFFF) {
-          boat::hil::CanFrame can_frame{};
-          can_frame.can_id = event_type;
-          const std::size_t copy_len = std::min(payload.size(), sizeof(can_frame.data));
-          if (copy_len > 0) {
-            can_frame.dlc = static_cast<std::uint8_t>(copy_len);
-            std::memcpy(can_frame.data, payload.data(), copy_len);
-          }
-          can_registry.SendFrameAll(can_frame);
-        }
+      [&node_manager](const boat::core::Frame& core_frame) {
+        BoatFrame abi{};
+        core_frame.ToAbi(&abi);
+        node_manager.DispatchFrame(abi);
       });
+
 
   // Wire the PDU publisher so plugins (e.g. CanTp) can deliver reassembled
   // I-PDUs into the frame bus (handled by PduRouter plugin if loaded).
