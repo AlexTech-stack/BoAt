@@ -10,6 +10,7 @@
 #include "can_bus_registry.h"
 #include "ethernet_bus_registry.h"
 #include "event_store/event_store.h"
+#include "gateway/grpc_gateway/frame_sink.h"
 #include "gateway/grpc_gateway/gateway_context.h"
 #include "gateway/grpc_gateway/replay_service_impl.h"
 #include "gateway/grpc_gateway/rpc_audit_log.h"
@@ -60,6 +61,7 @@ struct IntegrationFixture {
   boat::hil::CanBusRegistry can_registry;
   boat::hil::EthernetBusRegistry eth_registry;
   boat::core::PluginManager plugin_manager;
+  boat::gateway::FrameSink frame_sink{can_registry, eth_registry};
   boat::gateway::RpcAuditLog audit_log;
   boat::gateway::GatewayContext ctx{
       .sim = sim,
@@ -71,6 +73,7 @@ struct IntegrationFixture {
       .can_bus_registry = can_registry,
       .ethernet_bus_registry = eth_registry,
       .plugin_manager = plugin_manager,
+      .frame_sink = frame_sink,
       .audit_log = audit_log,
   };
   boat::gateway::ReplayServiceImpl replay_service{ctx};

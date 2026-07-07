@@ -12,6 +12,31 @@
 
 namespace boat::core {
 
+namespace {
+
+constexpr std::uint32_t kAllBusMask = 0xFFFFFFFFu;
+
+// Parse a plugin's declared_buses() string (a JSON array of bus-type names,
+// e.g. ["can","eth"]) into a bitmask of BOAT_BUS_* values. A CAN handler is
+// assumed to accept both classic and FD frames. Unrecognized / empty input is
+// treated as "accept all" so a plugin is never silently starved of frames.
+std::uint32_t ParseDeclaredBusMask(const char* decl) {
+  if (decl == nullptr) return kAllBusMask;
+  const std::string s(decl);
+  const auto has = [&](const char* tok) {
+    return s.find(tok) != std::string::npos;
+  };
+  std::uint32_t mask = 0;
+  if (has("\"canfd\"")) mask |= (1u << BOAT_BUS_CANFD);
+  if (has("\"can\""))   mask |= (1u << BOAT_BUS_CAN) | (1u << BOAT_BUS_CANFD);
+  if (has("\"eth\""))   mask |= (1u << BOAT_BUS_ETHERNET);
+  if (has("\"tcp\""))   mask |= (1u << BOAT_BUS_TCP);
+  if (has("\"pdu\""))   mask |= (1u << BOAT_BUS_PDU);
+  return mask == 0 ? kAllBusMask : mask;
+}
+
+}  // namespace
+
 void PluginManager::SetPublisher(SignalPublishFn fn) {
   publisher_fn_ = std::move(fn);
 }
@@ -72,6 +97,13 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
   }
 
   PluginHandle handle{dl_handle, plugin, so_path, abi_version, destroy_fn, {}};
+
+  // Cache the plugin's declared bus types so DispatchFrame can pre-filter
+  // instead of calling on_frame for every plugin on every frame.
+  if (plugin->vtable->declared_buses != nullptr) {
+    handle.declared_bus_mask =
+        ParseDeclaredBusMask(plugin->vtable->declared_buses(plugin->ctx));
+  }
 
   // Wire signal publisher.
   if (plugin->vtable->set_publisher != nullptr && publisher_fn_) {
@@ -163,18 +195,26 @@ void PluginManager::TickAll(std::uint64_t tick) {
 }
 
 void PluginManager::DispatchFrame(const BoatFrame& frame) {
-  std::vector<BoatPlugin*> snapshot;
+  struct Target {
+    BoatPlugin* plugin;
+    std::uint32_t bus_mask;
+  };
+  std::vector<Target> snapshot;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     snapshot.reserve(plugins_.size());
     for (auto& [name, handle] : plugins_) {
       (void)name;
-      snapshot.push_back(handle.plugin);
+      snapshot.push_back({handle.plugin, handle.declared_bus_mask});
     }
   }
-  for (auto* plugin : snapshot) {
-    if (plugin->vtable->on_frame != nullptr) {
-      plugin->vtable->on_frame(plugin->ctx, &frame);
+  const std::uint32_t bus_bit =
+      (frame.bus_type < 32) ? (1u << frame.bus_type) : 0u;
+  for (auto& t : snapshot) {
+    // Skip plugins that didn't declare this bus type — avoids O(N) fan-out.
+    if ((t.bus_mask & bus_bit) == 0) continue;
+    if (t.plugin->vtable->on_frame != nullptr) {
+      t.plugin->vtable->on_frame(t.plugin->ctx, &frame);
     }
   }
 }

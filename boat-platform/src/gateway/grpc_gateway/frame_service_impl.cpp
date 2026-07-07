@@ -10,6 +10,7 @@
 #include "can_bus_registry.h"
 #include "core/frame.h"
 #include "ethernet_bus_registry.h"
+#include "frame_sink.h"
 
 namespace boat::gateway {
 namespace {
@@ -141,14 +142,7 @@ grpc::Status FrameServiceImpl::SendFrame(grpc::ServerContext*,
       if (frame.iface().empty() || !ctx_.can_bus_registry.Has(frame.iface())) {
         return grpc::Status(grpc::NOT_FOUND, "CAN interface not found");
       }
-      boat::hil::CanFrame cf{};
-      cf.can_id = frame.can_meta().can_id;
-      cf.dlc    = frame.can_meta().dlc;
-      cf.flags  = frame.can_meta().flags;
-      cf.timestamp_ns = frame.timestamp_ns();
-      const auto copy_len = std::min(frame.payload().size(), size_t{64});
-      std::memcpy(cf.data, frame.payload().data(), copy_len);
-      ctx_.can_bus_registry.SendFrame(frame.iface(), cf);
+      ctx_.frame_sink.Publish(frame);
       response->set_accepted(true);
       break;
     }
@@ -156,21 +150,14 @@ grpc::Status FrameServiceImpl::SendFrame(grpc::ServerContext*,
       if (frame.iface().empty() || !ctx_.ethernet_bus_registry.Has(frame.iface())) {
         return grpc::Status(grpc::NOT_FOUND, "Ethernet interface not found");
       }
-      boat::hil::EthernetFrame ef{};
-      std::memcpy(ef.dst_mac, frame.eth_meta().dst_mac, 6);
-      std::memcpy(ef.src_mac, frame.eth_meta().src_mac, 6);
-      ef.ethertype = frame.eth_meta().ethertype;
-      ef.vlan_id   = frame.eth_meta().vlan_id;
-      ef.timestamp_ns = frame.timestamp_ns();
-      ef.payload   = frame.payload();
-      ctx_.ethernet_bus_registry.SendFrame(frame.iface(), ef);
+      ctx_.frame_sink.Publish(frame);
       response->set_accepted(true);
       break;
     }
     case boat::core::Frame::BusType::kTcp:
     case boat::core::Frame::BusType::kPdu: {
       // TCP and PDU frames go through the plugin frame bus, not hardware registries.
-      // For now, return unsupported — plugins handle these in Phase 3/4.
+      // For now, return unsupported — handled in Part D (PDU dispatch / TCP redirect).
       response->set_accepted(false);
       break;
     }

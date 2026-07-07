@@ -3,9 +3,9 @@ import json
 
 def test_build_matches_core_loader_schema(scenario_builder):
     scenario_builder.add_plugin(
-        name="vehicle_dynamics",
-        path="plugins/vehicle_dynamics.so",
-        config={"initial_velocity": 4.0},
+        name="can_tp",
+        path="plugins/can_tp.so",
+        config={"block_size": 4},
     )
     scenario_builder.add_signal("speed", 0.0, name="Vehicle Speed", unit="m/s")
     scenario_builder.add_fault("speed", "SIGNAL_CORRUPTION", 25, magnitude=0.5)
@@ -28,8 +28,8 @@ def test_build_matches_core_loader_schema(scenario_builder):
 
     plugin = built["plugins"][0]
     assert set(plugin.keys()) == {"so_path", "config_json"}
-    assert plugin["so_path"] == "plugins/vehicle_dynamics.so"
-    assert json.loads(plugin["config_json"]) == {"initial_velocity": 4.0}
+    assert plugin["so_path"] == "plugins/can_tp.so"
+    assert json.loads(plugin["config_json"]) == {"block_size": 4}
 
     signal = built["signals"][0]
     assert signal == {"id": "speed", "name": "Vehicle Speed", "type": "double", "unit": "m/s"}

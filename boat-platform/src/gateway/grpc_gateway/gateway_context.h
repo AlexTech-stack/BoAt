@@ -18,6 +18,8 @@ class EthernetBusRegistry;
 
 namespace boat::gateway {
 
+class FrameSink;
+
 struct GatewayContext {
   boat::core::SimulationContext& sim;
 
@@ -29,6 +31,7 @@ struct GatewayContext {
   boat::hil::CanBusRegistry& can_bus_registry;
   boat::hil::EthernetBusRegistry& ethernet_bus_registry;
   boat::core::PluginManager& plugin_manager;
+  FrameSink& frame_sink;
   RpcAuditLog& audit_log;
 };
 
