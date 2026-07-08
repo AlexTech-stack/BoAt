@@ -58,12 +58,12 @@ Physical CAN interfaces (e.g. PEAK, Kvaser, gs_usb) are supported via `PhysicalC
 # Bring up a physical CAN interface (adjust bitrate to your setup)
 sudo ip link set can0 up type can bitrate 500000
 
-# The `boat can detect` command scans available CAN hardware (no gateway needed)
-boat can detect
+# No CLI hardware-detection command; inspect CAN hardware directly
+ip -d link show type can
 
-# List registered interfaces with metadata (requires active gateway)
-boat can list-buses
-boat --json can list-buses
+# List interfaces the gateway has access to, with metadata (requires active gateway)
+boat frame list-ifaces
+boat --json frame list-ifaces
 ```
 
 ## Architecture

@@ -89,25 +89,21 @@ The `ListBuses` gRPC response now returns per-interface metadata (driver name, s
 
 ### CLI CAN commands
 
+The standalone `boat can` / `boat eth` Typer commands (including `list-buses` and
+`detect`) were retired in favor of the unified `boat frame` command; there is
+no CLI hardware-detection command anymore — inspect `/sys/class/net/` or use
+`ip -d link show type can` directly.
+
 ```bash
-# List registered interfaces with metadata (requires gateway)
-boat can list-buses
-boat --json can list-buses
+# List interfaces the gateway has access to, with metadata (requires gateway)
+boat frame list-ifaces
+boat --json frame list-ifaces
 
-# Detect available CAN hardware on the host (no gateway required)
-boat can detect
-boat --json can detect
-
-# v8: Unified frame send/subscribe (preferred over boat can/boat eth)
+# v8: Unified frame send/subscribe
 boat frame send --bus-type can --can-id 0x123 --iface vcan0 --data AABBCCDD
 boat frame subscribe --bus-types can
 boat frame send --bus-type ethernet --ethertype 0x0800 --dst-ip 10.0.0.1 --data AABB
 ```
-
-The `boat can detect` command scans `/sys/class/net/` for CAN interfaces and identifies:
-- Physical hardware (PEAK PCAN-USB Pro FD via USB ID `0c72:0011`, other USB devices)
-- Virtual CAN interfaces
-- Driver name, FD capability, link state
 
 ## Test
 
@@ -137,8 +133,7 @@ bash boat-platform/sdk/python/boat/stubs/generate_stubs.sh
 # CLI
 boat --help
 boat sim init|start|pause|step|stop
-boat frame send|subscribe
-boat can send|listen           # deprecated — use 'boat frame' instead
+boat frame send|subscribe|list-ifaces
 boat scenario create|validate|get|list
 
 # SDK (programmatic)

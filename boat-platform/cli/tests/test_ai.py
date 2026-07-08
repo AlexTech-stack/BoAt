@@ -43,13 +43,13 @@ def test_ai_bus_setup() -> None:
 
 
 def test_ai_cli() -> None:
-    with patch("boat_cli.ai.ai_backend.complete", return_value="boat can send --iface vcan0 --id 0x100"):
+    with patch("boat_cli.ai.ai_backend.complete", return_value="boat frame send --bus-type can --can-id 0x100 --iface vcan0"):
         result = runner.invoke(app, [
             "ai", "cli",
             "--query", "Send a CAN frame 0x100 on vcan0",
         ])
     assert result.exit_code == 0
-    assert "boat can send" in result.stdout
+    assert "boat frame send" in result.stdout
 
 
 def test_ai_plugin(tmp_path: Path) -> None:
