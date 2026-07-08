@@ -207,4 +207,29 @@ def test_replay_import_reports_correct_frame_count(tmp_path) -> None:
     assert "3" in result.output
 
 
+def test_trace_replay_applies_id_filter_and_shows_it_in_banner(tmp_path) -> None:
+    asc_file = tmp_path / "mixed.asc"
+    with can.ASCWriter(str(asc_file)) as writer:
+        writer.on_message_received(can.Message(arbitration_id=0x583, data=[1], channel=4))
+        writer.on_message_received(can.Message(arbitration_id=0x100, data=[2], channel=4))
+        writer.on_message_received(can.Message(arbitration_id=0x583, data=[3], channel=4))
+        writer.on_message_received(can.Message(arbitration_id=0x200, data=[4], channel=4))
+
+    fake_client = _fake_client()
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, [
+            "trace", "replay", str(asc_file),
+            "--channel", "4", "--id", "0x583", "--buses", "vcan0", "--speed", "0",
+        ])
+
+    assert result.exit_code == 0
+    assert "0x583" in result.output  # banner echoes the applied id filter
+
+    sent_ids = [
+        call.args[0].frame.can_id
+        for call in fake_client.can.SendCanFrame.call_args_list
+    ]
+    assert sent_ids == [0x583, 0x583]
+
+
 

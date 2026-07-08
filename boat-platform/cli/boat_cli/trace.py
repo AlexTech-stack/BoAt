@@ -270,9 +270,10 @@ def cmd_replay(
 
     speed_label = f"{speed}x" if speed > 0 else "max"
     ch_label = f" ch={channel}" if channel is not None else ""
+    id_label = f" id={[hex(i) for i in sorted(id_set)]}" if id_set else ""
     typer.echo(
         f"Replaying {file.name} -> {gateway}  "
-        f"[speed={speed_label}  loop={loop or 'off'}{ch_label}"
+        f"[speed={speed_label}  loop={loop or 'off'}{ch_label}{id_label}"
         f"  buses={bus_list or ['vcan0']}]"
     )
 
