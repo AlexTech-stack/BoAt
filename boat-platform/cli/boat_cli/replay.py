@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 from typing import Optional
 
@@ -335,9 +336,15 @@ def cmd_import(
         print_error(f"ImportTraceData rejected: {msg}")
         raise typer.Exit(1)
 
-    # ▸ Each record is 28 bytes header + variable payload.
-    #   Approximate frame count by counting magic markers.
-    n_frames = binary_data.count(b"\xa7\xb0\xa7\xb0")
+    # ▸ Each record is a 4-byte little-endian length prefix followed by that
+    #   many bytes of serialized boat.v1.Frame protobuf; walk the stream to
+    #   get an exact count.
+    n_frames = 0
+    off = 0
+    while off + 4 <= len(binary_data):
+        (record_len,) = struct.unpack_from("<I", binary_data, off)
+        off += 4 + record_len
+        n_frames += 1
     size_kb = len(binary_data) / 1024
     print_table(
         ["accepted", "trace_id", "frames", "size"],

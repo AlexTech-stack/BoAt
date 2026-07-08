@@ -1611,3 +1611,25 @@ class TestMacMap:
             req.mac_map[ip_str] = mac_str
         assert req.mac_map["10.0.0.1"] == "aa:bb:cc:dd:ee:01"
         assert len(req.mac_map) == 1
+
+
+class TestReplayRejectsPcap:
+    """TraceReplayer.replay() is CAN-only; server-side delegation was removed."""
+
+    def test_replay_raises_for_pcap(self, tmp_path):
+        from boat.trace_replay import TraceReplayer, TraceReplayError
+
+        pcap_path = tmp_path / "capture.pcap"
+        pcap_path.write_bytes(_make_pcap([]))
+
+        replayer = TraceReplayer(buses=["eth0"], speed=1.0)
+        try:
+            replayer.replay(str(pcap_path))
+            assert False, "expected TraceReplayError"
+        except TraceReplayError as e:
+            assert "boat replay import" in str(e)
+
+    def test_replay_server_side_no_longer_exists(self):
+        from boat.trace_replay import TraceReplayer
+
+        assert not hasattr(TraceReplayer, "replay_server_side")

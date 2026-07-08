@@ -939,7 +939,16 @@ boat db show --msg MotorSpeed_PDU --db config/pdu_db_example.json --pack</code><
   <tr><td><code>--loop</code></td><td>off</td><td>Loop the file indefinitely</td></tr>
   <tr><td><code>--sim-id &lt;id&gt;</code></td><td></td><td>Simulation ID attached to every replayed frame</td></tr>
   <tr><td><code>--verbose</code></td><td>off</td><td>Print each frame as it is sent</td></tr>
+  <tr><td><code>--channel &lt;N&gt;</code></td><td></td><td>Only replay frames from this CAN channel (1-based)</td></tr>
+  <tr><td><code>--id &lt;hex&gt;</code></td><td></td><td>Only replay frames with this CAN ID; comma-separated for multiple</td></tr>
 </table>
+
+<div class="callout">
+  <code>boat trace replay</code> sends each frame individually via gRPC, CAN-only.
+  For Ethernet/pcap replay, use <code>boat replay import</code> +
+  <code>boat replay start</code>/<code>stream</code> instead (see
+  <code>docs/howto/replay.md</code> for the full server-side replay reference).
+</div>
 
 <!-- ═══ CLI PLUGIN ═══ -->
 <h2 id="cli-plugin">CLI — <code>boat plugin</code></h2>

@@ -26,10 +26,12 @@ _CLI_REFERENCE = """\
   boat scenario validate --file <path>        # validate JSON
   boat scenario delete <id>                   # delete
 
-### replay — Trace replay
+### replay — Trace replay (server-side; required for Ethernet/.pcap)
+  boat replay import <file> --trace-id <id>   # convert+upload .asc/.blf/.pcap
   boat replay start --trace <id>              # start replay
+  boat replay stream --trace <id>             # start + stream in one call
   boat replay seek --tick <n>                 # seek to tick
-  boat replay stream                          # stream replay events
+  boat replay pause|resume|stop                # control an active replay
 
 ### plugin — Plugin management
   boat plugin register --path <so_path>       # load a .so plugin
@@ -99,7 +101,8 @@ _CLI_REFERENCE = """\
   boat trace start [--asc|--blf|--pcap]       # start recording
   boat trace stop                              # stop recording
   boat trace status                            # recording status
-  boat trace replay <file>                     # inject trace file
+  boat trace replay <file.asc|file.blf>       # inject CAN frames individually, real-time (CAN only)
+                                                # for .pcap/Ethernet, use `boat replay import` + `start`/`stream` instead
 
 ### Global flags (available everywhere)
   --host localhost:50051                       # gateway address
