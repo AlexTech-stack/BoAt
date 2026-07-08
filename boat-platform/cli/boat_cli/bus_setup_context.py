@@ -53,6 +53,11 @@ _BUS_REFERENCE = """\
   # Bring up
   sudo ip link set eth0 up
 
+  # The gateway needs BOAT_ETH_INTERFACES=raw:eth0 (raw: prefix) to bind a
+  # physical NIC via AF_PACKET, which requires CAP_NET_RAW. Grant it to the
+  # binary instead of running the gateway as root (see "Raw Ethernet
+  # permissions" below).
+
 ## Gateway Environment Variables
 
   BOAT_CAN_INTERFACES=vcan0,vcan1,can0   # CAN interfaces the gateway manages
@@ -82,6 +87,21 @@ _BUS_REFERENCE = """\
     BOAT_ETH_INTERFACES=veth0 \\
     ./build/debug/.../boat_gateway
 
+  # With a physical NIC (raw AF_PACKET) — grant CAP_NET_RAW first, see below
+  BOAT_ETH_INTERFACES=raw:eth0 ./build/debug/.../boat_gateway
+
+## Raw Ethernet permissions
+
+  Physical NICs via `raw:<iface>` need `CAP_NET_RAW`. Grant it to the binary
+  rather than running the whole gateway with sudo — a sudo-run gateway leaves
+  root-owned files behind (e.g. trace files under /tmp) that block later
+  non-root runs from writing to the same paths:
+
+  sudo setcap cap_net_raw+ep ./build/debug/src/gateway/grpc_gateway/boat_gateway
+
+  Reapply after every rebuild — the capability is stored on the binary's
+  inode, and a fresh build produces a new file.
+
 ## Prerequisites
 
   sudo apt install cmake ninja-build g++ libacl1-dev
@@ -101,7 +121,10 @@ Ethernet interfaces for the BoAt simulation platform.
 
 Rules:
 1. Output the exact shell commands needed — the user will copy-paste them.
-2. Explain which commands need sudo.
+2. Explain which commands need sudo. For raw Ethernet (`raw:` prefix), recommend
+   `sudo setcap cap_net_raw+ep` on the gateway binary instead of running the
+   gateway itself with sudo — running as root leaves root-owned files behind
+   (e.g. under /tmp) that block later non-root runs.
 3. Distinguish between virtual (vcan*) and physical (can*, en*, eth*) interfaces.
 4. When the user mentions specific hardware (PEAK, Kvaser, etc.), check `ip -d link show type can` / sysfs output.
 5. For gateway startup, provide the full command with environment variables.
