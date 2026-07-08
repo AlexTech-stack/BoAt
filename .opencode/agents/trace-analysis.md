@@ -20,7 +20,7 @@ All in `boat-platform/sdk/python/boat/`:
 | Module | File | Purpose |
 |--------|------|---------|
 | TraceRecorder | `trace_recorder.py` | Daemon client for recording traces (PCAP/BLF/ASC/JSONL) |
-| TraceReplayer | `trace_replay.py` | Replay ASC/BLF trace files |
+| TraceReplayer | `trace_replay.py` | Direct real-time CAN replay (ASC/BLF, via gRPC CanService); also converts ASC/BLF/PCAP to the gateway's binary trace format for `boat replay import` |
 | TraceAnalyzer | `trace_analyzer.py` | BLF trace parsing and signal analysis |
 | TraceReverseEngineer | `trace_reverse_engineer.py` | Signal boundary discovery from raw traces |
 
@@ -37,8 +37,13 @@ C++ impl: `src/gateway/grpc_gateway/` — TraceService
 
 ## General guidance
 
-- The `boat trace` CLI commands wrap all trace functionality
+- `boat trace start/stop/status` (recording) and `boat trace replay` (direct
+  CAN-only replay, CanService) are two different backends from `boat replay
+  import/start/stream/...` (server-side, ReplayService) — Ethernet/`.pcap`
+  replay only exists under `boat replay`, never `boat trace replay`.
 - After changing trace modules, run Python tests: `pytest sdk/python/tests/ -v`
-- Trace replay depends on the ReplayService gRPC endpoint — ensure gateway is running
+- `boat trace replay` uses `CanService.SendCanFrame` directly and does not
+  touch `ReplayService` at all. `boat replay import/start/stream` depends on
+  `ReplayService` — ensure the gateway is running for either.
 - The reverse engineer module uses heuristic signal discovery — validate results against known PDU DBs
 - Demo trace files are in `boat-platform/demo/traces/`

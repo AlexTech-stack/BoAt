@@ -1,17 +1,14 @@
-"""Python SDK for replaying CAN/Ethernet trace files through the BoAt gateway.
+"""Python SDK for replaying CAN trace files through the BoAt gateway.
 
-Supported formats:
-  - CAN: .asc, .blf (via python-can)
-   - Ethernet: .pcap (DLT_EN10MB, IPv4/IPv6+UDP/ICMP)
+``TraceReplayer.replay()`` supports CAN only (.asc, .blf via python-can) and
+sends each frame one-by-one via gRPC CanService, paced in real time by this
+process. There is no server-side mode here.
 
-Two replay modes are available:
-
-1. **Direct mode** (default): Sends each CAN frame one-by-one via gRPC CanService.
-2. **Server-side mode**: Converts the trace to the gateway's internal binary format,
-   uploads it via ReplayService.ImportTraceData, then plays back using
-   ReplayService.StartReplay + StreamReplay.
-
-Ethernet traces always use server-side mode.
+For Ethernet (.pcap) replay, use ``convert_to_binary()`` to produce the
+gateway's internal binary trace format, upload it via
+ReplayService.ImportTraceData, then play it back with
+ReplayService.StartReplay + StreamReplay (this is what the ``boat replay
+import`` / ``boat replay start`` / ``boat replay stream`` CLI commands do).
 
 Quick example::
 
@@ -25,14 +22,13 @@ Quick example::
     )
     replayer.replay("recording.asc")
 
-    # Ethernet pcap replay (always server-side)
+    # Ethernet pcap replay (server-side only, via ReplayService)
     replayer = TraceReplayer(
-        gateway="localhost:50051",
-        buses=["eth0"],
         replay_src_ip="192.168.1.1",
         replay_dst_ip="192.168.1.100",
     )
-    replayer.replay("capture.pcap")
+    binary_data = replayer.convert_to_binary("capture.pcap")
+    # ... upload via ReplayService.ImportTraceData, then StartReplay/StreamReplay
 """
 from __future__ import annotations
 
@@ -231,34 +227,36 @@ class TraceReplayer:
         self._tcp_plugin      = None  # lazy-loaded TcpHandle
         self._tcp_streams     = {}    # key -> list of (payload, is_fin)
         self._stub            = None
-        self._replay_stub     = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def replay(self, path: str | Path, loop: int | None = None, server_side: bool = False) -> int:
-        """Replay a trace file.
+    def replay(self, path: str | Path, loop: int | None = None) -> int:
+        """Replay a CAN trace file, sending each frame individually via gRPC.
 
         Args:
-            path: Path to a ``.asc``, ``.blf``, or ``.pcap`` file.
+            path: Path to a ``.asc`` or ``.blf`` file.
             loop: If set, replay the file in a loop with N ms gap between the
                   last message of one run and the first message of the next run.
                   ``None`` or omitted means play once.
-            server_side: If *True*, upload the trace and use the gateway's
-                         ReplayService for server-side playback.  Automatically
-                         enabled for ``.pcap`` files.
 
         Returns:
             Total number of frames sent (across all loop iterations).
 
         Raises:
-            TraceReplayError: If the file cannot be opened or a gRPC error
-            occurs.
+            TraceReplayError: If the file cannot be opened, is a ``.pcap``
+            (Ethernet replay is server-side only — use ``convert_to_binary()``
+            + ReplayService, i.e. ``boat replay import`` + ``boat replay
+            start``/``stream``), or a gRPC error occurs.
         """
         path = Path(path)
-        if path.suffix.lower() == ".pcap" and not server_side:
-            server_side = True
-        if server_side:
-            return self.replay_server_side(path, loop_delay_ms=loop or 0)
+        if path.suffix.lower() == ".pcap":
+            raise TraceReplayError(
+                "Ethernet/.pcap replay is not supported by TraceReplayer.replay() "
+                "(direct per-frame CAN injection only). Use convert_to_binary() + "
+                "ReplayService.ImportTraceData/StartReplay/StreamReplay instead "
+                "(the `boat replay import` + `boat replay start`/`stream` CLI "
+                "commands do this)."
+            )
 
         stub = self._get_stub()
         total = 0
@@ -275,76 +273,6 @@ class TraceReplayer:
             total += run_sent
             if loop is None:
                 break
-        return total
-
-    def replay_server_side(self, path: str | Path, loop_delay_ms: int = 0) -> int:
-        """Replay a trace file using the gateway's ReplayService.
-
-        Converts the trace to the internal binary format, uploads it via
-        ImportTraceData, then plays back using StartReplay + StreamReplay.
-        When *loop_delay_ms* > 0 the C++ engine loops the trace with that gap
-        between passes until ``StopReplay`` is called.
-
-        Args:
-            path: Path to an ``.asc`` or ``.blf`` file.
-            loop_delay_ms: ms gap between loop passes; 0 = single pass.
-
-        Returns:
-            Total number of frames replayed.
-
-        Raises:
-            TraceReplayError: On conversion, upload, or playback errors.
-        """
-        from boat.v1 import replay_pb2
-
-        path = Path(path)
-        trace_id = path.stem
-
-        binary_data = self.convert_to_binary(path)
-
-        replay_stub = self._get_replay_stub()
-
-        try:
-            upload_resp = replay_stub.ImportTraceData(
-                replay_pb2.ImportTraceDataRequest(
-                    trace_id=trace_id,
-                    format=path.suffix.lstrip(".").upper(),
-                    data=binary_data,
-                )
-            )
-        except Exception as e:
-            raise TraceReplayError(f"ImportTraceData failed: {e}") from e
-
-        if not upload_resp.accepted:
-            raise TraceReplayError(f"ImportTraceData rejected: {upload_resp.error.message}")
-
-        speed_mult = 1_000_000.0 if self.speed == 0 else self.speed
-        eth_iface = self.eth_iface or (self.buses[0] if self.buses else "")
-        start_req = replay_pb2.StartReplayRequest(
-            trace_id=trace_id,
-            simulation_id=self.simulation_id,
-            speed=replay_pb2.REPLAY_SPEED_ACCELERATED,
-            speed_multiplier=speed_mult,
-            eth_iface=eth_iface,
-            loop_delay_ms=loop_delay_ms,
-        )
-        if self.mac_map:
-            for ip_str, mac_str in self.mac_map.items():
-                start_req.mac_map[ip_str] = mac_str
-        start_resp = replay_stub.StartReplay(start_req)
-
-        if not start_resp.accepted:
-            raise TraceReplayError(f"StartReplay rejected: {start_resp.error.message}")
-
-        total = 0
-        stream = replay_stub.StreamReplay(
-            replay_pb2.StreamReplayRequest(replay_id=start_resp.replay_id)
-        )
-        for event in stream:
-            total += 1
-            if self.on_frame is not None:
-                self.on_frame(total, event)
-
         return total
 
     # ── Internals ──────────────────────────────────────────────────────────────
@@ -822,18 +750,6 @@ class TraceReplayer:
         while s >> 16:
             s = (s & 0xFFFF) + (s >> 16)
         return (~s) & 0xFFFF
-
-    def _get_replay_stub(self):
-        if self._replay_stub is not None:
-            return self._replay_stub
-        try:
-            import grpc
-            from boat.v1 import replay_pb2_grpc
-        except ImportError as e:
-            raise TraceReplayError(f"Cannot import boat gRPC stubs: {e}") from e
-        channel = grpc.insecure_channel(self.gateway)
-        self._replay_stub = replay_pb2_grpc.ReplayServiceStub(channel)
-        return self._replay_stub
 
     def _get_stub(self):
         if self._stub is not None:

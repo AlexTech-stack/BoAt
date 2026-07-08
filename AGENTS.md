@@ -473,10 +473,13 @@ boat replay stream --trace myrun \
   --mac-map 192.168.0.1=02:de:ad:be:ef:01  # IP→MAC mappings
 ```
 
-#### Legacy combined flow
+#### `boat trace replay` (direct, CAN-only)
 ```bash
-# boat trace replay still works (combines import + replay)
-boat trace replay trace.asc --server-side --loop 250 --verbose
+# Sends each frame individually via gRPC, paced in real time by the client
+# process -- no import/upload, no server-side session, no pause/resume/seek.
+# CAN (.asc/.blf) only; .pcap is rejected -- use `boat replay import` +
+# `boat replay start`/`stream` above for Ethernet.
+boat trace replay trace.asc --loop 250 --verbose --buses vcan0
 ```
 
 ### Loopback prevention
