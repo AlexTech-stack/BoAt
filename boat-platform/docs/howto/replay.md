@@ -504,7 +504,7 @@ CAN FD frames are handled automatically.  The SocketCan driver uses
 sudo ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on
 
 # Verify FD support
-boat can list-buses
+boat frame list-ifaces
 ```
 
 ### Extended (29-bit) CAN IDs
@@ -617,7 +617,7 @@ eth_replayer.replay("capture.pcap")
 |---------|--------------|
 | Frames not appearing on the bus | Check that the target interface is up. For CAN FD: `ip link show can0`. For Ethernet: `ip link show eth0`. |
 | Extended CAN IDs appear truncated (e.g. `29F` instead of `1BFC829F`) | SocketCan driver missing `CAN_EFF_FLAG`. Build the latest gateway. |
-| gRPC `UNAVAILABLE` | Gateway not running or wrong host/port. Verify: `boat can list-buses`. |
+| gRPC `UNAVAILABLE` | Gateway not running or wrong host/port. Verify: `boat frame list-ifaces`. |
 | CAN server-side replay imports but no frames on the bus | The trace file timestamps may be absolute (epoch-based). The Python SDK converts to relative ticks internally since build `43824e6`. Upgrade the SDK: `pip install -e ./sdk/python`. |
 | Server-side replay seems to hang (no console output after "Replaying...") | The Python client blocks on `StreamReplay` waiting for events from the gateway's EventBus. Frames are still delivered to the bus — verify with `candump` / `tcpdump`. Use `Ctrl+C` to interrupt. |
 | No frames replayed | Check the trace file format. Ensure channel/ID filters are correct. For pcap: only classic pcap (DLT\_EN10MB) is supported, not pcapng. |

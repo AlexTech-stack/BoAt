@@ -89,14 +89,14 @@ Key env vars: `BOAT_CAN_INTERFACES` / `BOAT_ETH_INTERFACES`, `BOAT_NODE_PLUGINS`
 boat sim init|start|pause|step|stop
 boat frame send --bus-type can --can-id 0x123 --iface vcan0 --data AABBCCDD   # unified send
 boat frame subscribe --bus-types can                                          # unified subscribe
-boat can send|listen|list-buses|detect     # can/eth are deprecated wrappers; `detect` needs no gateway
+boat frame list-ifaces                      # list CAN + Ethernet interfaces the gateway sees
 boat pdu route|group|enable-group|...       # delegated to the pdu_router plugin
 boat can-tp configure|send                  # ISO-TP
 boat replay import <trace> --trace-id ...   # convert+upload .asc/.blf/.pcap → boat.v1.Frame records
 boat replay stream --trace <id> --speed accelerated --multiplier 2.0 --buses vcan0
 ```
 
-Programmatic: `from boat.client import BoAtClient` / `from boat.frame_node import FrameNode` (e.g. `node.send_can("vcan0", 0x123, b"...")`). Dispatch quirk: `python3 -m boat` routes `can|pdu|eth|db` to `boat/cmd.py` (one-shot), everything else to `boat/cli.py` (REPL).
+Programmatic: `from boat.client import BoAtClient` / `from boat.frame_node import FrameNode` (e.g. `node.send_can("vcan0", 0x123, b"...")`). Dispatch quirk: `python3 -m boat` routes `can|pdu|eth|db` to `boat/cmd.py` (one-shot, PDU-database-driven `can send`/`eth send` only — unrelated to the `boat` console script above, which has no `can`/`eth` subcommand), everything else to `boat/cli.py` (REPL).
 
 **After editing any `.proto`, regenerate Python stubs**: `bash boat-platform/sdk/python/boat/stubs/generate_stubs.sh`. The generated stubs under `sdk/python/boat/stubs/boat/v1/` are committed and must stay in sync.
 

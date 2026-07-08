@@ -37,14 +37,18 @@ _CLI_REFERENCE = """\
   boat plugin info <id>                       # get plugin details
   boat plugin unload <id>                     # unload plugin
 
-### can — CAN bus
-  boat can list-buses                         # list registered interfaces
-  boat can detect                             # detect local CAN hardware (no gateway)
-  boat can send --iface <name> --id <hex>     # send raw CAN frame
-         [--dlc N] [--data <hex>] [--fd]
-  boat can send --msg <name> --sig <N=val>    # send from PDU DB (requires --db)
-         [--bus <name>] [--db <path>]
-  boat can subscribe [--iface <name>]          # stream CAN frames
+### frame — unified CAN + Ethernet send/subscribe (FrameService)
+  boat frame list-ifaces                             # list interfaces the gateway has access to
+  boat frame send --bus-type can --can-id <hex>      # send a raw CAN frame
+         --iface <name> [--data <hex>] [--fd]
+  boat frame send --bus-type eth --iface <name>      # send a raw Ethernet frame
+         --data <hex> [--ethertype <hex>] [--src-mac <mac>] [--dst-mac <mac>]
+  boat frame subscribe --bus-types can,eth            # stream frames
+         [--iface <name>]
+
+  Note: there is no standalone hardware-detection command anymore
+  (the old `boat can detect` was retired). Use `ip link show type can`
+  or `boat frame list-ifaces` (requires a running gateway) instead.
 
 ### can-tp — CAN Transport Protocol (ISO 15765-2)
   boat can-tp configure --nsdu-id <id>        # configure session
@@ -53,14 +57,6 @@ _CLI_REFERENCE = """\
   boat can-tp send --nsdu-id <id>             # send large PDU
          --source-addr <hex> --target-addr <hex>
          --dlc 8|64 --data <hex>
-
-### eth — Ethernet
-  boat eth list-ifaces                        # list interfaces
-  boat eth send --iface <name>                # send raw frame
-         --payload <hex>
-         [--ethertype <hex>] [--src <mac>] [--dst <mac>]
-  boat eth subscribe [--iface <name>]          # stream Ethernet frames
-         [--ethertype <hex>]
 
 ### pdu — PDU routing and transmission
   boat pdu send --id <hex> --data <hex>       # send PDU via configured route
@@ -119,7 +115,7 @@ boat sim watch <sim_id>
 boat sim stop <sim_id>
 
 # 2. Send a CAN frame
-boat can send --iface vcan0 --id 0x100 --data 0123
+boat frame send --bus-type can --can-id 0x100 --iface vcan0 --data 0123
 
 # 3. Configure cyclic PDU transmission
 boat pdu route --id 0x100 --transport can --iface vcan0 \\
@@ -129,15 +125,12 @@ boat pdu route --id 0x100 --transport can --iface vcan0 \\
 boat db list
 boat db show --msg "VehicleSpeed" --bus Powertrain_CAN
 
-# 5. Detect CAN hardware
-boat can detect
-
-# 6. Configure CanTp session and send large data
+# 5. Configure CanTp session and send large data
 boat can-tp configure --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8
 boat can-tp send --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 \\
   --dlc 8 --data 0123456789ABCDEF...
 
-# 7. Run tests
+# 6. Run tests
 boat test list-environments
 boat test run manifest.json --env virtual --parallel
 """
@@ -149,7 +142,7 @@ into the correct `boat ...` CLI command.
 Rules:
 1. Output ONLY the CLI command and a brief explanation.
 2. If the user's request is ambiguous, ask for clarification with the options.
-3. Prefer the most specific subcommand (e.g. `boat can send` over `boat pdu`).
+3. Prefer the most specific subcommand (e.g. `boat frame send` over `boat pdu`).
 4. Use --json flag when the user wants machine-readable output.
 5. When a task requires multiple steps, list them in order.
 6. If the task is better done via the Python SDK (e.g. complex logic),
