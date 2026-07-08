@@ -208,6 +208,9 @@ def test_replay_import_reports_correct_frame_count(tmp_path) -> None:
 
 
 def test_trace_replay_applies_id_filter_and_shows_it_in_banner(tmp_path) -> None:
+    # `boat trace replay` does NOT go through the CLI's injected BoAtClient --
+    # TraceReplayer opens its own gRPC stub via _get_stub(), so that (not
+    # boat_cli.main.BoAtClient) is what must be mocked here.
     asc_file = tmp_path / "mixed.asc"
     with can.ASCWriter(str(asc_file)) as writer:
         writer.on_message_received(can.Message(arbitration_id=0x583, data=[1], channel=4))
@@ -215,8 +218,10 @@ def test_trace_replay_applies_id_filter_and_shows_it_in_banner(tmp_path) -> None
         writer.on_message_received(can.Message(arbitration_id=0x583, data=[3], channel=4))
         writer.on_message_received(can.Message(arbitration_id=0x200, data=[4], channel=4))
 
-    fake_client = _fake_client()
-    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+    fake_stub = Mock()
+    fake_stub.SendCanFrame = Mock(return_value=SimpleNamespace(accepted=True))
+
+    with patch("boat.trace_replay.TraceReplayer._get_stub", return_value=fake_stub):
         result = runner.invoke(app, [
             "trace", "replay", str(asc_file),
             "--channel", "4", "--id", "0x583", "--buses", "vcan0", "--speed", "0",
@@ -225,10 +230,7 @@ def test_trace_replay_applies_id_filter_and_shows_it_in_banner(tmp_path) -> None
     assert result.exit_code == 0
     assert "0x583" in result.output  # banner echoes the applied id filter
 
-    sent_ids = [
-        call.args[0].frame.can_id
-        for call in fake_client.can.SendCanFrame.call_args_list
-    ]
+    sent_ids = [call.args[0].frame.can_id for call in fake_stub.SendCanFrame.call_args_list]
     assert sent_ids == [0x583, 0x583]
 
 
