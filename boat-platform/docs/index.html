@@ -499,15 +499,19 @@ BOAT_CAN_INTERFACES=vcan0,vcan1 \
 BOAT_ETH_INTERFACES=veth0,veth1 \
 ./boat_gateway
 
-<span class="cm"># With physical USB Ethernet adapters</span>
+<span class="cm"># With physical USB Ethernet adapters (after granting CAP_NET_RAW, see below)</span>
 BOAT_CAN_INTERFACES=vcan0 \
 BOAT_ETH_INTERFACES=raw:enx28107b9f2016,raw:enx28107b9f2017 \
-sudo ./boat_gateway</code></pre>
+./boat_gateway</code></pre>
 
 <div class="callout warn">
   <strong>Permissions</strong>
-  Physical Ethernet via <code>raw:</code> requires <code>CAP_NET_RAW</code>. Either run with <code>sudo</code>
-  or grant the capability: <code>sudo setcap cap_net_raw+ep ./boat_gateway</code>
+  Physical Ethernet via <code>raw:</code> requires <code>CAP_NET_RAW</code>. Grant the capability to the
+  binary rather than running the gateway as root:
+  <code>sudo setcap cap_net_raw+ep ./boat_gateway</code>. Root-owned files (e.g. under <code>/tmp</code>)
+  left behind by a <code>sudo</code>-run gateway can block later non-root runs from writing to the same
+  paths, so prefer <code>setcap</code>. Reapply it after every rebuild — the capability is stored on the
+  binary's inode.
 </div>
 
 <h2 id="gateway-env">Environment Variables</h2>
@@ -563,8 +567,9 @@ sudo ./boat_gateway</code></pre>
 <pre><code>sudo ip addr add 50.50.0.1/24 dev enx28107b9f2016
 sudo ip addr add 50.50.0.2/24 dev enx28107b9f2017
 sudo ip link set enx28107b9f2016 up
-sudo ip link set enx28107b9f2017 up</code></pre>
-  Then start with: <code>BOAT_ETH_INTERFACES=raw:enx28107b9f2016,raw:enx28107b9f2017 sudo ./boat_gateway</code>
+sudo ip link set enx28107b9f2017 up
+sudo setcap cap_net_raw+ep ./boat_gateway</code></pre>
+  Then start with: <code>BOAT_ETH_INTERFACES=raw:enx28107b9f2016,raw:enx28107b9f2017 ./boat_gateway</code>
 </div>
 
 <p>
@@ -1459,9 +1464,18 @@ sudo ip link set enx28107b9f2017 up</code></pre>
   </li>
   <li>
     <div class="step-body">
+      <strong>Grant the gateway binary raw-socket access</strong>
+<pre><code>sudo setcap cap_net_raw+ep ./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
+      Preferred over running the whole gateway as <code>root</code> — a <code>sudo</code>-run gateway
+      leaves root-owned files behind (e.g. under <code>/tmp</code>) that block later non-root runs
+      from writing to the same paths. Reapply after every rebuild.
+    </div>
+  </li>
+  <li>
+    <div class="step-body">
       <strong>Start the gateway with both physical NICs registered</strong>
 <pre><code>BOAT_ETH_INTERFACES=raw:enx28107b9f2016,raw:enx28107b9f2017 \
-sudo ./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
+./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
       Verify startup output:
 <pre><code>[Gateway] Registered raw Ethernet interface 'enx28107b9f2016'
 [Gateway] Registered raw Ethernet interface 'enx28107b9f2017'</code></pre>
@@ -1756,9 +1770,13 @@ nmcli connection up &lt;uuid&gt;</code></pre>
 <details>
   <summary>How do I run the gateway without sudo for raw Ethernet?</summary>
   <div class="faq-body">
-    <p>Grant the <code>CAP_NET_RAW</code> capability to the binary:</p>
+    <p>Grant the <code>CAP_NET_RAW</code> capability to the binary — this is the recommended
+    approach, not just a workaround. Running the gateway with <code>sudo</code> instead leaves
+    root-owned files behind (e.g. trace files under <code>/tmp</code>) that block later non-root
+    runs from writing to the same paths.</p>
     <pre><code>sudo setcap cap_net_raw+ep ./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
-    <p>After this, you can run the gateway as a normal user with raw Ethernet support.</p>
+    <p>After this, you can run the gateway as a normal user with raw Ethernet support. The
+    capability is stored on the binary's inode, so reapply it after every rebuild.</p>
   </div>
 </details>
 

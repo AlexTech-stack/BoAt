@@ -14,9 +14,13 @@ cmake --preset debug && cmake --build --preset debug
 BOAT_ETH_INTERFACES=veth0 \
   build/debug/src/gateway/grpc_gateway/boat_gateway
 
-# Start the gateway (physical Ethernet NICs need raw: prefix)
+# Start the gateway (physical Ethernet NICs need raw: prefix + CAP_NET_RAW)
+# Grant the capability once per build instead of running as root — root-owned
+# artifacts under /tmp (trace files, etc.) will otherwise block later
+# non-root runs from writing to the same paths:
+sudo setcap cap_net_raw+ep build/debug/src/gateway/grpc_gateway/boat_gateway
 BOAT_ETH_INTERFACES=raw:eth0 \
-  sudo build/debug/src/gateway/grpc_gateway/boat_gateway
+  build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
 ### CAN replay
@@ -70,8 +74,10 @@ registered via the `BOAT_ETH_INTERFACES` environment variable:
 # Virtual interface (veth) — no prefix needed
 BOAT_ETH_INTERFACES=veth0 ...
 
-# Physical NIC (raw AF_PACKET) — requires raw: prefix and CAP_NET_RAW
-# Run the gateway with sudo, or grant the capability permanently:
+# Physical NIC (raw AF_PACKET) — requires raw: prefix and CAP_NET_RAW.
+# Grant the capability to the binary (preferred — avoids root-owned files
+# under /tmp that block later non-root runs); reapply after every rebuild
+# since setcap is stored on the binary's inode:
 #   sudo setcap cap_net_raw+ep build/debug/src/gateway/grpc_gateway/boat_gateway
 BOAT_ETH_INTERFACES=raw:eth0 ...  # or raw:enx28107b9f2017
 ```
@@ -622,4 +628,4 @@ eth_replayer.replay("capture.pcap")
 | Server-side replay seems to hang (no console output after "Replaying...") | The Python client blocks on `StreamReplay` waiting for events from the gateway's EventBus. Frames are still delivered to the bus — verify with `candump` / `tcpdump`. Use `Ctrl+C` to interrupt. |
 | No frames replayed | Check the trace file format. Ensure channel/ID filters are correct. For pcap: only classic pcap (DLT\_EN10MB) is supported, not pcapng. |
 | Ethernet pcap replay: no frames on the wire | Verify the target interface is correct (`--buses eth0`) and that ``--replay-src-ip`` / ``--replay-dst-ip`` are set. The interface must be up and registered via ``BOAT_ETH_INTERFACES`` — use ``raw:`` prefix for physical NICs (e.g. ``BOAT_ETH_INTERFACES=raw:eth0``). |
-| Raw socket: Operation not permitted | Physical Ethernet interfaces need ``CAP_NET_RAW``. Run the gateway with ``sudo`` or use ``sudo setcap cap_net_raw+ep`` on the gateway binary. |
+| Raw socket: Operation not permitted | Physical Ethernet interfaces need ``CAP_NET_RAW``. Grant it once per build with ``sudo setcap cap_net_raw+ep`` on the gateway binary (preferred over running as root — avoids root-owned files under ``/tmp`` blocking later non-root runs). |
