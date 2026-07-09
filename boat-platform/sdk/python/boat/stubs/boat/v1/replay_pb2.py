@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from boat.v1 import common_pb2 as boat_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14\x62oat/v1/replay.proto\x12\x07\x62oat.v1\x1a\x14\x62oat/v1/common.proto\"\x8f\x02\n\x12StartReplayRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x15\n\rsimulation_id\x18\x02 \x01(\t\x12#\n\x05speed\x18\x03 \x01(\x0e\x32\x14.boat.v1.ReplaySpeed\x12\x18\n\x10speed_multiplier\x18\x04 \x01(\x01\x12\x11\n\teth_iface\x18\x05 \x01(\t\x12\x38\n\x07mac_map\x18\x06 \x03(\x0b\x32\'.boat.v1.StartReplayRequest.MacMapEntry\x12\x15\n\rloop_delay_ms\x18\x07 \x01(\x05\x1a-\n\x0bMacMapEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"4\n\x11SeekReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\x12\x0c\n\x04tick\x18\x02 \x01(\x04\"(\n\x13StreamReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\"\'\n\x12PauseReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\"(\n\x13ResumeReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\"&\n\x11StopReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\"H\n\x16ImportTraceDataRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x0e\n\x06\x66ormat\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\"\xab\x01\n\x1cStartReplayFromEventsRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\x12\x11\n\tsignal_id\x18\x02 \x01(\t\x12\x10\n\x08tick_min\x18\x03 \x01(\x04\x12\x10\n\x08tick_max\x18\x04 \x01(\x04\x12#\n\x05speed\x18\x05 \x01(\x0e\x32\x14.boat.v1.ReplaySpeed\x12\x18\n\x10speed_multiplier\x18\x06 \x01(\x01\"?\n\x0bReplayEvent\x12\x11\n\treplay_id\x18\x01 \x01(\t\x12\x0c\n\x04tick\x18\x02 \x01(\x04\x12\x0f\n\x07payload\x18\x03 \x01(\x0c\"a\n\x15ReplayControlResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12#\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.boat.v1.ErrorDetail\x12\x11\n\treplay_id\x18\x03 \x01(\t*f\n\x0bReplaySpeed\x12\x1a\n\x16REPLAY_SPEED_REAL_TIME\x10\x00\x12\x1c\n\x18REPLAY_SPEED_ACCELERATED\x10\x01\x12\x1d\n\x19REPLAY_SPEED_STEP_BY_STEP\x10\x02\x32\x83\x05\n\rReplayService\x12J\n\x0bStartReplay\x12\x1b.boat.v1.StartReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12H\n\nSeekReplay\x12\x1a.boat.v1.SeekReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12\x44\n\x0cStreamReplay\x12\x1c.boat.v1.StreamReplayRequest\x1a\x14.boat.v1.ReplayEvent0\x01\x12J\n\x0bPauseReplay\x12\x1b.boat.v1.PauseReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12L\n\x0cResumeReplay\x12\x1c.boat.v1.ResumeReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12H\n\nStopReplay\x12\x1a.boat.v1.StopReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12R\n\x0fImportTraceData\x12\x1f.boat.v1.ImportTraceDataRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12^\n\x15StartReplayFromEvents\x12%.boat.v1.StartReplayFromEventsRequest\x1a\x1e.boat.v1.ReplayControlResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14\x62oat/v1/replay.proto\x12\x07\x62oat.v1\x1a\x14\x62oat/v1/common.proto\"\x9e\x02\n\x12StartReplayRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x15\n\rsimulation_id\x18\x02 \x01(\t\x12#\n\x05speed\x18\x03 \x01(\x0e\x32\x14.boat.v1.ReplaySpeed\x12\x18\n\x10speed_multiplier\x18\x04 \x01(\x01\x12\x11\n\teth_iface\x18\x05 \x01(\t\x12\x38\n\x07mac_map\x18\x06 \x03(\x0b\x32\'.boat.v1.StartReplayRequest.MacMapEntry\x12\x15\n\rloop_delay_ms\x18\x07 \x01(\x05\x12\r\n\x05\x62uses\x18\x08 \x03(\t\x1a-\n\x0bMacMapEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"4\n\x11SeekReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\x12\x0c\n\x04tick\x18\x02 \x01(\x04\"(\n\x13StreamReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\"\'\n\x12PauseReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\"(\n\x13ResumeReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\"&\n\x11StopReplayRequest\x12\x11\n\treplay_id\x18\x01 \x01(\t\"H\n\x16ImportTraceDataRequest\x12\x10\n\x08trace_id\x18\x01 \x01(\t\x12\x0e\n\x06\x66ormat\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\"\xab\x01\n\x1cStartReplayFromEventsRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\x12\x11\n\tsignal_id\x18\x02 \x01(\t\x12\x10\n\x08tick_min\x18\x03 \x01(\x04\x12\x10\n\x08tick_max\x18\x04 \x01(\x04\x12#\n\x05speed\x18\x05 \x01(\x0e\x32\x14.boat.v1.ReplaySpeed\x12\x18\n\x10speed_multiplier\x18\x06 \x01(\x01\"?\n\x0bReplayEvent\x12\x11\n\treplay_id\x18\x01 \x01(\t\x12\x0c\n\x04tick\x18\x02 \x01(\x04\x12\x0f\n\x07payload\x18\x03 \x01(\x0c\"a\n\x15ReplayControlResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\x12#\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.boat.v1.ErrorDetail\x12\x11\n\treplay_id\x18\x03 \x01(\t*f\n\x0bReplaySpeed\x12\x1a\n\x16REPLAY_SPEED_REAL_TIME\x10\x00\x12\x1c\n\x18REPLAY_SPEED_ACCELERATED\x10\x01\x12\x1d\n\x19REPLAY_SPEED_STEP_BY_STEP\x10\x02\x32\x83\x05\n\rReplayService\x12J\n\x0bStartReplay\x12\x1b.boat.v1.StartReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12H\n\nSeekReplay\x12\x1a.boat.v1.SeekReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12\x44\n\x0cStreamReplay\x12\x1c.boat.v1.StreamReplayRequest\x1a\x14.boat.v1.ReplayEvent0\x01\x12J\n\x0bPauseReplay\x12\x1b.boat.v1.PauseReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12L\n\x0cResumeReplay\x12\x1c.boat.v1.ResumeReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12H\n\nStopReplay\x12\x1a.boat.v1.StopReplayRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12R\n\x0fImportTraceData\x12\x1f.boat.v1.ImportTraceDataRequest\x1a\x1e.boat.v1.ReplayControlResponse\x12^\n\x15StartReplayFromEvents\x12%.boat.v1.StartReplayFromEventsRequest\x1a\x1e.boat.v1.ReplayControlResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,30 +34,30 @@ if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_STARTREPLAYREQUEST_MACMAPENTRY']._loaded_options = None
   _globals['_STARTREPLAYREQUEST_MACMAPENTRY']._serialized_options = b'8\001'
-  _globals['_REPLAYSPEED']._serialized_start=960
-  _globals['_REPLAYSPEED']._serialized_end=1062
+  _globals['_REPLAYSPEED']._serialized_start=975
+  _globals['_REPLAYSPEED']._serialized_end=1077
   _globals['_STARTREPLAYREQUEST']._serialized_start=56
-  _globals['_STARTREPLAYREQUEST']._serialized_end=327
-  _globals['_STARTREPLAYREQUEST_MACMAPENTRY']._serialized_start=282
-  _globals['_STARTREPLAYREQUEST_MACMAPENTRY']._serialized_end=327
-  _globals['_SEEKREPLAYREQUEST']._serialized_start=329
-  _globals['_SEEKREPLAYREQUEST']._serialized_end=381
-  _globals['_STREAMREPLAYREQUEST']._serialized_start=383
-  _globals['_STREAMREPLAYREQUEST']._serialized_end=423
-  _globals['_PAUSEREPLAYREQUEST']._serialized_start=425
-  _globals['_PAUSEREPLAYREQUEST']._serialized_end=464
-  _globals['_RESUMEREPLAYREQUEST']._serialized_start=466
-  _globals['_RESUMEREPLAYREQUEST']._serialized_end=506
-  _globals['_STOPREPLAYREQUEST']._serialized_start=508
-  _globals['_STOPREPLAYREQUEST']._serialized_end=546
-  _globals['_IMPORTTRACEDATAREQUEST']._serialized_start=548
-  _globals['_IMPORTTRACEDATAREQUEST']._serialized_end=620
-  _globals['_STARTREPLAYFROMEVENTSREQUEST']._serialized_start=623
-  _globals['_STARTREPLAYFROMEVENTSREQUEST']._serialized_end=794
-  _globals['_REPLAYEVENT']._serialized_start=796
-  _globals['_REPLAYEVENT']._serialized_end=859
-  _globals['_REPLAYCONTROLRESPONSE']._serialized_start=861
-  _globals['_REPLAYCONTROLRESPONSE']._serialized_end=958
-  _globals['_REPLAYSERVICE']._serialized_start=1065
-  _globals['_REPLAYSERVICE']._serialized_end=1708
+  _globals['_STARTREPLAYREQUEST']._serialized_end=342
+  _globals['_STARTREPLAYREQUEST_MACMAPENTRY']._serialized_start=297
+  _globals['_STARTREPLAYREQUEST_MACMAPENTRY']._serialized_end=342
+  _globals['_SEEKREPLAYREQUEST']._serialized_start=344
+  _globals['_SEEKREPLAYREQUEST']._serialized_end=396
+  _globals['_STREAMREPLAYREQUEST']._serialized_start=398
+  _globals['_STREAMREPLAYREQUEST']._serialized_end=438
+  _globals['_PAUSEREPLAYREQUEST']._serialized_start=440
+  _globals['_PAUSEREPLAYREQUEST']._serialized_end=479
+  _globals['_RESUMEREPLAYREQUEST']._serialized_start=481
+  _globals['_RESUMEREPLAYREQUEST']._serialized_end=521
+  _globals['_STOPREPLAYREQUEST']._serialized_start=523
+  _globals['_STOPREPLAYREQUEST']._serialized_end=561
+  _globals['_IMPORTTRACEDATAREQUEST']._serialized_start=563
+  _globals['_IMPORTTRACEDATAREQUEST']._serialized_end=635
+  _globals['_STARTREPLAYFROMEVENTSREQUEST']._serialized_start=638
+  _globals['_STARTREPLAYFROMEVENTSREQUEST']._serialized_end=809
+  _globals['_REPLAYEVENT']._serialized_start=811
+  _globals['_REPLAYEVENT']._serialized_end=874
+  _globals['_REPLAYCONTROLRESPONSE']._serialized_start=876
+  _globals['_REPLAYCONTROLRESPONSE']._serialized_end=973
+  _globals['_REPLAYSERVICE']._serialized_start=1080
+  _globals['_REPLAYSERVICE']._serialized_end=1723
 # @@protoc_insertion_point(module_scope)
