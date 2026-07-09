@@ -54,6 +54,12 @@ start`/`stream` instead (see [Replay modes](#replay-modes)).
 
 ## Interface configuration
 
+Importing a trace (`boat replay import`) never bakes a target interface into
+it — interface (and MAC) targeting is entirely a replay-time decision, made
+with `--buses`/`--eth-iface`/`--mac-map` on `boat replay start` or `stream`
+(both accept the same flags). This means the same imported trace can be
+replayed against different hardware without re-importing it.
+
 The `--buses` flag maps trace channels to target interfaces.  The order
 determines the mapping:
 
@@ -334,13 +340,14 @@ original L2 MACs are discarded — only the IP packet (L3+) is preserved.
 
 Map rewritten IP addresses to specific MAC addresses.  Unlike the other
 flags in this section, `--mac-map` (along with `--eth-iface`) is a
-**playback-time** flag on `boat replay stream`, not `boat replay import` —
-MAC assignment happens in the C++ forwarder when the frame is actually
-sent, not at conversion time.  The gateway parses each replayed packet's
-rewritten src/dst IP,
-looks them up in the map, and uses the result as the src/dst MAC for the
-Ethernet frame.  IPs not in the map fall back to the default
-(auto-detect / broadcast).
+**playback-time** flag on `boat replay start`/`stream`, not `boat replay
+import` — MAC assignment happens in the C++ replay engine
+(`ProtoToCoreFrame`, `replay_engine.cpp`) when the frame is dispatched, not
+at conversion time.  It parses each replayed packet's rewritten src/dst IP
+(already resolved to their final string form via `inet_ntop`, matching
+Python's `ipaddress` string output), looks them up in the map, and uses the
+result as the src/dst MAC for the Ethernet frame.  IPs not in the map fall
+back to the default (auto-detect / broadcast).
 
 ```bash
 # IP rewrite happens at import time; MAC mapping happens at playback time
