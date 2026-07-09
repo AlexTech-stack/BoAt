@@ -70,7 +70,7 @@ Three ready-to-use configs exist:
   "dut": {
     "name": "ecu-42",
     "type": "plugin",
-    "so_path": "./build/.../can_responder.so"
+    "so_path": "./build/.../pdu_router.so"
   }
 }
 ```

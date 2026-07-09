@@ -33,10 +33,11 @@ Located in `boat-platform/src/plugins/`:
 
 | Plugin | Description |
 |--------|-------------|
-| `can_responder/` | Listens for specific CAN IDs and auto-responds |
-| `network_sim/` | CAN/LIN/Ethernet network simulation |
-| `sensor_model/` | LiDAR/Camera/Radar sensor stubs |
-| `vehicle_dynamics/` | Vehicle dynamics simulation (speed, RPM) |
+| `pdu_router/` | AUTOSAR-style PDU routing, groups, transmission scheduling |
+| `can_tp/` | ISO-TP (ISO 15765-2) transport protocol segmentation/reassembly |
+| `tcp/` | Config-driven TCP transport (server/client connection handling) |
+| `someip/` | SOME/IP protocol support |
+| `probe/` | Gateway conformance/echo probe (passive/active bus monitoring) |
 
 ## CMake plugin support
 

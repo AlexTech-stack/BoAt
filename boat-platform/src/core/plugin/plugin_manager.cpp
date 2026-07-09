@@ -105,6 +105,23 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
         ParseDeclaredBusMask(plugin->vtable->declared_buses(plugin->ctx));
   }
 
+  // Optional: plugin exposes a named C++ service pointer (e.g. pdu_router's
+  // IPduRouter) for gRPC service implementations to look up via
+  // FindService(). Independent of the vtable ABI -- both symbols are
+  // simply absent for plugins that don't need this.
+  auto service_name_fn = reinterpret_cast<boat_plugin_service_name_fn>(
+      dlsym(dl_handle, "boat_plugin_service_name"));
+  auto service_ptr_fn = reinterpret_cast<boat_plugin_service_ptr_fn>(
+      dlsym(dl_handle, "boat_plugin_service_ptr"));
+  if (service_name_fn != nullptr && service_ptr_fn != nullptr) {
+    const char* service_name = service_name_fn();
+    void* service_ptr = service_ptr_fn(plugin->ctx);
+    if (service_name != nullptr && service_name[0] != '\0' && service_ptr != nullptr) {
+      RegisterService(service_name, service_ptr);
+      handle.registered_services.emplace_back(service_name);
+    }
+  }
+
   // Wire signal publisher.
   if (plugin->vtable->set_publisher != nullptr && publisher_fn_) {
     auto fn_shared = std::make_shared<SignalPublishFn>(publisher_fn_);
@@ -168,6 +185,14 @@ void PluginManager::Unload(const std::string& name) {
     if (it == plugins_.end()) return;
     handle = std::move(it->second);
     plugins_.erase(it);
+  }
+  // Remove any services this plugin registered before destroying it --
+  // otherwise FindService() would keep handing out a dangling pointer.
+  if (!handle.registered_services.empty()) {
+    std::lock_guard<std::mutex> lock(services_mutex_);
+    for (const auto& service_name : handle.registered_services) {
+      services_.erase(service_name);
+    }
   }
 #ifndef _WIN32
   if (handle.plugin != nullptr) {
