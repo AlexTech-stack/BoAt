@@ -22,6 +22,11 @@ catch_discover_tests(boat_unit_event_bus)
 
 add_executable(boat_unit_plugin_manager unit/test_plugin_manager.cpp)
 target_link_libraries(boat_unit_plugin_manager PRIVATE boat_core Catch2::Catch2WithMain)
+if(TARGET pdu_router)
+  add_dependencies(boat_unit_plugin_manager pdu_router)
+  target_compile_definitions(boat_unit_plugin_manager PRIVATE
+    PDU_ROUTER_SO="$<TARGET_FILE:pdu_router>")
+endif()
 catch_discover_tests(boat_unit_plugin_manager)
 
 add_executable(boat_unit_signal_bus unit/test_signal_bus.cpp)
