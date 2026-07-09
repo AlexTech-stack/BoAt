@@ -8,6 +8,10 @@ message CanMetadata {
   uint32 can_id  = 1;
   uint32 dlc     = 2;  // ISO-encoded DLC (0-15; 0-8 direct, 9=12B, 10=16B, …)
   uint32 flags   = 3;  // CANFD_BRS=0x01, CANFD_ESI=0x02, CANFD_FDF=0x04
+  uint32 channel = 4;  // 1-based trace channel; 0 = unknown/unset.
+                        // Import stores the original channel instead of a
+                        // baked interface name, so replay can map it to any
+                        // interface via ReplayConfig.buses without re-import.
 }
 
 message EthMetadata {

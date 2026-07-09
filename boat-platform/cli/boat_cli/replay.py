@@ -22,6 +22,18 @@ _SPEED_MAP = {
 }
 
 
+def _parse_mac_map(mac_map: str | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    if not mac_map:
+        return result
+    for pair in mac_map.split(","):
+        pair = pair.strip()
+        if "=" in pair:
+            ip_str, mac_str = pair.split("=", 1)
+            result[ip_str.strip()] = mac_str.strip()
+    return result
+
+
 @replay_app.command("start")
 def start_replay(
     ctx: typer.Context,
@@ -30,15 +42,29 @@ def start_replay(
                               help="Replay speed: real-time, accelerated, step"),
     multiplier: float = typer.Option(1.0, "--multiplier", "-m",
                                      help="Speed multiplier (>0). 2.0 = twice as fast."),
+    loop: Optional[int] = typer.Option(None, "--loop", "-l",
+                                        help="Loop with N ms gap between runs"),
+    mac_map: Optional[str] = typer.Option(None, "--mac-map",
+                                           help="IP→MAC mappings (comma-separated). "
+                                                "Example: 192.168.0.100=02:de:ad:be:ef:01"),
+    eth_iface: Optional[str] = typer.Option(None, "--eth-iface",
+                                              help="Target Ethernet interface for reconstructed frames"),
+    buses: str = typer.Option("", "--buses", "-b",
+                              help="Comma-separated CAN interface names for channel mapping"),
     sim_id: str = typer.Option("", "--sim-id", help="Simulation ID"),
 ) -> None:
     proto_speed = _SPEED_MAP.get(speed, replay_pb2.REPLAY_SPEED_REAL_TIME)
+    bus_list = [b.strip() for b in buses.split(",") if b.strip()] if buses else []
     response = ctx.obj["client"].replay.StartReplay(
         replay_pb2.StartReplayRequest(
             trace_id=trace,
             simulation_id=sim_id,
             speed=proto_speed,
             speed_multiplier=multiplier,
+            eth_iface=eth_iface or "",
+            mac_map=_parse_mac_map(mac_map),
+            loop_delay_ms=loop or 0,
+            buses=bus_list,
         )
     )
     print_table(["accepted", "replay_id"], [[bool(response.accepted), response.replay_id]], ctx.obj["json_mode"])
@@ -80,15 +106,7 @@ def stream_replay(
     does not need to manage replay_id manually.
     """
     proto_speed = _SPEED_MAP.get(speed, replay_pb2.REPLAY_SPEED_REAL_TIME)
-
-    # ── Parse mac_map ──────────────────────────────────────────────────────
-    mac_map_dict: dict[str, str] = {}
-    if mac_map:
-        for pair in mac_map.split(","):
-            pair = pair.strip()
-            if "=" in pair:
-                ip_str, mac_str = pair.split("=", 1)
-                mac_map_dict[ip_str.strip()] = mac_str.strip()
+    bus_list = [b.strip() for b in buses.split(",") if b.strip()] if buses else []
 
     speed_label = f"{multiplier}x" if proto_speed == replay_pb2.REPLAY_SPEED_ACCELERATED else speed
     typer.echo(f"Streaming {trace}  [speed={speed_label}  loop={loop or 'off'}]")
@@ -102,8 +120,9 @@ def stream_replay(
                 speed=proto_speed,
                 speed_multiplier=multiplier,
                 eth_iface=eth_iface or "",
-                mac_map=mac_map_dict,
+                mac_map=_parse_mac_map(mac_map),
                 loop_delay_ms=loop or 0,
+                buses=bus_list,
             )
         )
     except Exception as e:

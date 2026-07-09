@@ -4,10 +4,13 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
+
+#include <arpa/inet.h>
 
 #include "boat/v1/frame.pb.h"
 #include "core/frame.h"
@@ -19,8 +22,47 @@ std::uint64_t FrameTimestampToMs(std::uint64_t timestamp_ns) {
   return timestamp_ns / 1'000'000ULL;
 }
 
-boat::core::Frame ProtoToCoreFrame(const boat::v1::Frame& pf) {
-  std::string iface = pf.iface();
+// Resolve a 1-based trace channel to a target CAN interface using the
+// replay's --buses mapping (ch1->buses[0], ch2->buses[1], ...); falls back
+// to the last bus if there are more channels than buses, and to "vcan0" if
+// no buses were configured at all -- this is what makes an imported trace
+// replayable on different hardware without re-importing it.
+std::string ResolveCanIface(const ReplayConfig& config, std::uint32_t channel) {
+  if (config.buses.empty()) {
+    return "vcan0";
+  }
+  const std::size_t idx = channel == 0 ? 0 : static_cast<std::size_t>(channel - 1);
+  return config.buses[std::min(idx, config.buses.size() - 1)];
+}
+
+// Render a raw 4- or 16-byte IP address back to its canonical string form
+// (matching Python's `str(ipaddress.ip_address(...))`, RFC 5952) so it can
+// be looked up in a --mac-map keyed by that string.
+std::string IpBytesToString(const std::string& ip_bytes, std::uint32_t ip_version) {
+  if (ip_bytes.empty()) {
+    return {};
+  }
+  char buf[INET6_ADDRSTRLEN]{};
+  const int family = (ip_version == 6) ? AF_INET6 : AF_INET;
+  if (inet_ntop(family, ip_bytes.data(), buf, sizeof(buf)) == nullptr) {
+    return {};
+  }
+  return std::string(buf);
+}
+
+bool ParseMacInto(const std::string& mac_str, std::uint8_t out[6]) {
+  unsigned int bytes[6];
+  if (std::sscanf(mac_str.c_str(), "%x:%x:%x:%x:%x:%x", &bytes[0], &bytes[1],
+                   &bytes[2], &bytes[3], &bytes[4], &bytes[5]) != 6) {
+    return false;
+  }
+  for (int i = 0; i < 6; ++i) {
+    out[i] = static_cast<std::uint8_t>(bytes[i]);
+  }
+  return true;
+}
+
+boat::core::Frame ProtoToCoreFrame(const boat::v1::Frame& pf, const ReplayConfig& config) {
   std::vector<std::uint8_t> payload(pf.payload().begin(), pf.payload().end());
   std::uint64_t ts = pf.timestamp_ns();
 
@@ -29,6 +71,7 @@ boat::core::Frame ProtoToCoreFrame(const boat::v1::Frame& pf) {
     case boat::v1::Frame::CAN:
     case boat::v1::Frame::CANFD: {
       const auto& cm = pf.can();
+      std::string iface = ResolveCanIface(config, cm.channel());
       f = boat::core::Frame::FromCan(
           std::move(iface), cm.can_id(), static_cast<std::uint8_t>(cm.dlc()),
           static_cast<std::uint8_t>(cm.flags()), std::move(payload),
@@ -40,12 +83,25 @@ boat::core::Frame ProtoToCoreFrame(const boat::v1::Frame& pf) {
       uint8_t dm[6]{}, sm[6]{};
       std::memcpy(dm, em.dst_mac().data(), std::min(em.dst_mac().size(), 6UL));
       std::memcpy(sm, em.src_mac().data(), std::min(em.src_mac().size(), 6UL));
+
+      if (!config.mac_map.empty()) {
+        const std::string dst_ip_str = IpBytesToString(em.dst_ip(), em.ip_version());
+        const std::string src_ip_str = IpBytesToString(em.src_ip(), em.ip_version());
+        if (auto it = config.mac_map.find(dst_ip_str); it != config.mac_map.end()) {
+          ParseMacInto(it->second, dm);
+        }
+        if (auto it = config.mac_map.find(src_ip_str); it != config.mac_map.end()) {
+          ParseMacInto(it->second, sm);
+        }
+      }
+
       const uint8_t* sip = em.src_ip().empty()
                                ? nullptr
                                : reinterpret_cast<const uint8_t*>(em.src_ip().data());
       const uint8_t* dip = em.dst_ip().empty()
                                ? nullptr
                                : reinterpret_cast<const uint8_t*>(em.dst_ip().data());
+      std::string iface = config.eth_iface.empty() ? pf.iface() : config.eth_iface;
       f = boat::core::Frame::FromEthernet(
           std::move(iface), dm, sm, static_cast<std::uint16_t>(em.ethertype()),
           static_cast<std::uint16_t>(em.vlan_id()), sip,
@@ -55,8 +111,7 @@ boat::core::Frame ProtoToCoreFrame(const boat::v1::Frame& pf) {
     }
     case boat::v1::Frame::PDU: {
       const auto& pm = pf.pdu();
-      f = boat::core::Frame::FromPdu(std::move(iface), pm.pdu_id(),
-                                     std::move(payload));
+      f = boat::core::Frame::FromPdu(pf.iface(), pm.pdu_id(), std::move(payload));
       break;
     }
     default:
@@ -315,7 +370,7 @@ void ReplayController::ReplayLoop() {
         has_records = true;
 
         // ── Dispatch via core::Frame ────────────────────────────────────
-        auto core_frame = ProtoToCoreFrame(pf);
+        auto core_frame = ProtoToCoreFrame(pf, active_config_);
 
         {
           std::lock_guard<std::mutex> lock(forwarder_mutex_);
