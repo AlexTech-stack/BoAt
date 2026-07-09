@@ -6,15 +6,6 @@ add_library(boat_ipc STATIC
   uds/uds_server.cpp
   uds/uds_client.cpp
   uds/uds_framing.cpp
-  grpc/grpc_server.cpp
-  grpc/services/simulation_service_stub.cpp
-  grpc/services/signal_service_stub.cpp
-  grpc/services/scenario_service_stub.cpp
-  grpc/services/replay_service_stub.cpp
-  grpc/services/plugin_service_stub.cpp
-  grpc/services/metrics_service_stub.cpp
-  grpc/services/trace_service_stub.cpp
-  grpc/services/fault_service_stub.cpp
 )
 
 target_include_directories(boat_ipc PUBLIC
