@@ -87,6 +87,20 @@ BoatPlugin* boat_plugin_create();
 void boat_plugin_destroy(BoatPlugin* plugin);
 uint32_t boat_plugin_abi_version();
 
+/* ── Optional: named C++ service export ─────────────────────────────────
+   A plugin MAY export both of these symbols to expose a named C++ service
+   pointer that host-side gRPC service implementations look up via
+   PluginManager::FindService(name) -- e.g. the pdu_router plugin exposing
+   an IPduRouter* for PduServiceImpl to delegate to. Omit both symbols
+   entirely if the plugin has no such service; this is independent of
+   BoatPluginVTable, so it does not require an ABI version bump for
+   plugins that don't use it. boat_plugin_service_ptr is called once,
+   right after initialize() succeeds, with the same ctx passed to every
+   other vtable function -- the returned pointer must stay valid until
+   shutdown() returns. */
+typedef const char* (*boat_plugin_service_name_fn)();
+typedef void* (*boat_plugin_service_ptr_fn)(void* ctx);
+
 #ifdef __cplusplus
 }
 #endif

@@ -53,7 +53,9 @@ def _pick_iface(client: BoAtClient, bus_type: str) -> str:
 def send_frame(
     ctx: typer.Context,
     bus_type: str = typer.Option(
-        ..., "--bus-type", "-b", help="CAN, CANFD, ETHERNET, TCP, or PDU"),
+        ..., "--bus-type", "-b",
+        help="CAN, CANFD, ETHERNET, or PDU (TCP is not supported here -- "
+             "it's connection-oriented; use the TCP plugin instead)"),
     iface: str = typer.Option("", "--iface", "-i", help="Interface name (auto-selected if omitted)"),
     can_id: str = typer.Option("0", "--can-id", help="CAN identifier (decimal or 0x hex)"),
     data: str = typer.Option(..., "--data", "-d", help="Payload hex, e.g. AABBCCDD"),
@@ -96,6 +98,13 @@ def send_frame(
     if bt is None:
         print_error(f"Unknown bus type: {bus_type}. "
                      f"Valid: {', '.join(bt_map.keys())}")
+        sys.exit(1)
+    if bt == frame_pb2.Frame.TCP:
+        print_error(
+            "boat frame send does not support TCP -- it's connection-oriented, "
+            "not a fire-and-forget frame. Use the TCP plugin's own connection "
+            "API instead (`boat-platform/src/plugins/tcp/`)."
+        )
         sys.exit(1)
 
     if not iface:

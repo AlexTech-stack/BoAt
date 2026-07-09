@@ -262,4 +262,17 @@ def test_replay_stream_verbose_shows_per_frame_detail() -> None:
     assert "Streaming..." not in result.output  # progress counter is non-verbose-only
 
 
+def test_frame_send_rejects_tcp_client_side() -> None:
+    fake_client = _fake_client()
+    fake_client.frame = SimpleNamespace(SendFrame=Mock())
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, ["frame", "send", "--bus-type", "tcp", "--data", "AA"])
+
+    assert result.exit_code != 0
+    assert "does not support TCP" in result.output
+    # Rejected client-side -- never even attempts the RPC.
+    assert not fake_client.frame.SendFrame.called
+
+
 

@@ -19,8 +19,7 @@
                          │ Plugin ABI v8 (dlopen C ABI)
 ┌────────────────────────▼─────────────────────────────────────────┐
 │                       PLUGIN LAYER                                │
-│   PduRouter  │  CanTp  │  TCP  │  SOME/IP  │  VehicleDynamics    │
-│   SensorModel│  NetworkSim │  CanResponder │  ...                 │
+│   PduRouter  │  CanTp  │  TCP  │  SOME/IP  │  Probe  │  ...       │
 └──────────────────────────────────────────────────────────────────┘
 │
 ┌────────────────────────┬─────────────────────────────────────────┐

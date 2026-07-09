@@ -23,6 +23,10 @@ struct PluginHandle {
   // parsed once from declared_buses() at load. All-ones = accept every bus
   // type (plugin declared nothing). Used by DispatchFrame to pre-filter.
   std::uint32_t declared_bus_mask = 0xFFFFFFFFu;
+  // Service names this plugin registered via the optional
+  // boat_plugin_service_name/boat_plugin_service_ptr symbols, so Unload()
+  // can remove them and avoid leaving a dangling pointer in services_.
+  std::vector<std::string> registered_services;
 };
 
 /* Signature for routing a signal value from a plugin. */
