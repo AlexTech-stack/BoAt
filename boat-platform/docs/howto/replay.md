@@ -14,21 +14,26 @@ cmake --preset debug && cmake --build --preset debug
 BOAT_ETH_INTERFACES=veth0 \
   build/debug/src/gateway/grpc_gateway/boat_gateway
 
-# Start the gateway (physical Ethernet NICs need raw: prefix)
+# Start the gateway (physical Ethernet NICs need raw: prefix + CAP_NET_RAW)
+# Grant the capability once per build instead of running as root — root-owned
+# artifacts under /tmp (trace files, etc.) will otherwise block later
+# non-root runs from writing to the same paths:
+sudo setcap cap_net_raw+ep build/debug/src/gateway/grpc_gateway/boat_gateway
 BOAT_ETH_INTERFACES=raw:eth0 \
-  sudo build/debug/src/gateway/grpc_gateway/boat_gateway
+  build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
-### CAN replay
+### CAN replay (direct, real-time)
 ```bash
 boat trace replay recording.blf --buses vcan0
 ```
 
-### Ethernet pcap replay
+### Ethernet pcap replay (server-side only)
 ```bash
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --replay-src-ip 192.168.1.1 \
   --replay-dst-ip 192.168.1.100
+boat replay stream --trace demo --eth-iface eth0
 ```
 
 ## Trace file formats
@@ -42,41 +47,65 @@ boat trace replay capture.pcap --buses eth0 \
 ``.pcapng`` is **not** supported — only classic pcap with Ethernet link layer
 (DLT\_EN10MB = 1).
 
-Ethernet pcap files automatically switch to server-side mode
-(see [Replay modes](#replay-modes)).
+`boat trace replay` supports CAN only (`.asc`/`.blf`) — it sends each frame
+individually via gRPC, paced in real time by the client process. Ethernet
+`.pcap` replay always goes through `boat replay import` + `boat replay
+start`/`stream` instead (see [Replay modes](#replay-modes)).
 
 ## Interface configuration
+
+Importing a trace (`boat replay import`) never bakes a target interface into
+it — interface (and MAC) targeting is entirely a replay-time decision, made
+with `--buses`/`--eth-iface`/`--mac-map` on `boat replay start` or `stream`
+(both accept the same flags). This means the same imported trace can be
+replayed against different hardware without re-importing it.
 
 The `--buses` flag maps trace channels to target interfaces.  The order
 determines the mapping:
 
 ```bash
-# CAN: channel 1 → can0, channel 2 → can1, etc.
+# CAN: channel 1 → can0, channel 2 → can1, etc. (boat trace replay)
 boat trace replay recording.blf --buses can0,can1,can2
 
-# Ethernet: first bus is the target interface
-boat trace replay capture.pcap --buses eth0 \
+# CAN via the server-side path uses the same channel mapping on `stream`
+boat replay import recording.blf --trace-id demo
+boat replay stream --trace demo --buses can0,can1,can2
+
+# Ethernet: the target interface is selected at playback time with --eth-iface
+boat replay import capture.pcap --trace-id demo \
   --replay-src-ip 192.168.1.1 --replay-dst-ip 192.168.1.100
+boat replay stream --trace demo --eth-iface eth0
 ```
 
 For CAN traces, channel *N* maps to `buses[N-1]` (1-based).  If fewer buses
 are listed than channels, the last bus is used as fallback.
 
-For Ethernet traces, only the first bus is relevant — it selects the target
-network interface for frame injection.  The gateway must have the interface
-registered via the `BOAT_ETH_INTERFACES` environment variable:
+For Ethernet traces, `--eth-iface` on `boat replay stream` (or `start`)
+selects the target network interface for frame injection.  The gateway must
+have the interface registered via the `BOAT_ETH_INTERFACES` environment
+variable:
 
 ```bash
 # Virtual interface (veth) — no prefix needed
 BOAT_ETH_INTERFACES=veth0 ...
 
-# Physical NIC (raw AF_PACKET) — requires raw: prefix and CAP_NET_RAW
-# Run the gateway with sudo, or grant the capability permanently:
+# Physical NIC (raw AF_PACKET) — requires raw: prefix and CAP_NET_RAW.
+# Grant the capability to the binary (preferred — avoids root-owned files
+# under /tmp that block later non-root runs); reapply after every rebuild
+# since setcap is stored on the binary's inode:
 #   sudo setcap cap_net_raw+ep build/debug/src/gateway/grpc_gateway/boat_gateway
 BOAT_ETH_INTERFACES=raw:eth0 ...  # or raw:enx28107b9f2017
 ```
 
 ## Filtering
+
+`--channel` and `--id` (CAN) work on `boat trace replay` directly. Every
+other filter/rewrite flag below (`--ip-map`, `--ethertype`, `--protocol`,
+`--src-ip-filter`, `--dst-ip-filter`, `--src-port`, `--dst-port`,
+`--replay-src-ip`, `--replay-dst-ip`, `--ip-filter`) is an Ethernet-only,
+conversion-time flag on `boat replay import` — the examples below show only
+the import step for brevity; play back the imported trace afterward with
+`boat replay stream --trace <id> --eth-iface <iface>`.
 
 ### CAN channel filter
 
@@ -110,11 +139,11 @@ given addresses.  Both IPv4 and IPv6 are accepted:
 
 ```bash
 # IPv4 — all packets rewritten to 192.168.1.1 → 192.168.1.100
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --replay-src-ip 192.168.1.1 --replay-dst-ip 192.168.1.100
 
 # IPv6
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --replay-src-ip 2001:db8::1 --replay-dst-ip 2001:db8::100
 ```
 
@@ -131,7 +160,7 @@ conversations and map each one to different real-world IPs:
 ```bash
 # Rewrite 10.10.10.10 → 192.168.0.100 and 10.10.10.11 → 192.168.0.101
 # Other IPs in the pcap are left at their original values
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --ip-map 10.10.10.10=192.168.0.100,10.10.10.11=192.168.0.101
 ```
 
@@ -142,7 +171,7 @@ rewrite acts as a fallback for unmapped addresses:
 ```bash
 # 10.10.10.10 → 192.168.0.100 (via map)
 # 10.10.10.11 → 10.0.0.1    (via global fallback)
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --ip-map 10.10.10.10=192.168.0.100 \
   --replay-src-ip 10.0.0.1
 ```
@@ -155,7 +184,7 @@ select only the conversations you care about from a busy pcap:
 
 ```bash
 # Rewrite IPs, then keep only packets involving 192.168.0.100
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --ip-map 10.10.10.10=192.168.0.100,10.10.10.11=192.168.0.101 \
   --ip-filter 192.168.0.100
 ```
@@ -170,7 +199,7 @@ specifically.  This lets you replay only one direction of a conversation:
 
 ```bash
 # Replay only ping requests from 10.0.0.1 → 8.8.8.8, drop responses
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --replay-src-ip 10.0.0.1 --replay-dst-ip 8.8.8.8 \
   --src-ip-filter 10.0.0.1 --dst-ip-filter 8.8.8.8
 ```
@@ -183,12 +212,12 @@ The three post-rewrite filters combine as independent **AND** rules:
 
 ```bash
 # Keep only traffic to 192.168.0.101 (regardless of source)
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --replay-src-ip 192.168.0.100 --replay-dst-ip 192.168.0.101 \
   --dst-ip-filter 192.168.0.101
 
 # Keep only traffic from 192.168.0.100 (regardless of destination)
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --replay-src-ip 192.168.0.100 --replay-dst-ip 192.168.0.101 \
   --src-ip-filter 192.168.0.100
 ```
@@ -200,13 +229,13 @@ EtherType is in the given set are replayed.  Accepts hex values or names:
 
 ```bash
 # Only IPv4 (0x0800)
-boat trace replay capture.pcap --buses eth0 --ethertype ipv4
+boat replay import capture.pcap --trace-id demo --ethertype ipv4
 
 # Only IPv6 (0x86DD)
-boat trace replay capture.pcap --buses eth0 --ethertype ipv6
+boat replay import capture.pcap --trace-id demo --ethertype ipv6
 
 # Multiple: IPv4 + ARP
-boat trace replay capture.pcap --buses eth0 --ethertype ipv4,arp
+boat replay import capture.pcap --trace-id demo --ethertype ipv4,arp
 ```
 
 Recognised EtherType names:
@@ -227,13 +256,13 @@ and IPv6+UDP.  Accepts decimal values or names:
 
 ```bash
 # Only UDP
-boat trace replay capture.pcap --buses eth0 --protocol udp
+boat replay import capture.pcap --trace-id demo --protocol udp
 
 # UDP + ICMP (applies to both IPv4 ICMP and IPv6 ICMPv6)
-boat trace replay capture.pcap --buses eth0 --protocol udp,icmp
+boat replay import capture.pcap --trace-id demo --protocol udp,icmp
 
 # Only ICMPv6
-boat trace replay capture.pcap --buses eth0 --protocol icmpv6
+boat replay import capture.pcap --trace-id demo --protocol icmpv6
 ```
 
 Recognised protocol names:
@@ -257,10 +286,10 @@ unfiltered.  Port filters are applied after the protocol filter:
 
 ```bash
 # Only DHCP (UDP src=68 or dst=67)
-boat trace replay capture.pcap --buses eth0 --protocol udp --src-port 68 --dst-port 67
+boat replay import capture.pcap --trace-id demo --protocol udp --src-port 68 --dst-port 67
 
 # Only a specific UDP port
-boat trace replay capture.pcap --buses eth0 --protocol udp --src-port 30490
+boat replay import capture.pcap --trace-id demo --protocol udp --src-port 30490
 ```
 
 ### Fragmentation and extension headers
@@ -309,19 +338,27 @@ original L2 MACs are discarded — only the IP packet (L3+) is preserved.
 
 #### Per-IP MAC mapping (`--mac-map`)
 
-Map rewritten IP addresses to specific MAC addresses.  The C++ forwarder
-parses each replayed packet's rewritten src/dst IP, looks them up in the
-map, and uses the result as the src/dst MAC for the Ethernet frame.
-IPs not in the map fall back to the default (auto-detect / broadcast).
+Map rewritten IP addresses to specific MAC addresses.  Unlike the other
+flags in this section, `--mac-map` (along with `--eth-iface`) is a
+**playback-time** flag on `boat replay start`/`stream`, not `boat replay
+import` — MAC assignment happens in the C++ replay engine
+(`ProtoToCoreFrame`, `replay_engine.cpp`) when the frame is dispatched, not
+at conversion time.  It parses each replayed packet's rewritten src/dst IP
+(already resolved to their final string form via `inet_ntop`, matching
+Python's `ipaddress` string output), looks them up in the map, and uses the
+result as the src/dst MAC for the Ethernet frame.  IPs not in the map fall
+back to the default (auto-detect / broadcast).
 
 ```bash
-# Map each IP to its MAC (applied after --ip-map)
-boat trace replay capture.pcap --buses eth0 \
-  --ip-map 10.10.10.1=192.168.0.100,8.8.8.8=192.168.0.1 \
+# IP rewrite happens at import time; MAC mapping happens at playback time
+boat replay import capture.pcap --trace-id demo \
+  --ip-map 10.10.10.1=192.168.0.100,8.8.8.8=192.168.0.1
+boat replay stream --trace demo --eth-iface eth0 \
   --mac-map 192.168.0.100=02:de:ad:be:ef:01,192.168.0.1=02:de:ad:be:ef:02
 
 # Without IP map, the MAC map keys match the original pcap IPs
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo
+boat replay stream --trace demo --eth-iface eth0 \
   --mac-map 10.10.10.1=02:de:ad:be:ef:01,8.8.8.8=02:de:ad:be:ef:02
 ```
 
@@ -361,8 +398,9 @@ boat trace replay recording.blf --speed 0 --buses vcan0
 | `10` | 10x speed |
 | `10000+` | Effectively max speed, indistinguishable from `0` |
 
-In direct mode each frame incurs a gRPC round-trip (~5-8ms) even at max speed.
-Use [server-side mode](#server-side-mode) to eliminate per-frame gRPC overhead.
+`boat trace replay` incurs a gRPC round-trip per frame (~5-8ms) even at max
+speed. Use [the server-side path](#replay-modes) (`boat replay import` +
+`start`/`stream`) to eliminate per-frame gRPC overhead.
 
 ### Loop mode
 
@@ -395,58 +433,70 @@ more than one tick; there is no accumulated drift even across long traces.
 
 ## Replay modes
 
-Two modes are available:
+There are two, hard-separated commands — no flag switches between them,
+and no format auto-selects one over the other:
 
-| Mode | Description | CLI flag | Suitable for |
-|------|-------------|----------|-------------|
-| **Direct** | Reads the trace locally and sends each frame via gRPC | (default) | CAN only, ad-hoc replays |
-| **Server-side** | Converts trace to binary, uploads to gateway, plays back on the gateway's tick timer | ``--server-side`` | CAN + Ethernet, high-speed replay |
+| Command | Description | Bus types | Suitable for |
+|---------|-------------|-----------|-------------|
+| `boat trace replay` | Reads the trace locally and sends each frame individually via gRPC, paced in real time by the client process | CAN only (`.asc`/`.blf`) | Ad-hoc CAN replays, no server-side state |
+| `boat replay import` + `start`/`stream` | Converts the trace to the gateway's internal binary format, uploads it, and plays it back on the gateway's own tick timer, with pause/resume/seek control | CAN + Ethernet | Ethernet/pcap (required), high-speed replay, pause/resume/seek |
 
-### Direct mode
+### `boat trace replay` (direct)
 
 ```bash
-# Replay CAN trace locally via gRPC (default)
+# Replay a CAN trace locally via gRPC
 boat trace replay recording.blf --buses vcan0
 ```
 
 Each frame is sent individually via `CanService.SendCanFrame`.  Simple but
-each frame incurs a gRPC round-trip (~5-8ms).  Ethernet pcap replay is
-**not** available in direct mode.
+each frame incurs a gRPC round-trip (~5-8ms).  This command supports CAN
+only — passing a `.pcap` file fails immediately with an error pointing to
+`boat replay import`.
 
-### Server-side mode
+### `boat replay import` + `start`/`stream` (server-side)
 
 ```bash
-# CAN: upload + replay in one command
-boat trace replay recording.blf --server-side --buses vcan0
+# CAN: import once, then replay (repeatable without re-uploading)
+boat replay import recording.blf --trace-id demo
+boat replay stream --trace demo --buses vcan0
 
-# Ethernet: auto-selected (--server-side is implicit for .pcap)
-boat trace replay capture.pcap --buses eth0 \
+# Ethernet: the only supported path for .pcap files
+boat replay import capture.pcap --trace-id demo \
   --replay-src-ip 192.168.1.1 --replay-dst-ip 192.168.1.100
+boat replay stream --trace demo --eth-iface eth0
 ```
 
 The trace is converted to the gateway's internal binary format, uploaded in
 a single `ImportTraceData` request, and played back using the gateway's own
 tick timer.  There is **no per-frame gRPC overhead** — timing is driven
-entirely by the gateway's scheduler.
+entirely by the gateway's scheduler. Because the trace is stored on the
+gateway under a `--trace-id`, it can be replayed multiple times, paused,
+resumed, or seeked without re-uploading (`boat replay pause`/`resume`/
+`seek`/`stop`).
 
-Server-side mode is **recommended for most use cases**, especially when:
-- Replaying Ethernet pcap files (required)
+This path is required when:
+- Replaying Ethernet pcap files (the only supported path)
 - Replaying at high speed (``--speed 0`` or large multipliers)
 - Replaying long traces where timing accuracy matters
 - The gateway and client are on different hosts
-
-For Ethernet pcap files, server-side mode is **auto-forced** — the CLI
-enables it automatically and ignores the ``--server-side`` flag.
+- You need pause/resume/seek control mid-replay
 
 ## Verbose output
 
 ```bash
-# Print every frame as it is sent
+# boat trace replay: print every CAN frame as it is sent
 boat trace replay recording.blf --verbose --buses vcan0
+
+# boat replay stream: print every server-side event as it arrives
+boat replay stream --trace demo --verbose
 ```
 
-In server-side mode the output shows gateway tick numbers and payload
-snippets.  In direct mode it shows CAN IDs, timestamps, and hex data.
+`boat trace replay --verbose` shows CAN IDs, timestamps, and hex data.
+`boat replay stream --verbose` shows one line per event with gateway tick
+number and payload hex, for any bus type. Without `--verbose`, `boat
+replay stream` still shows *something* — a single self-updating progress
+line (frame count + current tick, refreshed a few times a second) — rather
+than staying silent until the final `Done` summary.
 
 ## Replay lifecycle
 
@@ -457,8 +507,10 @@ boat replay resume
 boat replay stop
 ```
 
-These commands control a running server-side replay.  Direct-mode replays
-run in the client process and are interrupted with `Ctrl+C`.
+These commands control a running server-side replay started via `boat
+replay start`/`stream`.  `boat trace replay` runs entirely in the client
+process and is interrupted with `Ctrl+C` — it has no replay-id to pause,
+resume, or seek.
 
 ## Replay from event store
 
@@ -504,7 +556,7 @@ CAN FD frames are handled automatically.  The SocketCan driver uses
 sudo ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on
 
 # Verify FD support
-boat can list-buses
+boat frame list-ifaces
 ```
 
 ### Extended (29-bit) CAN IDs
@@ -557,15 +609,17 @@ boat trace replay tracefile.blf --channel 4 --buses can0 --id 0x040,0x0C0 --spee
 candump can0
 
 # Ethernet: replay a pcap with a global IP override
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --replay-src-ip 192.168.10.50 --replay-dst-ip 10.0.0.1
+boat replay stream --trace demo --eth-iface eth0
 tcpdump -i eth0
 
 # Ethernet: only replay IPv6 ICMPv6, map specific addresses, filter to one pair
-boat trace replay capture.pcap --buses eth0 \
+boat replay import capture.pcap --trace-id demo \
   --ethertype ipv6 --protocol icmpv6 \
   --ip-map 2001:db8::1=fe80::100,2001:db8::2=fe80::200 \
   --ip-filter fe80::100,fe80::200
+boat replay stream --trace demo --eth-iface eth0
 tcpdump -i eth0
 ```
 
@@ -574,7 +628,7 @@ tcpdump -i eth0
 ```python
 from boat.trace_replay import TraceReplayer
 
-# CAN replay
+# CAN replay (direct, real-time -- the only thing TraceReplayer.replay() does)
 replayer = TraceReplayer(
     gateway="localhost:50051",
     buses=["vcan0"],
@@ -582,34 +636,50 @@ replayer = TraceReplayer(
     channel_filter=4,
     id_filter={0x040, 0x0C0},
 )
-
-# Direct mode (CAN only)
 replayer.replay("tracefile.blf")
 
-# Server-side mode (CAN + Ethernet)
-replayer.replay("tracefile.blf", server_side=True)
+# replayer.replay("capture.pcap") raises TraceReplayError -- Ethernet/.pcap
+# replay is server-side only, via convert_to_binary() + ReplayService.
 
-# Ethernet pcap replay (always server-side)
+# Ethernet pcap replay (server-side, via ReplayService)
+from boat.v1 import replay_pb2, replay_pb2_grpc
+import grpc
+
 eth_replayer = TraceReplayer(
-    gateway="localhost:50051",
-    buses=["eth0"],
     replay_src_ip="192.168.1.1",
     replay_dst_ip="192.168.1.100",
 )
-eth_replayer.replay("capture.pcap")
+binary_data = eth_replayer.convert_to_binary("capture.pcap")
 
-# Ethernet with filters and IP mapping
+channel = grpc.insecure_channel("localhost:50051")
+replay_stub = replay_pb2_grpc.ReplayServiceStub(channel)
+replay_stub.ImportTraceData(replay_pb2.ImportTraceDataRequest(
+    trace_id="demo", format="PCAP", data=binary_data,
+))
+start_resp = replay_stub.StartReplay(replay_pb2.StartReplayRequest(
+    trace_id="demo", eth_iface="eth0",
+    speed=replay_pb2.REPLAY_SPEED_ACCELERATED, speed_multiplier=1.0,
+))
+for event in replay_stub.StreamReplay(
+    replay_pb2.StreamReplayRequest(replay_id=start_resp.replay_id)
+):
+    print(event.tick, len(event.payload))
+
+# Ethernet with filters and IP mapping -- same convert_to_binary() call,
+# just with more TraceReplayer constructor args
 eth_replayer = TraceReplayer(
-    gateway="localhost:50051",
-    buses=["eth0"],
     ethertype_filter={0x86DD},
     protocol_filter={58},       # ICMPv6
     ip_map={"2001:db8::1": "fe80::100",
             "2001:db8::2": "fe80::200"},
     ip_filter={"fe80::100", "fe80::200"},
 )
-eth_replayer.replay("capture.pcap")
+binary_data = eth_replayer.convert_to_binary("capture.pcap")
 ```
+
+In practice, the `boat replay import` + `boat replay start`/`stream` CLI
+commands do exactly the above and are usually simpler than driving the
+gRPC calls directly.
 
 ## Troubleshooting
 
@@ -617,9 +687,10 @@ eth_replayer.replay("capture.pcap")
 |---------|--------------|
 | Frames not appearing on the bus | Check that the target interface is up. For CAN FD: `ip link show can0`. For Ethernet: `ip link show eth0`. |
 | Extended CAN IDs appear truncated (e.g. `29F` instead of `1BFC829F`) | SocketCan driver missing `CAN_EFF_FLAG`. Build the latest gateway. |
-| gRPC `UNAVAILABLE` | Gateway not running or wrong host/port. Verify: `boat can list-buses`. |
+| gRPC `UNAVAILABLE` | Gateway not running or wrong host/port. Verify: `boat frame list-ifaces`. |
 | CAN server-side replay imports but no frames on the bus | The trace file timestamps may be absolute (epoch-based). The Python SDK converts to relative ticks internally since build `43824e6`. Upgrade the SDK: `pip install -e ./sdk/python`. |
 | Server-side replay seems to hang (no console output after "Replaying...") | The Python client blocks on `StreamReplay` waiting for events from the gateway's EventBus. Frames are still delivered to the bus — verify with `candump` / `tcpdump`. Use `Ctrl+C` to interrupt. |
 | No frames replayed | Check the trace file format. Ensure channel/ID filters are correct. For pcap: only classic pcap (DLT\_EN10MB) is supported, not pcapng. |
-| Ethernet pcap replay: no frames on the wire | Verify the target interface is correct (`--buses eth0`) and that ``--replay-src-ip`` / ``--replay-dst-ip`` are set. The interface must be up and registered via ``BOAT_ETH_INTERFACES`` — use ``raw:`` prefix for physical NICs (e.g. ``BOAT_ETH_INTERFACES=raw:eth0``). |
-| Raw socket: Operation not permitted | Physical Ethernet interfaces need ``CAP_NET_RAW``. Run the gateway with ``sudo`` or use ``sudo setcap cap_net_raw+ep`` on the gateway binary. |
+| Ethernet pcap replay: no frames on the wire | Verify the target interface is correct (`--eth-iface eth0` on `boat replay stream`) and that ``--replay-src-ip`` / ``--replay-dst-ip`` were set on the `boat replay import` step. The interface must be up and registered via ``BOAT_ETH_INTERFACES`` — use ``raw:`` prefix for physical NICs (e.g. ``BOAT_ETH_INTERFACES=raw:eth0``), and see the setcap note above instead of running the gateway as root. |
+| `boat trace replay capture.pcap` fails immediately | This command only supports CAN (`.asc`/`.blf`). Use `boat replay import capture.pcap --trace-id <id>` followed by `boat replay stream --trace <id> --eth-iface <iface>`. |
+| Raw socket: Operation not permitted | Physical Ethernet interfaces need ``CAP_NET_RAW``. Grant it once per build with ``sudo setcap cap_net_raw+ep`` on the gateway binary (preferred over running as root — avoids root-owned files under ``/tmp`` blocking later non-root runs). |

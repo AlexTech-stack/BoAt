@@ -1,4 +1,5 @@
 add_library(boat_core STATIC
+  frame.cpp
   scheduler/sim_clock.cpp
   scheduler/tick_scheduler.cpp
   signal/signal_router.cpp
@@ -18,4 +19,5 @@ target_include_directories(boat_core PUBLIC
   "${CMAKE_SOURCE_DIR}/sdk/cpp/include"
 )
 target_compile_features(boat_core PUBLIC cxx_std_20)
+set_target_properties(boat_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(boat_core PRIVATE ${CMAKE_DL_LIBS})

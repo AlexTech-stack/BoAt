@@ -14,6 +14,11 @@ namespace boat::gateway {
 
 PduServiceImpl::PduServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
 
+boat::core::IPduRouter* PduServiceImpl::GetRouter() {
+  return static_cast<boat::core::IPduRouter*>(
+      ctx_.plugin_manager.FindService("pdu_router"));
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 static uint64_t NowNsPdu() {
@@ -129,6 +134,7 @@ grpc::Status PduServiceImpl::SendPdu(
     grpc::ServerContext* context,
     const boat::v1::SendPduRequest* request,
     boat::v1::SendPduResponse* response) {
+  if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
   const auto& pf = request->pdu();
   if (pf.pdu_id() == 0) {
@@ -136,7 +142,7 @@ grpc::Status PduServiceImpl::SendPdu(
   }
 
   const std::vector<uint8_t> payload(pf.payload().begin(), pf.payload().end());
-  const bool accepted = ctx_.pdu_router.SendPdu(pf.pdu_id(), payload);
+  const bool accepted = GetRouter()->SendPdu(pf.pdu_id(), payload);
 
   {
     RpcEvent ev;
@@ -165,6 +171,7 @@ grpc::Status PduServiceImpl::SubscribePdus(
     grpc::ServerContext* context,
     const boat::v1::SubscribePdusRequest* request,
     grpc::ServerWriter<boat::v1::PduFrame>* writer) {
+  if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
   std::vector<uint32_t> pdu_ids(request->pdu_ids().begin(),
                                  request->pdu_ids().end());
@@ -197,7 +204,7 @@ grpc::Status PduServiceImpl::SubscribePdus(
   std::condition_variable         queue_cv;
   std::vector<boat::v1::PduFrame> queue;
 
-  const auto sub_id = ctx_.pdu_router.Subscribe(
+  const auto sub_id = GetRouter()->Subscribe(
       pdu_ids,
       [&queue_mutex, &queue_cv, &queue](const boat::hil::PduFrame& f) {
         boat::v1::PduFrame proto;
@@ -219,7 +226,7 @@ grpc::Status PduServiceImpl::SubscribePdus(
     }
     for (const auto& proto : pending) {
       if (!writer->Write(proto)) {
-        ctx_.pdu_router.Unsubscribe(sub_id);
+        GetRouter()->Unsubscribe(sub_id);
         return grpc::Status::OK;
       }
       RpcEvent ev;
@@ -236,7 +243,7 @@ grpc::Status PduServiceImpl::SubscribePdus(
     }
   }
 
-  ctx_.pdu_router.Unsubscribe(sub_id);
+  GetRouter()->Unsubscribe(sub_id);
   return grpc::Status::OK;
 }
 
@@ -244,6 +251,7 @@ grpc::Status PduServiceImpl::ConfigureRoute(
     grpc::ServerContext* context,
     const boat::v1::ConfigureRouteRequest* request,
     boat::v1::ConfigureRouteResponse* response) {
+  if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
   const boat::hil::PduRoute route = ProtoToRoute(request->route());
 
@@ -255,7 +263,7 @@ grpc::Status PduServiceImpl::ConfigureRoute(
                         "transport must be CAN or ETHERNET");
   }
 
-  ctx_.pdu_router.AddRoute(route);
+  GetRouter()->AddRoute(route);
 
   {
     RpcEvent ev;
@@ -289,6 +297,7 @@ grpc::Status PduServiceImpl::ConfigureContainer(
     grpc::ServerContext* context,
     const boat::v1::ConfigureContainerRequest* request,
     boat::v1::ConfigureContainerResponse* response) {
+  if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
   const auto& c = request->container();
   if (c.container_id() == 0) {
@@ -315,7 +324,7 @@ grpc::Status PduServiceImpl::ConfigureContainer(
   def.vlan_id   = static_cast<uint16_t>(c.vlan_id() & 0x0FFF);
   def.pdu_ids.assign(c.pdu_ids().begin(), c.pdu_ids().end());
 
-  ctx_.pdu_router.AddContainer(def);
+  GetRouter()->AddContainer(def);
 
   {
     RpcEvent ev;
@@ -344,8 +353,9 @@ grpc::Status PduServiceImpl::ListRoutes(
     grpc::ServerContext*,
     const boat::v1::ListRoutesRequest*,
     boat::v1::ListRoutesResponse* response) {
+  if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
-  for (const auto& r : ctx_.pdu_router.ListRoutes()) {
+  for (const auto& r : GetRouter()->ListRoutes()) {
     RouteToProto(r, response->add_routes());
   }
   return grpc::Status::OK;
@@ -357,8 +367,9 @@ grpc::Status PduServiceImpl::RemoveRoute(
     grpc::ServerContext* context,
     const boat::v1::RemoveRouteRequest* request,
     boat::v1::RemoveRouteResponse* response) {
+  if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
-  ctx_.pdu_router.RemoveRoute(request->pdu_id());
+  GetRouter()->RemoveRoute(request->pdu_id());
 
   {
     RpcEvent ev;
@@ -383,6 +394,7 @@ grpc::Status PduServiceImpl::ConfigureGroup(
     grpc::ServerContext* context,
     const boat::v1::ConfigureGroupRequest* request,
     boat::v1::ConfigureGroupResponse* response) {
+  if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
   const auto& pg = request->group();
   if (pg.group_id() == 0) {
@@ -394,7 +406,7 @@ grpc::Status PduServiceImpl::ConfigureGroup(
                         "group must include at least one pdu_id");
   }
 
-  ctx_.pdu_router.AddGroup(ProtoToGroup(pg));
+  GetRouter()->AddGroup(ProtoToGroup(pg));
 
   {
     RpcEvent ev;
@@ -422,8 +434,9 @@ grpc::Status PduServiceImpl::EnableGroup(
     grpc::ServerContext* context,
     const boat::v1::EnableGroupRequest* request,
     boat::v1::EnableGroupResponse* response) {
+  if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
-  ctx_.pdu_router.EnableGroup(request->group_id());
+  GetRouter()->EnableGroup(request->group_id());
 
   {
     RpcEvent ev;
@@ -446,8 +459,9 @@ grpc::Status PduServiceImpl::DisableGroup(
     grpc::ServerContext* context,
     const boat::v1::DisableGroupRequest* request,
     boat::v1::DisableGroupResponse* response) {
+  if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
-  ctx_.pdu_router.DisableGroup(request->group_id());
+  GetRouter()->DisableGroup(request->group_id());
 
   {
     RpcEvent ev;
@@ -470,8 +484,9 @@ grpc::Status PduServiceImpl::ListGroups(
     grpc::ServerContext*,
     const boat::v1::ListGroupsRequest*,
     boat::v1::ListGroupsResponse* response) {
+  if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
-  for (const auto& g : ctx_.pdu_router.ListGroups()) {
+  for (const auto& g : GetRouter()->ListGroups()) {
     GroupToProto(g, response->add_groups());
   }
   return grpc::Status::OK;

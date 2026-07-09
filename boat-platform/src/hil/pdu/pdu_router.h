@@ -11,6 +11,7 @@
 #include "pdu/pdu_types.h"
 #include "pdu/transmission_engine.h"
 #include "can_bus_registry.h"
+#include "core/pdu_router_interface.h"
 #include "ethernet_bus_registry.h"
 
 namespace boat::hil {
@@ -29,10 +30,20 @@ namespace boat::hil {
  *   CAN ID = route.can_id if non-zero, else route.pdu_id
  *   CAN data = PDU payload (up to 8 bytes classic / 64 bytes FD)
  */
-class PduRouter {
+class PduRouter : public boat::core::IPduRouter {
  public:
   PduRouter(CanBusRegistry& can, EthernetBusRegistry& eth);
+  PduRouter();  // plugin mode — use SetFramePublisher
   ~PduRouter();
+
+  // Plugin mode: set the single frame publisher for CAN/Eth/PDU output.
+  void SetFramePublisher(std::function<void(const BoatFrame&)> fn);
+
+  // Make these public for the v8 plugin wrapper to call from on_frame.
+  using CanRx = std::function<void(const CanFrame&, const std::string&)>;
+  using EthRx = std::function<void(const EthernetFrame&, const std::string&)>;
+  void OnCanFrame(const CanFrame& frame, const std::string& iface);
+  void OnEthernetFrame(const EthernetFrame& frame, const std::string& iface);
 
   // Add or replace a per-PDU routing rule.
   void AddRoute(const PduRoute& route);
@@ -75,8 +86,6 @@ class PduRouter {
   void ConfigureDeadline(uint32_t pdu_id, const PduDeadlineConfig& cfg);
 
  private:
-  void OnCanFrame(const CanFrame& frame, const std::string& iface);
-  void OnEthernetFrame(const EthernetFrame& frame, const std::string& iface);
   void DispatchPdu(const PduFrame& pdu);
 
   bool SendContainer(const PduContainerDef& def,
@@ -85,8 +94,11 @@ class PduRouter {
   // Returns false if the PDU belongs to a disabled group.
   bool IsPduGated(uint32_t pdu_id) const;
 
-  CanBusRegistry&      can_;
-  EthernetBusRegistry& eth_;
+  CanBusRegistry*      can_{nullptr};
+  EthernetBusRegistry* eth_{nullptr};
+
+  // Plugin mode: set to non-null when loaded as a v8 plugin.
+  std::function<void(const BoatFrame&)> frame_publisher_;
 
   mutable std::mutex routes_mutex_;
   std::unordered_map<uint32_t, PduRoute> routes_;  // keyed by pdu_id

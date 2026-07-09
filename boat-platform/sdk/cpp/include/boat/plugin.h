@@ -3,7 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define BOAT_PLUGIN_ABI_VERSION 7
+#include "boat/frame.h"
+
+#define BOAT_PLUGIN_ABI_VERSION 8
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,42 +15,12 @@ extern "C" {
 typedef void (*BoatPublishFn)(void* publisher_ctx, const char* signal_id,
                               uint64_t tick, double value);
 
-/* CAN frame type used by the plugin CAN-publish callback.
- * flags bits: CANFD_BRS=0x01, CANFD_ESI=0x02, CANFD_FDF=0x04, SELF_SENT=0x08; 0 = classic CAN. */
+/* CAN FD flag constants — kept for self-sent detection in can_tp. */
 #define BOAT_CAN_FLAG_SELF_SENT 0x08
-typedef struct BoatCanFrame {
-  uint32_t can_id;
-  uint8_t  dlc;    /* actual byte count: 0-8 classic, 0-64 FD */
-  uint8_t  flags;
-  uint8_t  data[64];
-} BoatCanFrame;
 
-/* Callback a plugin calls to publish a raw CAN frame onto the HIL bus. */
-typedef void (*BoatCanPublishFn)(void* publisher_ctx, const BoatCanFrame* frame);
-
-/* Callback the host calls on a plugin to deliver an incoming CAN frame.
-   iface is the name of the interface the frame was received on (e.g. "vcan1"). */
-typedef void (*BoatCanReceiveFn)(void* ctx, const BoatCanFrame* frame, const char* iface);
-
-/* Ethernet frame type used by the plugin Ethernet-publish callback. */
-typedef struct BoatEthFrame {
-  uint8_t  dst_mac[6];
-  uint8_t  src_mac[6];
-  uint16_t ethertype;
-  uint8_t* payload;
-  size_t   payload_len;
-} BoatEthFrame;
-
-/* Callback a plugin calls to publish an Ethernet frame onto the HIL bus. */
-typedef void (*BoatEthPublishFn)(void* publisher_ctx, const BoatEthFrame* frame);
-
-/* Callback the host calls on a plugin to deliver an incoming Ethernet frame.
-   iface is the name of the interface the frame was received on (e.g. "veth0"). */
-typedef void (*BoatEthReceiveFn)(void* ctx, const BoatEthFrame* frame, const char* iface);
-
-/* Callback a plugin calls to publish a named value on the always-on signal bus.
-   The bus is independent of any simulation lifecycle. */
-typedef void (*BoatBusPublishFn)(void* publisher_ctx, const char* name, double value);
+/* Ethernet self-sent flag — set by EthernetBusRegistry when a frame was
+   sourced locally (loopback prevention). */
+#define BOAT_ETH_FLAG_SELF_SENT 0x01
 
 /* PDU frame type used by the PDU-publish callback.
    This is the mechanism for CanTp to deliver reassembled I-PDUs. */
@@ -59,30 +31,47 @@ typedef struct BoatPduFrame {
   const char* iface;  /* interface the frame arrived on */
 } BoatPduFrame;
 
-/* Callback a plugin calls to publish a fully-formed PDU into the PduRouter. */
+/* Callback a plugin calls to publish a fully-formed PDU into the frame bus.
+   The host dispatches it via DispatchFrame for routing by the PduRouter plugin. */
 typedef void (*BoatPduPublishFn)(void* publisher_ctx, const BoatPduFrame* frame);
 
+/* Callback a plugin calls to publish a named value on the always-on signal bus.
+   The bus is independent of any simulation lifecycle. */
+typedef void (*BoatBusPublishFn)(void* publisher_ctx, const char* name, double value);
+
+/* ── v8 Plugin VTable ────────────────────────────────────────────────── */
+
 typedef struct BoatPluginVTable {
-  int (*initialize)(void* ctx, const char* config_json);
+  /* Required — parse config JSON, return 0 on success. */
+  int  (*initialize)(void* ctx, const char* config_json);
+
+  /* Required — called on every tick by the host scheduler. */
   void (*on_tick)(void* ctx, uint64_t tick);
+
+  /* Required — cleanup. Host guarantees no concurrent callbacks after return. */
   void (*shutdown)(void* ctx);
-  /* Optional — set to NULL if the plugin does not publish signals. Called once
-     before the first tick so the plugin can store the callback. */
+
+  /* Optional — set to NULL if the plugin does not publish signals. */
   void (*set_publisher)(void* ctx, BoatPublishFn fn, void* publisher_ctx);
-  /* Optional — set to NULL if the plugin does not publish CAN frames. */
-  void (*set_can_publisher)(void* ctx, BoatCanPublishFn fn, void* publisher_ctx);
-  /* Optional — set to NULL if the plugin does not react to incoming CAN frames.
-     The host calls this function directly to deliver each received frame. */
-  BoatCanReceiveFn on_can_frame;
-  /* Optional — set to NULL if the plugin does not publish Ethernet frames. */
-  void (*set_eth_publisher)(void* ctx, BoatEthPublishFn fn, void* publisher_ctx);
-  /* Optional — set to NULL if the plugin does not react to incoming Ethernet frames. */
-  BoatEthReceiveFn on_eth_frame;
+
   /* Optional — set to NULL if the plugin does not publish bus signals. */
   void (*set_bus_publisher)(void* ctx, BoatBusPublishFn fn, void* publisher_ctx);
-  /* Optional (v6) — set to NULL if the plugin does not publish PDU frames.
-     The host wires this to PduRouter::SendPdu(). */
+
+  /* Optional — set to NULL if the plugin does not publish PDU frames.
+     The host dispatches these as BOAT_BUS_PDU frames for routing. */
   void (*set_pdu_publisher)(void* ctx, BoatPduPublishFn fn, void* publisher_ctx);
+
+  /* Host → Plugin: deliver a unified BoatFrame. */
+  BoatFrameReceiveFn on_frame;
+
+  /* Plugin → Host: publish a unified BoatFrame onto the bus. */
+  void (*set_frame_publisher)(void* ctx, BoatFramePublishFn fn,
+                              void* publisher_ctx);
+
+  /* Optional: plugin declares which bus types it handles.
+     Returns a JSON array of bus type names, e.g. "[\"can\",\"eth\"]".
+     "" or NULL means "accept all". */
+  BoatDeclaredBusesFn declared_buses;
 } BoatPluginVTable;
 
 typedef struct BoatPlugin {
@@ -95,10 +84,22 @@ typedef void (*boat_plugin_destroy_fn)(BoatPlugin* plugin);
 typedef uint32_t (*boat_plugin_abi_version_fn)();
 
 BoatPlugin* boat_plugin_create();
-// Ownership contract: `boat_plugin_destroy()` is responsible for full teardown,
-// including invoking `vtable->shutdown(ctx)` exactly once before freeing memory.
 void boat_plugin_destroy(BoatPlugin* plugin);
 uint32_t boat_plugin_abi_version();
+
+/* ── Optional: named C++ service export ─────────────────────────────────
+   A plugin MAY export both of these symbols to expose a named C++ service
+   pointer that host-side gRPC service implementations look up via
+   PluginManager::FindService(name) -- e.g. the pdu_router plugin exposing
+   an IPduRouter* for PduServiceImpl to delegate to. Omit both symbols
+   entirely if the plugin has no such service; this is independent of
+   BoatPluginVTable, so it does not require an ABI version bump for
+   plugins that don't use it. boat_plugin_service_ptr is called once,
+   right after initialize() succeeds, with the same ctx passed to every
+   other vtable function -- the returned pointer must stay valid until
+   shutdown() returns. */
+typedef const char* (*boat_plugin_service_name_fn)();
+typedef void* (*boat_plugin_service_ptr_fn)(void* ctx);
 
 #ifdef __cplusplus
 }

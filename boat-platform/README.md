@@ -58,12 +58,12 @@ Physical CAN interfaces (e.g. PEAK, Kvaser, gs_usb) are supported via `PhysicalC
 # Bring up a physical CAN interface (adjust bitrate to your setup)
 sudo ip link set can0 up type can bitrate 500000
 
-# The `boat can detect` command scans available CAN hardware (no gateway needed)
-boat can detect
+# No CLI hardware-detection command; inspect CAN hardware directly
+ip -d link show type can
 
-# List registered interfaces with metadata (requires active gateway)
-boat can list-buses
-boat --json can list-buses
+# List interfaces the gateway has access to, with metadata (requires active gateway)
+boat frame list-ifaces
+boat --json frame list-ifaces
 ```
 
 ## Architecture
@@ -84,7 +84,7 @@ This "double-tick" design serves two distinct use cases:
 
 Both managers use the same C ABI (`BoatPluginVTable`) and can load the same `.so` files. A plugin can be loaded into both managers simultaneously (e.g. a vehicle dynamics node that runs persistently while a test simulation loads additional signal-processing plugins).
 
-The node tick thread also drives `PduRouter::OnTick()` for the PDU transmission engine, ensuring scheduled CAN/Ethernet frames are sent on time even outside simulation.
+The node tick thread also ticks the `pdu_router` plugin (via its `on_tick`), driving the PDU transmission engine so scheduled CAN/Ethernet frames are sent on time even outside simulation. As of ABI v8 the PDU router is itself a node plugin (`pdu_router.so`) rather than gateway-core logic.
 
 ## Known issues
 

@@ -76,6 +76,18 @@ void CanBusRegistry::Unsubscribe(RxCallbackId id) {
   subscriptions_.erase(id);
 }
 
+CanBusRegistry::RxCallbackId CanBusRegistry::SubscribeFrame(FrameRxCallback cb) {
+  std::lock_guard<std::mutex> lock(frame_subs_mutex_);
+  const RxCallbackId id = next_frame_id_++;
+  frame_subscriptions_[id] = std::move(cb);
+  return id;
+}
+
+void CanBusRegistry::UnsubscribeFrame(RxCallbackId id) {
+  std::lock_guard<std::mutex> lock(frame_subs_mutex_);
+  frame_subscriptions_.erase(id);
+}
+
 std::vector<std::string> CanBusRegistry::Interfaces() const {
   std::lock_guard<std::mutex> lock(bridges_mutex_);
   std::vector<std::string> names;
@@ -122,6 +134,27 @@ void CanBusRegistry::DispatchRx(const CanFrame& frame, const std::string& iface)
   }
   for (const auto& cb : to_call) {
     cb(frame, iface);
+  }
+
+  // Deliver to unified-frame subscribers.
+  std::vector<FrameRxCallback> frame_cbs;
+  {
+    std::lock_guard<std::mutex> lock(frame_subs_mutex_);
+    frame_cbs.reserve(frame_subscriptions_.size());
+    for (const auto& [id, cb] : frame_subscriptions_) {
+      (void)id;
+      frame_cbs.push_back(cb);
+    }
+  }
+  if (!frame_cbs.empty()) {
+    std::vector<uint8_t> payload(frame.data, frame.data + frame.dlc);
+    const bool is_fd = (frame.flags & kCanFdFlagFdf) != 0;
+    auto core_frame = boat::core::Frame::FromCan(iface, frame.can_id, frame.dlc,
+                                                  frame.flags, std::move(payload), is_fd);
+    core_frame.set_timestamp_ns(frame.timestamp_ns);
+    for (const auto& cb : frame_cbs) {
+      cb(core_frame);
+    }
   }
 }
 

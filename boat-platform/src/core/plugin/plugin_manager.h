@@ -18,69 +18,61 @@ struct PluginHandle {
   std::string name;
   std::uint32_t abi_version;
   boat_plugin_destroy_fn destroy_fn;
-  /* Holds shared ownership of heap-allocated publisher trampoline contexts.
-     Freed automatically when the handle is destroyed (on Unload). */
   std::vector<std::shared_ptr<void>> publisher_contexts;
+  // Bitmask of bus types this plugin handles (bit N = BOAT_BUS_* value N),
+  // parsed once from declared_buses() at load. All-ones = accept every bus
+  // type (plugin declared nothing). Used by DispatchFrame to pre-filter.
+  std::uint32_t declared_bus_mask = 0xFFFFFFFFu;
+  // Service names this plugin registered via the optional
+  // boat_plugin_service_name/boat_plugin_service_ptr symbols, so Unload()
+  // can remove them and avoid leaving a dangling pointer in services_.
+  std::vector<std::string> registered_services;
 };
 
-/* Signature used inside the core layer to route a signal value to wherever
-   the host (gateway, test harness, …) wants to deliver it. */
+/* Signature for routing a signal value from a plugin. */
 using SignalPublishFn =
     std::function<void(const char* signal_id, uint64_t tick, double value)>;
-
-/* Signature for delivering a raw CAN frame from a plugin to the HIL layer.
-   plugin_iface is the interface the plugin is configured for (from its config JSON). */
-using CanPublishFn = std::function<void(const BoatCanFrame& frame, const std::string& plugin_iface)>;
-
-/* Signature for delivering an Ethernet frame from a plugin to the HIL layer. */
-using EthPublishFn = std::function<void(const BoatEthFrame& frame)>;
 
 /* Signature for publishing a named value to the always-on signal bus. */
 using BusPublishFn = std::function<void(const char* name, double value)>;
 
-/* Signature for delivering a PDU frame from a plugin to the PduRouter. */
+/* Signature for delivering a PDU frame from a plugin into the frame bus. */
 using PduPublishFn = std::function<void(const BoatPduFrame& frame)>;
+
+/* v8: Signature for delivering a unified BoatFrame from a plugin to the bus. */
+using FramePublishFn = std::function<void(const BoatFrame& frame)>;
 
 class PluginManager {
  public:
-  /* Set before loading plugins.  Every plugin that exposes set_publisher will
-     receive a trampoline that delegates to this function. */
   void SetPublisher(SignalPublishFn fn);
-
-  /* Set before loading plugins.  Every plugin that exposes set_can_publisher will
-     receive a trampoline that delegates to this function. */
-  void SetCanPublisher(CanPublishFn fn);
-
-  /* Set before loading plugins.  Every plugin that exposes set_eth_publisher will
-     receive a trampoline that delegates to this function. */
-  void SetEthPublisher(EthPublishFn fn);
-
-  /* Set before loading plugins.  Every plugin that exposes set_bus_publisher will
-     receive a trampoline that delegates to this function. */
   void SetBusPublisher(BusPublishFn fn);
-
-  /* Set before loading plugins.  Every plugin that exposes set_pdu_publisher will
-     receive a trampoline that delegates to this function. */
   void SetPduPublisher(PduPublishFn fn);
+  void SetFramePublisher(FramePublishFn fn);
 
   PluginHandle Load(const std::string& so_path, const std::string& config_json);
   void Unload(const std::string& name);
   void TickAll(std::uint64_t tick);
-  /* Deliver an incoming CAN frame to every plugin that implements on_can_frame. */
-  void DispatchCanFrame(const BoatCanFrame& frame, const std::string& iface);
-  /* Deliver an incoming Ethernet frame to every plugin that implements on_eth_frame. */
-  void DispatchEthFrame(const BoatEthFrame& frame, const std::string& iface);
+
+  /* v8: Deliver a unified BoatFrame to every plugin with on_frame. */
+  void DispatchFrame(const BoatFrame& frame);
+
   void ShutdownAll();
   [[nodiscard]] std::vector<std::string> List() const;
+
+  /* Service provider registry */
+  void RegisterService(const std::string& name, void* service);
+  [[nodiscard]] void* FindService(const std::string& name) const;
 
  private:
   mutable std::mutex mutex_;
   std::map<std::string, PluginHandle> plugins_;
   SignalPublishFn publisher_fn_;
-  CanPublishFn can_publisher_fn_;
-  EthPublishFn eth_publisher_fn_;
   BusPublishFn bus_publisher_fn_;
   PduPublishFn pdu_publisher_fn_;
+  FramePublishFn frame_publisher_fn_;
+
+  mutable std::mutex services_mutex_;
+  std::map<std::string, void*> services_;
 };
 
 }  // namespace boat::core

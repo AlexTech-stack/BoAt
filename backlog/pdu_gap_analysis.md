@@ -1,5 +1,7 @@
 # PDU Gap Analysis — BoAt vs. AUTOSAR
 
+> **Architecture update (ABI v8):** The PduRouter is now a plugin (`pdu_router.so`) loaded by the gateway. The core provides only ticks, frame dispatch, and a gRPC server. All domain-specific logic (CAN messages, signal routing, E2E, etc.) is in plugins. The `Plugin ABI v8` unifies CAN/Ethernet/TCP/PDU frame types into a single `BoatFrame`. See `CLAUDE.md` (repo root) for the architecture overview and `boat-platform/docs/architecture/system-architecture.md` for the full v8 architecture writeup.
+
 ## Simulation Philosophy & Architecture
 
 BoAt is a **simulation environment for automotive ECUs** . The simulation does **not** reimplement AUTOSAR — it generates and consumes traffic to exercise AUTOSAR ECUs under test.

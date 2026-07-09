@@ -9,26 +9,36 @@ namespace boat::hil {
 
 // ── Construction / destruction ────────────────────────────────────────────────
 
+PduRouter::PduRouter()
+    : tx_engine_(std::make_unique<TransmissionEngine>(
+          [this](uint32_t pid, const std::vector<uint8_t>& pl) {
+            return SendPdu(pid, pl);
+          })) {}
+
 PduRouter::PduRouter(CanBusRegistry& can, EthernetBusRegistry& eth)
-    : can_(can), eth_(eth),
+    : can_(&can), eth_(&eth),
       tx_engine_(std::make_unique<TransmissionEngine>(
           [this](uint32_t pid, const std::vector<uint8_t>& pl) {
             return SendPdu(pid, pl);
           })) {
   // Subscribe to all frames on both registries; PDU matching is done internally.
-  can_sub_id_ = can_.Subscribe(
+  can_sub_id_ = can_->Subscribe(
       "",
       [this](const CanFrame& frame, const std::string& iface) {
         OnCanFrame(frame, iface);
       });
 
-  eth_sub_id_ = eth_.Subscribe(
+  eth_sub_id_ = eth_->Subscribe(
       "", 0,
       [this](const EthernetFrame& frame, const std::string& iface) {
         OnEthernetFrame(frame, iface);
       });
 
   subscribed_ = true;
+}
+
+void PduRouter::SetFramePublisher(std::function<void(const BoatFrame&)> fn) {
+  frame_publisher_ = std::move(fn);
 }
 
 PduRouter::~PduRouter() { Stop(); }
@@ -112,7 +122,7 @@ bool PduRouter::SendContainer(const PduContainerDef& def,
   }
   frame.src_ip = def.src_ip;
   frame.dst_ip = def.dst_ip;
-  return eth_.SendFrame(def.iface, frame);
+  return eth_->SendFrame(def.iface, frame);
 }
 
 // ── Send ──────────────────────────────────────────────────────────────────────
@@ -154,11 +164,25 @@ bool PduRouter::SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload) {
 
   if (route.transport == PduTransport::kCan) {
     const uint32_t can_id = route.can_id != 0 ? route.can_id : pdu_id;
-    CanFrame frame{};
-    frame.can_id = can_id;
-    frame.dlc    = static_cast<uint8_t>(std::min(payload.size(), std::size_t{64}));
-    std::memcpy(frame.data, payload.data(), frame.dlc);
-    sent = can_.SendFrame(route.iface, frame);
+    const uint8_t dlc = static_cast<uint8_t>(std::min(payload.size(), std::size_t{64}));
+    if (frame_publisher_) {
+      BoatFrame bf{};
+      bf.bus_type = BOAT_BUS_CAN;
+      bf.meta.can.can_id = can_id;
+      bf.meta.can.dlc = dlc;
+      bf.meta.can.flags = 0;
+      bf.iface = route.iface.c_str();
+      bf.payload = const_cast<uint8_t*>(payload.data());
+      bf.payload_len = dlc;
+      frame_publisher_(bf);
+      sent = true;
+    } else if (can_) {
+      CanFrame frame{};
+      frame.can_id = can_id;
+      frame.dlc    = dlc;
+      std::memcpy(frame.data, payload.data(), frame.dlc);
+      sent = can_->SendFrame(route.iface, frame);
+    }
   } else if (route.transport == PduTransport::kEthernet) {
     EthernetFrame frame;
     frame.vlan_id = route.vlan_id;
@@ -191,7 +215,19 @@ bool PduRouter::SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload) {
       frame.payload[3] = static_cast<uint8_t>(pdu_id & 0xFF);
       std::memcpy(frame.payload.data() + 4, payload.data(), payload.size());
     }
-    sent = eth_.SendFrame(route.iface, frame);
+    if (frame_publisher_) {
+      BoatFrame bf{};
+      bf.bus_type = BOAT_BUS_ETHERNET;
+      bf.meta.eth.ethertype = frame.ethertype;
+      bf.meta.eth.vlan_id = route.vlan_id;
+      bf.iface = route.iface.c_str();
+      bf.payload = const_cast<uint8_t*>(frame.payload.data());
+      bf.payload_len = frame.payload.size();
+      frame_publisher_(bf);
+      sent = true;
+    } else {
+      sent = eth_->SendFrame(route.iface, frame);
+    }
   }
 
   // Notify transmission engine after a successful send so OnChange
@@ -222,8 +258,8 @@ void PduRouter::Unsubscribe(SubId id) {
 
 void PduRouter::Stop() {
   if (subscribed_) {
-    can_.Unsubscribe(can_sub_id_);
-    eth_.Unsubscribe(eth_sub_id_);
+    if (can_) can_->Unsubscribe(can_sub_id_);
+    if (eth_) eth_->Unsubscribe(eth_sub_id_);
     subscribed_ = false;
   }
 }

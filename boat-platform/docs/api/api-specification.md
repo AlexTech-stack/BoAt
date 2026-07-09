@@ -1,7 +1,7 @@
 # API Specification
 
 All protobuf service files are defined under `proto/boat/v1/`, package `boat.v1`.
-13 gRPC services across 15 `.proto` files.
+14 gRPC services across 16 `.proto` files.
 
 ### `simulation.proto` — SimulationService (9 RPCs)
 
@@ -54,7 +54,7 @@ Replay session identity: `StartReplay` returns `ReplayControlResponse.replay_id`
 
 | Method | Type | Description |
 |---|---|---|
-| `RegisterPlugin` | Unary | Register plugin .so |
+| `RegisterPlugin` | Unary | Register plugin .so (optional `config_json` field for configuration) |
 | `ListPlugins` | Unary | List available plugins |
 | `GetPluginInfo` | Unary | Fetch plugin metadata |
 | `UnloadPlugin` | Unary | Hot-unload plugin |
@@ -81,6 +81,15 @@ Replay session identity: `StartReplay` returns `ReplayControlResponse.replay_id`
 |---|---|---|
 | `InjectFault` | Unary | Schedule fault injection for simulation |
 | `ListFaults` | Unary | Paginated fault event listing |
+
+### `frame.proto` — FrameService (2 RPCs)
+
+| Method | Type | Description |
+|---|---|---|
+| `SendFrame` | Unary | Transmit a unified BoatFrame (CAN, CANFD, Ethernet, TCP, PDU) |
+| `SubscribeFrames` | Server-streaming | Stream incoming frames by bus type filter |
+
+Unified frame send/subscribe endpoint that replaces the older `CanService` and `EthernetService` for new development. The `Frame` message carries a `bus_type` discriminator (CAN, CANFD, ETHERNET, TCP, PDU) and per-bus metadata in a `oneof` block.
 
 ### `can.proto` — CanService (3 RPCs)
 

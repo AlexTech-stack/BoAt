@@ -16,4 +16,5 @@ add_library(boat_hil STATIC
 )
 target_include_directories(boat_hil PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(boat_hil PUBLIC cxx_std_20)
+set_target_properties(boat_hil PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(boat_hil PUBLIC boat_core)

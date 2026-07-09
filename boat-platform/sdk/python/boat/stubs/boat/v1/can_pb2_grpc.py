@@ -5,7 +5,7 @@ import warnings
 
 from boat.v1 import can_pb2 as boat_dot_v1_dot_can__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class CanServiceStub(object):
+class CanServiceStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -51,7 +51,7 @@ class CanServiceStub(object):
                 _registered_method=True)
 
 
-class CanServiceServicer(object):
+class CanServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def SendCanFrame(self, request, context):
@@ -98,7 +98,7 @@ def add_CanServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class CanService(object):
+class CanService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod

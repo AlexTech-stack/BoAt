@@ -3,6 +3,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include "boat/v1/pdu.grpc.pb.h"
+#include "core/pdu_router_interface.h"
 #include "gateway_context.h"
 
 namespace boat::gateway {
@@ -59,6 +60,7 @@ class PduServiceImpl final : public boat::v1::PduService::Service {
 
  private:
   GatewayContext& ctx_;
+  boat::core::IPduRouter* GetRouter();
 };
 
 }  // namespace boat::gateway

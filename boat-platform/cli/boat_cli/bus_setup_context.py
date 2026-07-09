@@ -14,8 +14,8 @@ _BUS_REFERENCE = """\
   sudo ip link add vcan1 type vcan && sudo ip link set vcan1 up
 
 ### Physical CAN (e.g. PEAK PCAN-USB Pro FD)
-  # Check hardware detection
-  boat can detect
+  # Check hardware detection (no CLI wrapper — inspect sysfs/ip directly)
+  ip link show type can
 
   # Bring up with standard bitrate
   sudo ip link set can0 up type can bitrate 500000
@@ -31,11 +31,13 @@ _BUS_REFERENCE = """\
   sudo ip link set can0 down
 
 ### Hardware detection (sysfs)
-  The `boat can detect` command (no gateway needed) scans /sys/class/net/ for
-  CAN interfaces and identifies:
-    - Physical hardware via USB ID (e.g. PEAK PCAN-USB Pro FD = 0c72:0011)
-    - Virtual CAN interfaces (vcan*)
-    - Driver name, FD capability, link state
+  There is no dedicated CLI detection command. Identify CAN hardware directly:
+    - `ip -d link show type can` lists CAN interfaces with driver info
+    - `/sys/class/net/<iface>/device/uevent` has the USB vendor/product ID
+      (e.g. PEAK PCAN-USB Pro FD = 0c72:0011)
+    - Virtual CAN interfaces are named vcan*; physical ones show a
+      `device/driver` symlink in sysfs
+    - Once a gateway is running, `boat frame list-ifaces` lists what it sees
 
 ## Ethernet Bus Setup
 
@@ -50,6 +52,11 @@ _BUS_REFERENCE = """\
 
   # Bring up
   sudo ip link set eth0 up
+
+  # The gateway needs BOAT_ETH_INTERFACES=raw:eth0 (raw: prefix) to bind a
+  # physical NIC via AF_PACKET, which requires CAP_NET_RAW. Grant it to the
+  # binary instead of running the gateway as root (see "Raw Ethernet
+  # permissions" below).
 
 ## Gateway Environment Variables
 
@@ -80,6 +87,21 @@ _BUS_REFERENCE = """\
     BOAT_ETH_INTERFACES=veth0 \\
     ./build/debug/.../boat_gateway
 
+  # With a physical NIC (raw AF_PACKET) — grant CAP_NET_RAW first, see below
+  BOAT_ETH_INTERFACES=raw:eth0 ./build/debug/.../boat_gateway
+
+## Raw Ethernet permissions
+
+  Physical NICs via `raw:<iface>` need `CAP_NET_RAW`. Grant it to the binary
+  rather than running the whole gateway with sudo — a sudo-run gateway leaves
+  root-owned files behind (e.g. trace files under /tmp) that block later
+  non-root runs from writing to the same paths:
+
+  sudo setcap cap_net_raw+ep ./build/debug/src/gateway/grpc_gateway/boat_gateway
+
+  Reapply after every rebuild — the capability is stored on the binary's
+  inode, and a fresh build produces a new file.
+
 ## Prerequisites
 
   sudo apt install cmake ninja-build g++ libacl1-dev
@@ -90,9 +112,7 @@ _BUS_REFERENCE = """\
 
 ## CLI Commands for Bus Inspection
 
-  boat can list-buses       # List registered interfaces (requires gateway)
-  boat can detect           # Detect local CAN hardware (no gateway needed)
-  eth list-ifaces           # List Ethernet interfaces (requires gateway)
+  boat frame list-ifaces    # List CAN + Ethernet interfaces the gateway sees (requires gateway)
 """
 
 _SYSTEM_INTRO = """\
@@ -101,9 +121,12 @@ Ethernet interfaces for the BoAt simulation platform.
 
 Rules:
 1. Output the exact shell commands needed — the user will copy-paste them.
-2. Explain which commands need sudo.
+2. Explain which commands need sudo. For raw Ethernet (`raw:` prefix), recommend
+   `sudo setcap cap_net_raw+ep` on the gateway binary instead of running the
+   gateway itself with sudo — running as root leaves root-owned files behind
+   (e.g. under /tmp) that block later non-root runs.
 3. Distinguish between virtual (vcan*) and physical (can*, en*, eth*) interfaces.
-4. When the user mentions specific hardware (PEAK, Kvaser, etc.), check `boat can detect` output.
+4. When the user mentions specific hardware (PEAK, Kvaser, etc.), check `ip -d link show type can` / sysfs output.
 5. For gateway startup, provide the full command with environment variables.
 6. Keep output concise — focus on what the user needs to run.
 """

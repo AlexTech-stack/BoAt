@@ -1,17 +1,14 @@
-"""Python SDK for replaying CAN/Ethernet trace files through the BoAt gateway.
+"""Python SDK for replaying CAN trace files through the BoAt gateway.
 
-Supported formats:
-  - CAN: .asc, .blf (via python-can)
-   - Ethernet: .pcap (DLT_EN10MB, IPv4/IPv6+UDP/ICMP)
+``TraceReplayer.replay()`` supports CAN only (.asc, .blf via python-can) and
+sends each frame one-by-one via gRPC CanService, paced in real time by this
+process. There is no server-side mode here.
 
-Two replay modes are available:
-
-1. **Direct mode** (default): Sends each CAN frame one-by-one via gRPC CanService.
-2. **Server-side mode**: Converts the trace to the gateway's internal binary format,
-   uploads it via ReplayService.ImportTraceData, then plays back using
-   ReplayService.StartReplay + StreamReplay.
-
-Ethernet traces always use server-side mode.
+For Ethernet (.pcap) replay, use ``convert_to_binary()`` to produce the
+gateway's internal binary trace format, upload it via
+ReplayService.ImportTraceData, then play it back with
+ReplayService.StartReplay + StreamReplay (this is what the ``boat replay
+import`` / ``boat replay start`` / ``boat replay stream`` CLI commands do).
 
 Quick example::
 
@@ -25,14 +22,13 @@ Quick example::
     )
     replayer.replay("recording.asc")
 
-    # Ethernet pcap replay (always server-side)
+    # Ethernet pcap replay (server-side only, via ReplayService)
     replayer = TraceReplayer(
-        gateway="localhost:50051",
-        buses=["eth0"],
         replay_src_ip="192.168.1.1",
         replay_dst_ip="192.168.1.100",
     )
-    replayer.replay("capture.pcap")
+    binary_data = replayer.convert_to_binary("capture.pcap")
+    # ... upload via ReplayService.ImportTraceData, then StartReplay/StreamReplay
 """
 from __future__ import annotations
 
@@ -46,12 +42,6 @@ from typing import Callable, List, Optional
 # CAN FD flags (matches gateway constants)
 _CANFD_BRS = 0x01   # bit-rate switch
 _CANFD_FDF = 0x04   # FD frame
-
-# Internal trace format magic number
-_TRACE_MAGIC = 0xB0A7B0A7
-
-# Replay Ethernet event type base (matches kReplayEthEventBase in C++)
-_REPLAY_ETH_EVENT_BASE = 0xEE000000
 
 # IPv6 extension header numbers that should be walked to find the actual L4 protocol.
 _IPv6_EXTENSION_HEADERS = {0, 43, 44, 50, 51, 60, 135}
@@ -237,158 +227,132 @@ class TraceReplayer:
         self._tcp_plugin      = None  # lazy-loaded TcpHandle
         self._tcp_streams     = {}    # key -> list of (payload, is_fin)
         self._stub            = None
-        self._replay_stub     = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def replay(self, path: str | Path, loop: bool = False, server_side: bool = False) -> int:
-        """Replay a trace file.
+    def replay(self, path: str | Path, loop: int | None = None) -> int:
+        """Replay a CAN trace file, sending each frame individually via gRPC.
 
         Args:
-            path: Path to a ``.asc``, ``.blf``, or ``.pcap`` file.
-            loop: If *True* replay the file indefinitely until the process is
-                  interrupted.
-            server_side: If *True*, upload the trace and use the gateway's
-                         ReplayService for server-side playback.  Automatically
-                         enabled for ``.pcap`` files.
+            path: Path to a ``.asc`` or ``.blf`` file.
+            loop: If set, replay the file in a loop with N ms gap between the
+                  last message of one run and the first message of the next run.
+                  ``None`` or omitted means play once.
 
         Returns:
             Total number of frames sent (across all loop iterations).
 
         Raises:
-            TraceReplayError: If the file cannot be opened or a gRPC error
-            occurs.
+            TraceReplayError: If the file cannot be opened, is a ``.pcap``
+            (Ethernet replay is server-side only — use ``convert_to_binary()``
+            + ReplayService, i.e. ``boat replay import`` + ``boat replay
+            start``/``stream``), or a gRPC error occurs.
         """
         path = Path(path)
-        if path.suffix.lower() == ".pcap" and not server_side:
-            server_side = True
-        if server_side:
-            return self.replay_server_side(path, loop=loop)
+        if path.suffix.lower() == ".pcap":
+            raise TraceReplayError(
+                "Ethernet/.pcap replay is not supported by TraceReplayer.replay() "
+                "(direct per-frame CAN injection only). Use convert_to_binary() + "
+                "ReplayService.ImportTraceData/StartReplay/StreamReplay instead "
+                "(the `boat replay import` + `boat replay start`/`stream` CLI "
+                "commands do this)."
+            )
 
         stub = self._get_stub()
         total = 0
+        last_msg_wall: float | None = None
         while True:
-            total += self._replay_once(stub, path, total == 0)
-            if not loop:
-                break
-        return total
-
-    def replay_server_side(self, path: str | Path, loop: bool = False) -> int:
-        """Replay a trace file using the gateway's ReplayService.
-
-        Converts the trace to the internal binary format, uploads it via
-        ImportTraceData, then plays back using StartReplay + StreamReplay.
-
-        Args:
-            path: Path to an ``.asc`` or ``.blf`` file.
-            loop: If *True* replay the file indefinitely.
-
-        Returns:
-            Total number of frames replayed.
-
-        Raises:
-            TraceReplayError: On conversion, upload, or playback errors.
-        """
-        from boat.v1 import replay_pb2
-
-        path = Path(path)
-        trace_id = path.stem
-
-        binary_data = self._convert_to_binary(path)
-
-        replay_stub = self._get_replay_stub()
-
-        try:
-            upload_resp = replay_stub.ImportTraceData(
-                replay_pb2.ImportTraceDataRequest(
-                    trace_id=trace_id,
-                    format=path.suffix.lstrip(".").upper(),
-                    data=binary_data,
-                )
+            offset = 0.0
+            if last_msg_wall is not None and loop is not None:
+                target = last_msg_wall + loop / 1000.0
+                now = time.monotonic()
+                offset = max(0.0, target - now)
+            run_sent, last_msg_wall = self._replay_once(
+                stub, path, initial_offset_sec=offset
             )
-        except Exception as e:
-            raise TraceReplayError(f"ImportTraceData failed: {e}") from e
-
-        if not upload_resp.accepted:
-            raise TraceReplayError(f"ImportTraceData rejected: {upload_resp.error.message}")
-
-        speed_mult = 1_000_000.0 if self.speed == 0 else self.speed
-        eth_iface = self.eth_iface or (self.buses[0] if self.buses else "")
-        start_req = replay_pb2.StartReplayRequest(
-            trace_id=trace_id,
-            simulation_id=self.simulation_id,
-            speed=replay_pb2.REPLAY_SPEED_ACCELERATED,
-            speed_multiplier=speed_mult,
-            eth_iface=eth_iface,
-        )
-        if self.mac_map:
-            for ip_str, mac_str in self.mac_map.items():
-                start_req.mac_map[ip_str] = mac_str
-        start_resp = replay_stub.StartReplay(start_req)
-
-        if not start_resp.accepted:
-            raise TraceReplayError(f"StartReplay rejected: {start_resp.error.message}")
-
-        replay_id = start_resp.replay_id
-        total = 0
-        while True:
-            stream = replay_stub.StreamReplay(
-                replay_pb2.StreamReplayRequest(replay_id=replay_id)
-            )
-            pass_total = 0
-            try:
-                for event in stream:
-                    pass_total += 1
-                    total += 1
-                    if self.on_frame is not None:
-                        self.on_frame(pass_total, event)
-            except Exception:
-                pass
-            if not loop:
+            total += run_sent
+            if loop is None:
                 break
-
         return total
 
     # ── Internals ──────────────────────────────────────────────────────────────
 
-    def _convert_to_binary(self, path: Path) -> bytes:
+    def convert_to_binary(self, path: Path) -> bytes:
         """Convert a trace file to the gateway's internal binary trace format.
+
+        Each event is serialized as a length-delimited ``boat.v1.Frame``
+        protobuf message (``uint32 length`` + ``bytes``).  The Frame carries
+        the full bus-agnostic metadata (timestamps, payload, CAN/Ethernet/PDU
+        metadata) so the replay engine can dispatch directly through
+        ``PluginManager::DispatchFrame``.
+
+        Import is hardware-independent: CAN records store the original
+        trace ``channel`` (not a resolved interface), and Ethernet records
+        leave ``iface`` unset unless ``eth_iface``/``buses`` were passed to
+        this ``TraceReplayer``. Target interfaces (and MAC addresses, via
+        ``mac_map``) are resolved at replay time from ``--buses``/
+        ``--eth-iface``/``--mac-map`` on ``boat replay start``/``stream``,
+        so the same import can be replayed on different hardware without
+        re-importing.
 
         Handles both CAN (ASC/BLF) and Ethernet (pcap) sources.
         """
+        from boat.v1 import frame_pb2
+
         reader = self._open_reader(path)
         result = bytearray()
-        first_ts: Optional[float] = None
         is_eth = isinstance(reader, EthernetPcapReader)
 
         with reader:
             for msg in reader:
-                ts = msg.timestamp
-                if first_ts is None:
-                    first_ts = ts
-                relative_ts = ts - first_ts
-
-                tick = int(relative_ts * 1000)
-                wall_time_ns = int(relative_ts * 1_000_000_000)
-
                 if is_eth:
                     if self.ethertype_filter and msg.ethertype not in self.ethertype_filter:
                         continue
-                    # Check for TCP — if a plugin is configured, buffer for stateful replay
-                    payload = msg.payload
+                    payload_bytes = msg.payload
                     is_tcp = False
                     if self.tcp_plugin_path:
-                        if msg.ethertype == 0x0800 and len(payload) >= 20:
-                            is_tcp = (payload[9] == 6)
-                        elif msg.ethertype == 0x86DD and len(payload) >= 40:
-                            is_tcp = (payload[6] == 6)
+                        if msg.ethertype == 0x0800 and len(payload_bytes) >= 20:
+                            is_tcp = (payload_bytes[9] == 6)
+                        elif msg.ethertype == 0x86DD and len(payload_bytes) >= 40:
+                            is_tcp = (payload_bytes[6] == 6)
                     if is_tcp:
                         self._buffer_tcp_frame(msg)
                         continue
                     raw = self._reconstruct_ip_packet(msg)
                     if not raw:
                         continue
-                    event_type = _REPLAY_ETH_EVENT_BASE | (msg.ethertype & 0xFFFF)
+
+                    # Extract rewritten IPs from the reconstructed header.
+                    if msg.ethertype == 0x0800 and len(raw) >= 20:
+                        src_ip = raw[12:16]
+                        dst_ip = raw[16:20]
+                        ip_ver = 4
+                    elif msg.ethertype == 0x86DD and len(raw) >= 40:
+                        src_ip = raw[8:24]
+                        dst_ip = raw[24:40]
+                        ip_ver = 6
+                    else:
+                        src_ip = b""
+                        dst_ip = b""
+                        ip_ver = 0
+
+                    eth_iface = self.eth_iface or (self.buses[0] if self.buses else "")
+
+                    proto = frame_pb2.Frame(
+                        bus_type=frame_pb2.Frame.ETHERNET,
+                        iface=eth_iface,
+                        timestamp_ns=int(msg.timestamp * 1_000_000_000),
+                        payload=raw,
+                        eth=frame_pb2.EthMetadata(
+                            dst_mac=bytes(msg.dst_mac),
+                            src_mac=bytes(msg.src_mac),
+                            ethertype=msg.ethertype,
+                            vlan_id=0,
+                            src_ip=src_ip,
+                            dst_ip=dst_ip,
+                            ip_version=ip_ver,
+                        ),
+                    )
                 else:
                     ch = getattr(msg, "channel", None)
                     if self.channel_filter is not None and ch != self.channel_filter:
@@ -396,18 +360,34 @@ class TraceReplayer:
                     if self.id_filter and msg.arbitration_id not in self.id_filter:
                         continue
                     raw = bytes(msg.data)
-                    event_type = msg.arbitration_id
 
-                header = struct.pack(
-                    "<IIQqI",
-                    _TRACE_MAGIC,
-                    event_type,
-                    tick,
-                    wall_time_ns,
-                    len(raw),
-                )
-                result.extend(header)
-                result.extend(raw)
+                    flags = 0
+                    if getattr(msg, "is_fd", False):
+                        flags |= _CANFD_FDF
+                    if getattr(msg, "bitrate_switch", False):
+                        flags |= _CANFD_BRS
+
+                    # Store the original channel, not a resolved interface --
+                    # target interface is a replay-time decision (--buses on
+                    # `boat replay start`/`stream`), so the same import can be
+                    # replayed on different hardware without re-importing.
+                    channel = getattr(msg, "channel", 1) or 1
+
+                    proto = frame_pb2.Frame(
+                        bus_type=frame_pb2.Frame.CANFD if flags else frame_pb2.Frame.CAN,
+                        timestamp_ns=int(msg.timestamp * 1_000_000_000),
+                        payload=raw,
+                        can=frame_pb2.CanMetadata(
+                            can_id=msg.arbitration_id,
+                            dlc=len(msg.data),
+                            flags=flags,
+                            channel=channel,
+                        ),
+                    )
+
+                data = proto.SerializeToString()
+                result.extend(struct.pack("<I", len(data)))
+                result.extend(data)
 
         if self._tcp_streams:
             self._replay_tcp_streams()
@@ -784,18 +764,6 @@ class TraceReplayer:
             s = (s & 0xFFFF) + (s >> 16)
         return (~s) & 0xFFFF
 
-    def _get_replay_stub(self):
-        if self._replay_stub is not None:
-            return self._replay_stub
-        try:
-            import grpc
-            from boat.v1 import replay_pb2_grpc
-        except ImportError as e:
-            raise TraceReplayError(f"Cannot import boat gRPC stubs: {e}") from e
-        channel = grpc.insecure_channel(self.gateway)
-        self._replay_stub = replay_pb2_grpc.ReplayServiceStub(channel)
-        return self._replay_stub
-
     def _get_stub(self):
         if self._stub is not None:
             return self._stub
@@ -842,8 +810,18 @@ class TraceReplayer:
             "Supported: .pcap, .asc, .blf"
         )
 
-    def _replay_once(self, stub, path: Path, is_first: bool) -> int:
-        """Stream one pass through *path*, return frame count."""
+    def _replay_once(self, stub, path: Path, initial_offset_sec: float = 0.0) -> tuple[int, float | None]:
+        """Stream one pass through *path*.
+
+        Args:
+            initial_offset_sec: Seconds to wait before the first message so that
+                it fires at the correct offset from a previous run's last message.
+
+        Returns:
+            (frame_count, last_msg_wall_time) where *last_msg_wall_time* is
+            ``time.monotonic()`` when the last message was sent, or *None* if
+            no messages were sent.
+        """
         from boat.v1 import can_pb2
 
         sent            = 0
@@ -871,6 +849,8 @@ class TraceReplayer:
                     wait        = delta_trace / self.speed - delta_wall
                     if wait > 0:
                         time.sleep(wait)
+                elif self.speed > 0 and initial_offset_sec > 0:
+                    time.sleep(initial_offset_sec)
 
                 prev_trace_ts = msg.timestamp
                 prev_wall_ts  = time.monotonic()
@@ -910,4 +890,4 @@ class TraceReplayer:
 
                 sent += 1
 
-        return sent
+        return sent, prev_wall_ts

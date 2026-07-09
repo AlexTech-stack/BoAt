@@ -50,18 +50,18 @@ struct NsduConnection {
 
 /* CanTp plugin state. */
 struct CanTpPlugin {
-  BoatCanPublishFn  can_publish_fn{nullptr};
-  void*             can_publisher_ctx{nullptr};
-  BoatPduPublishFn  pdu_publish_fn{nullptr};
-  void*             pdu_publisher_ctx{nullptr};
+  BoatFramePublishFn  frame_publish_fn{nullptr};
+  void*               frame_publisher_ctx{nullptr};
+  BoatPduPublishFn    pdu_publish_fn{nullptr};
+  void*               pdu_publisher_ctx{nullptr};
   std::unordered_map<uint32_t, NsduConnection> connections;  // keyed by source_addr
-  std::string       iface;
+  std::string         iface;
 
   // TX pacing thread + synchronization
-  std::thread       tx_thread;
-  std::mutex        tx_mutex;
+  std::thread         tx_thread;
+  std::mutex          tx_mutex;
   std::condition_variable tx_cv;
-  std::atomic<bool> tx_stop{false};
+  std::atomic<bool>   tx_stop{false};
 };
 
 extern "C" BoatPlugin* boat_plugin_create();

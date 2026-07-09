@@ -33,8 +33,7 @@ TEST_CASE("PluginManager thread safety under concurrent access", "[unit][plugin_
 
   // Wire a no-op publisher so the setter path is exercised
   manager.SetPublisher([](const char*, std::uint64_t, double) {});
-  manager.SetCanPublisher([](const BoatCanFrame&, const std::string&) {});
-  manager.SetEthPublisher([](const BoatEthFrame&) {});
+  manager.SetFramePublisher([](const BoatFrame&) {});
   manager.SetBusPublisher([](const char*, double) {});
   manager.SetPduPublisher([](const BoatPduFrame&) {});
 
@@ -44,8 +43,7 @@ TEST_CASE("PluginManager thread safety under concurrent access", "[unit][plugin_
   std::thread ticker([&]() {
     while (!done.load(std::memory_order_acquire)) {
       manager.TickAll(1);
-      manager.DispatchCanFrame(BoatCanFrame{}, "vcan0");
-      manager.DispatchEthFrame(BoatEthFrame{}, "veth0");
+      manager.DispatchFrame(BoatFrame{});
     }
   });
 
@@ -64,3 +62,24 @@ TEST_CASE("PluginManager thread safety under concurrent access", "[unit][plugin_
   ticker.join();
   REQUIRE(manager.List().empty());
 }
+
+#ifdef PDU_ROUTER_SO
+TEST_CASE("PluginManager auto-registers and unregisters a plugin's exported service",
+          "[unit][plugin_manager]") {
+  // Exercises the real boat_plugin_service_name/boat_plugin_service_ptr
+  // dlsym-based auto-registration path end-to-end, using the actual
+  // pdu_router.so built by this same build -- this is the exact mechanism
+  // that fixes PduService's gRPC RPCs previously always returning NOT_FOUND.
+  boat::core::PluginManager manager;
+
+  REQUIRE(manager.FindService("pdu_router") == nullptr);
+
+  manager.Load(PDU_ROUTER_SO, "{}");
+  REQUIRE(manager.FindService("pdu_router") != nullptr);
+
+  // Unload must remove the registration too, or FindService would hand out
+  // a dangling pointer into the now-destroyed plugin.
+  manager.Unload(PDU_ROUTER_SO);
+  REQUIRE(manager.FindService("pdu_router") == nullptr);
+}
+#endif

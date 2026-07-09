@@ -1,6 +1,8 @@
 #include "plugin/plugin_manager.h"
 
+#include <cstring>
 #include <stdexcept>
+#include <string>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -10,16 +12,33 @@
 
 namespace boat::core {
 
+namespace {
+
+constexpr std::uint32_t kAllBusMask = 0xFFFFFFFFu;
+
+// Parse a plugin's declared_buses() string (a JSON array of bus-type names,
+// e.g. ["can","eth"]) into a bitmask of BOAT_BUS_* values. A CAN handler is
+// assumed to accept both classic and FD frames. Unrecognized / empty input is
+// treated as "accept all" so a plugin is never silently starved of frames.
+std::uint32_t ParseDeclaredBusMask(const char* decl) {
+  if (decl == nullptr) return kAllBusMask;
+  const std::string s(decl);
+  const auto has = [&](const char* tok) {
+    return s.find(tok) != std::string::npos;
+  };
+  std::uint32_t mask = 0;
+  if (has("\"canfd\"")) mask |= (1u << BOAT_BUS_CANFD);
+  if (has("\"can\""))   mask |= (1u << BOAT_BUS_CAN) | (1u << BOAT_BUS_CANFD);
+  if (has("\"eth\""))   mask |= (1u << BOAT_BUS_ETHERNET);
+  if (has("\"tcp\""))   mask |= (1u << BOAT_BUS_TCP);
+  if (has("\"pdu\""))   mask |= (1u << BOAT_BUS_PDU);
+  return mask == 0 ? kAllBusMask : mask;
+}
+
+}  // namespace
+
 void PluginManager::SetPublisher(SignalPublishFn fn) {
   publisher_fn_ = std::move(fn);
-}
-
-void PluginManager::SetCanPublisher(CanPublishFn fn) {
-  can_publisher_fn_ = std::move(fn);
-}
-
-void PluginManager::SetEthPublisher(EthPublishFn fn) {
-  eth_publisher_fn_ = std::move(fn);
 }
 
 void PluginManager::SetBusPublisher(BusPublishFn fn) {
@@ -28,6 +47,10 @@ void PluginManager::SetBusPublisher(BusPublishFn fn) {
 
 void PluginManager::SetPduPublisher(PduPublishFn fn) {
   pdu_publisher_fn_ = std::move(fn);
+}
+
+void PluginManager::SetFramePublisher(FramePublishFn fn) {
+  frame_publisher_fn_ = std::move(fn);
 }
 
 PluginHandle PluginManager::Load(const std::string& so_path, const std::string& config_json) {
@@ -52,7 +75,9 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
   const std::uint32_t abi_version = abi_fn();
   if (abi_version != BOAT_PLUGIN_ABI_VERSION) {
     dlclose(dl_handle);
-    throw std::runtime_error("Plugin ABI version mismatch");
+    throw std::runtime_error(
+        "Plugin ABI version mismatch (" + std::to_string(abi_version) +
+        " != " + std::to_string(BOAT_PLUGIN_ABI_VERSION) + ")");
   }
 
   BoatPlugin* plugin = create_fn();
@@ -73,7 +98,31 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
 
   PluginHandle handle{dl_handle, plugin, so_path, abi_version, destroy_fn, {}};
 
-  // Wire the signal publisher if the plugin supports it.
+  // Cache the plugin's declared bus types so DispatchFrame can pre-filter
+  // instead of calling on_frame for every plugin on every frame.
+  if (plugin->vtable->declared_buses != nullptr) {
+    handle.declared_bus_mask =
+        ParseDeclaredBusMask(plugin->vtable->declared_buses(plugin->ctx));
+  }
+
+  // Optional: plugin exposes a named C++ service pointer (e.g. pdu_router's
+  // IPduRouter) for gRPC service implementations to look up via
+  // FindService(). Independent of the vtable ABI -- both symbols are
+  // simply absent for plugins that don't need this.
+  auto service_name_fn = reinterpret_cast<boat_plugin_service_name_fn>(
+      dlsym(dl_handle, "boat_plugin_service_name"));
+  auto service_ptr_fn = reinterpret_cast<boat_plugin_service_ptr_fn>(
+      dlsym(dl_handle, "boat_plugin_service_ptr"));
+  if (service_name_fn != nullptr && service_ptr_fn != nullptr) {
+    const char* service_name = service_name_fn();
+    void* service_ptr = service_ptr_fn(plugin->ctx);
+    if (service_name != nullptr && service_name[0] != '\0' && service_ptr != nullptr) {
+      RegisterService(service_name, service_ptr);
+      handle.registered_services.emplace_back(service_name);
+    }
+  }
+
+  // Wire signal publisher.
   if (plugin->vtable->set_publisher != nullptr && publisher_fn_) {
     auto fn_shared = std::make_shared<SignalPublishFn>(publisher_fn_);
     plugin->vtable->set_publisher(
@@ -85,50 +134,7 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
     handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
 
-  // Wire the CAN publisher if the plugin supports it.
-  if (plugin->vtable->set_can_publisher != nullptr && can_publisher_fn_) {
-    // Parse the plugin's configured interface from its config JSON.
-    std::string plugin_iface;
-    auto key_pos = config_json.find("\"iface\"");
-    if (key_pos != std::string::npos) {
-      auto val_pos = config_json.find('"', key_pos + 7);
-      if (val_pos != std::string::npos) {
-        auto end_pos = config_json.find('"', val_pos + 1);
-        if (end_pos != std::string::npos) {
-          plugin_iface = config_json.substr(val_pos + 1, end_pos - val_pos - 1);
-        }
-      }
-    }
-    struct CanPublishBinding {
-      CanPublishFn fn;
-      std::string  iface;
-    };
-    auto binding = std::make_shared<CanPublishBinding>(
-        CanPublishBinding{can_publisher_fn_, std::move(plugin_iface)});
-    plugin->vtable->set_can_publisher(
-        plugin->ctx,
-        [](void* pctx, const BoatCanFrame* frame) {
-          if (frame == nullptr) return;
-          auto* b = static_cast<CanPublishBinding*>(pctx);
-          b->fn(*frame, b->iface);
-        },
-        static_cast<void*>(binding.get()));
-    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(binding));
-  }
-
-  // Wire the Ethernet publisher if the plugin supports it.
-  if (plugin->vtable->set_eth_publisher != nullptr && eth_publisher_fn_) {
-    auto fn_shared = std::make_shared<EthPublishFn>(eth_publisher_fn_);
-    plugin->vtable->set_eth_publisher(
-        plugin->ctx,
-        [](void* pctx, const BoatEthFrame* frame) {
-          if (frame != nullptr) (*static_cast<EthPublishFn*>(pctx))(*frame);
-        },
-        fn_shared.get());
-    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
-  }
-
-  // Wire the bus-signal publisher if the plugin supports it.
+  // Wire bus-signal publisher.
   if (plugin->vtable->set_bus_publisher != nullptr && bus_publisher_fn_) {
     auto fn_shared = std::make_shared<BusPublishFn>(bus_publisher_fn_);
     plugin->vtable->set_bus_publisher(
@@ -140,13 +146,25 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
     handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
 
-  // Wire the PDU publisher if the plugin supports it.
+  // Wire PDU publisher.
   if (plugin->vtable->set_pdu_publisher != nullptr && pdu_publisher_fn_) {
     auto fn_shared = std::make_shared<PduPublishFn>(pdu_publisher_fn_);
     plugin->vtable->set_pdu_publisher(
         plugin->ctx,
         [](void* pctx, const BoatPduFrame* frame) {
           if (frame != nullptr) (*static_cast<PduPublishFn*>(pctx))(*frame);
+        },
+        fn_shared.get());
+    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
+  }
+
+  // v8: Wire unified frame publisher.
+  if (plugin->vtable->set_frame_publisher != nullptr && frame_publisher_fn_) {
+    auto fn_shared = std::make_shared<FramePublishFn>(frame_publisher_fn_);
+    plugin->vtable->set_frame_publisher(
+        plugin->ctx,
+        [](void* pctx, const BoatFrame* frame) {
+          if (frame != nullptr) (*static_cast<FramePublishFn*>(pctx))(*frame);
         },
         fn_shared.get());
     handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
@@ -164,13 +182,18 @@ void PluginManager::Unload(const std::string& name) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = plugins_.find(name);
-    if (it == plugins_.end()) {
-      return;
-    }
+    if (it == plugins_.end()) return;
     handle = std::move(it->second);
     plugins_.erase(it);
   }
-
+  // Remove any services this plugin registered before destroying it --
+  // otherwise FindService() would keep handing out a dangling pointer.
+  if (!handle.registered_services.empty()) {
+    std::lock_guard<std::mutex> lock(services_mutex_);
+    for (const auto& service_name : handle.registered_services) {
+      services_.erase(service_name);
+    }
+  }
 #ifndef _WIN32
   if (handle.plugin != nullptr) {
     handle.destroy_fn(handle.plugin);
@@ -178,7 +201,6 @@ void PluginManager::Unload(const std::string& name) {
   if (handle.dl_handle != nullptr) {
     dlclose(handle.dl_handle);
   }
-  // publisher_contexts freed automatically when handle goes out of scope
 #endif
 }
 
@@ -197,36 +219,27 @@ void PluginManager::TickAll(std::uint64_t tick) {
   }
 }
 
-void PluginManager::DispatchCanFrame(const BoatCanFrame& frame, const std::string& iface) {
-  std::vector<BoatPlugin*> snapshot;
+void PluginManager::DispatchFrame(const BoatFrame& frame) {
+  struct Target {
+    BoatPlugin* plugin;
+    std::uint32_t bus_mask;
+  };
+  std::vector<Target> snapshot;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     snapshot.reserve(plugins_.size());
     for (auto& [name, handle] : plugins_) {
       (void)name;
-      snapshot.push_back(handle.plugin);
+      snapshot.push_back({handle.plugin, handle.declared_bus_mask});
     }
   }
-  for (auto* plugin : snapshot) {
-    if (plugin->vtable->on_can_frame != nullptr) {
-      plugin->vtable->on_can_frame(plugin->ctx, &frame, iface.c_str());
-    }
-  }
-}
-
-void PluginManager::DispatchEthFrame(const BoatEthFrame& frame, const std::string& iface) {
-  std::vector<BoatPlugin*> snapshot;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    snapshot.reserve(plugins_.size());
-    for (auto& [name, handle] : plugins_) {
-      (void)name;
-      snapshot.push_back(handle.plugin);
-    }
-  }
-  for (auto* plugin : snapshot) {
-    if (plugin->vtable->on_eth_frame != nullptr) {
-      plugin->vtable->on_eth_frame(plugin->ctx, &frame, iface.c_str());
+  const std::uint32_t bus_bit =
+      (frame.bus_type < 32) ? (1u << frame.bus_type) : 0u;
+  for (auto& t : snapshot) {
+    // Skip plugins that didn't declare this bus type — avoids O(N) fan-out.
+    if ((t.bus_mask & bus_bit) == 0) continue;
+    if (t.plugin->vtable->on_frame != nullptr) {
+      t.plugin->vtable->on_frame(t.plugin->ctx, &frame);
     }
   }
 }
@@ -255,6 +268,17 @@ std::vector<std::string> PluginManager::List() const {
     names.push_back(name);
   }
   return names;
+}
+
+void PluginManager::RegisterService(const std::string& name, void* service) {
+  std::lock_guard<std::mutex> lock(services_mutex_);
+  services_[name] = service;
+}
+
+void* PluginManager::FindService(const std::string& name) const {
+  std::lock_guard<std::mutex> lock(services_mutex_);
+  auto it = services_.find(name);
+  return (it != services_.end()) ? it->second : nullptr;
 }
 
 }  // namespace boat::core

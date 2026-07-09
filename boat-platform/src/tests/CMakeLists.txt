@@ -22,6 +22,11 @@ catch_discover_tests(boat_unit_event_bus)
 
 add_executable(boat_unit_plugin_manager unit/test_plugin_manager.cpp)
 target_link_libraries(boat_unit_plugin_manager PRIVATE boat_core Catch2::Catch2WithMain)
+if(TARGET pdu_router)
+  add_dependencies(boat_unit_plugin_manager pdu_router)
+  target_compile_definitions(boat_unit_plugin_manager PRIVATE
+    PDU_ROUTER_SO="$<TARGET_FILE:pdu_router>")
+endif()
 catch_discover_tests(boat_unit_plugin_manager)
 
 add_executable(boat_unit_signal_bus unit/test_signal_bus.cpp)
@@ -39,6 +44,10 @@ catch_discover_tests(boat_unit_determinism_engine)
 add_executable(boat_unit_fault_injector unit/test_fault_injector.cpp)
 target_link_libraries(boat_unit_fault_injector PRIVATE boat_core Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_fault_injector)
+
+add_executable(boat_unit_frame unit/test_frame.cpp)
+target_link_libraries(boat_unit_frame PRIVATE boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_frame)
 
 add_executable(boat_unit_sqlite_event_store unit/test_sqlite_event_store.cpp)
 target_link_libraries(boat_unit_sqlite_event_store PRIVATE boat_core boat_store Catch2::Catch2WithMain)

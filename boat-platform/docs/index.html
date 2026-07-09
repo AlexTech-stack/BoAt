@@ -308,9 +308,8 @@
 
     <li class="section-head"><a href="#">CLI Reference</a></li>
     <li><a href="#cli-global">Global Options</a></li>
-    <li><a href="#cli-can">boat can</a></li>
+    <li><a href="#cli-frame">boat frame</a></li>
     <li><a href="#cli-can-tp">boat can-tp</a></li>
-    <li><a href="#cli-eth">boat eth</a></li>
     <li><a href="#cli-pdu">boat pdu</a></li>
     <li><a href="#cli-db">boat db</a></li>
     <li><a href="#cli-sim">boat sim</a></li>
@@ -400,11 +399,15 @@
   ┌─────────────────────────────────────────────────────┐
   │              BoAt Gateway  (:50051 gRPC)             │
   │                                                     │
-  │  CanService  EthernetService  PduService  ...       │
-  │       │            │               │                │
-  │  CanBusRegistry  EthernetBusRegistry  PduRouter     │
-  │       │            │                                │
-  │  [vcan0] [vcan1]  [veth0] [raw:enxABC] [veth1]     │
+  │  FrameService  CanService  PduService  ...          │
+  │       │                                             │
+  │  FrameSink ──────────── single frame→wire sink      │
+  │       │            ▲                                 │
+  │  CanBusRegistry  EthernetBusRegistry ── DispatchRx ─┐│
+  │       │            │                                ▼│
+  │  [vcan0] [vcan1]  [veth0] [raw:enxABC]   plugins    ││
+  │                                  [ pdu_router can_tp ││
+  │                                    tcp  someip ]  on_frame
   └─────────────────────────────────────────────────────┘
          ▲                      ▲
          │ gRPC                 │ gRPC
@@ -419,6 +422,15 @@
   Clients — CLI, Python nodes, or any gRPC client — connect on TCP port <code>50051</code>.
 </p>
 
+<p>
+  <strong>ABI v8:</strong> the core owns the stateless transport substrate — the single
+  <code>FrameSink</code> is the only path a frame reaches a bus, and every producer
+  (plugins, replay, <code>FrameService.SendFrame</code>) transmits through it. Inbound frames
+  are dispatched to plugins' <code>on_frame</code>, filtered to the bus types each plugin
+  declares. Plugins own stateful conversations only (TCP, ISO-TP, PDU routing, SOME/IP);
+  even PDU routing is a plugin (<code>pdu_router.so</code>) rather than gateway-core logic.
+</p>
+
 <h3>Bus Registries</h3>
 <table>
   <tr><th>Registry</th><th>Driver types</th><th>Notes</th></tr>
@@ -426,12 +438,15 @@
   <tr><td>EthernetBusRegistry</td><td>VirtualEthernetDriver (multicast UDP), RawSocketEthernetDriver (AF_PACKET)</td><td>Virtual or physical NIC</td></tr>
 </table>
 
-<h3>PDU Router</h3>
+<h3>PDU Router (plugin)</h3>
 <p>
-  The <code>PduRouter</code> sits on top of both registries and maps 32-bit PDU IDs to physical
-  transports. Routes are added at runtime via <code>ConfigureRoute</code>. When a PDU is sent,
-  the router looks up the route and forwards it as a CAN frame or an Ethernet UDP/IpduM datagram.
-  Incoming frames are parsed back to PDU frames and delivered to all active <code>SubscribePdus</code> streams.
+  As of ABI v8 the <code>PduRouter</code> is a runtime plugin (<code>pdu_router.so</code>), not
+  gateway-core logic. It registers itself as the <code>IPduRouter</code> service, and
+  <code>PduServiceImpl</code> delegates to it via <code>FindService("pdu_router")</code>. It maps
+  32-bit PDU IDs to physical transports; routes are added at runtime via <code>ConfigureRoute</code>.
+  When a PDU is sent, the router looks up the route and forwards it as a CAN frame or an Ethernet
+  UDP/IpduM datagram (published through <code>set_frame_publisher</code>). Incoming frames are parsed
+  back to PDU frames and delivered to all active <code>SubscribePdus</code> streams.
 </p>
 
 <!-- ═══ QUICK START ═══ -->
@@ -467,7 +482,7 @@ BOAT_ETH_INTERFACES=veth0 \
   <li>
     <div class="step-body">
       <strong>Send your first CAN frame</strong>
-<pre><code>boat can send --id 0x7B --data DEADBEEF --bus vcan0</code></pre>
+<pre><code>boat frame send --bus-type can --can-id 0x7B --data DEADBEEF --iface vcan0</code></pre>
     </div>
   </li>
 </ol>
@@ -484,15 +499,19 @@ BOAT_CAN_INTERFACES=vcan0,vcan1 \
 BOAT_ETH_INTERFACES=veth0,veth1 \
 ./boat_gateway
 
-<span class="cm"># With physical USB Ethernet adapters</span>
+<span class="cm"># With physical USB Ethernet adapters (after granting CAP_NET_RAW, see below)</span>
 BOAT_CAN_INTERFACES=vcan0 \
 BOAT_ETH_INTERFACES=raw:enx28107b9f2016,raw:enx28107b9f2017 \
-sudo ./boat_gateway</code></pre>
+./boat_gateway</code></pre>
 
 <div class="callout warn">
   <strong>Permissions</strong>
-  Physical Ethernet via <code>raw:</code> requires <code>CAP_NET_RAW</code>. Either run with <code>sudo</code>
-  or grant the capability: <code>sudo setcap cap_net_raw+ep ./boat_gateway</code>
+  Physical Ethernet via <code>raw:</code> requires <code>CAP_NET_RAW</code>. Grant the capability to the
+  binary rather than running the gateway as root:
+  <code>sudo setcap cap_net_raw+ep ./boat_gateway</code>. Root-owned files (e.g. under <code>/tmp</code>)
+  left behind by a <code>sudo</code>-run gateway can block later non-root runs from writing to the same
+  paths, so prefer <code>setcap</code>. Reapply it after every rebuild — the capability is stored on the
+  binary's inode.
 </div>
 
 <h2 id="gateway-env">Environment Variables</h2>
@@ -548,8 +567,9 @@ sudo ./boat_gateway</code></pre>
 <pre><code>sudo ip addr add 50.50.0.1/24 dev enx28107b9f2016
 sudo ip addr add 50.50.0.2/24 dev enx28107b9f2017
 sudo ip link set enx28107b9f2016 up
-sudo ip link set enx28107b9f2017 up</code></pre>
-  Then start with: <code>BOAT_ETH_INTERFACES=raw:enx28107b9f2016,raw:enx28107b9f2017 sudo ./boat_gateway</code>
+sudo ip link set enx28107b9f2017 up
+sudo setcap cap_net_raw+ep ./boat_gateway</code></pre>
+  Then start with: <code>BOAT_ETH_INTERFACES=raw:enx28107b9f2016,raw:enx28107b9f2017 ./boat_gateway</code>
 </div>
 
 <p>
@@ -579,53 +599,59 @@ boat --host 192.168.1.10:50051 pdu list-routes
 <span class="cm"># Machine-readable JSON output</span>
 boat --json can list-buses</code></pre>
 
-<!-- ═══ CLI CAN ═══ -->
-<h2 id="cli-can">CLI — <code>boat can</code></h2>
+<!-- ═══ CLI FRAME ═══ -->
+<h2 id="cli-frame">CLI — <code>boat frame</code></h2>
+<p>
+  Unified send/subscribe/list for CAN, CAN FD, Ethernet, TCP, and PDU frames via
+  <code>FrameService</code>. This replaced the old <code>boat can</code> / <code>boat eth</code>
+  commands.
+</p>
 
-<h3>boat can list-buses</h3>
-<p>Lists all CAN interfaces registered on the gateway.</p>
-<pre><code>boat can list-buses</code></pre>
+<h3>boat frame list-ifaces</h3>
+<p>Lists all CAN and Ethernet interfaces the gateway has access to, with metadata.</p>
+<pre><code>boat frame list-ifaces</code></pre>
 
-<h3>boat can send</h3>
+<h3>boat frame send</h3>
 <table>
   <tr><th>Option</th><th>Tag</th><th>Description</th></tr>
-  <tr><td><code>--id &lt;hex|dec&gt;</code></td><td><span class="tag req">req*</span></td><td>CAN frame ID (e.g., <code>0x7B</code> or <code>123</code>)</td></tr>
-  <tr><td><code>--data &lt;hex&gt;</code></td><td><span class="tag req">req*</span></td><td>Raw payload bytes as hex (e.g., <code>DEADBEEF</code> or <code>DE:AD:BE:EF</code>)</td></tr>
-  <tr><td><code>--msg &lt;name&gt;</code></td><td><span class="tag opt">opt</span></td><td>Message name from the PDU database. Enables signal packing. Overrides <code>--id</code> and <code>--data</code> defaults.</td></tr>
-  <tr><td><code>--sig &lt;Name=value&gt;</code></td><td><span class="tag opt">opt</span></td><td>Set signal physical value (repeatable). Requires <code>--msg</code>.</td></tr>
-  <tr><td><code>--db &lt;path&gt;</code></td><td><span class="tag def">pdu_db.json</span></td><td>PDU database file</td></tr>
-  <tr><td><code>--dlc &lt;N&gt;</code></td><td><span class="tag def">-1</span></td><td>Override byte count — pads with zeros if longer, truncates if shorter. <code>-1</code> = use payload length.</td></tr>
-  <tr><td><code>--bus &lt;iface&gt;</code></td><td><span class="tag opt">opt</span></td><td>CAN interface to send on. Defaults to the <code>Bus</code> field in the database or sends on all interfaces.</td></tr>
-  <tr><td><code>--fd</code></td><td><span class="tag opt">opt</span></td><td>Send as CAN FD frame (sets <code>CANFD_FDF</code> flag)</td></tr>
-  <tr><td><code>--brs</code></td><td><span class="tag opt">opt</span></td><td>Bit-rate switch (CAN FD only — sets <code>CANFD_BRS</code>)</td></tr>
+  <tr><td><code>--bus-type &lt;type&gt;</code></td><td><span class="tag req">req</span></td><td><code>CAN</code>, <code>CANFD</code>, <code>ETHERNET</code>, <code>TCP</code>, or <code>PDU</code></td></tr>
+  <tr><td><code>--data &lt;hex&gt;</code></td><td><span class="tag req">req</span></td><td>Payload bytes as hex (e.g., <code>DEADBEEF</code>)</td></tr>
+  <tr><td><code>--iface &lt;name&gt;</code></td><td><span class="tag opt">opt</span></td><td>Interface name. Auto-selected from the gateway's first registered bus of that type if omitted.</td></tr>
+  <tr><td><code>--can-id &lt;hex|dec&gt;</code></td><td><span class="tag def">0</span></td><td>CAN identifier (CAN/CANFD only)</td></tr>
+  <tr><td><code>--ethertype &lt;hex|dec&gt;</code></td><td><span class="tag def">0</span></td><td>Ethernet EtherType (Ethernet only)</td></tr>
+  <tr><td><code>--src-mac</code> / <code>--dst-mac</code></td><td><span class="tag opt">opt</span></td><td>MAC addresses (Ethernet only)</td></tr>
+  <tr><td><code>--src-ip</code> / <code>--dst-ip</code></td><td><span class="tag opt">opt</span></td><td>IPv4 addresses (Ethernet/TCP)</td></tr>
+  <tr><td><code>--src-port</code> / <code>--dst-port</code></td><td><span class="tag def">0</span></td><td>TCP/UDP ports</td></tr>
+  <tr><td><code>--pdu-id &lt;hex|dec&gt;</code></td><td><span class="tag def">0</span></td><td>PDU identifier (PDU only)</td></tr>
 </table>
+
+<pre><code><span class="cm"># Raw CAN frame</span>
+boat frame send --bus-type can --can-id 0x7B --data DEADBEEF --iface vcan0
+
+<span class="cm"># CAN FD frame</span>
+boat frame send --bus-type canfd --can-id 0x100 --data 0102030405060708 --iface vcan0
+
+<span class="cm"># Raw Ethernet frame</span>
+boat frame send --bus-type ethernet --iface veth0 --data DEADBEEF --ethertype 0x88B5</code></pre>
 
 <div class="callout">
-  <strong>*</strong> Either <code>--id</code>+<code>--data</code> or <code>--msg</code> is required.
-  When <code>--msg</code> is used, <code>--data</code> overrides the packed payload and <code>--id</code> overrides the database CAN ID.
+  <strong>PDU-database-driven sends</strong> (<code>--msg</code>/<code>--sig</code>/<code>--db</code>, signal packing)
+  are not part of <code>boat frame send</code>. Use <code>python3 -m boat can send --msg &lt;name&gt; --sig Name=value --db &lt;path&gt;</code>
+  (or <code>python3 -m boat eth send</code>) instead — a separate one-shot dispatcher in <code>boat/cmd.py</code>,
+  reached via <code>python3 -m boat</code> rather than the <code>boat</code> console script.
 </div>
 
-<pre><code><span class="cm"># Raw frame</span>
-boat can send --id 0x7B --data DEADBEEF --bus vcan0
-
-<span class="cm"># From database — packs MotorSpeed=100 rpm and Clamp15=1 V</span>
-boat can send --msg Motor_1 --sig MotorSpeed=100 --sig Clamp15=1 \
-              --db config/pdu_db_example.json
-
-<span class="cm"># CAN FD frame with BRS</span>
-boat can send --id 0x100 --data 0102030405060708 --fd --brs --bus vcan0</code></pre>
-
-<h3>boat can subscribe</h3>
+<h3>boat frame subscribe</h3>
 <table>
   <tr><th>Option</th><th>Default</th><th>Description</th></tr>
-  <tr><td><code>--bus &lt;iface&gt;</code></td><td>all</td><td>Filter to a specific CAN interface</td></tr>
-  <tr><td><code>--count &lt;N&gt;</code></td><td><code>0</code> (unlimited)</td><td>Stop after N frames</td></tr>
+  <tr><td><code>--bus-types &lt;list&gt;</code></td><td>all</td><td>Comma-separated: <code>CAN,CANFD,ETHERNET,TCP,PDU</code></td></tr>
+  <tr><td><code>--iface &lt;name&gt;</code></td><td>all</td><td>Filter to a specific interface</td></tr>
 </table>
-<pre><code><span class="cm"># Watch all traffic on vcan0</span>
-boat can subscribe --bus vcan0
+<pre><code><span class="cm"># Watch all CAN traffic on vcan0</span>
+boat frame subscribe --bus-types can --iface vcan0
 
-<span class="cm"># Capture 10 frames then exit</span>
-boat can subscribe --count 10</code></pre>
+<span class="cm"># Watch all traffic on all buses</span>
+boat frame subscribe</code></pre>
 
 <!-- ═══ CLI CAN-TP ═══ -->
 <h2 id="cli-can-tp">CLI — <code>boat can-tp</code></h2>
@@ -677,32 +703,6 @@ boat can-tp send --nsdu-id 0x7E0 --dlc 64 --data ...
   Start the gateway with <code>BOAT_NODE_PLUGINS=./build/debug/src/plugins/can_tp/can_tp.so</code>
   for CanTp commands to work.
 </div>
-
-<!-- ═══ CLI ETH ═══ -->
-<h2 id="cli-eth">CLI — <code>boat eth</code></h2>
-
-<h3>boat eth list-ifaces</h3>
-<p>Lists all Ethernet interfaces registered on the gateway.</p>
-<pre><code>boat eth list-ifaces</code></pre>
-
-<h3>boat eth send</h3>
-<table>
-  <tr><th>Option</th><th>Tag</th><th>Description</th></tr>
-  <tr><td><code>--iface &lt;name&gt;</code></td><td><span class="tag req">req</span></td><td>Interface name (e.g., <code>veth0</code>)</td></tr>
-  <tr><td><code>--payload &lt;hex&gt;</code></td><td><span class="tag req">req</span></td><td>Payload bytes as hex</td></tr>
-  <tr><td><code>--src &lt;MAC&gt;</code></td><td><span class="tag opt">opt</span></td><td>Source MAC address (<code>AA:BB:CC:DD:EE:FF</code>)</td></tr>
-  <tr><td><code>--dst &lt;MAC&gt;</code></td><td><span class="tag opt">opt</span></td><td>Destination MAC address. Broadcast used if omitted on raw sockets.</td></tr>
-  <tr><td><code>--ethertype &lt;hex&gt;</code></td><td><span class="tag def">0x0800</span></td><td>EtherType field</td></tr>
-</table>
-<pre><code>boat eth send --iface veth0 --payload DEADBEEF --ethertype 0x88B5</code></pre>
-
-<h3>boat eth subscribe</h3>
-<table>
-  <tr><th>Option</th><th>Default</th><th>Description</th></tr>
-  <tr><td><code>--iface &lt;name&gt;</code></td><td>all</td><td>Filter to a specific interface</td></tr>
-  <tr><td><code>--ethertype &lt;hex&gt;</code></td><td><code>0</code> (all)</td><td>Filter by EtherType</td></tr>
-  <tr><td><code>--count &lt;N&gt;</code></td><td><code>0</code> (unlimited)</td><td>Stop after N frames</td></tr>
-</table>
 
 <!-- ═══ CLI PDU ═══ -->
 <h2 id="cli-pdu">CLI — <code>boat pdu</code></h2>
@@ -939,7 +939,16 @@ boat db show --msg MotorSpeed_PDU --db config/pdu_db_example.json --pack</code><
   <tr><td><code>--loop</code></td><td>off</td><td>Loop the file indefinitely</td></tr>
   <tr><td><code>--sim-id &lt;id&gt;</code></td><td></td><td>Simulation ID attached to every replayed frame</td></tr>
   <tr><td><code>--verbose</code></td><td>off</td><td>Print each frame as it is sent</td></tr>
+  <tr><td><code>--channel &lt;N&gt;</code></td><td></td><td>Only replay frames from this CAN channel (1-based)</td></tr>
+  <tr><td><code>--id &lt;hex&gt;</code></td><td></td><td>Only replay frames with this CAN ID; comma-separated for multiple</td></tr>
 </table>
+
+<div class="callout">
+  <code>boat trace replay</code> sends each frame individually via gRPC, CAN-only.
+  For Ethernet/pcap replay, use <code>boat replay import</code> +
+  <code>boat replay start</code>/<code>stream</code> instead (see
+  <code>docs/howto/replay.md</code> for the full server-side replay reference).
+</div>
 
 <!-- ═══ CLI PLUGIN ═══ -->
 <h2 id="cli-plugin">CLI — <code>boat plugin</code></h2>
@@ -988,7 +997,6 @@ boat --show-completion</code></pre>
   <li><code>--iface</code> → all NICs from <code>/sys/class/net/</code></li>
   <li><code>--db</code> → <code>*.json</code> files in the current directory</li>
   <li><code>--msg</code> in <code>boat pdu send/container</code> → ETH_PDU message names from <code>--db</code></li>
-  <li><code>--msg</code> in <code>boat can send</code> → CAN/CANFD message names from <code>--db</code></li>
   <li><code>--msg</code> in <code>boat db show</code> → all message names from <code>--db</code></li>
 </ul>
 <div class="callout tip">
@@ -1306,14 +1314,15 @@ Combined: 00 AC 00 01 00 00 00 08 02 00 00 00 00 00 00 00
 
 <h3>Via CLI</h3>
 <pre><code><span class="cm"># Raw frame</span>
-boat can send --id 0x7B --data DEADBEEF --bus vcan0
+boat frame send --bus-type can --can-id 0x7B --data DEADBEEF --iface vcan0
 
-<span class="cm"># From database with signal values</span>
-boat can send --msg Motor_1 --sig MotorSpeed=100 --sig Clamp15=1 \
+<span class="cm"># From database with signal values (separate one-shot dispatcher, see the</span>
+<span class="cm"># callout under "boat frame send" above)</span>
+python3 -m boat can send --msg Motor_1 --sig MotorSpeed=100 --sig Clamp15=1 \
               --db config/pdu_db_example.json
 
 <span class="cm"># Subscribe in another terminal</span>
-boat can subscribe --bus vcan0 --count 5</code></pre>
+boat frame subscribe --bus-types can --iface vcan0</code></pre>
 
 <h3>Via Python SDK</h3>
 <pre><code><span class="kw">from</span> boat.client <span class="kw">import</span> BoAtClient
@@ -1464,9 +1473,18 @@ sudo ip link set enx28107b9f2017 up</code></pre>
   </li>
   <li>
     <div class="step-body">
+      <strong>Grant the gateway binary raw-socket access</strong>
+<pre><code>sudo setcap cap_net_raw+ep ./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
+      Preferred over running the whole gateway as <code>root</code> — a <code>sudo</code>-run gateway
+      leaves root-owned files behind (e.g. under <code>/tmp</code>) that block later non-root runs
+      from writing to the same paths. Reapply after every rebuild.
+    </div>
+  </li>
+  <li>
+    <div class="step-body">
       <strong>Start the gateway with both physical NICs registered</strong>
 <pre><code>BOAT_ETH_INTERFACES=raw:enx28107b9f2016,raw:enx28107b9f2017 \
-sudo ./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
+./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
       Verify startup output:
 <pre><code>[Gateway] Registered raw Ethernet interface 'enx28107b9f2016'
 [Gateway] Registered raw Ethernet interface 'enx28107b9f2017'</code></pre>
@@ -1487,10 +1505,10 @@ boat pdu send --id 0x00AC0001 --data DEADBEEF</code></pre>
     <div class="step-body">
       <strong>Verify receipt</strong> on the second adapter
 <pre><code><span class="cm"># List interfaces to confirm both registered</span>
-boat eth list-ifaces
+boat frame list-ifaces
 
 <span class="cm"># Subscribe to all traffic on the receiving interface</span>
-boat eth subscribe --iface enx28107b9f2017</code></pre>
+boat frame subscribe --bus-types ethernet --iface enx28107b9f2017</code></pre>
     </div>
   </li>
 </ol>
@@ -1659,8 +1677,9 @@ boat trace replay traces/motor_test_*.asc --buses vcan0 --speed 2.0</code></pre>
 
 <table>
   <tr><th>Service</th><th>Proto file</th><th>Key RPCs</th></tr>
-  <tr><td>CanService</td><td>can.proto</td><td>SendCanFrame, SubscribeCanFrames, ListBuses</td></tr>
-  <tr><td>EthernetService</td><td>ethernet.proto</td><td>SendFrame, SubscribeFrames, ListInterfaces</td></tr>
+  <tr><td>FrameService <em>(v8, unified)</em></td><td>frame.proto</td><td>SendFrame, SubscribeFrames — one send/subscribe surface for all bus types (CAN/CANFD/ETHERNET/PDU/TCP)</td></tr>
+  <tr><td>CanService <em>(legacy)</em></td><td>can.proto</td><td>SendCanFrame, SubscribeCanFrames, ListBuses</td></tr>
+  <tr><td>EthernetService <em>(legacy)</em></td><td>ethernet.proto</td><td>SendFrame, SubscribeFrames, ListInterfaces</td></tr>
   <tr><td>PduService</td><td>pdu.proto</td><td>SendPdu, SubscribePdus, ConfigureRoute, ListRoutes, ConfigureContainer, ConfigureGroup, EnableGroup, DisableGroup, ListGroups, RemoveRoute</td></tr>
   <tr><td>SimulationService</td><td>simulation.proto</td><td>Create/Start/Pause/Step/Reset/Stop/GetState/Watch/ListSimulations</td></tr>
   <tr><td>SignalService</td><td>signal.proto</td><td>InjectSignal, SubscribeSignals, GetSignalHistory</td></tr>
@@ -1704,7 +1723,7 @@ c = BoAtClient()
 <h2 id="faq">FAQ</h2>
 
 <details>
-  <summary>The gateway starts but <code>boat can list-buses</code> shows no interfaces</summary>
+  <summary>The gateway starts but <code>boat frame list-ifaces</code> shows no interfaces</summary>
   <div class="faq-body">
     <p>The gateway only registers interfaces that exist at startup time. Check:</p>
     <ul>
@@ -1760,9 +1779,13 @@ nmcli connection up &lt;uuid&gt;</code></pre>
 <details>
   <summary>How do I run the gateway without sudo for raw Ethernet?</summary>
   <div class="faq-body">
-    <p>Grant the <code>CAP_NET_RAW</code> capability to the binary:</p>
+    <p>Grant the <code>CAP_NET_RAW</code> capability to the binary — this is the recommended
+    approach, not just a workaround. Running the gateway with <code>sudo</code> instead leaves
+    root-owned files behind (e.g. trace files under <code>/tmp</code>) that block later non-root
+    runs from writing to the same paths.</p>
     <pre><code>sudo setcap cap_net_raw+ep ./build/debug/src/gateway/grpc_gateway/boat_gateway</code></pre>
-    <p>After this, you can run the gateway as a normal user with raw Ethernet support.</p>
+    <p>After this, you can run the gateway as a normal user with raw Ethernet support. The
+    capability is stored on the binary's inode, so reapply it after every rebuild.</p>
   </div>
 </details>
 

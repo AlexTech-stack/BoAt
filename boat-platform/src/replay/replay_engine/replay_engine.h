@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/frame.h"
 #include "event/event_bus.h"
 #include "event_store/event_store.h"
 #include "pdu/tick_timer.h"
@@ -10,25 +11,18 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace boat::replay {
 
 inline constexpr std::uint32_t kReplayBusEventType = 9001;
-inline constexpr std::uint32_t kReplayEthEventBase = 0xEE000000;
-inline constexpr std::uint32_t kReplayPduEventBase = 0xDD000000;
-
-inline constexpr std::uint32_t MakeReplayEthEventType(std::uint16_t ethertype) {
-  return kReplayEthEventBase | (ethertype & 0xFFFF);
-}
-inline constexpr std::uint32_t MakeReplayPduEventType(std::uint32_t pdu_id) {
-  return kReplayPduEventBase | (pdu_id & 0xFFFF);
-}
 
 enum class ReplaySpeed {
   REAL_TIME = 0,
@@ -43,6 +37,10 @@ struct ReplayConfig {
   std::uint64_t start_tick{0};
   std::string eth_iface;
   std::unordered_map<std::string, std::string> mac_map;
+  int loop_delay_ms{0};  // ms gap between loop passes; 0 = no loop
+  std::vector<std::string> buses;  // CAN interfaces for channel mapping
+                                    // (ch1->buses[0], ch2->buses[1], ...);
+                                    // empty = every channel maps to "vcan0".
 };
 
 class ReplayController {
@@ -60,16 +58,27 @@ class ReplayController {
   void Resume();
   void Stop();
   bool HasError() const;
+  bool IsRunning() const { return running_.load(); }
   std::string LastError() const;
 
-  using EventForwarder = std::function<void(std::uint32_t event_type, std::uint64_t tick,
-                                            const std::vector<std::uint8_t>& payload)>;
+  struct ReplayEventEntry {
+    std::uint64_t tick;
+    std::string payload;
+  };
+
+  /// Thread-safe: push a replay event onto the internal queue.
+  void PushEvent(std::uint64_t tick, std::string payload);
+
+  /// Thread-safe: consume (pop) all queued replay events.
+  std::vector<ReplayEventEntry> ConsumeEvents();
+
+  using EventForwarder = std::function<void(const boat::core::Frame& frame)>;
   void SetEventForwarder(EventForwarder forwarder);
   const ReplayConfig& GetActiveConfig() const;
 
  private:
   void ReplayLoop();
-  bool SeekToTick(std::uint64_t tick, std::size_t& offset) const;
+  bool SeekToTick(std::uint64_t tick, std::size_t& offset, std::uint64_t& landed_tick) const;
   void ParseTickDurationFromEnv();
 
   boat::store::ITraceStore& trace_store_;
@@ -92,6 +101,11 @@ class ReplayController {
   std::atomic<std::uint64_t> requested_seek_tick_{0};
   std::atomic<bool> seek_pending_{false};
   std::string last_error_;
+
+  // Replay event queue — used by StreamReplay to consume events without going
+  // through the EventBus (avoids race between publishing and subscribing).
+  std::deque<ReplayEventEntry> event_queue_;
+  std::mutex event_queue_mutex_;
 
   // TickTimer-based absolute-time scheduling (drift-free).
   std::unique_ptr<boat::hil::TickTimer> tick_timer_;

@@ -12,6 +12,7 @@
 #include "boat/v1/signal.grpc.pb.h"
 #include "boat/v1/simulation.grpc.pb.h"
 #include "event_store/event_store.h"
+#include "gateway/grpc_gateway/frame_sink.h"
 #include "gateway/grpc_gateway/gateway_context.h"
 #include "gateway/grpc_gateway/pdu_service_impl.h"
 #include "gateway/grpc_gateway/scenario_service_impl.h"
@@ -20,6 +21,7 @@
 #include "can_bus_registry.h"
 #include "ethernet_bus_registry.h"
 #include "pdu/pdu_router.h"
+#include "core/plugin/plugin_manager.h"
 #include "gateway/grpc_gateway/rpc_audit_log.h"
 #include "replay_engine/replay_engine.h"
 #include "scenario/scenario_loader.h"
@@ -42,7 +44,8 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
   boat::hil::CanBusRegistry can_registry;  // no interfaces opened in unit tests
   boat::hil::EthernetBusRegistry eth_registry;
-  boat::hil::PduRouter pdu_router(can_registry, eth_registry);
+  boat::core::PluginManager plugin_manager;
+  boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
   boat::gateway::RpcAuditLog audit_log;
   sim.signal_router().SetFaultInjector(&sim.fault_injector());
 
@@ -55,7 +58,8 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
       .replay_controller = replay_controller,
       .can_bus_registry = can_registry,
       .ethernet_bus_registry = eth_registry,
-      .pdu_router = pdu_router,
+      .plugin_manager = plugin_manager,
+      .frame_sink = frame_sink,
       .audit_log = audit_log,
   };
 
@@ -161,6 +165,10 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
 
   // ── PDU Group integration RPC tests ──────────────────────────────────────
   {
+    // Create and register a PduRouter for the test
+    boat::hil::PduRouter test_pdu_router(can_registry, eth_registry);
+    plugin_manager.RegisterService("pdu_router", &test_pdu_router);
+
     auto pdu_stub = boat::v1::PduService::NewStub(channel);
 
     // Configure a route (no physical interface needed for config)
