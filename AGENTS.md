@@ -421,9 +421,19 @@ Each event is stored as a length-delimited `boat.v1.Frame` protobuf record:
 ```
 
 The `Frame` message contains full bus-agnostic metadata: `bus_type`, `iface`,
-`timestamp_ns`, `payload`, plus CAN metadata (`can_id`, `dlc`, `flags`) or
-Ethernet metadata (`dst_mac`, `src_mac`, `ethertype`, `src_ip`, `dst_ip`,
-`ip_version`, `flags`).
+`timestamp_ns`, `payload`, plus CAN metadata (`can_id`, `dlc`, `flags`,
+`channel`) or Ethernet metadata (`dst_mac`, `src_mac`, `ethertype`, `src_ip`,
+`dst_ip`, `ip_version`, `flags`).
+
+Import is hardware-independent: `convert_to_binary()` does not bake a target
+interface into CAN records (it stores the original trace `channel` in
+`CanMetadata.channel` instead, leaving `Frame.iface` empty), and Ethernet
+records only get an `iface` baked in if the caller explicitly set
+`eth_iface`/`buses` on `TraceReplayer` (the CLI's `boat replay import` never
+does). Interface (and MAC) targeting is a replay-time decision, resolved in
+`ProtoToCoreFrame` (`replay_engine.cpp`) from `ReplayConfig.buses` /
+`.eth_iface` / `.mac_map` — see below. This means the same imported trace can
+be replayed against different interfaces/MACs without re-importing it.
 
 #### FrameSink (`src/gateway/grpc_gateway/frame_sink.{h,cpp}`)
 
@@ -462,16 +472,21 @@ boat replay import trace.asc --trace-id myrun \
 
 #### Stream (replay)
 ```bash
-# Replay an imported trace
+# Replay an imported trace -- interface/MAC targeting happens here, not at
+# import time, so the same trace_id can be replayed with different flags
+# against different hardware without re-importing.
 boat replay stream --trace myrun \
   --speed accelerated             # real-time / accelerated / step
   --multiplier 2.0                # speed factor
   --loop 1000                     # loop with 1s gap between passes
   --verbose                       # print per-frame hex
-  --buses vcan0,can1              # CAN interface mapping
-  --eth-iface eth0                # Ethernet target interface
-  --mac-map 192.168.0.1=02:de:ad:be:ef:01  # IP→MAC mappings
+  --buses vcan0,can1              # CAN channel->interface mapping (ch1->vcan0, ch2->can1)
+  --eth-iface eth0                # Ethernet target interface (overrides broadcast-to-all)
+  --mac-map 192.168.0.1=02:de:ad:be:ef:01  # rewritten-IP->MAC mappings
 ```
+
+`boat replay start` accepts the same `--buses`/`--eth-iface`/`--mac-map`/
+`--loop` flags (it just doesn't block to stream events afterward).
 
 #### `boat trace replay` (direct, CAN-only)
 ```bash
