@@ -234,4 +234,32 @@ def test_trace_replay_applies_id_filter_and_shows_it_in_banner(tmp_path) -> None
     assert sent_ids == [0x583, 0x583]
 
 
+def test_replay_stream_shows_progress_without_verbose() -> None:
+    fake_client = _fake_client()
+    fake_events = [SimpleNamespace(tick=1000 + i * 200, payload=b"x") for i in range(3)]
+    fake_client.replay.StreamReplay = Mock(return_value=fake_events)
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, ["replay", "stream", "--trace", "t1"])
+
+    assert result.exit_code == 0
+    assert "Streaming..." in result.output
+    assert "Done — 3 frame(s)." in result.output
+    assert "payload=" not in result.output  # that detail is verbose-only
+
+
+def test_replay_stream_verbose_shows_per_frame_detail() -> None:
+    fake_client = _fake_client()
+    fake_events = [SimpleNamespace(tick=1000, payload=b"\xde\xad\xbe\xef")]
+    fake_client.replay.StreamReplay = Mock(return_value=fake_events)
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, ["replay", "stream", "--trace", "t1", "--verbose"])
+
+    assert result.exit_code == 0
+    assert "tick=1000" in result.output
+    assert "payload=deadbeef" in result.output
+    assert "Streaming..." not in result.output  # progress counter is non-verbose-only
+
+
 

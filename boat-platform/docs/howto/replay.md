@@ -485,8 +485,11 @@ boat replay stream --trace demo --verbose
 ```
 
 `boat trace replay --verbose` shows CAN IDs, timestamps, and hex data.
-`boat replay stream --verbose` shows gateway tick numbers and payload
-snippets, for any bus type.
+`boat replay stream --verbose` shows one line per event with gateway tick
+number and payload hex, for any bus type. Without `--verbose`, `boat
+replay stream` still shows *something* — a single self-updating progress
+line (frame count + current tick, refreshed a few times a second) — rather
+than staying silent until the final `Done` summary.
 
 ## Replay lifecycle
 
