@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import struct
+import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -117,6 +119,7 @@ def stream_replay(
 
     # ── Stream ─────────────────────────────────────────────────────────────
     total = 0
+    last_progress_at = 0.0
     try:
         stream = ctx.obj["client"].replay.StreamReplay(
             replay_pb2.StreamReplayRequest(replay_id=replay_id)
@@ -126,6 +129,12 @@ def stream_replay(
             if verbose:
                 payload_hex = event.payload.hex() if event.payload else "(empty)"
                 typer.echo(f"[{total:4d}] tick={event.tick}  payload={payload_hex}")
+            else:
+                now = time.monotonic()
+                if now - last_progress_at >= 0.1:
+                    typer.echo(f"\rStreaming...  {total} frame(s) sent  tick={event.tick}", nl=False)
+                    sys.stdout.flush()
+                    last_progress_at = now
     except KeyboardInterrupt:
         try:
             ctx.obj["client"].replay.StopReplay(
@@ -136,6 +145,8 @@ def stream_replay(
         typer.echo(f"\nStopped after {total} frame(s).")
         raise typer.Exit(0)
 
+    if not verbose and total > 0:
+        typer.echo()
     typer.echo(f"Done \u2014 {total} frame(s).")
 
 
