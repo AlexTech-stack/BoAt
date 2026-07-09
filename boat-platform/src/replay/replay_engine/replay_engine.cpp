@@ -216,7 +216,8 @@ void ReplayController::ParseTickDurationFromEnv() {
   tick_duration_ = std::chrono::milliseconds(1);
 }
 
-bool ReplayController::SeekToTick(std::uint64_t target_tick, std::size_t& offset) const {
+bool ReplayController::SeekToTick(std::uint64_t target_tick, std::size_t& offset,
+                                   std::uint64_t& landed_tick) const {
   offset = 0;
   while (offset + sizeof(std::uint32_t) <= mapped_trace_.size()) {
     std::uint32_t record_len;
@@ -230,8 +231,10 @@ bool ReplayController::SeekToTick(std::uint64_t target_tick, std::size_t& offset
       throw std::runtime_error("invalid protobuf frame record");
     }
     offset += record_len;
-    if (FrameTimestampToMs(pf.timestamp_ns()) >= target_tick) {
+    const std::uint64_t record_tick = FrameTimestampToMs(pf.timestamp_ns());
+    if (record_tick >= target_tick) {
       offset -= (sizeof(record_len) + record_len);
+      landed_tick = record_tick;
       return true;
     }
   }
@@ -266,10 +269,15 @@ void ReplayController::ReplayLoop() {
 
         if (seek_pending_.exchange(false)) {
           const auto target_tick = requested_seek_tick_.load();
-          SeekToTick(target_tick, offset);
-          current_tick_.store(target_tick);
+          // Anchor to the actual tick of the record we land on, not the
+          // raw requested target -- trace timestamps are absolute (epoch
+          // milliseconds), so a target of 0 would otherwise leave the
+          // schedule anchored decades before the first real record.
+          std::uint64_t landed_tick = target_tick;
+          SeekToTick(target_tick, offset, landed_tick);
+          current_tick_.store(landed_tick);
           replay_base_time_ = std::chrono::steady_clock::now();
-          replay_base_tick_ = target_tick;
+          replay_base_tick_ = landed_tick;
           continue;
         }
 
@@ -372,7 +380,13 @@ void ReplayController::ReplayLoop() {
           std::this_thread::sleep_for(target - now);
         }
         replay_base_time_ = target;
-        replay_base_tick_ = active_config_.start_tick;
+        // Same absolute-tick anchoring as the seek path above -- re-derive
+        // the actual tick of the record the next pass will start on rather
+        // than reusing the raw configured start_tick.
+        std::size_t restart_offset = 0;
+        std::uint64_t landed_tick = active_config_.start_tick;
+        SeekToTick(active_config_.start_tick, restart_offset, landed_tick);
+        replay_base_tick_ = landed_tick;
       }
     } while (running_.load() && looping);
   } catch (const std::exception& ex) {
