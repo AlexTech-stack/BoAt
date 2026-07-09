@@ -434,3 +434,65 @@ TEST_CASE("ReplayController defaults speed_multiplier to 1.0 when zero", "[unit]
   REQUIRE_FALSE(controller.HasError());
   REQUIRE(event_store.inserted.size() == 3);
 }
+
+TEST_CASE("ReplayController anchors to the actual first-record tick for absolute-epoch traces",
+          "[unit][replay]") {
+  MockTraceStore trace_store;
+  MockEventStore event_store;
+  boat::core::EventBus event_bus;
+  ReplayController controller(trace_store, event_store, event_bus);
+
+  // Real imported traces store absolute epoch-millisecond timestamps, not
+  // small relative tick counts starting near 0 -- StartReplay never sets
+  // ReplayConfig::start_tick, so it defaults to 0. Before the fix, the
+  // schedule was anchored to that raw 0 instead of the trace's actual first
+  // tick, producing a multi-decade wait deadline on record one and hanging
+  // forever (zero events, ever).
+  constexpr std::uint64_t kEpochBaseMs = 1'775'052'551'000ULL;
+  auto trace_data = BuildSequentialTrace(kEpochBaseMs, 5);
+  trace_store.traces["epoch_trace"] = trace_data;
+
+  ReplayConfig config;
+  config.trace_id = "epoch_trace";
+  config.speed = ReplaySpeed::REAL_TIME;
+  config.speed_multiplier = 1000.0;
+
+  auto start = std::chrono::steady_clock::now();
+  controller.Start(config);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  controller.Stop();
+  auto elapsed = std::chrono::steady_clock::now() - start;
+
+  REQUIRE_FALSE(controller.HasError());
+  REQUIRE(event_store.inserted.size() == 5);
+  REQUIRE(elapsed < std::chrono::milliseconds(500));
+}
+
+TEST_CASE("ReplayController re-anchors to the first-record tick on each loop pass",
+          "[unit][replay]") {
+  MockTraceStore trace_store;
+  MockEventStore event_store;
+  boat::core::EventBus event_bus;
+  ReplayController controller(trace_store, event_store, event_bus);
+
+  constexpr std::uint64_t kEpochBaseMs = 1'775'052'551'000ULL;
+  auto trace_data = BuildSequentialTrace(kEpochBaseMs, 3);
+  trace_store.traces["epoch_loop"] = trace_data;
+
+  ReplayConfig config;
+  config.trace_id = "epoch_loop";
+  config.speed = ReplaySpeed::REAL_TIME;
+  config.speed_multiplier = 1000.0;
+  config.loop_delay_ms = 5;
+
+  controller.Start(config);
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  controller.Stop();
+
+  REQUIRE_FALSE(controller.HasError());
+  // Without the loop-restart anchor fix, the second pass re-anchors to
+  // start_tick (0) and hangs the same way the first pass would without the
+  // seek fix -- so more than one pass' worth of records confirms looping
+  // actually progresses past the first cycle.
+  REQUIRE(event_store.inserted.size() > 3);
+}

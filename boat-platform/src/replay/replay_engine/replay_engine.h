@@ -75,7 +75,7 @@ class ReplayController {
 
  private:
   void ReplayLoop();
-  bool SeekToTick(std::uint64_t tick, std::size_t& offset) const;
+  bool SeekToTick(std::uint64_t tick, std::size_t& offset, std::uint64_t& landed_tick) const;
   void ParseTickDurationFromEnv();
 
   boat::store::ITraceStore& trace_store_;
