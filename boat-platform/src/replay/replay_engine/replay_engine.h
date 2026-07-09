@@ -38,6 +38,9 @@ struct ReplayConfig {
   std::string eth_iface;
   std::unordered_map<std::string, std::string> mac_map;
   int loop_delay_ms{0};  // ms gap between loop passes; 0 = no loop
+  std::vector<std::string> buses;  // CAN interfaces for channel mapping
+                                    // (ch1->buses[0], ch2->buses[1], ...);
+                                    // empty = every channel maps to "vcan0".
 };
 
 class ReplayController {

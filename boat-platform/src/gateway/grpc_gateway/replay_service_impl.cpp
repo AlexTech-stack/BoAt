@@ -66,6 +66,7 @@ grpc::Status ReplayServiceImpl::StartReplay(grpc::ServerContext*, const boat::v1
         .eth_iface = request->eth_iface(),
         .mac_map = {request->mac_map().begin(), request->mac_map().end()},
         .loop_delay_ms = request->loop_delay_ms(),
+        .buses = {request->buses().begin(), request->buses().end()},
     };
     ctx_.replay_controller.Start(config);
     {

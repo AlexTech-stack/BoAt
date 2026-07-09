@@ -282,9 +282,18 @@ class TraceReplayer:
 
         Each event is serialized as a length-delimited ``boat.v1.Frame``
         protobuf message (``uint32 length`` + ``bytes``).  The Frame carries
-        the full bus-agnostic metadata (interface, timestamps, payload,
-        CAN/Ethernet/PDU metadata) so the replay engine can dispatch directly
-        through ``PluginManager::DispatchFrame``.
+        the full bus-agnostic metadata (timestamps, payload, CAN/Ethernet/PDU
+        metadata) so the replay engine can dispatch directly through
+        ``PluginManager::DispatchFrame``.
+
+        Import is hardware-independent: CAN records store the original
+        trace ``channel`` (not a resolved interface), and Ethernet records
+        leave ``iface`` unset unless ``eth_iface``/``buses`` were passed to
+        this ``TraceReplayer``. Target interfaces (and MAC addresses, via
+        ``mac_map``) are resolved at replay time from ``--buses``/
+        ``--eth-iface``/``--mac-map`` on ``boat replay start``/``stream``,
+        so the same import can be replayed on different hardware without
+        re-importing.
 
         Handles both CAN (ASC/BLF) and Ethernet (pcap) sources.
         """
@@ -358,17 +367,21 @@ class TraceReplayer:
                     if getattr(msg, "bitrate_switch", False):
                         flags |= _CANFD_BRS
 
-                    iface = self._iface_for_channel(getattr(msg, "channel", 1) or 1)
+                    # Store the original channel, not a resolved interface --
+                    # target interface is a replay-time decision (--buses on
+                    # `boat replay start`/`stream`), so the same import can be
+                    # replayed on different hardware without re-importing.
+                    channel = getattr(msg, "channel", 1) or 1
 
                     proto = frame_pb2.Frame(
                         bus_type=frame_pb2.Frame.CANFD if flags else frame_pb2.Frame.CAN,
-                        iface=iface,
                         timestamp_ns=int(msg.timestamp * 1_000_000_000),
                         payload=raw,
                         can=frame_pb2.CanMetadata(
                             can_id=msg.arbitration_id,
                             dlc=len(msg.data),
                             flags=flags,
+                            channel=channel,
                         ),
                     )
 
