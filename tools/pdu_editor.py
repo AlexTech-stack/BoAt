@@ -460,6 +460,7 @@ tr.selected td { background:rgba(88,166,255,0.1); }
   <a class="nav-link" data-port="8083">Recorder</a>
   <a class="nav-link" data-port="8087" style="color:var(--blue)">PDU Editor</a>
   <a class="nav-link" data-port="8088">Trace Analyzer</a>
+  <a class="nav-link" data-port="8089">Trace Editor</a>
 </nav>
 
 <div class="layout">

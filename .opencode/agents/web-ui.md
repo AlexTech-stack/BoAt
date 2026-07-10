@@ -27,6 +27,16 @@ All in `ui/`:
 | — | `debug.py` | Debug console |
 | — | `system_dashboard.py` | System-level dashboard |
 
+## Standalone tools
+
+All in `tools/`, no gateway required:
+
+| Port | File | Service |
+|------|------|---------|
+| 8087 | `pdu_editor.py` | Create/modify/validate/export PDU database JSON files |
+| 8088 | `trace_analyzer.py` | Read BLF trace files, analyze CAN messages, derive PDU database JSON |
+| 8089 | `trace_editor.py` | View/filter/edit the frames inside a gateway binary trace file (`boat replay import` format) |
+
 ## Start / Stop scripts
 
 ```bash
