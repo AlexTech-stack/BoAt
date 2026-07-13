@@ -62,7 +62,10 @@ def _frame_to_dict(frame, index: int) -> dict[str, Any]:
         "index": index,
         "bus_type": frame_pb2.Frame.BusType.Name(frame.bus_type),
         "iface": frame.iface,
-        "timestamp_ns": frame.timestamp_ns,
+        # Sent as a string, not a JSON number: real epoch-nanosecond values
+        # (~1.8e18) exceed JS's 53-bit safe-integer range, so a bare number
+        # here would get silently rounded by the browser's JSON.parse.
+        "timestamp_ns": str(frame.timestamp_ns),
         "payload": frame.payload.hex().upper(),
         "payload_len": len(frame.payload),
         "metadata_type": frame.WhichOneof("metadata"),
@@ -158,7 +161,7 @@ def _monotonic_warnings(frames: list[dict[str, Any]]) -> list[str]:
     warnings: list[str] = []
     prev_ts: Optional[int] = None
     for f in frames:
-        ts = f.get("timestamp_ns", 0)
+        ts = int(f.get("timestamp_ns", 0) or 0)
         if prev_ts is not None and ts < prev_ts:
             warnings.append(
                 f"Frame #{f.get('index')} has timestamp_ns {ts}, which is earlier than "
@@ -436,6 +439,22 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
 .field-row { display:flex; gap:8px; }
 .field-row .field { flex:1; }
 .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+.field-hint {
+  font-size:11px; color:var(--muted); line-height:1.6; background:var(--bg);
+  border:1px solid var(--border); border-radius:4px; padding:6px 8px; margin:-2px 0 8px;
+}
+.field-hint code { font-family:var(--mono); color:var(--text); }
+.ts-preview {
+  font-family:var(--mono); font-size:14px; letter-spacing:0.5px; margin-top:4px;
+  padding:6px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px;
+}
+.ts-s  { color:var(--muted); }
+.ts-ms { color:var(--blue); }
+.ts-us { color:var(--green); }
+.ts-ns { color:var(--orange); }
+.ts-dot { color:var(--red); font-weight:700; padding:0 1px; }
+.ts-legend { font-size:10px; color:var(--muted); margin-top:3px; }
+.ts-legend .ts-s, .ts-legend .ts-ms, .ts-legend .ts-us, .ts-legend .ts-ns { font-weight:700; }
 </style>
 </head>
 <body>
@@ -522,18 +541,33 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
       </div>
       <div class="field"><label>Iface</label><input id="m-iface"/></div>
     </div>
-    <div class="field"><label>Timestamp (ns)</label><input id="m-ts" type="number" min="0"/></div>
+    <div class="field">
+      <label>Timestamp (ns)</label>
+      <input id="m-ts" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="0" oninput="updateTsPreview()"/>
+      <div id="m-ts-preview" class="ts-preview"></div>
+      <div class="ts-legend">Grouped right-to-left in 3s: <span class="ts-s">seconds</span> . <span class="ts-ms">milliseconds</span> . <span class="ts-us">microseconds</span> . <span class="ts-ns">nanoseconds</span> — the number above is unchanged, this is just a reading aid.</div>
+    </div>
     <div class="field"><label>Payload (hex)</label><textarea id="m-payload" placeholder="AABBCCDD"></textarea></div>
 
     <div id="m-can-fields">
       <h3 style="font-size:12px;color:var(--muted);margin-top:12px">CAN metadata</h3>
       <div class="field-row">
         <div class="field"><label>CAN ID (hex or dec)</label><input id="m-can-id"/></div>
-        <div class="field"><label>DLC</label><input id="m-can-dlc" type="number" min="0"/></div>
+        <div class="field"><label>DLC</label><input id="m-can-dlc" type="number" min="0" max="15"/></div>
+      </div>
+      <div class="field-hint">
+        DLC → payload length: <code>0-8</code> = that many bytes (1:1). CAN&nbsp;FD only:
+        <code>9</code>=12B, <code>10</code>=16B, <code>11</code>=20B, <code>12</code>=24B,
+        <code>13</code>=32B, <code>14</code>=48B, <code>15</code>=64B. Classic CAN maxes out at DLC 8.
       </div>
       <div class="field-row">
         <div class="field"><label>Flags</label><input id="m-can-flags"/></div>
         <div class="field"><label>Channel</label><input id="m-can-channel" type="number" min="0"/></div>
+      </div>
+      <div class="field-hint">
+        Flags is a bitmask, combine with bitwise OR: <code>0x01</code> = CANFD_BRS (bit-rate switch),
+        <code>0x02</code> = CANFD_ESI (error state indicator), <code>0x04</code> = CANFD_FDF (FD frame format).
+        E.g. <code>0x05</code> = FDF + BRS, a typical CAN FD frame. Leave 0 for classic CAN.
       </div>
     </div>
 
@@ -552,6 +586,10 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
         <div class="field"><label>Dst IP</label><input id="m-eth-dst-ip"/></div>
       </div>
       <div class="field"><label>IP Version</label><input id="m-eth-ipver" type="number" min="0" max="6"/></div>
+      <div class="field-hint">
+        Ethernet frames have no packed flags field. VLAN ID <code>0</code> means untagged;
+        any other value tags the frame with that VLAN.
+      </div>
     </div>
 
     <div id="m-tcp-fields" style="display:none">
@@ -568,11 +606,16 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
         <div class="field"><label>IP Version</label><input id="m-tcp-ipver" type="number" min="0" max="6"/></div>
         <div class="field"><label>Conn Id (-1=new, -2=close)</label><input id="m-tcp-conn-id" type="number"/></div>
       </div>
+      <div class="field-hint">
+        TCP has no packed flags field either — connection lifecycle is carried entirely by Conn Id:
+        <code>-1</code> opens a new connection, <code>-2</code> closes one, <code>&gt;=0</code> reuses an existing connection.
+      </div>
     </div>
 
     <div id="m-pdu-fields" style="display:none">
       <h3 style="font-size:12px;color:var(--muted);margin-top:12px">PDU metadata</h3>
       <div class="field"><label>PDU Id</label><input id="m-pdu-id" placeholder="0x1 or 1"/></div>
+      <div class="field-hint">PDU frames have no packed flags field — just the PDU Id shown above.</div>
     </div>
 
     <div class="modal-actions">
@@ -619,6 +662,31 @@ function parseIntFlexible(v) {
   v = String(v).trim();
   if (v.toLowerCase().startsWith("0x")) return parseInt(v, 16) || 0;
   return parseInt(v, 10) || 0;
+}
+
+// Splits a numeric string into 3-digit groups from the right and colors the
+// last three (ms/µs/ns) so large epoch-nanosecond timestamps are easier to
+// place visually. Pure string manipulation on purpose -- real epoch-ns
+// values (~1.8e18) exceed JS's 53-bit safe-integer range, so this must never
+// round-trip through parseInt()/Number(), or it silently loses precision.
+function formatTimestampGroups(raw) {
+  const digits = String(raw || "").replace(/[^0-9]/g, "");
+  if (!digits) return "";
+  const groups = [];
+  for (let i = digits.length; i > 0; i -= 3) {
+    groups.unshift(digits.slice(Math.max(0, i - 3), i));
+  }
+  const n = groups.length;
+  return groups.map((g, idx) => {
+    const fromRight = n - idx;
+    const cls = fromRight === 1 ? "ts-ns" : fromRight === 2 ? "ts-us" : fromRight === 3 ? "ts-ms" : "ts-s";
+    return `<span class="${cls}">${g}</span>`;
+  }).join('<span class="ts-dot">.</span>');
+}
+
+function updateTsPreview() {
+  const raw = document.getElementById("m-ts").value;
+  document.getElementById("m-ts-preview").innerHTML = formatTimestampGroups(raw) || '<span class="ts-s">0</span>';
 }
 
 // ── File loading ──────────────────────────────────────────────────────────
@@ -763,7 +831,7 @@ function renderTable() {
       <td>${f.timestamp_ns}</td>
       <td>${esc(summaryFor(f))}</td>
       <td class="payload-cell" title="${esc(f.payload)}">${esc(f.payload)}</td>
-      <td>${f.payload_len}</td>
+      <td>${Math.floor((f.payload||"").length/2)}</td>
       <td class="row-actions">
         <button onclick="openEditModal(${f.index})">Edit</button>
         <button onclick="openInsertModal(${f.index})">Insert After</button>
@@ -856,7 +924,8 @@ function closeModal() {
 function fillModal(f) {
   document.getElementById("m-bus-type").value = f.bus_type || "CAN";
   document.getElementById("m-iface").value = f.iface || "";
-  document.getElementById("m-ts").value = f.timestamp_ns || 0;
+  document.getElementById("m-ts").value = f.timestamp_ns || "0";
+  updateTsPreview();
   document.getElementById("m-payload").value = f.payload || "";
 
   const c = f.can || {};
@@ -899,12 +968,14 @@ function onModalBusTypeChange() {
 function collectModal() {
   const bt = document.getElementById("m-bus-type").value;
   const payload = (document.getElementById("m-payload").value || "").replace(/\s+/g,"");
+  // Kept as a string end-to-end -- see formatTimestampGroups() above for why.
+  const tsDigits = (document.getElementById("m-ts").value || "").replace(/[^0-9]/g, "");
   const frame = {
     bus_type: bt,
     iface: document.getElementById("m-iface").value || "",
-    timestamp_ns: parseInt(document.getElementById("m-ts").value) || 0,
+    timestamp_ns: tsDigits || "0",
     payload: payload,
-    payload_len: payload.length / 2,
+    payload_len: Math.floor(payload.length / 2),
   };
   if (bt === "CAN" || bt === "CANFD") {
     frame.metadata_type = "can";
