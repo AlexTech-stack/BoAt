@@ -214,7 +214,11 @@ def _resolve_path(path_str: str) -> Path:
 @app.get("/api/trace/list")
 def api_trace_list():
     files = []
-    for d in [_EXPORT_DIR, Path.home()]:
+    # /tmp is where FlatFileTraceStore actually writes imported traces
+    # (server-side path is hardcoded as /tmp/<trace_id>.trace in
+    # replay_service_impl.cpp), so that's the most useful default place to
+    # look -- alongside traces/ (this tool's own save location) and $HOME.
+    for d in [Path("/tmp"), _EXPORT_DIR, Path.home()]:
         try:
             for f in Path(d).glob("*.trace"):
                 files.append(str(f))
@@ -516,6 +520,7 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
   <button class="btn-danger" id="delete-selected-btn" onclick="deleteSelected()" disabled>Delete Selected</button>
   <button class="btn-primary" onclick="saveFile()">Save</button>
   <button onclick="saveAs()">Save As</button>
+  <label>Gateway <input id="gateway-addr" placeholder="localhost:50051" style="width:150px" onchange="saveGatewayCookie()"/></label>
   <button class="btn-add" onclick="pushToGateway()">Push to Gateway</button>
 </div>
 
@@ -789,12 +794,31 @@ async function saveAs() {
   } catch(e) { toast("Save failed: " + e.message,"error"); }
 }
 
+// Gateway address is remembered across sessions/reloads via a cookie, since
+// it's normally constant for a given setup -- no reason to retype it on
+// every push. Trace ID stays a prompt since it's per-push, not per-session.
+const GATEWAY_COOKIE = "boat_trace_editor_gateway";
+
+function setCookie(name, value, days) {
+  const maxAge = (days || 365) * 24 * 60 * 60;
+  document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAge}; path=/; SameSite=Lax`;
+}
+
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)"));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function saveGatewayCookie() {
+  const val = document.getElementById("gateway-addr").value.trim();
+  if (val) setCookie(GATEWAY_COOKIE, val);
+}
+
 async function pushToGateway() {
   const defaultId = currentPath ? currentPath.split(/[\\/]/).pop().replace(/\.[^.]+$/, "") : "edited";
   const traceId = prompt("Trace ID to import as on the gateway:", defaultId);
   if (!traceId) return;
-  const gateway = prompt("Gateway address:", "localhost:50051");
-  if (!gateway) return;
+  const gateway = document.getElementById("gateway-addr").value.trim() || "localhost:50051";
   try {
     const r = await api("POST", "/api/trace/push", {trace_id: traceId, gateway: gateway});
     toast(`Pushed ${r.count} frames to gateway as trace_id "${r.trace_id}". Run: boat replay start --trace ${r.trace_id}`,"success");
@@ -1109,6 +1133,7 @@ async function saveModal() {
 
 // ── Init ──────────────────────────────────────────────────────────────────
 (async function init() {
+  document.getElementById("gateway-addr").value = getCookie(GATEWAY_COOKIE) || "localhost:50051";
   await refreshFileList();
   try {
     const fr = await api("GET","/api/frames");
