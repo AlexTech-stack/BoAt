@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import struct
 import sys
 import threading
 from pathlib import Path
@@ -56,6 +57,113 @@ def _ip_from_str(s: str) -> bytes:
     if not s:
         return b""
     return ipaddress.ip_address(s).packed
+
+# ── Ethernet L3/L4 packet construction (Payload = full IP packet) ─────────────
+#
+# For ETHERNET frames, Frame.payload is the *entire* L3 packet starting at
+# the IP header (matching what TraceReplayer.convert_to_binary() produces
+# from imported pcaps) -- EthMetadata only carries L2 addressing plus a
+# convenience copy of the IP addresses, not ports or protocol. These helpers
+# let the UI present a guided UDP/ICMP form (ports, type/code, app data)
+# instead of requiring the whole packet to be hand-built as raw hex, using
+# the same header layout and checksum algorithm as the pcap-import path
+# (TraceReplayer._reconstruct_ip4_packet/_reconstruct_ip6_packet).
+
+def _ip_checksum(data: bytes) -> int:
+    s = 0
+    for i in range(0, len(data), 2):
+        word = (data[i] << 8) | (data[i + 1] if i + 1 < len(data) else 0)
+        s += word
+    while s >> 16:
+        s = (s & 0xFFFF) + (s >> 16)
+    return (~s) & 0xFFFF
+
+def _build_ipv4_header(src_ip: bytes, dst_ip: bytes, protocol: int, payload_len: int) -> bytes:
+    total_len = 20 + payload_len
+    header = struct.pack("!BBHHHBBH4s4s", 0x45, 0, total_len, 0, 0, 64, protocol, 0, src_ip, dst_ip)
+    csum = _ip_checksum(header)
+    return header[:10] + struct.pack("!H", csum) + header[12:]
+
+def _build_ipv6_header(src_ip: bytes, dst_ip: bytes, next_header: int, payload_len: int) -> bytes:
+    if len(src_ip) != 16 or len(dst_ip) != 16:
+        raise ValueError("IPv6 addresses must be exactly 16 bytes")
+    return struct.pack("!IHBB", 0x60000000, payload_len, next_header, 64) + src_ip + dst_ip
+
+def _build_udp_packet(ip_version: int, src_ip: bytes, dst_ip: bytes,
+                       src_port: int, dst_port: int, data: bytes) -> bytes:
+    udp_len = 8 + len(data)
+    udp_header = struct.pack("!HHHH", src_port, dst_port, udp_len, 0) + data
+    if ip_version == 6:
+        pseudo = src_ip + dst_ip + struct.pack("!I", udp_len) + b"\x00\x00\x00" + struct.pack("!B", 17)
+        ip_header = _build_ipv6_header(src_ip, dst_ip, 17, udp_len)
+    else:
+        pseudo = src_ip + dst_ip + b"\x00" + struct.pack("!BH", 17, udp_len)
+        ip_header = _build_ipv4_header(src_ip, dst_ip, 17, udp_len)
+    csum = _ip_checksum(pseudo + udp_header)
+    if csum == 0:
+        csum = 0xFFFF  # RFC 768: an all-zero computed checksum is transmitted as all-ones
+    udp_segment = udp_header[:6] + struct.pack("!H", csum) + udp_header[8:]
+    return ip_header + udp_segment
+
+def _build_icmp_packet(ip_version: int, src_ip: bytes, dst_ip: bytes,
+                        icmp_type: int, icmp_code: int, identifier: int,
+                        sequence: int, data: bytes) -> bytes:
+    next_header = 58 if ip_version == 6 else 1  # ICMPv6 vs ICMPv4
+    icmp_header = struct.pack("!BBHHH", icmp_type, icmp_code, 0, identifier, sequence) + data
+    if ip_version == 6:
+        # ICMPv6 checksum includes the IPv6 pseudo-header (RFC 4443); ICMPv4 does not.
+        pseudo = src_ip + dst_ip + struct.pack("!I", len(icmp_header)) + b"\x00\x00\x00" + struct.pack("!B", next_header)
+        csum = _ip_checksum(pseudo + icmp_header)
+        ip_header = _build_ipv6_header(src_ip, dst_ip, next_header, len(icmp_header))
+    else:
+        csum = _ip_checksum(icmp_header)
+        ip_header = _build_ipv4_header(src_ip, dst_ip, next_header, len(icmp_header))
+    icmp_segment = icmp_header[:2] + struct.pack("!H", csum) + icmp_header[4:]
+    return ip_header + icmp_segment
+
+def _parse_ip_l4(payload: bytes, ip_version: int) -> Optional[dict[str, Any]]:
+    """Best-effort parse of an existing raw payload as IPv4/IPv6 + UDP/ICMP.
+
+    Returns None if it doesn't look like one of those (e.g. TCP, or not even
+    a valid IP packet) -- the caller falls back to raw hex editing.
+    """
+    try:
+        if ip_version == 6:
+            if len(payload) < 40:
+                return None
+            next_header = payload[6]
+            l4 = payload[40:]
+            src_ip, dst_ip = _ip_to_str(payload[8:24]), _ip_to_str(payload[24:40])
+            udp_proto, icmp_proto = 17, 58
+        else:
+            if len(payload) < 20:
+                return None
+            ihl = (payload[0] & 0x0F) * 4
+            if ihl < 20 or ihl > len(payload):
+                return None
+            next_header = payload[9]
+            l4 = payload[ihl:]
+            src_ip, dst_ip = _ip_to_str(payload[12:16]), _ip_to_str(payload[16:20])
+            udp_proto, icmp_proto = 17, 1
+
+        if next_header == udp_proto and len(l4) >= 8:
+            src_port, dst_port = struct.unpack("!HH", l4[0:4])
+            return {
+                "protocol": "udp", "src_ip": src_ip, "dst_ip": dst_ip,
+                "src_port": src_port, "dst_port": dst_port,
+                "data": l4[8:].hex().upper(),
+            }
+        if next_header == icmp_proto and len(l4) >= 8:
+            icmp_type, icmp_code, _csum, identifier, sequence = struct.unpack("!BBHHH", l4[0:8])
+            return {
+                "protocol": "icmp", "src_ip": src_ip, "dst_ip": dst_ip,
+                "icmp_type": icmp_type, "icmp_code": icmp_code,
+                "identifier": identifier, "sequence": sequence,
+                "data": l4[8:].hex().upper(),
+            }
+    except Exception:
+        pass
+    return None
 
 def _frame_to_dict(frame, index: int) -> dict[str, Any]:
     d: dict[str, Any] = {
@@ -373,6 +481,60 @@ def api_frame_insert(body: dict):
         count = len(_current_frames)
     return {"status": "ok", "index": pos, "count": count}
 
+@app.post("/api/eth/build")
+def api_eth_build(body: dict):
+    """Build a full IP+UDP or IP+ICMP packet from structured fields.
+
+    Returns the resulting bytes as hex, meant to be stored directly as the
+    frame's payload (see the module docstring above _ip_checksum for why
+    Ethernet frames carry the whole L3 packet as payload).
+    """
+    ip_version = int(body.get("ip_version") or 4)
+    try:
+        src_ip = _ip_from_str(body.get("src_ip") or "")
+        dst_ip = _ip_from_str(body.get("dst_ip") or "")
+    except ValueError as e:
+        raise HTTPException(400, f"Invalid IP address: {e}")
+    if not src_ip or not dst_ip:
+        raise HTTPException(400, "src_ip and dst_ip are required")
+    expected_len = 16 if ip_version == 6 else 4
+    if len(src_ip) != expected_len or len(dst_ip) != expected_len:
+        raise HTTPException(400, f"src_ip/dst_ip must be valid IPv{ip_version} addresses")
+
+    try:
+        data = bytes.fromhex((body.get("data") or "").replace(" ", ""))
+    except ValueError:
+        raise HTTPException(400, "Invalid hex in 'data'")
+
+    protocol = body.get("protocol")
+    try:
+        if protocol == "udp":
+            packet = _build_udp_packet(ip_version, src_ip, dst_ip,
+                                        int(body.get("src_port") or 0), int(body.get("dst_port") or 0), data)
+        elif protocol == "icmp":
+            packet = _build_icmp_packet(ip_version, src_ip, dst_ip,
+                                         int(body.get("icmp_type") or 0), int(body.get("icmp_code") or 0),
+                                         int(body.get("identifier") or 0), int(body.get("sequence") or 0), data)
+        else:
+            raise HTTPException(400, f"Unknown protocol: {protocol!r} (expected 'udp' or 'icmp')")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Failed to build packet: {e}")
+
+    return {"payload": packet.hex().upper()}
+
+@app.post("/api/eth/parse")
+def api_eth_parse(body: dict):
+    """Best-effort parse an existing Ethernet payload as IP+UDP/ICMP, for
+    pre-filling the guided form when opening an already-existing frame."""
+    ip_version = int(body.get("ip_version") or 4)
+    try:
+        payload = bytes.fromhex((body.get("payload") or "").replace(" ", ""))
+    except ValueError:
+        raise HTTPException(400, "Invalid hex payload")
+    return {"parsed": _parse_ip_l4(payload, ip_version)}
+
 # ── HTML ──────────────────────────────────────────────────────────────────────
 
 HTML = r"""<!DOCTYPE html>
@@ -522,6 +684,7 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
   <button onclick="saveAs()">Save As</button>
   <label>Gateway <input id="gateway-addr" placeholder="localhost:50051" style="width:150px" onchange="saveGatewayCookie()"/></label>
   <button class="btn-add" onclick="pushToGateway()">Push to Gateway</button>
+  <a href="/howto" target="_blank" style="color:var(--muted);font-size:12px;text-decoration:none;padding:5px 10px;border:1px solid var(--border);border-radius:4px">Help</a>
 </div>
 
 <div class="filterbar">
@@ -609,7 +772,7 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
     </div>
 
     <div id="m-eth-fields" style="display:none">
-      <h3 style="font-size:12px;color:var(--muted);margin-top:12px">Ethernet metadata</h3>
+      <h3 style="font-size:12px;color:var(--muted);margin-top:12px">Ethernet metadata (L2)</h3>
       <div class="field-row">
         <div class="field"><label>Src MAC</label><input id="m-eth-src-mac" placeholder="aa:bb:cc:dd:ee:ff"/></div>
         <div class="field"><label>Dst MAC</label><input id="m-eth-dst-mac" placeholder="aa:bb:cc:dd:ee:ff"/></div>
@@ -618,14 +781,78 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
         <div class="field"><label>EtherType</label><input id="m-eth-ethertype" placeholder="0x0800"/></div>
         <div class="field"><label>VLAN ID</label><input id="m-eth-vlan" type="number" min="0"/></div>
       </div>
-      <div class="field-row">
-        <div class="field"><label>Src IP</label><input id="m-eth-src-ip"/></div>
-        <div class="field"><label>Dst IP</label><input id="m-eth-dst-ip"/></div>
-      </div>
-      <div class="field"><label>IP Version</label><input id="m-eth-ipver" type="number" min="0" max="6"/></div>
       <div class="field-hint">
         Ethernet frames have no packed flags field. VLAN ID <code>0</code> means untagged;
-        any other value tags the frame with that VLAN.
+        any other value tags the frame with that VLAN (metadata only, not spliced into the packet bytes below).
+        <strong>EtherType is set independently here</strong> and is never auto-filled or overwritten by the IP
+        Version / L4 Protocol choices below -- set it yourself to match: <code>0x0800</code> for IPv4,
+        <code>0x86DD</code> for IPv6. A mismatch (e.g. IPv6 payload with EtherType left at IPv4) will build a
+        packet a real receiver can't parse correctly.
+      </div>
+
+      <h3 style="font-size:12px;color:var(--muted);margin-top:12px">IP / transport layer</h3>
+      <div class="field-row">
+        <div class="field"><label>IP Version</label>
+          <select id="m-eth-ipver" onchange="onEthFieldChange()">
+            <option value="4">IPv4</option>
+            <option value="6">IPv6</option>
+          </select>
+        </div>
+        <div class="field"><label>L4 Protocol</label>
+          <select id="m-eth-protocol" onchange="onEthProtocolChange()">
+            <option value="">None (edit raw packet bytes below)</option>
+            <option value="udp">UDP</option>
+            <option value="icmp">ICMP</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Src IP</label><input id="m-eth-src-ip" oninput="onEthFieldChange()"/></div>
+        <div class="field"><label>Dst IP</label><input id="m-eth-dst-ip" oninput="onEthFieldChange()"/></div>
+      </div>
+      <div class="field-hint">
+        <code>Frame.payload</code> for Ethernet is the whole IP packet, not just an application payload -- there's
+        no separate header/data split at the protocol level. Pick UDP or ICMP here to fill in the header fields
+        below and have the full packet (with correct length/checksum) built for you; pick "None" to edit the raw
+        packet bytes directly (needed for TCP -- this codebase sends TCP through its own connection-oriented
+        plugin, not as raw frames, so a guided TCP form wouldn't be replayable here anyway).
+      </div>
+
+      <div id="m-eth-udp-fields" style="display:none">
+        <div class="field-row">
+          <div class="field"><label>Src Port</label><input id="m-eth-src-port" type="number" min="0" max="65535" oninput="onEthFieldChange()"/></div>
+          <div class="field"><label>Dst Port</label><input id="m-eth-dst-port" type="number" min="0" max="65535" oninput="onEthFieldChange()"/></div>
+        </div>
+      </div>
+
+      <div id="m-eth-icmp-fields" style="display:none">
+        <div class="field-row">
+          <div class="field"><label>Type</label><input id="m-eth-icmp-type" type="number" min="0" max="255" oninput="onEthFieldChange()"/></div>
+          <div class="field"><label>Code</label><input id="m-eth-icmp-code" type="number" min="0" max="255" oninput="onEthFieldChange()"/></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Identifier</label><input id="m-eth-icmp-id" type="number" min="0" max="65535" oninput="onEthFieldChange()"/></div>
+          <div class="field"><label>Sequence</label><input id="m-eth-icmp-seq" type="number" min="0" max="65535" oninput="onEthFieldChange()"/></div>
+        </div>
+        <div class="field-hint">
+          Type/code: IPv4 echo request = <code>8</code>/<code>0</code>, echo reply = <code>0</code>/<code>0</code>.
+          IPv6 echo request = <code>128</code>/<code>0</code>, echo reply = <code>129</code>/<code>0</code>.
+        </div>
+      </div>
+
+      <div id="m-eth-appdata-field" class="field" style="display:none">
+        <label>Application Data (hex)</label>
+        <textarea id="m-eth-appdata" oninput="onEthFieldChange()" placeholder="Bytes after the UDP/ICMP header, if any"></textarea>
+      </div>
+
+      <div id="m-eth-preview-wrap" style="display:none">
+        <div class="field-hint">
+          Payload (hex) above is now <strong>built automatically</strong> from these fields --
+          IP header + <span id="m-eth-preview-proto"></span> header + Application Data, with length and
+          checksum computed for you. It's read-only while a protocol is selected; switch L4 Protocol to
+          "None" to take over editing it directly.
+        </div>
+        <div id="m-eth-build-error" class="field-hint" style="display:none;border-color:var(--red);color:var(--red)"></div>
       </div>
     </div>
 
@@ -942,17 +1169,17 @@ async function deleteSelected() {
 }
 
 // ── Modal: edit / insert ────────────────────────────────────────────────────
-function openEditModal(index) {
+async function openEditModal(index) {
   const f = frames.find(x => x.index === index);
   if (!f) return;
   editingIndex = index;
   insertAfterIndex = null;
   document.getElementById("modal-title").textContent = `Edit Frame #${index}`;
-  fillModal(f);
   document.getElementById("modal-overlay").style.display = "flex";
+  await fillModal(f);
 }
 
-function openInsertModal(afterIndex) {
+async function openInsertModal(afterIndex) {
   // Pre-fill from the adjacent frame as a convenience starting point, if any.
   // For "insert at start" (afterIndex < 0) there is no preceding frame, so
   // clone the frame currently at position 0 instead: the replay engine
@@ -967,9 +1194,9 @@ function openInsertModal(afterIndex) {
   insertAfterIndex = afterIndex;
   document.getElementById("modal-title").textContent =
     afterIndex < 0 ? "Insert Frame at Start" : `Insert Frame After #${afterIndex}`;
-  fillModal(base || {bus_type:"CAN", iface:"", timestamp_ns:0, payload:"", metadata_type:"can",
-    can:{can_id:0, dlc:0, flags:0, channel:1}});
   document.getElementById("modal-overlay").style.display = "flex";
+  await fillModal(base || {bus_type:"CAN", iface:"", timestamp_ns:0, payload:"", metadata_type:"can",
+    can:{can_id:0, dlc:0, flags:0, channel:1}});
 }
 
 function closeModal() {
@@ -977,7 +1204,7 @@ function closeModal() {
   editingIndex = null; insertAfterIndex = null;
 }
 
-function fillModal(f) {
+async function fillModal(f) {
   document.getElementById("m-bus-type").value = f.bus_type || "CAN";
   document.getElementById("m-iface").value = f.iface || "";
   document.getElementById("m-ts").value = f.timestamp_ns || "0";
@@ -997,7 +1224,8 @@ function fillModal(f) {
   document.getElementById("m-eth-vlan").value = e.vlan_id || 0;
   document.getElementById("m-eth-src-ip").value = e.src_ip || "";
   document.getElementById("m-eth-dst-ip").value = e.dst_ip || "";
-  document.getElementById("m-eth-ipver").value = e.ip_version || 0;
+  document.getElementById("m-eth-ipver").value = String(e.ip_version || 4);
+  await fillEthProtocolFields(f.bus_type, e.ip_version || 4, f.payload || "");
 
   const t = f.tcp || {};
   document.getElementById("m-tcp-src-ip").value = t.src_ip || "";
@@ -1020,6 +1248,90 @@ function onModalBusTypeChange() {
   document.getElementById("m-eth-fields").style.display = bt==="ETHERNET" ? "block" : "none";
   document.getElementById("m-tcp-fields").style.display = bt==="TCP" ? "block" : "none";
   document.getElementById("m-pdu-fields").style.display = bt==="PDU" ? "block" : "none";
+}
+
+// ── Ethernet guided UDP/ICMP packet builder ─────────────────────────────────
+// Frame.payload for ETHERNET frames is the whole IP packet (see the
+// field-hint text above m-eth-udp-fields). Selecting a protocol here builds
+// that packet server-side (/api/eth/build, sharing the same header/checksum
+// logic as pcap import) and writes it into the shared #m-payload field,
+// which is otherwise the raw-hex editor used by every other bus type.
+
+function onEthProtocolChange() {
+  const proto = document.getElementById("m-eth-protocol").value;
+  document.getElementById("m-eth-udp-fields").style.display = proto === "udp" ? "block" : "none";
+  document.getElementById("m-eth-icmp-fields").style.display = proto === "icmp" ? "block" : "none";
+  document.getElementById("m-eth-appdata-field").style.display = proto ? "block" : "none";
+  document.getElementById("m-eth-preview-wrap").style.display = proto ? "block" : "none";
+  document.getElementById("m-eth-preview-proto").textContent = proto.toUpperCase();
+  const payloadEl = document.getElementById("m-payload");
+  payloadEl.readOnly = !!proto;
+  payloadEl.style.opacity = proto ? "0.65" : "1";
+  if (proto) rebuildEthPacket();
+}
+
+function onEthFieldChange() {
+  if (document.getElementById("m-eth-protocol").value) rebuildEthPacket();
+}
+
+async function rebuildEthPacket() {
+  const proto = document.getElementById("m-eth-protocol").value;
+  if (!proto) return;
+  const body = {
+    ip_version: parseInt(document.getElementById("m-eth-ipver").value) || 4,
+    protocol: proto,
+    src_ip: document.getElementById("m-eth-src-ip").value || "",
+    dst_ip: document.getElementById("m-eth-dst-ip").value || "",
+    data: (document.getElementById("m-eth-appdata").value || "").replace(/\s+/g,""),
+  };
+  if (proto === "udp") {
+    body.src_port = parseInt(document.getElementById("m-eth-src-port").value) || 0;
+    body.dst_port = parseInt(document.getElementById("m-eth-dst-port").value) || 0;
+  } else if (proto === "icmp") {
+    body.icmp_type = parseInt(document.getElementById("m-eth-icmp-type").value) || 0;
+    body.icmp_code = parseInt(document.getElementById("m-eth-icmp-code").value) || 0;
+    body.identifier = parseInt(document.getElementById("m-eth-icmp-id").value) || 0;
+    body.sequence = parseInt(document.getElementById("m-eth-icmp-seq").value) || 0;
+  }
+  const errEl = document.getElementById("m-eth-build-error");
+  try {
+    const r = await api("POST", "/api/eth/build", body);
+    document.getElementById("m-payload").value = r.payload;
+    errEl.style.display = "none";
+  } catch(e) {
+    errEl.style.display = "block";
+    errEl.textContent = "Could not build packet: " + e.message;
+  }
+}
+
+// Auto-detects an existing ETHERNET frame's payload as UDP/ICMP (via
+// /api/eth/parse) and pre-fills the guided fields; leaves L4 Protocol on
+// "None" (raw) for anything else (TCP, or payloads that just aren't a
+// recognizable IP packet), so real bytes are never hidden or reinterpreted
+// incorrectly.
+async function fillEthProtocolFields(busType, ipVersion, payloadHex) {
+  document.getElementById("m-eth-protocol").value = "";
+  onEthProtocolChange();
+  if (busType !== "ETHERNET" || !payloadHex) return;
+  try {
+    const r = await api("POST", "/api/eth/parse", {ip_version: ipVersion, payload: payloadHex});
+    const p = r.parsed;
+    if (!p) return;
+    if (p.protocol === "udp") {
+      document.getElementById("m-eth-src-port").value = p.src_port;
+      document.getElementById("m-eth-dst-port").value = p.dst_port;
+    } else if (p.protocol === "icmp") {
+      document.getElementById("m-eth-icmp-type").value = p.icmp_type;
+      document.getElementById("m-eth-icmp-code").value = p.icmp_code;
+      document.getElementById("m-eth-icmp-id").value = p.identifier;
+      document.getElementById("m-eth-icmp-seq").value = p.sequence;
+    } else {
+      return;
+    }
+    document.getElementById("m-eth-appdata").value = p.data;
+    document.getElementById("m-eth-protocol").value = p.protocol;
+    onEthProtocolChange();
+  } catch(e) { /* leave in raw mode on any parse failure */ }
 }
 
 // DLC means "how many payload bytes actually get sent" everywhere in this
@@ -1154,6 +1466,11 @@ async function saveModal() {
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTMLResponse(HTML)
+
+@app.get("/howto", response_class=HTMLResponse)
+def howto():
+    howto_path = Path(__file__).resolve().parent / "trace_editor_howto.html"
+    return HTMLResponse(howto_path.read_text(encoding="utf-8"))
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────

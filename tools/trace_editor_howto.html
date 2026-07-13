@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>BoAt — Trace Editor Howto</title>
+<style>
+:root {
+  --bg:     #0d1117;
+  --panel:  #161b22;
+  --border: #30363d;
+  --text:   #e6edf3;
+  --muted:  #8b949e;
+  --blue:   #58a6ff;
+  --green:  #3fb950;
+  --yellow: #d29922;
+  --red:    #f85149;
+  --purple: #d2a8ff;
+  --orange: #ffa657;
+  --mono:   "SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  font-size:14px; line-height:1.6;
+}
+header {
+  height:46px; background:var(--panel); border-bottom:1px solid var(--border);
+  display:flex; align-items:center; padding:0 16px; gap:12px;
+}
+.logo { font-weight:700; color:var(--blue); font-size:16px; }
+.subtitle { color:var(--muted); font-size:13px; }
+.spacer { flex:1; }
+#panel-nav {
+  height:32px; background:#0d1117; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; padding:0 16px; gap:8px;
+}
+#panel-nav .nav-link { color:var(--muted); font-size:12px; text-decoration:none; padding:4px 10px; border-radius:4px; }
+#panel-nav .nav-link:hover { color:var(--text); background:var(--panel); }
+main { max-width:860px; margin:0 auto; padding:24px 24px 80px; }
+h1 { font-size:22px; margin-bottom:4px; }
+h2 { font-size:16px; margin:28px 0 10px; color:var(--blue); border-bottom:1px solid var(--border); padding-bottom:6px; }
+h3 { font-size:13px; margin:18px 0 8px; color:var(--text); }
+p, li { color:var(--text); }
+p { margin-bottom:10px; }
+ul, ol { margin:0 0 12px 22px; }
+li { margin-bottom:6px; }
+code {
+  font-family:var(--mono); font-size:12px; background:var(--panel); border:1px solid var(--border);
+  border-radius:3px; padding:1px 5px; color:var(--orange);
+}
+pre {
+  font-family:var(--mono); font-size:12px; background:var(--panel); border:1px solid var(--border);
+  border-radius:6px; padding:10px 14px; overflow-x:auto; margin:10px 0 14px; color:var(--green);
+}
+pre code { background:none; border:none; padding:0; color:inherit; }
+.callout {
+  background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--blue);
+  border-radius:6px; padding:10px 14px; margin:10px 0 14px; font-size:13px;
+}
+.callout.warn { border-left-color:var(--red); }
+.callout strong { color:var(--red); }
+.field-table { width:100%; border-collapse:collapse; font-size:13px; margin:8px 0 16px; }
+.field-table th, .field-table td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); }
+.field-table th { color:var(--muted); font-weight:600; font-size:11px; }
+.top-link { color:var(--blue); text-decoration:none; font-size:12px; }
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">⛵ BoAt</span>
+  <span class="subtitle">Trace Editor — Howto</span>
+  <span class="spacer"></span>
+  <a class="top-link" href="/">← Back to Trace Editor</a>
+</header>
+
+<nav id="panel-nav">
+  <a class="nav-link" data-port="8086">Launcher</a>
+  <a class="nav-link" data-port="8080">Dashboard</a>
+  <a class="nav-link" data-port="8081">Nodes</a>
+  <a class="nav-link" data-port="8082">Commander</a>
+  <a class="nav-link" data-port="8083">Recorder</a>
+  <a class="nav-link" data-port="8087">PDU Editor</a>
+  <a class="nav-link" data-port="8088">Trace Analyzer</a>
+  <a class="nav-link" data-port="8089" style="color:var(--blue)">Trace Editor</a>
+</nav>
+
+<main>
+  <h1>Trace Editor — How To</h1>
+  <p style="color:var(--muted)">
+    <code>tools/trace_editor.py</code> is a standalone tool for viewing, filtering, and editing
+    the frames inside a gateway binary trace file (the format produced by
+    <code>boat replay import</code> / <code>TraceReplayer.convert_to_binary()</code>). It needs no
+    running gateway to load, edit, or save a trace — a gateway is only needed for the optional
+    "Push to Gateway" action.
+  </p>
+  <pre><code>python3 tools/trace_editor.py
+# open http://localhost:8089  (port via BOAT_TRACE_EDITOR_PORT)</code></pre>
+
+  <h2>Loading a trace</h2>
+  <p>The file dropdown auto-populates from three places, no Browse needed for the common case:</p>
+  <ul>
+    <li><code>/tmp</code> — where the gateway actually writes imported traces
+      (<code>ImportTraceData</code>'s hardcoded storage path is <code>/tmp/&lt;trace_id&gt;.trace</code>),
+      so anything already imported shows up here.</li>
+    <li><code>traces/</code> — this tool's own default save location.</li>
+    <li>your home directory.</li>
+  </ul>
+  <p>Pick a file and click <strong>Load</strong>, or <strong>Browse...</strong> to type an
+  arbitrary path. <strong>New</strong> starts an empty trace from scratch.</p>
+
+  <h2>The frame table</h2>
+  <p>
+    Columns: index, bus type, iface, timestamp (ns), a one-line summary (CAN ID/DLC, MAC/IP:port,
+    etc.), the payload as hex, and <strong>Len</strong> — always the <em>actual</em> current
+    payload byte count, recomputed from the hex string every time the table renders, including
+    trailing zero bytes. It never trusts a separately cached length field, so it can't drift from
+    what's really there.
+  </p>
+  <p>
+    Use the filter bar (bus type, iface substring, CAN ID, timestamp range) to narrow down a large
+    trace. Filtering is client-side over the already-loaded frame list — no round-trip per filter
+    change.
+  </p>
+  <p>
+    Row actions: <strong>Edit</strong>, <strong>Insert After</strong> (clones the row as a
+    starting point for the new frame), and <strong>Delete</strong>. Checkboxes +
+    <strong>Delete Selected</strong> for bulk removal.
+  </p>
+
+  <h2>Saving and pushing to a gateway</h2>
+  <ul>
+    <li><strong>Save</strong> writes back to the currently loaded path; <strong>Save As</strong>
+      picks a new one (relative paths land under <code>traces/</code>).</li>
+    <li><strong>Push to Gateway</strong> uploads the current in-memory frames straight to a
+      running gateway via <code>ReplayService.ImportTraceData</code>, using the
+      <strong>Gateway</strong> address field in the toolbar (remembered across sessions via a
+      cookie, so you don't retype it every time).</li>
+  </ul>
+  <div class="callout">
+    Push is <em>not</em> the same as <code>boat replay import</code> — that command only accepts
+    source formats (<code>.asc</code>/<code>.blf</code>/<code>.pcap</code>) and always does its
+    own client-side conversion, so it can't re-ingest a trace that's already in this tool's binary
+    format. Push is the only way to get an edited trace back into a simulation. After pushing,
+    actually play it with:
+    <pre><code>boat replay start --trace &lt;trace_id&gt; --buses &lt;ifaceA,ifaceB&gt;</code></pre>
+  </div>
+  <p>
+    Both <strong>Save</strong> and <strong>Push</strong> report non-blocking warnings (shown as
+    toasts) for anything that looks like a mistake rather than blocking you outright — see
+    <a class="top-link" href="#gotchas" style="color:var(--blue)">Gotchas</a> below for what they check.
+  </p>
+
+  <h2>Editing a frame</h2>
+  <p>
+    Click <strong>Edit</strong> (or <strong>Insert After</strong> / <strong>+ Add Frame</strong>)
+    to open the frame form. Fields shown depend on the selected <strong>Bus Type</strong>.
+  </p>
+
+  <h3>Common fields</h3>
+  <ul>
+    <li><strong>Iface</strong> — what this does depends on bus type, see
+      <a class="top-link" href="#gotchas" style="color:var(--blue)">Gotchas</a>; for CAN/CANFD
+      it's essentially informational.</li>
+    <li><strong>Timestamp (ns)</strong> — the raw nanosecond value you edit is a big integer (real
+      epoch timestamps are ~19 digits); the box underneath is a read-only, colored, dot-separated
+      grouping of that same number (seconds · milliseconds · microseconds · nanoseconds, right to
+      left) purely to make it easier to read at a glance. It does not change what gets saved.</li>
+    <li><strong>Payload (hex)</strong> — shared across all bus types. For CAN/CANFD and PDU this
+      is the actual payload. For Ethernet it's the <em>entire</em> IP packet (see below) —
+      normally built for you rather than hand-edited.</li>
+  </ul>
+
+  <h3>CAN / CANFD</h3>
+  <p>
+    <strong>DLC</strong> auto-fills to match the Payload's byte length every time you edit
+    Payload.
+  </p>
+  <div class="callout warn">
+    <strong>DLC means "how many bytes actually get sent" — it is not an ISO 11898-1 DLC code.</strong>
+    If you edit DLC by hand to something smaller than the payload, the frame gets truncated to
+    that many bytes; a red warning appears immediately if DLC and payload length disagree, and the
+    same check runs again server-side on Save/Push in case a mismatch was created outside the UI
+    (e.g. a direct API call).
+  </div>
+  <p>
+    For CAN FD, if the resulting length isn't already one of the 8 valid FD lengths
+    (0-8/12/16/20/24/32/48/64 bytes), the gateway rounds it up and zero-pads automatically when the
+    frame is actually sent — you never need to pre-pad it yourself in the editor.
+  </p>
+  <p>
+    <strong>Flags</strong> is a bitmask: <code>0x01</code>=CANFD_BRS (bit-rate switch),
+    <code>0x02</code>=CANFD_ESI (error state indicator), <code>0x04</code>=CANFD_FDF (FD frame
+    format). Combine with bitwise OR — <code>0x05</code> is a typical FD frame with BRS. Leave at
+    <code>0</code> for classic CAN.
+  </p>
+
+  <h3>Ethernet</h3>
+  <p>
+    <code>Frame.payload</code> for Ethernet frames is the whole IP packet starting at the IP
+    header — there's no separate "header vs. data" split at the protocol level, which used to mean
+    hand-building the entire IPv4/IPv6 + UDP/ICMP header yourself as raw hex just to send one UDP
+    datagram. The editor now does that construction for you.
+  </p>
+  <div class="callout warn">
+    <strong>EtherType and VLAN ID are plain L2 metadata, set independently of everything below.</strong>
+    EtherType is never auto-filled or overwritten by the IP Version / L4 Protocol choice — set it
+    yourself to match (<code>0x0800</code> for IPv4, <code>0x86DD</code> for IPv6). Leaving it
+    inconsistent with the actual packet inside builds a frame a real receiver can't parse
+    correctly; the editor won't catch that mismatch for you.
+  </div>
+  <p><strong>IP Version</strong> (IPv4/IPv6) and <strong>L4 Protocol</strong> (None / UDP / ICMP) control the guided form:</p>
+  <table class="field-table">
+    <tr><th>Protocol</th><th>Fields</th><th>Notes</th></tr>
+    <tr><td>UDP</td><td>Src Port, Dst Port, Application Data (hex)</td>
+      <td>Builds a full IP+UDP packet with correct length and checksum.</td></tr>
+    <tr><td>ICMP</td><td>Type, Code, Identifier, Sequence, Application Data (hex)</td>
+      <td>IPv4 echo request/reply = <code>8</code>/<code>0</code> and <code>0</code>/<code>0</code>;
+        IPv6 = <code>128</code>/<code>0</code> and <code>129</code>/<code>0</code>.</td></tr>
+    <tr><td>None</td><td>Payload (hex) becomes a plain hex editor again</td>
+      <td>For anything the guided form doesn't cover — including TCP: this codebase sends TCP
+        through a dedicated connection-oriented plugin, not as raw frames, so a guided TCP builder
+        here wouldn't be replayable live anyway. Still fine to view/edit already-captured TCP bytes
+        as raw hex.</td></tr>
+  </table>
+  <p>
+    While a protocol is selected, the Payload field is a <strong>read-only preview</strong> of the
+    exact bytes that will be sent — switch L4 Protocol back to "None" to take over editing the raw
+    bytes directly.
+  </p>
+  <p>
+    <strong>Opening an existing frame</strong> auto-detects UDP/ICMP from its actual payload bytes
+    and pre-fills the guided fields; anything it can't recognize (TCP, or anything that isn't a
+    well-formed IP packet) is left in raw mode untouched — existing bytes are never silently
+    reinterpreted.
+  </p>
+
+  <h3>TCP / PDU</h3>
+  <p>
+    TCP and PDU fields are more direct: IPs/ports/connection-id for TCP (<strong>Conn Id</strong>:
+    <code>-1</code> opens a new connection, <code>-2</code> closes one, <code>&gt;=0</code> reuses
+    an existing one), just a numeric ID for PDU. Neither has a packed flags field.
+  </p>
+
+  <h2 id="gotchas">Gotchas and shared semantics</h2>
+  <h3>Iface means different things per bus type</h3>
+  <p>Confirmed from <code>replay_engine.cpp</code>'s <code>ProtoToCoreFrame()</code>:</p>
+  <table class="field-table">
+    <tr><th>Bus type</th><th>What <code>iface</code> does</th></tr>
+    <tr><td>CAN / CANFD</td><td>Ignored at replay time. The actual target interface always comes
+      from <code>channel</code>, resolved via <code>boat replay start/stream --buses</code>
+      (channel 1 → first <code>--buses</code> entry, channel 2 → second, etc.).</td></tr>
+    <tr><td>Ethernet</td><td>Used as a fallback only if <code>--eth-iface</code> isn't passed to replay.</td></tr>
+    <tr><td>PDU</td><td>Used directly.</td></tr>
+    <tr><td>TCP</td><td>Not used by this replay path at all (handled by the TCP plugin).</td></tr>
+  </table>
+
+  <h3>Timestamps should be non-decreasing</h3>
+  <p>
+    The replay engine schedules frames by absolute <code>timestamp_ns</code>; a frame timestamped
+    earlier than the one before it is a red flag (Save and Push both warn about this) — it used to
+    be able to hang the whole replay subsystem indefinitely on that one bad frame, which is now
+    fixed to at least not hang, but out-of-order timestamps are still not something you want in a
+    trace meant to replay in order.
+  </p>
+
+  <h3>Len always reflects the real payload</h3>
+  <p>Computed fresh from the hex string, not a cached field — trust it even after manual edits.</p>
+</main>
+<script>
+(function() {
+  const h = window.location.hostname, p = window.location.port;
+  document.querySelectorAll('.nav-link').forEach(a => {
+    a.href = 'http://' + h + ':' + a.dataset.port + '/';
+    if (a.dataset.port === p) a.classList.add('active');
+  });
+})();
+</script>
+</body>
+</html>
