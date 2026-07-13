@@ -171,6 +171,34 @@ def _monotonic_warnings(frames: list[dict[str, Any]]) -> list[str]:
         prev_ts = ts
     return warnings
 
+def _dlc_mismatch_warnings(frames: list[dict[str, Any]]) -> list[str]:
+    """Flag CAN/CANFD frames whose can.dlc doesn't match the actual payload length.
+
+    dlc means "how many payload bytes actually get sent" everywhere in this
+    codebase, not an ISO 11898-1 DLC code (see frame.proto's CanMetadata.dlc
+    comment) -- a mismatch silently truncates the frame (dlc < payload) or
+    sends zero padding for the gap (dlc > payload) rather than erroring, so
+    it's easy to end up with an unintended one, e.g. via a direct API/curl
+    edit that bypasses the editor's own auto-sync.
+    """
+    warnings: list[str] = []
+    for f in frames:
+        if f.get("metadata_type") != "can" or not f.get("can"):
+            continue
+        payload_len = len((f.get("payload") or "").replace(" ", "")) // 2
+        dlc = int(f["can"].get("dlc") or 0)
+        if dlc != payload_len:
+            consequence = (
+                f"the frame will be truncated to {dlc} byte(s) on send"
+                if dlc < payload_len else
+                f"the extra {dlc - payload_len} byte(s) will be sent as zero padding"
+            )
+            warnings.append(
+                f"Frame #{f.get('index')}: DLC ({dlc}) does not match payload length "
+                f"({payload_len} bytes) -- {consequence}."
+            )
+    return warnings
+
 def _reindex() -> None:
     for i, f in enumerate(_current_frames):
         f["index"] = i
@@ -237,7 +265,7 @@ def api_trace_save(body: dict):
     fp.write_bytes(binary)
     with _frames_lock:
         _current_path = str(fp)
-        warnings = _monotonic_warnings(_current_frames)
+        warnings = _monotonic_warnings(_current_frames) + _dlc_mismatch_warnings(_current_frames)
     return {"status": "ok", "path": str(fp), "count": len(frames), "warnings": warnings}
 
 @app.get("/api/frames")
@@ -300,7 +328,7 @@ def api_trace_push(body: dict):
         except ValueError as e:
             raise HTTPException(400, f"Invalid frame data: {e}")
         binary = TraceReplayer.frames_to_binary(frames)
-        warnings = _monotonic_warnings(_current_frames)
+        warnings = _monotonic_warnings(_current_frames) + _dlc_mismatch_warnings(_current_frames)
 
     try:
         from boat.client import BoAtClient
@@ -547,19 +575,23 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
       <div id="m-ts-preview" class="ts-preview"></div>
       <div class="ts-legend">Grouped right-to-left in 3s: <span class="ts-s">seconds</span> . <span class="ts-ms">milliseconds</span> . <span class="ts-us">microseconds</span> . <span class="ts-ns">nanoseconds</span> — the number above is unchanged, this is just a reading aid.</div>
     </div>
-    <div class="field"><label>Payload (hex)</label><textarea id="m-payload" placeholder="AABBCCDD"></textarea></div>
+    <div class="field"><label>Payload (hex)</label><textarea id="m-payload" oninput="onPayloadInput()" placeholder="AABBCCDD"></textarea></div>
 
     <div id="m-can-fields">
       <h3 style="font-size:12px;color:var(--muted);margin-top:12px">CAN metadata</h3>
       <div class="field-row">
         <div class="field"><label>CAN ID (hex or dec)</label><input id="m-can-id"/></div>
-        <div class="field"><label>DLC</label><input id="m-can-dlc" type="number" min="0" max="15"/></div>
+        <div class="field"><label>DLC</label><input id="m-can-dlc" type="number" min="0" max="64" oninput="onDlcInput()"/></div>
       </div>
       <div class="field-hint">
-        DLC → payload length: <code>0-8</code> = that many bytes (1:1). CAN&nbsp;FD only:
-        <code>9</code>=12B, <code>10</code>=16B, <code>11</code>=20B, <code>12</code>=24B,
-        <code>13</code>=32B, <code>14</code>=48B, <code>15</code>=64B. Classic CAN maxes out at DLC 8.
+        DLC is simply <strong>how many bytes of the payload actually get sent</strong> — it is
+        <em>not</em> an ISO 11898-1 DLC code. It normally auto-fills to match Payload's length above
+        (edit Payload and this updates); if you edit DLC by hand to something smaller than the payload,
+        the frame gets <strong>truncated</strong> to that many bytes, the rest of the payload is dropped.
+        For CAN&nbsp;FD, if the resulting length isn't already one of 0-8/12/16/20/24/32/48/64 bytes, it
+        gets rounded up and zero-padded automatically when sent — you don't need to pre-pad it yourself.
       </div>
+      <div id="m-dlc-warning" class="field-hint" style="display:none;border-color:var(--red);color:var(--red)"></div>
       <div class="field-row">
         <div class="field"><label>Flags</label><input id="m-can-flags"/></div>
         <div class="field"><label>Channel</label><input id="m-can-channel" type="number" min="0"/></div>
@@ -955,6 +987,7 @@ function fillModal(f) {
   document.getElementById("m-pdu-id").value = p.pdu_id || 0;
 
   onModalBusTypeChange();
+  checkDlcMismatch();  // surface pre-existing dlc/payload mismatches on open, without "fixing" them
 }
 
 function onModalBusTypeChange() {
@@ -963,6 +996,37 @@ function onModalBusTypeChange() {
   document.getElementById("m-eth-fields").style.display = bt==="ETHERNET" ? "block" : "none";
   document.getElementById("m-tcp-fields").style.display = bt==="TCP" ? "block" : "none";
   document.getElementById("m-pdu-fields").style.display = bt==="PDU" ? "block" : "none";
+}
+
+// DLC means "how many payload bytes actually get sent" everywhere in this
+// codebase -- it is NOT an ISO 11898-1 DLC code (see frame.proto's
+// CanMetadata.dlc comment). Auto-fill it from the payload by default so
+// editing a frame can't silently create a dlc/payload mismatch; a manual
+// edit to DLC afterward still works (e.g. to deliberately truncate), but
+// gets flagged so it's clear it's no longer just "the payload length".
+function onPayloadInput() {
+  const payload = (document.getElementById("m-payload").value || "").replace(/\s+/g,"");
+  document.getElementById("m-can-dlc").value = Math.floor(payload.length / 2);
+  checkDlcMismatch();
+}
+
+function onDlcInput() {
+  checkDlcMismatch();
+}
+
+function checkDlcMismatch() {
+  const payload = (document.getElementById("m-payload").value || "").replace(/\s+/g,"");
+  const payloadLen = Math.floor(payload.length / 2);
+  const dlc = parseInt(document.getElementById("m-can-dlc").value) || 0;
+  const warn = document.getElementById("m-dlc-warning");
+  if (dlc === payloadLen) {
+    warn.style.display = "none";
+    return;
+  }
+  warn.style.display = "block";
+  warn.textContent = dlc < payloadLen
+    ? `DLC (${dlc}) is less than the payload (${payloadLen} bytes) -- only the first ${dlc} byte(s) will actually be sent, the rest of the payload is dropped on save/replay.`
+    : `DLC (${dlc}) is more than the payload (${payloadLen} bytes) -- there's no data for the extra ${dlc - payloadLen} byte(s); they'll be sent as zero padding.`;
 }
 
 function collectModal() {
