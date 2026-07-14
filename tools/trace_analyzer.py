@@ -276,9 +276,13 @@ tr:hover td { background:rgba(88,166,255,0.03); }
 .slider:before { position:absolute; content:""; height:14px; width:14px; left:3px; bottom:3px; background-color:var(--text); transition:.3s; border-radius:50%; }
 input:checked + .slider { background-color:var(--blue); }
 input:checked + .slider:before { transform:translateX(16px); }
+#toast-container {
+  position:fixed; bottom:20px; right:20px; z-index:9999;
+  display:flex; flex-direction:column-reverse; gap:8px; align-items:flex-end;
+}
 .toast {
-  position:fixed; bottom:20px; right:20px; padding:10px 20px; border-radius:6px; font-size:13px;
-  z-index:9999; animation:fadeIn 0.2s;
+  padding:10px 20px; border-radius:6px; font-size:13px; max-width:420px;
+  animation:fadeIn 0.2s;
 }
 .toast.info { background:var(--blue); color:#fff; }
 .toast.error { background:var(--red); color:#fff; }
@@ -359,7 +363,10 @@ function toast(msg, type="info") {
   const el = document.createElement("div");
   el.className = "toast " + type; el.textContent = msg;
   document.getElementById("toast-container").appendChild(el);
-  setTimeout(() => el.remove(), 3000);
+  // Longer messages get more time to read; multiple toasts stack in the
+  // container (column-reverse) instead of overlapping at the same spot.
+  const duration = Math.min(8000, Math.max(3000, msg.length * 60));
+  setTimeout(() => el.remove(), duration);
 }
 
 async function api(method, url, body) {
