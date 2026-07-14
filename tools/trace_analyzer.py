@@ -423,7 +423,7 @@ async function analyze() {
     toast(`Analyzed ${lastResult.file_name}: ${lastResult.total_frames} frames, ${lastResult.unique_ids} CAN IDs`,"success");
     (lastResult.warnings || []).forEach(w => toast(w, "info"));
     if (includeSignals && lastResult.numpy_available === false) {
-      toast("numpy not installed — signal reverse-engineering used the slower pure-Python fallback","info");
+      toast("numpy not installed — signal reverse-engineering used the slower pure-Python fallback. Install with: pip install -e ./boat-platform/sdk/python[analysis]","info");
     }
   } catch(e) {
     document.getElementById("progress").style.display = "none";
