@@ -60,13 +60,46 @@ class TraceAnalyzer:
         self._analysis: TraceAnalysis | None = None
 
     def analyze(self) -> TraceAnalysis:
-        """Read the BLF file and compute per-ID statistics."""
-        import can as python_can
+        """Read the trace file and compute per-ID CAN statistics.
 
+        Supports ``.blf``/``.asc`` (via python-can -- the same
+        ``BLFReader``/``ASCReader`` classes ``trace_replay.py`` already uses
+        for the same purpose) and ``.trace`` (the gateway's own binary
+        format, via :meth:`TraceReplayer.parse_binary`). ``.trace`` files
+        may contain non-CAN frames (Ethernet/TCP/PDU); those are counted and
+        reported in ``analysis.errors``, not analyzed -- this tool is
+        CAN-focused. ``.pcap`` (Ethernet-only) is rejected outright.
+        """
+        suffix = self._path.suffix.lower()
         analysis = TraceAnalysis(path=str(self._path))
         stats: dict[int, CanIdStats] = {}
 
-        reader = python_can.BLFReader(str(self._path))
+        if suffix in (".blf", ".asc"):
+            self._read_python_can(suffix, analysis, stats)
+        elif suffix == ".trace":
+            self._read_trace_binary(analysis, stats)
+        elif suffix == ".pcap":
+            raise ValueError(
+                ".pcap captures are Ethernet-only and not analyzed by this CAN-focused tool"
+            )
+        else:
+            raise ValueError(f"Unsupported format: {suffix} (expected .blf, .asc, or .trace)")
+
+        analysis.can_stats = stats
+        analysis.unique_ids = len(stats)
+        self._analysis = analysis
+
+        self._detect_cycle_times(analysis)
+        self._compute_bit_liveness(analysis)
+        return analysis
+
+    def _read_python_can(
+        self, suffix: str, analysis: TraceAnalysis, stats: dict[int, CanIdStats]
+    ) -> None:
+        import can as python_can
+
+        reader_cls = python_can.BLFReader if suffix == ".blf" else python_can.ASCReader
+        reader = reader_cls(str(self._path))
         with reader:
             for msg in reader:
                 analysis.total_frames += 1
@@ -86,13 +119,38 @@ class TraceAnalyzer:
                 s.timestamps.append(msg.timestamp)
                 analysis.channels.add(ch)
 
-        analysis.can_stats = stats
-        analysis.unique_ids = len(stats)
-        self._analysis = analysis
+    def _read_trace_binary(
+        self, analysis: TraceAnalysis, stats: dict[int, CanIdStats]
+    ) -> None:
+        from boat.trace_replay import TraceReplayer
+        from boat.v1 import frame_pb2
 
-        self._detect_cycle_times(analysis)
-        self._compute_bit_liveness(analysis)
-        return analysis
+        frames = TraceReplayer.parse_binary(self._path.read_bytes())
+        skipped = 0
+        for frame in frames:
+            analysis.total_frames += 1
+            if frame.bus_type not in (frame_pb2.Frame.CAN, frame_pb2.Frame.CANFD):
+                skipped += 1
+                continue
+            aid = frame.can.can_id
+            ch = frame.can.channel or 1
+            if aid not in stats:
+                stats[aid] = CanIdStats(
+                    channel=ch,
+                    arbitration_id=aid,
+                    is_extended=aid > 0x7FF,
+                    is_fd=frame.bus_type == frame_pb2.Frame.CANFD,
+                )
+            s = stats[aid]
+            s.count += 1
+            s.dlc_values.append(len(frame.payload))
+            s.payload_samples.append(bytes(frame.payload))
+            s.timestamps.append(frame.timestamp_ns / 1e9)  # ns -> seconds, matches python-can's convention
+            analysis.channels.add(ch)
+        if skipped:
+            analysis.errors.append(
+                f"skipped {skipped} non-CAN frame(s) (ETHERNET/TCP/PDU) -- not analyzed by this tool"
+            )
 
     @staticmethod
     def _detect_cycle_times(analysis: TraceAnalysis) -> None:

@@ -23,8 +23,13 @@ from boat.trace_reverse_engineer import TraceReverseEngineer
 
 _PORT = int(os.environ.get("BOAT_TRACE_ANALYZER_PORT", "8088"))
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "config"
+# The Trace Editor's own default save/scan location -- also used as the
+# target of the "Convert & Send to Trace Editor" action below, so a
+# converted .trace file shows up there with zero Trace Editor changes.
 _EXPORT_DIR = Path(__file__).resolve().parent.parent / "traces"
 _EXPORT_DIR.mkdir(exist_ok=True)
+# Where recordings actually land in practice (BOAT_HIL/recorder output).
+_RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "traces"
 
 app = FastAPI()
 
@@ -36,14 +41,17 @@ _analysis_lock = threading.Lock()
 @app.get("/api/blf/list")
 def api_blf_list():
     files = []
-    for d in [_EXPORT_DIR, _CONFIG_DIR, Path.home(), Path("/")]:
+    for d in [_RECORDINGS_DIR, _EXPORT_DIR, _CONFIG_DIR, Path("/tmp"), Path.home(), Path.home() / "traces"]:
         try:
-            for f in Path(d).glob("*.blf"):
-                files.append(str(f))
+            for pattern in ("*.blf", "*.asc", "*.trace"):
+                for f in Path(d).glob(pattern):
+                    files.append(str(f))
         except Exception:
             pass
     files = sorted(set(files))[:200]
     return {"files": files, "export_dir": str(_EXPORT_DIR)}
+
+_SUPPORTED_SUFFIXES = (".blf", ".asc", ".trace")
 
 @app.post("/api/blf/analyze")
 def api_blf_analyze(body: dict):
@@ -51,8 +59,8 @@ def api_blf_analyze(body: dict):
     fp = Path(path).expanduser()
     if not fp.exists():
         raise HTTPException(404, f"File not found: {fp}")
-    if fp.suffix.lower() not in (".blf",):
-        raise HTTPException(400, f"Unsupported format: {fp.suffix}. Only .blf is supported.")
+    if fp.suffix.lower() not in _SUPPORTED_SUFFIXES:
+        raise HTTPException(400, f"Unsupported format: {fp.suffix}. Supported: .blf, .asc, .trace")
 
     try:
         analyzer = TraceAnalyzer(str(fp))
@@ -75,6 +83,9 @@ def api_blf_analyze(body: dict):
         "channels": sorted(analysis.channels),
         "can_ids": [],
         "pdu_db": {},
+        "warnings": list(analysis.errors),
+        "discovered_signals": {},
+        "numpy_available": None,
     }
 
     for aid in sorted(analysis.can_stats.keys()):
@@ -96,8 +107,29 @@ def api_blf_analyze(body: dict):
     try:
         if include_signals:
             engineer = TraceReverseEngineer(analyzer)
-            pdu_db = engineer.to_pdu_db(bus_mapping=bus_mapping, message_names=message_names)
-            result["signal_count"] = sum(len(m.get("signals", [])) for m in pdu_db.get("messages", []))
+            # Compute once, share between the exported PDU DB and the
+            # UI-only signal preview below -- to_pdu_db() used to recompute
+            # this itself, doubling the cost of the expensive bit-clustering.
+            re_result = engineer.reverse_engineer()
+            pdu_db = engineer.to_pdu_db(bus_mapping=bus_mapping, message_names=message_names, result=re_result)
+            result["signal_count"] = re_result.total_signals_discovered
+            result["numpy_available"] = re_result.numpy_available
+            result["discovered_signals"] = {
+                str(msg.can_id): [
+                    {
+                        "name": sig.name,
+                        "value_type": sig.value_type,
+                        "confidence": round(sig.confidence, 2),
+                        "is_counter": sig.is_counter,
+                        "is_checksum": sig.is_checksum,
+                        # Preview only -- never written to the exported PDU DB,
+                        # which follows the documented config schema.
+                        "physical_values": sig.physical_values[:50],
+                    }
+                    for sig in msg.signals
+                ]
+                for msg in re_result.messages if msg.signals
+            }
         else:
             pdu_db = analyzer.to_pdu_db(bus_mapping=bus_mapping, message_names=message_names)
             result["signal_count"] = 0
@@ -124,6 +156,33 @@ def api_blf_export(body: dict):
     fp = _CONFIG_DIR / f"{name}.json"
     fp.write_text(json.dumps(pdu_db, indent=2))
     return {"status": "ok", "path": str(fp), "message_count": len(pdu_db.get("messages", []))}
+
+@app.post("/api/blf/convert")
+def api_blf_convert(body: dict):
+    """Convert an analyzed .blf/.asc/.trace file into the Trace Editor's
+    binary trace format and drop it in _EXPORT_DIR (the Trace Editor's own
+    default save/scan location), so it shows up there with no Trace Editor
+    changes needed. Reuses the exact conversion `boat replay import` uses."""
+    from boat.trace_replay import TraceReplayer, TraceReplayError
+
+    path = body.get("path", "")
+    fp = Path(path).expanduser()
+    if not fp.exists():
+        raise HTTPException(404, f"File not found: {fp}")
+    if fp.suffix.lower() not in _SUPPORTED_SUFFIXES:
+        raise HTTPException(400, f"Unsupported format: {fp.suffix}. Supported: .blf, .asc, .trace")
+    if fp.suffix.lower() == ".trace":
+        raise HTTPException(400, "File is already in the Trace Editor's binary format")
+
+    try:
+        binary_data = TraceReplayer().convert_to_binary(fp)
+    except TraceReplayError as e:
+        raise HTTPException(400, f"Conversion failed: {e}")
+
+    out_name = body.get("name") or fp.stem
+    out_path = _EXPORT_DIR / f"{out_name}.trace"
+    out_path.write_bytes(binary_data)
+    return {"status": "ok", "path": str(out_path)}
 
 @app.get("/api/db/list")
 def api_db_list():
@@ -258,7 +317,7 @@ input:checked + .slider:before { transform:translateX(16px); }
 <div class="layout">
   <div class="sidebar">
     <div class="sidebar-toolbar">
-      <input id="file-path" type="text" placeholder="/path/to/trace.blf" style="flex:1;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px"/>
+      <input id="file-path" type="text" placeholder="/path/to/trace.blf|.asc|.trace" style="flex:1;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px"/>
       <button class="btn-primary" onclick="browseFile()">Browse</button>
       <button class="btn-add" onclick="analyze()">Analyze</button>
     </div>
@@ -281,7 +340,7 @@ input:checked + .slider:before { transform:translateX(16px); }
   <div class="main" id="main-content">
     <div class="empty-state" id="empty-state">
       <h2>No trace file analyzed</h2>
-      <p>Enter a path to a .blf file and click Analyze, or browse for files on the system.</p>
+      <p>Enter a path to a .blf/.asc/.trace file and click Analyze, or browse for files on the system.</p>
     </div>
     <div id="results" style="display:none">
       <div class="stat-grid" id="stats-bar"></div>
@@ -314,7 +373,7 @@ async function api(method, url, body) {
 async function browseFile() {
   const r = await api("GET","/api/blf/list");
   const files = r.files;
-  if (!files.length) { toast("No .blf files found on the system","error"); return; }
+  if (!files.length) { toast("No .blf/.asc/.trace files found on the system","error"); return; }
   const fp = prompt("Enter path or paste from known files:\n\n" + files.slice(0,30).join("\n"));
   if (!fp) return;
   document.getElementById("file-path").value = fp;
@@ -322,7 +381,7 @@ async function browseFile() {
 
 async function analyze() {
   const path = document.getElementById("file-path").value.trim();
-  if (!path) { toast("Enter a path to a .blf file","error"); return; }
+  if (!path) { toast("Enter a path to a .blf/.asc/.trace file","error"); return; }
 
   document.getElementById("empty-state").style.display = "none";
   document.getElementById("results").style.display = "none";
@@ -355,6 +414,10 @@ async function analyze() {
     document.getElementById("progress").style.display = "none";
     document.getElementById("results").style.display = "block";
     toast(`Analyzed ${lastResult.file_name}: ${lastResult.total_frames} frames, ${lastResult.unique_ids} CAN IDs`,"success");
+    (lastResult.warnings || []).forEach(w => toast(w, "info"));
+    if (includeSignals && lastResult.numpy_available === false) {
+      toast("numpy not installed — signal reverse-engineering used the slower pure-Python fallback","info");
+    }
   } catch(e) {
     document.getElementById("progress").style.display = "none";
     document.getElementById("empty-state").style.display = "block";
@@ -377,21 +440,47 @@ function renderResults(result) {
   const btns = `<div style="margin-bottom:12px;display:flex;gap:6px">
     <button class="btn btn-add" onclick="exportDb()">📥 Export to PDU DB</button>
     <button class="btn btn-primary" onclick="toggleConfig()">⚙ Configure Mapping</button>
+    <button class="btn btn-primary" onclick="convertForTraceEditor()">↪ Convert & Send to Trace Editor</button>
   </div>`;
+
+  const discovered = result.discovered_signals || {};
 
   table.innerHTML = btns + `
     <table><thead><tr>
-      <th>CAN ID</th><th>Ch</th><th>Count</th><th>DLC</th><th>Type</th><th>Cycle</th><th>SendType</th>
+      <th></th><th>CAN ID</th><th>Ch</th><th>Count</th><th>DLC</th><th>Type</th><th>Cycle</th><th>SendType</th>
     </tr></thead><tbody>
-    ${ids.map(d => `<tr>
+    ${ids.map(d => {
+      const sigs = discovered[String(d.can_id)] || [];
+      const rowId = `sigrow-${d.can_id}`;
+      const toggleCell = sigs.length
+        ? `<span style="cursor:pointer;color:var(--blue)" id="toggle-${rowId}" onclick="toggleSignalRow('${rowId}')">&#9656;</span>`
+        : "";
+      const sigBadge = sigs.length
+        ? `<span class="badge" style="background:rgba(210,168,255,0.15);color:var(--purple);margin-left:4px">${sigs.length} sig</span>`
+        : "";
+      const detailRow = sigs.length ? `<tr id="${rowId}" style="display:none"><td></td><td colspan="7" style="padding:8px 8px 12px 24px;background:var(--bg)">
+        ${sigs.map(s => `
+          <div style="display:flex;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid var(--border)">
+            <span style="font-family:var(--mono);font-size:11px;min-width:100px">${s.name}</span>
+            <span class="badge" style="background:rgba(88,166,255,0.15);color:var(--blue)">${s.value_type}</span>
+            <span class="badge" style="background:rgba(63,185,80,0.15);color:var(--green)">conf ${s.confidence}</span>
+            ${s.is_counter ? `<span class="badge badge-cyclic">counter</span>` : ""}
+            ${s.is_checksum ? `<span class="badge badge-spont">checksum</span>` : ""}
+            ${sparkline(s.physical_values)}
+          </div>
+        `).join("")}
+      </td></tr>` : "";
+      return `<tr>
+      <td>${toggleCell}</td>
       <td><strong>${d.can_id_hex}</strong> (${d.can_id})</td>
       <td>${d.channel}</td>
       <td>${d.count.toLocaleString()}</td>
       <td>${d.max_dlc}</td>
       <td>${d.is_fd ? "CANFD" : "CAN"} ${d.is_extended ? "· Ext" : ""}</td>
       <td>${d.cycle_time_ms ? d.cycle_time_ms.toFixed(1) + " ms" : "—"}</td>
-      <td><span class="badge ${d.send_type === 'Cyclic' ? 'badge-cyclic' : 'badge-spont'}">${d.send_type}</span></td>
-    </tr>`).join("")}
+      <td><span class="badge ${d.send_type === 'Cyclic' ? 'badge-cyclic' : 'badge-spont'}">${d.send_type}</span>${sigBadge}</td>
+    </tr>${detailRow}`;
+    }).join("")}
     </tbody></table>
   `;
 
@@ -417,6 +506,30 @@ function renderResults(result) {
       <input class="name-input" type="text" value="Msg_0x${id.toString(16).toUpperCase()}" placeholder="message name"/>
     </div>
   `).join("");
+}
+
+function sparkline(values) {
+  if (!values || values.length < 2) return "";
+  const w = 120, h = 24, pad = 2;
+  const min = Math.min(...values), max = Math.max(...values);
+  const span = (max - min) || 1;
+  const step = (w - pad * 2) / (values.length - 1);
+  const points = values.map((v, i) => {
+    const x = pad + i * step;
+    const y = h - pad - ((v - min) / span) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;flex-shrink:0">
+    <polyline points="${points}" fill="none" stroke="var(--blue)" stroke-width="1.5"/>
+  </svg>`;
+}
+
+function toggleSignalRow(rowId) {
+  const row = document.getElementById(rowId);
+  const toggle = document.getElementById("toggle-" + rowId);
+  const isHidden = row.style.display === "none";
+  row.style.display = isHidden ? "table-row" : "none";
+  toggle.innerHTML = isHidden ? "&#9662;" : "&#9656;";
 }
 
 function toggleConfig() {
@@ -468,6 +581,30 @@ async function exportDb() {
   }
 }
 
+async function convertForTraceEditor() {
+  if (!lastResult || !lastResult.path) {
+    toast("No analysis data to convert","error");
+    return;
+  }
+  if (lastResult.path.toLowerCase().endsWith(".trace")) {
+    toast("This file is already in the Trace Editor's binary format","error");
+    return;
+  }
+  try {
+    const r = await api("POST","/api/blf/convert", {path: lastResult.path});
+    const editorUrl = "http://" + window.location.hostname + ":8089/";
+    toast(`Saved ${r.path} -- open it in the Trace Editor's Load dropdown`,"success");
+    const link = document.createElement("a");
+    link.href = editorUrl; link.target = "_blank";
+    link.textContent = "Open Trace Editor →";
+    link.style.cssText = "position:fixed;bottom:60px;right:20px;padding:8px 14px;background:var(--blue);color:#fff;border-radius:6px;font-size:13px;text-decoration:none;z-index:9999";
+    document.body.appendChild(link);
+    setTimeout(() => link.remove(), 8000);
+  } catch(e) {
+    toast("Convert failed: " + e.message,"error");
+  }
+}
+
 (function() {
   const h = window.location.hostname, p = window.location.port;
   document.querySelectorAll('.nav-link').forEach(a => {
@@ -483,8 +620,19 @@ async function exportDb() {
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-def index():
-    return HTMLResponse(HTML)
+def index(path: Optional[str] = Query(None)):
+    html = HTML
+    if path:
+        # Cross-link from the Trace Editor ("Analyze in Trace Analyzer"):
+        # pre-fill the path field and run the analysis automatically.
+        # json.dumps for safe JS string escaping, not string interpolation.
+        autorun = (
+            "<script>window.addEventListener(\"DOMContentLoaded\",function(){"
+            f"document.getElementById(\"file-path\").value={json.dumps(path)};"
+            "analyze();});</script>"
+        )
+        html = html.replace("</body>", autorun + "</body>")
+    return HTMLResponse(html)
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────

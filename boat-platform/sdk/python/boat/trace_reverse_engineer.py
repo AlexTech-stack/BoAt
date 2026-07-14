@@ -113,14 +113,19 @@ class TraceReverseEngineer:
 
         for aid in sorted(self._analysis.can_stats.keys()):
             s = self._analysis.can_stats[aid]
-            if s.count < 2:
-                continue
 
-            discovered_signals = self._analyze_can_id(s)
-            discovered_signals = [
-                sig for sig in discovered_signals
-                if sig.confidence >= self._min_confidence
-            ]
+            # Bit-correlation clustering needs >=2 samples to mean anything,
+            # but a CAN ID observed only once is still a real message that
+            # belongs in the export -- only the signal *discovery* is
+            # skipped, not the message itself (matches TraceAnalyzer.to_pdu_db(),
+            # which includes every observed CAN ID regardless of count).
+            discovered_signals: list[DiscoveredSignal] = []
+            if s.count >= 2:
+                discovered_signals = self._analyze_can_id(s)
+                discovered_signals = [
+                    sig for sig in discovered_signals
+                    if sig.confidence >= self._min_confidence
+                ]
 
             length = max(s.dlc_values) if s.dlc_values else 8
             cycle_ms = self._analysis.cycle_times_ms.get(aid, 0)
@@ -728,24 +733,31 @@ class TraceReverseEngineer:
         self,
         bus_mapping: dict[int, str] | None = None,
         message_names: dict[int, str] | None = None,
+        result: ReverseEngineeringResult | None = None,
     ) -> dict:
         """Export reverse-engineered results as a PDU database dict.
 
         Args:
             bus_mapping:  Map BLF channel number → bus name.
             message_names: Map CAN arbitration ID → message name.
+            result: A pre-computed :class:`ReverseEngineeringResult` (from
+                :meth:`reverse_engineer`), to avoid re-running the expensive
+                bit-correlation clustering when the caller already has one.
+                Runs :meth:`reverse_engineer` itself if omitted.
 
         Returns:
             A dict matching the PDU database schema.
         """
-        result = self.reverse_engineer()
+        result = result if result is not None else self.reverse_engineer()
         bus_mapping = bus_mapping or {}
         message_names = message_names or {}
 
         messages: list[dict] = []
 
-        for msg in result.messages:
-            db_id = msg.can_id + 1
+        # Sequential DbId (matching TraceAnalyzer.to_pdu_db()'s scheme) --
+        # deliberately not can_id + 1, so toggling signal reverse-engineering
+        # on/off and re-exporting doesn't renumber every message.
+        for db_id, msg in enumerate(result.messages, start=1):
             signals_list: list[dict] = []
             for sig in msg.signals:
                 signals_list.append({

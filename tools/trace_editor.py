@@ -1103,6 +1103,7 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
   <button onclick="saveAs()">Save As</button>
   <label>Gateway <input id="gateway-addr" placeholder="localhost:50051" style="width:150px" onchange="saveGatewayCookie()"/></label>
   <button class="btn-add" onclick="pushToGateway()">Push to Gateway</button>
+  <button onclick="analyzeInTraceAnalyzer()">Analyze in Trace Analyzer</button>
   <a href="/howto" target="_blank" style="color:var(--muted);font-size:12px;text-decoration:none;padding:5px 10px;border:1px solid var(--border);border-radius:4px">Help</a>
 </div>
 
@@ -1773,6 +1774,20 @@ async function pushToGateway() {
     toast(`Pushed ${r.count} frames to gateway as trace_id "${r.trace_id}". Run: boat replay start --trace ${r.trace_id}`,"success");
     showWarnings(r.warnings);
   } catch(e) { toast("Push failed: " + e.message,"error"); }
+}
+
+// This tool's own binary .trace format isn't directly analyzable by the
+// Trace Analyzer's python-can-based readers, but it does understand .trace
+// directly (see boat/trace_analyzer.py's _read_trace_binary) via
+// TraceReplayer.parse_binary() -- so passing currentPath straight through
+// works with no conversion needed, unlike the reverse direction.
+function analyzeInTraceAnalyzer() {
+  if (!currentPath) {
+    toast("Load or save a trace first","error");
+    return;
+  }
+  const url = "http://" + window.location.hostname + ":8088/?path=" + encodeURIComponent(currentPath);
+  window.open(url, "_blank");
 }
 
 // ── Filtering + table rendering ────────────────────────────────────────────
