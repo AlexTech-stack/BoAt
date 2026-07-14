@@ -67,8 +67,8 @@ depend on the selected **Bus Type**.
   number (seconds · milliseconds · microseconds · nanoseconds, right to left) purely to make it
   easier to read at a glance. It does not change what gets saved.
 - **Payload (hex)** — shared across all bus types. For CAN/CANFD and PDU this is the actual
-  payload. For Ethernet it's the *entire* IP packet (see below) — normally built for you rather
-  than hand-edited.
+  payload. For Ethernet it's *everything after the Ethernet header* — an IP packet, or a raw
+  EtherCAT datagram (see below) — normally built for you rather than hand-edited.
 
 ### CAN / CANFD
 
@@ -86,21 +86,22 @@ depend on the selected **Bus Type**.
 
 ### Ethernet
 
-`Frame.payload` for Ethernet frames is the whole IP packet starting at the IP header — there's no
-separate "header vs. data" split at the protocol level, which used to mean hand-building the
-entire IPv4/IPv6 + UDP/ICMP header yourself as raw hex just to send one UDP datagram. The editor
-now does that construction for you:
+`Frame.payload` for Ethernet frames is everything after the Ethernet header — there's no separate
+"header vs. data" split at the protocol level, which used to mean hand-building the entire
+IPv4/IPv6 + UDP/ICMP header (or an EtherCAT datagram) yourself as raw hex just to send one message.
+The editor now does that construction for you:
 
 - **EtherType** and **VLAN ID** are plain L2 metadata, set independently of everything below.
   **EtherType is never auto-filled or overwritten** by the IP Version / L4 Protocol choice — set
-  it yourself to match (`0x0800` for IPv4, `0x86DD` for IPv6). Leaving it inconsistent with the
-  actual packet inside builds a frame a real receiver can't parse correctly; the editor won't
-  catch that mismatch for you.
-- **IP Version** (IPv4/IPv6) and **L4 Protocol** (None / UDP / ICMP) control the guided form:
+  it yourself to match (`0x0800` for IPv4, `0x86DD` for IPv6, `0x88A4` for EtherCAT). Leaving it
+  inconsistent with the actual packet inside builds a frame a real receiver can't parse correctly;
+  the editor won't catch that mismatch for you.
+- **L4 Protocol** controls the guided form: **None**, **UDP**, **ICMP** (both IP-based, see below),
+  or **EtherCAT** (no IP at all — see its own section below).
   - **UDP** — Src Port, Dst Port, Application Data (hex). Builds a full IP+UDP packet with correct
-    length and checksum.
+    length and checksum. IP Version (IPv4/IPv6) and Src/Dst IP apply here.
   - **ICMP** — Type, Code, Identifier, Sequence, Application Data (hex). IPv4 echo request/reply =
-    `8`/`0` and `0`/`0`; IPv6 = `128`/`0` and `129`/`0`.
+    `8`/`0` and `0`/`0`; IPv6 = `128`/`0` and `129`/`0`. IP Version and Src/Dst IP apply here too.
   - **None** — the Payload field becomes a plain hex editor again, for anything the guided form
     doesn't cover. This is also where TCP payloads go: this codebase treats TCP as
     connection-oriented and sends it through a dedicated TCP plugin, not as raw frames, so a
@@ -108,11 +109,41 @@ now does that construction for you:
     still fine to view/edit already-captured TCP bytes as raw hex, just not to construct new
     "live" TCP traffic this way.
 - While a protocol is selected, the Payload field is a **read-only preview** of the exact bytes
-  that will be sent (IP header + UDP/ICMP header + your data, with checksum computed) — switch L4
-  Protocol back to "None" to take over editing the raw bytes directly.
-- **Opening an existing frame** auto-detects UDP/ICMP from its actual payload bytes and pre-fills
-  the guided fields; anything it can't recognize (TCP, or anything that isn't a well-formed IP
-  packet) is left in raw mode untouched — existing bytes are never silently reinterpreted.
+  that will be sent, with checksum/length computed — switch L4 Protocol back to "None" to take
+  over editing the raw bytes directly.
+- **Opening an existing frame** auto-detects UDP/ICMP/EtherCAT from its actual payload bytes (the
+  EtherCAT check only runs when EtherType is `0x88A4`) and pre-fills the guided fields; anything it
+  can't recognize (TCP, a multi-datagram EtherCAT frame, or anything that isn't well-formed) is
+  left in raw mode untouched — existing bytes are never silently reinterpreted.
+
+#### EtherCAT
+
+Selecting **EtherCAT** hides the IP Version/Src IP/Dst IP fields (EtherCAT has no IP layer — it
+rides directly on the Ethernet header via EtherType `0x88A4`) and builds a single EtherCAT
+datagram: the 2-byte EtherCAT frame header plus a 10-byte datagram header, your data, and a
+2-byte Working Counter.
+
+- **Command** — the 15 standard EtherCAT commands (NOP, APRD/APWR/APRW, FPRD/FPWR/FPRW, BRD/BWR/BRW,
+  LRD/LWR/LRW, ARMW, FRMW).
+- **Index (Idx)** — a free-form byte the master can use to correlate a response to its request; not
+  interpreted by slaves.
+- **Address ADP / ADO** — their meaning depends on the selected Command, and their field labels
+  update to say so: auto-increment commands (AP*, ARMW) treat ADP as a ring position counted back
+  from the master and ADO as a byte offset into the slave's memory; configured-address commands
+  (FP*, FRMW) treat ADP as the slave's fixed station address; broadcast commands (B*) ignore ADP
+  (leave it `0`); logical commands (L*) treat ADP:ADO together as one 32-bit logical address (ADP =
+  low 16 bits, ADO = high 16 bits) matched by a slave's FMMU configuration.
+- **Working Counter (WKC)** — starts at `0x0000` for a frame sent by the master; each slave that
+  successfully processes the datagram increments it. Only set this to something nonzero if you're
+  deliberately hand-crafting a frame to look like it already circulated through slaves (e.g. to
+  test a master's response-validation logic in isolation, without a real or simulated slave chain).
+- **Datagram Data (hex)** — the same "Application Data" field used by UDP/ICMP, relabeled.
+
+This builds exactly **one** EtherCAT datagram. Real EtherCAT frames often chain several datagrams
+together (the "More" bit in each datagram's length word signals another follows) to address
+multiple slaves per cycle — that's not constructible in this guided form. Switch L4 Protocol to
+"None" and hand-edit the raw bytes if you need a multi-datagram frame; opening such a frame later
+will correctly leave it in raw mode rather than truncating it to the first datagram.
 
 ### TCP / PDU
 

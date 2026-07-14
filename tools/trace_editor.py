@@ -121,6 +121,54 @@ def _build_icmp_packet(ip_version: int, src_ip: bytes, dst_ip: bytes,
     icmp_segment = icmp_header[:2] + struct.pack("!H", csum) + icmp_header[4:]
     return ip_header + icmp_segment
 
+# EtherCAT (IEC 61158-4-12 / ETG.1000.4) rides directly on EtherType 0x88A4 --
+# no IP layer at all. Frame.payload is the 2-byte EtherCAT frame header plus
+# one or more datagrams (10-byte header + data + 2-byte working counter). The
+# guided form below only builds/parses a *single* datagram; multi-datagram
+# frames (the datagram header's "More" bit set) are left as raw hex since
+# there's no way to represent a chain of them in this form without a
+# dedicated per-datagram list UI.
+
+def _build_ethercat_frame(cmd: int, idx: int, adp: int, ado: int, data: bytes, wkc: int) -> bytes:
+    if not (0 <= len(data) <= 0x7FF):
+        raise ValueError("EtherCAT datagram data must be 0-2047 bytes")
+    # Datagram header: Cmd(1) Idx(1) ADP(2 LE) ADO(2 LE) LenWord(2 LE) IRQ(2 LE).
+    # LenWord bit11=reserved(0), bit14=circulating(0), bit15=more(0 -- single datagram).
+    len_word = len(data) & 0x7FF
+    datagram_header = struct.pack("<BBHHHH", cmd & 0xFF, idx & 0xFF, adp & 0xFFFF, ado & 0xFFFF, len_word, 0)
+    datagram = datagram_header + data + struct.pack("<H", wkc & 0xFFFF)
+    # EtherCAT frame header: bits0-10=length of what follows, bits12-15=type (1=EtherCAT command).
+    ecat_len = len(datagram) & 0x7FF
+    frame_header = struct.pack("<H", (1 << 12) | ecat_len)
+    return frame_header + datagram
+
+def _parse_ethercat_frame(payload: bytes) -> Optional[dict[str, Any]]:
+    """Best-effort parse of a single-datagram EtherCAT frame. Returns None for
+    anything that isn't a well-formed single EtherCAT datagram (including
+    valid multi-datagram frames), so real bytes are never mis-truncated."""
+    try:
+        if len(payload) < 2 + 10 + 2:
+            return None
+        frame_hdr = struct.unpack("<H", payload[0:2])[0]
+        ecat_len = frame_hdr & 0x7FF
+        ecat_type = (frame_hdr >> 12) & 0xF
+        if ecat_type != 1 or 2 + ecat_len != len(payload):
+            return None
+        cmd, idx, adp, ado, len_word, _irq = struct.unpack("<BBHHHH", payload[2:12])
+        if (len_word >> 15) & 1:  # More bit set -- multi-datagram, not representable here
+            return None
+        dlen = len_word & 0x7FF
+        if 12 + dlen + 2 != len(payload):
+            return None
+        data = payload[12:12 + dlen]
+        wkc = struct.unpack("<H", payload[12 + dlen:14 + dlen])[0]
+        return {
+            "protocol": "ethercat", "cmd": cmd, "idx": idx, "adp": adp, "ado": ado,
+            "data": data.hex().upper(), "wkc": wkc,
+        }
+    except Exception:
+        return None
+
 def _parse_ip_l4(payload: bytes, ip_version: int) -> Optional[dict[str, Any]]:
     """Best-effort parse of an existing raw payload as IPv4/IPv6 + UDP/ICMP.
 
@@ -483,24 +531,14 @@ def api_frame_insert(body: dict):
 
 @app.post("/api/eth/build")
 def api_eth_build(body: dict):
-    """Build a full IP+UDP or IP+ICMP packet from structured fields.
+    """Build a full packet from structured fields -- IP+UDP/ICMP, or a raw
+    EtherCAT frame (no IP layer).
 
     Returns the resulting bytes as hex, meant to be stored directly as the
     frame's payload (see the module docstring above _ip_checksum for why
-    Ethernet frames carry the whole L3 packet as payload).
+    Ethernet frames carry the whole L3 packet -- or, for EtherCAT, the whole
+    EtherCAT frame -- as payload).
     """
-    ip_version = int(body.get("ip_version") or 4)
-    try:
-        src_ip = _ip_from_str(body.get("src_ip") or "")
-        dst_ip = _ip_from_str(body.get("dst_ip") or "")
-    except ValueError as e:
-        raise HTTPException(400, f"Invalid IP address: {e}")
-    if not src_ip or not dst_ip:
-        raise HTTPException(400, "src_ip and dst_ip are required")
-    expected_len = 16 if ip_version == 6 else 4
-    if len(src_ip) != expected_len or len(dst_ip) != expected_len:
-        raise HTTPException(400, f"src_ip/dst_ip must be valid IPv{ip_version} addresses")
-
     try:
         data = bytes.fromhex((body.get("data") or "").replace(" ", ""))
     except ValueError:
@@ -508,15 +546,32 @@ def api_eth_build(body: dict):
 
     protocol = body.get("protocol")
     try:
-        if protocol == "udp":
-            packet = _build_udp_packet(ip_version, src_ip, dst_ip,
-                                        int(body.get("src_port") or 0), int(body.get("dst_port") or 0), data)
-        elif protocol == "icmp":
-            packet = _build_icmp_packet(ip_version, src_ip, dst_ip,
-                                         int(body.get("icmp_type") or 0), int(body.get("icmp_code") or 0),
-                                         int(body.get("identifier") or 0), int(body.get("sequence") or 0), data)
+        if protocol == "ethercat":
+            packet = _build_ethercat_frame(
+                int(body.get("cmd") or 0), int(body.get("idx") or 0),
+                int(body.get("adp") or 0), int(body.get("ado") or 0),
+                data, int(body.get("wkc") or 0))
+        elif protocol in ("udp", "icmp"):
+            ip_version = int(body.get("ip_version") or 4)
+            try:
+                src_ip = _ip_from_str(body.get("src_ip") or "")
+                dst_ip = _ip_from_str(body.get("dst_ip") or "")
+            except ValueError as e:
+                raise HTTPException(400, f"Invalid IP address: {e}")
+            if not src_ip or not dst_ip:
+                raise HTTPException(400, "src_ip and dst_ip are required")
+            expected_len = 16 if ip_version == 6 else 4
+            if len(src_ip) != expected_len or len(dst_ip) != expected_len:
+                raise HTTPException(400, f"src_ip/dst_ip must be valid IPv{ip_version} addresses")
+            if protocol == "udp":
+                packet = _build_udp_packet(ip_version, src_ip, dst_ip,
+                                            int(body.get("src_port") or 0), int(body.get("dst_port") or 0), data)
+            else:
+                packet = _build_icmp_packet(ip_version, src_ip, dst_ip,
+                                             int(body.get("icmp_type") or 0), int(body.get("icmp_code") or 0),
+                                             int(body.get("identifier") or 0), int(body.get("sequence") or 0), data)
         else:
-            raise HTTPException(400, f"Unknown protocol: {protocol!r} (expected 'udp' or 'icmp')")
+            raise HTTPException(400, f"Unknown protocol: {protocol!r} (expected 'udp', 'icmp', or 'ethercat')")
     except HTTPException:
         raise
     except Exception as e:
@@ -526,13 +581,19 @@ def api_eth_build(body: dict):
 
 @app.post("/api/eth/parse")
 def api_eth_parse(body: dict):
-    """Best-effort parse an existing Ethernet payload as IP+UDP/ICMP, for
-    pre-filling the guided form when opening an already-existing frame."""
-    ip_version = int(body.get("ip_version") or 4)
+    """Best-effort parse an existing Ethernet payload for pre-filling the
+    guided form when opening an already-existing frame. EtherCAT detection is
+    gated strictly on EtherType 0x88A4 (never guessed from the bytes alone,
+    matching this tool's rule that EtherType always drives interpretation);
+    everything else falls back to the IP+UDP/ICMP parser."""
     try:
         payload = bytes.fromhex((body.get("payload") or "").replace(" ", ""))
     except ValueError:
         raise HTTPException(400, "Invalid hex payload")
+    ethertype = int(body.get("ethertype") or 0)
+    if ethertype == 0x88A4:
+        return {"parsed": _parse_ethercat_frame(payload)}
+    ip_version = int(body.get("ip_version") or 4)
     return {"parsed": _parse_ip_l4(payload, ip_version)}
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
@@ -786,11 +847,11 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
         any other value tags the frame with that VLAN (metadata only, not spliced into the packet bytes below).
         <strong>EtherType is set independently here</strong> and is never auto-filled or overwritten by the IP
         Version / L4 Protocol choices below -- set it yourself to match: <code>0x0800</code> for IPv4,
-        <code>0x86DD</code> for IPv6. A mismatch (e.g. IPv6 payload with EtherType left at IPv4) will build a
-        packet a real receiver can't parse correctly.
+        <code>0x86DD</code> for IPv6, <code>0x88A4</code> for EtherCAT. A mismatch (e.g. IPv6 payload with
+        EtherType left at IPv4) will build a packet a real receiver can't parse correctly.
       </div>
 
-      <h3 style="font-size:12px;color:var(--muted);margin-top:12px">IP / transport layer</h3>
+      <h3 style="font-size:12px;color:var(--muted);margin-top:12px">Payload construction</h3>
       <div class="field-row">
         <div class="field"><label>IP Version</label>
           <select id="m-eth-ipver" onchange="onEthFieldChange()">
@@ -803,19 +864,21 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
             <option value="">None (edit raw packet bytes below)</option>
             <option value="udp">UDP</option>
             <option value="icmp">ICMP</option>
+            <option value="ethercat">EtherCAT (raw, no IP)</option>
           </select>
         </div>
       </div>
-      <div class="field-row">
+      <div id="m-eth-ipaddr-row" class="field-row">
         <div class="field"><label>Src IP</label><input id="m-eth-src-ip" oninput="onEthFieldChange()"/></div>
         <div class="field"><label>Dst IP</label><input id="m-eth-dst-ip" oninput="onEthFieldChange()"/></div>
       </div>
       <div class="field-hint">
-        <code>Frame.payload</code> for Ethernet is the whole IP packet, not just an application payload -- there's
-        no separate header/data split at the protocol level. Pick UDP or ICMP here to fill in the header fields
-        below and have the full packet (with correct length/checksum) built for you; pick "None" to edit the raw
-        packet bytes directly (needed for TCP -- this codebase sends TCP through its own connection-oriented
-        plugin, not as raw frames, so a guided TCP form wouldn't be replayable here anyway).
+        <code>Frame.payload</code> for Ethernet is everything after the Ethernet header -- there's no separate
+        header/data split at the protocol level. Pick UDP or ICMP to fill in an IP+L4 header below and have the
+        full packet (with correct length/checksum) built for you; pick EtherCAT to build a single EtherCAT
+        datagram directly on top of the Ethernet header (no IP at all); pick "None" to edit the raw packet bytes
+        directly (needed for TCP -- this codebase sends TCP through its own connection-oriented plugin, not as
+        raw frames, so a guided TCP form wouldn't be replayable here anyway).
       </div>
 
       <div id="m-eth-udp-fields" style="display:none">
@@ -840,8 +903,52 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
         </div>
       </div>
 
+      <div id="m-eth-ethercat-fields" style="display:none">
+        <div class="field-row">
+          <div class="field"><label>Command</label>
+            <select id="m-eth-ecat-cmd" onchange="onEcatCmdChange()">
+              <option value="0">0x00 NOP</option>
+              <option value="1">0x01 APRD (auto-inc read)</option>
+              <option value="2">0x02 APWR (auto-inc write)</option>
+              <option value="3">0x03 APRW (auto-inc read/write)</option>
+              <option value="4">0x04 FPRD (config-addr read)</option>
+              <option value="5">0x05 FPWR (config-addr write)</option>
+              <option value="6">0x06 FPRW (config-addr read/write)</option>
+              <option value="7">0x07 BRD (broadcast read)</option>
+              <option value="8">0x08 BWR (broadcast write)</option>
+              <option value="9">0x09 BRW (broadcast read/write)</option>
+              <option value="10">0x0A LRD (logical read)</option>
+              <option value="11">0x0B LWR (logical write)</option>
+              <option value="12">0x0C LRW (logical read/write)</option>
+              <option value="13">0x0D ARMW (auto-inc read multiple write)</option>
+              <option value="14">0x0E FRMW (config-addr read multiple write)</option>
+            </select>
+          </div>
+          <div class="field"><label>Index (Idx)</label><input id="m-eth-ecat-idx" placeholder="0x00" oninput="onEthFieldChange()"/></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label id="m-eth-ecat-adp-label">Address ADP</label><input id="m-eth-ecat-adp" placeholder="0x0000" oninput="onEthFieldChange()"/></div>
+          <div class="field"><label id="m-eth-ecat-ado-label">Address ADO</label><input id="m-eth-ecat-ado" placeholder="0x0000" oninput="onEthFieldChange()"/></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Working Counter (WKC)</label><input id="m-eth-ecat-wkc" placeholder="0x0000" oninput="onEthFieldChange()"/></div>
+        </div>
+        <div class="field-hint">
+          ADP/ADO meaning depends on Command: auto-increment commands (AP*, ARMW) use ADP as a ring position
+          counted back from the master and ADO as the byte offset in the slave's memory; configured-address
+          commands (FP*, FRMW) use ADP as the slave's fixed station address and ADO as the offset; broadcast
+          commands (B*) ignore ADP (leave 0) and use ADO as the offset; logical commands (L*) use ADP as the
+          low 16 bits and ADO as the high 16 bits of one 32-bit logical address matched by slaves' FMMU
+          configuration. Working Counter starts at <code>0x0000</code> for a frame sent by the master -- each
+          slave that successfully processes the datagram increments it, so only pre-fill a non-zero WKC here to
+          hand-craft a frame that looks like it already passed through slaves. This form builds a
+          <strong>single EtherCAT datagram</strong>; a frame with multiple chained datagrams isn't
+          constructible here -- switch L4 Protocol to "None" and edit the raw bytes for that.
+        </div>
+      </div>
+
       <div id="m-eth-appdata-field" class="field" style="display:none">
-        <label>Application Data (hex)</label>
+        <label id="m-eth-appdata-label">Application Data (hex)</label>
         <textarea id="m-eth-appdata" oninput="onEthFieldChange()" placeholder="Bytes after the UDP/ICMP header, if any"></textarea>
       </div>
 
@@ -1225,7 +1332,7 @@ async function fillModal(f) {
   document.getElementById("m-eth-src-ip").value = e.src_ip || "";
   document.getElementById("m-eth-dst-ip").value = e.dst_ip || "";
   document.getElementById("m-eth-ipver").value = String(e.ip_version || 4);
-  await fillEthProtocolFields(f.bus_type, e.ip_version || 4, f.payload || "");
+  await fillEthProtocolFields(f.bus_type, e.ip_version || 4, f.payload || "", e.ethertype || 0);
 
   const t = f.tcp || {};
   document.getElementById("m-tcp-src-ip").value = t.src_ip || "";
@@ -1261,13 +1368,44 @@ function onEthProtocolChange() {
   const proto = document.getElementById("m-eth-protocol").value;
   document.getElementById("m-eth-udp-fields").style.display = proto === "udp" ? "block" : "none";
   document.getElementById("m-eth-icmp-fields").style.display = proto === "icmp" ? "block" : "none";
+  document.getElementById("m-eth-ethercat-fields").style.display = proto === "ethercat" ? "block" : "none";
+  document.getElementById("m-eth-ipaddr-row").style.display = proto === "ethercat" ? "none" : "flex";
+  document.getElementById("m-eth-appdata-label").textContent =
+    proto === "ethercat" ? "Datagram Data (hex)" : "Application Data (hex)";
   document.getElementById("m-eth-appdata-field").style.display = proto ? "block" : "none";
   document.getElementById("m-eth-preview-wrap").style.display = proto ? "block" : "none";
   document.getElementById("m-eth-preview-proto").textContent = proto.toUpperCase();
   const payloadEl = document.getElementById("m-payload");
   payloadEl.readOnly = !!proto;
   payloadEl.style.opacity = proto ? "0.65" : "1";
-  if (proto) rebuildEthPacket();
+  if (proto === "ethercat") onEcatCmdChange();  // also triggers rebuildEthPacket()
+  else if (proto) rebuildEthPacket();
+}
+
+// Relabels ADP/ADO to match what they mean for the selected EtherCAT command
+// (see the field-hint text in m-eth-ethercat-fields) -- purely cosmetic, the
+// bytes sent are the same two 16-bit fields regardless of command.
+function onEcatCmdChange() {
+  const cmd = parseInt(document.getElementById("m-eth-ecat-cmd").value) || 0;
+  const adpLabel = document.getElementById("m-eth-ecat-adp-label");
+  const adoLabel = document.getElementById("m-eth-ecat-ado-label");
+  if ([1,2,3,13].includes(cmd)) {        // APRD/APWR/APRW/ARMW -- auto-increment
+    adpLabel.textContent = "ADP (ring position, auto-inc)";
+    adoLabel.textContent = "ADO (offset)";
+  } else if ([4,5,6,14].includes(cmd)) { // FPRD/FPWR/FPRW/FRMW -- configured address
+    adpLabel.textContent = "ADP (station address)";
+    adoLabel.textContent = "ADO (offset)";
+  } else if ([7,8,9].includes(cmd)) {    // BRD/BWR/BRW -- broadcast
+    adpLabel.textContent = "ADP (ignored, leave 0)";
+    adoLabel.textContent = "ADO (offset)";
+  } else if ([10,11,12].includes(cmd)) { // LRD/LWR/LRW -- logical
+    adpLabel.textContent = "Logical Address (low 16 bits)";
+    adoLabel.textContent = "Logical Address (high 16 bits)";
+  } else {                               // NOP
+    adpLabel.textContent = "Address ADP";
+    adoLabel.textContent = "Address ADO";
+  }
+  rebuildEthPacket();
 }
 
 function onEthFieldChange() {
@@ -1278,20 +1416,28 @@ async function rebuildEthPacket() {
   const proto = document.getElementById("m-eth-protocol").value;
   if (!proto) return;
   const body = {
-    ip_version: parseInt(document.getElementById("m-eth-ipver").value) || 4,
     protocol: proto,
-    src_ip: document.getElementById("m-eth-src-ip").value || "",
-    dst_ip: document.getElementById("m-eth-dst-ip").value || "",
     data: (document.getElementById("m-eth-appdata").value || "").replace(/\s+/g,""),
   };
-  if (proto === "udp") {
-    body.src_port = parseInt(document.getElementById("m-eth-src-port").value) || 0;
-    body.dst_port = parseInt(document.getElementById("m-eth-dst-port").value) || 0;
-  } else if (proto === "icmp") {
-    body.icmp_type = parseInt(document.getElementById("m-eth-icmp-type").value) || 0;
-    body.icmp_code = parseInt(document.getElementById("m-eth-icmp-code").value) || 0;
-    body.identifier = parseInt(document.getElementById("m-eth-icmp-id").value) || 0;
-    body.sequence = parseInt(document.getElementById("m-eth-icmp-seq").value) || 0;
+  if (proto === "udp" || proto === "icmp") {
+    body.ip_version = parseInt(document.getElementById("m-eth-ipver").value) || 4;
+    body.src_ip = document.getElementById("m-eth-src-ip").value || "";
+    body.dst_ip = document.getElementById("m-eth-dst-ip").value || "";
+    if (proto === "udp") {
+      body.src_port = parseInt(document.getElementById("m-eth-src-port").value) || 0;
+      body.dst_port = parseInt(document.getElementById("m-eth-dst-port").value) || 0;
+    } else {
+      body.icmp_type = parseInt(document.getElementById("m-eth-icmp-type").value) || 0;
+      body.icmp_code = parseInt(document.getElementById("m-eth-icmp-code").value) || 0;
+      body.identifier = parseInt(document.getElementById("m-eth-icmp-id").value) || 0;
+      body.sequence = parseInt(document.getElementById("m-eth-icmp-seq").value) || 0;
+    }
+  } else if (proto === "ethercat") {
+    body.cmd = parseIntFlexible(document.getElementById("m-eth-ecat-cmd").value);
+    body.idx = parseIntFlexible(document.getElementById("m-eth-ecat-idx").value);
+    body.adp = parseIntFlexible(document.getElementById("m-eth-ecat-adp").value);
+    body.ado = parseIntFlexible(document.getElementById("m-eth-ecat-ado").value);
+    body.wkc = parseIntFlexible(document.getElementById("m-eth-ecat-wkc").value);
   }
   const errEl = document.getElementById("m-eth-build-error");
   try {
@@ -1304,17 +1450,18 @@ async function rebuildEthPacket() {
   }
 }
 
-// Auto-detects an existing ETHERNET frame's payload as UDP/ICMP (via
-// /api/eth/parse) and pre-fills the guided fields; leaves L4 Protocol on
-// "None" (raw) for anything else (TCP, or payloads that just aren't a
-// recognizable IP packet), so real bytes are never hidden or reinterpreted
+// Auto-detects an existing ETHERNET frame's payload as UDP/ICMP/EtherCAT (via
+// /api/eth/parse) and pre-fills the guided fields; EtherCAT detection is
+// gated on EtherType 0x88A4 server-side. Leaves L4 Protocol on "None" (raw)
+// for anything else (TCP, multi-datagram EtherCAT, or payloads that just
+// aren't recognizable), so real bytes are never hidden or reinterpreted
 // incorrectly.
-async function fillEthProtocolFields(busType, ipVersion, payloadHex) {
+async function fillEthProtocolFields(busType, ipVersion, payloadHex, ethertype) {
   document.getElementById("m-eth-protocol").value = "";
   onEthProtocolChange();
   if (busType !== "ETHERNET" || !payloadHex) return;
   try {
-    const r = await api("POST", "/api/eth/parse", {ip_version: ipVersion, payload: payloadHex});
+    const r = await api("POST", "/api/eth/parse", {ip_version: ipVersion, payload: payloadHex, ethertype: ethertype || 0});
     const p = r.parsed;
     if (!p) return;
     if (p.protocol === "udp") {
@@ -1325,12 +1472,19 @@ async function fillEthProtocolFields(busType, ipVersion, payloadHex) {
       document.getElementById("m-eth-icmp-code").value = p.icmp_code;
       document.getElementById("m-eth-icmp-id").value = p.identifier;
       document.getElementById("m-eth-icmp-seq").value = p.sequence;
+    } else if (p.protocol === "ethercat") {
+      document.getElementById("m-eth-ecat-cmd").value = p.cmd;
+      document.getElementById("m-eth-ecat-idx").value = "0x" + p.idx.toString(16).toUpperCase();
+      document.getElementById("m-eth-ecat-adp").value = "0x" + p.adp.toString(16).toUpperCase();
+      document.getElementById("m-eth-ecat-ado").value = "0x" + p.ado.toString(16).toUpperCase();
+      document.getElementById("m-eth-ecat-wkc").value = "0x" + p.wkc.toString(16).toUpperCase();
     } else {
       return;
     }
     document.getElementById("m-eth-appdata").value = p.data;
     document.getElementById("m-eth-protocol").value = p.protocol;
     onEthProtocolChange();
+    if (p.protocol === "ethercat") onEcatCmdChange();
   } catch(e) { /* leave in raw mode on any parse failure */ }
 }
 

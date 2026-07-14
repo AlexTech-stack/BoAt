@@ -42,6 +42,7 @@ main { max-width:860px; margin:0 auto; padding:24px 24px 80px; }
 h1 { font-size:22px; margin-bottom:4px; }
 h2 { font-size:16px; margin:28px 0 10px; color:var(--blue); border-bottom:1px solid var(--border); padding-bottom:6px; }
 h3 { font-size:13px; margin:18px 0 8px; color:var(--text); }
+h4 { font-size:12px; margin:14px 0 6px; color:var(--muted); }
 p, li { color:var(--text); }
 p { margin-bottom:10px; }
 ul, ol { margin:0 0 12px 22px; }
@@ -172,8 +173,9 @@ pre code { background:none; border:none; padding:0; color:inherit; }
       grouping of that same number (seconds · milliseconds · microseconds · nanoseconds, right to
       left) purely to make it easier to read at a glance. It does not change what gets saved.</li>
     <li><strong>Payload (hex)</strong> — shared across all bus types. For CAN/CANFD and PDU this
-      is the actual payload. For Ethernet it's the <em>entire</em> IP packet (see below) —
-      normally built for you rather than hand-edited.</li>
+      is the actual payload. For Ethernet it's <em>everything after the Ethernet header</em> — an
+      IP packet, or a raw EtherCAT datagram (see below) — normally built for you rather than
+      hand-edited.</li>
   </ul>
 
   <h3>CAN / CANFD</h3>
@@ -202,26 +204,30 @@ pre code { background:none; border:none; padding:0; color:inherit; }
 
   <h3>Ethernet</h3>
   <p>
-    <code>Frame.payload</code> for Ethernet frames is the whole IP packet starting at the IP
-    header — there's no separate "header vs. data" split at the protocol level, which used to mean
-    hand-building the entire IPv4/IPv6 + UDP/ICMP header yourself as raw hex just to send one UDP
-    datagram. The editor now does that construction for you.
+    <code>Frame.payload</code> for Ethernet frames is everything after the Ethernet header —
+    there's no separate "header vs. data" split at the protocol level, which used to mean
+    hand-building the entire IPv4/IPv6 + UDP/ICMP header (or an EtherCAT datagram) yourself as raw
+    hex just to send one message. The editor now does that construction for you.
   </p>
   <div class="callout warn">
     <strong>EtherType and VLAN ID are plain L2 metadata, set independently of everything below.</strong>
     EtherType is never auto-filled or overwritten by the IP Version / L4 Protocol choice — set it
-    yourself to match (<code>0x0800</code> for IPv4, <code>0x86DD</code> for IPv6). Leaving it
-    inconsistent with the actual packet inside builds a frame a real receiver can't parse
-    correctly; the editor won't catch that mismatch for you.
+    yourself to match (<code>0x0800</code> for IPv4, <code>0x86DD</code> for IPv6, <code>0x88A4</code>
+    for EtherCAT). Leaving it inconsistent with the actual packet inside builds a frame a real
+    receiver can't parse correctly; the editor won't catch that mismatch for you.
   </div>
-  <p><strong>IP Version</strong> (IPv4/IPv6) and <strong>L4 Protocol</strong> (None / UDP / ICMP) control the guided form:</p>
+  <p><strong>L4 Protocol</strong> controls the guided form — None, UDP, ICMP (both IP-based), or
+    EtherCAT (no IP at all, see its own section below):</p>
   <table class="field-table">
     <tr><th>Protocol</th><th>Fields</th><th>Notes</th></tr>
     <tr><td>UDP</td><td>Src Port, Dst Port, Application Data (hex)</td>
-      <td>Builds a full IP+UDP packet with correct length and checksum.</td></tr>
+      <td>Builds a full IP+UDP packet with correct length and checksum. IP Version and Src/Dst IP apply.</td></tr>
     <tr><td>ICMP</td><td>Type, Code, Identifier, Sequence, Application Data (hex)</td>
       <td>IPv4 echo request/reply = <code>8</code>/<code>0</code> and <code>0</code>/<code>0</code>;
-        IPv6 = <code>128</code>/<code>0</code> and <code>129</code>/<code>0</code>.</td></tr>
+        IPv6 = <code>128</code>/<code>0</code> and <code>129</code>/<code>0</code>. IP Version and
+        Src/Dst IP apply.</td></tr>
+    <tr><td>EtherCAT</td><td>Command, Index, Address ADP/ADO, Working Counter, Datagram Data (hex)</td>
+      <td>Builds one raw EtherCAT datagram directly on the Ethernet header, no IP layer. See below.</td></tr>
     <tr><td>None</td><td>Payload (hex) becomes a plain hex editor again</td>
       <td>For anything the guided form doesn't cover — including TCP: this codebase sends TCP
         through a dedicated connection-oriented plugin, not as raw frames, so a guided TCP builder
@@ -234,11 +240,48 @@ pre code { background:none; border:none; padding:0; color:inherit; }
     bytes directly.
   </p>
   <p>
-    <strong>Opening an existing frame</strong> auto-detects UDP/ICMP from its actual payload bytes
-    and pre-fills the guided fields; anything it can't recognize (TCP, or anything that isn't a
-    well-formed IP packet) is left in raw mode untouched — existing bytes are never silently
-    reinterpreted.
+    <strong>Opening an existing frame</strong> auto-detects UDP/ICMP/EtherCAT from its actual
+    payload bytes (the EtherCAT check only runs when EtherType is <code>0x88A4</code>) and
+    pre-fills the guided fields; anything it can't recognize (TCP, a multi-datagram EtherCAT frame,
+    or anything that isn't well-formed) is left in raw mode untouched — existing bytes are never
+    silently reinterpreted.
   </p>
+
+  <h4>EtherCAT</h4>
+  <p>
+    Selecting <strong>EtherCAT</strong> hides the IP Version/Src IP/Dst IP fields (EtherCAT has no
+    IP layer — it rides directly on the Ethernet header via EtherType <code>0x88A4</code>) and
+    builds a single EtherCAT datagram: the 2-byte EtherCAT frame header plus a 10-byte datagram
+    header, your data, and a 2-byte Working Counter.
+  </p>
+  <table class="field-table">
+    <tr><th>Field</th><th>Meaning</th></tr>
+    <tr><td>Command</td><td>The 15 standard EtherCAT commands (NOP, APRD/APWR/APRW,
+      FPRD/FPWR/FPRW, BRD/BWR/BRW, LRD/LWR/LRW, ARMW, FRMW).</td></tr>
+    <tr><td>Index (Idx)</td><td>A free-form byte the master can use to correlate a response to its
+      request; not interpreted by slaves.</td></tr>
+    <tr><td>Address ADP / ADO</td><td>Meaning depends on Command, and the field labels update to
+      say so: auto-increment commands (AP*, ARMW) treat ADP as a ring position counted back from
+      the master and ADO as a byte offset into the slave's memory; configured-address commands
+      (FP*, FRMW) treat ADP as the slave's fixed station address; broadcast commands (B*) ignore
+      ADP (leave it <code>0</code>); logical commands (L*) treat ADP:ADO together as one 32-bit
+      logical address (ADP = low 16 bits, ADO = high 16 bits) matched by a slave's FMMU
+      configuration.</td></tr>
+    <tr><td>Working Counter (WKC)</td><td>Starts at <code>0x0000</code> for a frame sent by the
+      master; each slave that successfully processes the datagram increments it. Only set this
+      nonzero to deliberately hand-craft a frame that looks like it already circulated through
+      slaves.</td></tr>
+    <tr><td>Datagram Data (hex)</td><td>The same "Application Data" field used by UDP/ICMP,
+      relabeled.</td></tr>
+  </table>
+  <div class="callout warn">
+    This builds exactly <strong>one</strong> EtherCAT datagram. Real EtherCAT frames often chain
+    several datagrams together (the "More" bit in each datagram's length word signals another
+    follows) to address multiple slaves per cycle — that's not constructible in this guided form.
+    Switch L4 Protocol to "None" and hand-edit the raw bytes if you need a multi-datagram frame;
+    opening such a frame later will correctly leave it in raw mode rather than truncating it to the
+    first datagram.
+  </div>
 
   <h3>TCP / PDU</h3>
   <p>
