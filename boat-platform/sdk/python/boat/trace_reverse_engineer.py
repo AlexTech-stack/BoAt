@@ -405,14 +405,21 @@ class TraceReverseEngineer:
         if not raw_nums:
             return None
 
-        value_type, min_val, max_val, factor, offset, enum_vals = (
-            self._analyze_values(raw_nums, length, byte_order)
+        value_type, min_val, max_val, factor, offset, enum_vals, is_signed = (
+            self._analyze_values(raw_nums, length)
         )
 
-        is_counter = self._detect_counter(raw_nums, stats)
+        is_counter = self._detect_counter(raw_nums, length)
         is_checksum = self._detect_checksum(raw_nums, stats, bits)
         confidence = self._compute_confidence(
             bits, raw_nums, stats, is_counter, is_checksum
+        )
+
+        # physical_values must use the same reference frame factor/offset
+        # were derived from in _analyze_values: the sign-converted numeric
+        # value for signed signals, the raw bit pattern otherwise.
+        working_nums = (
+            self._to_signed(raw_nums, length) if is_signed else raw_nums
         )
 
         return DiscoveredSignal(
@@ -432,7 +439,7 @@ class TraceReverseEngineer:
             is_checksum=is_checksum,
             confidence=confidence,
             raw_values=raw_nums[:100],
-            physical_values=[v * factor + offset for v in raw_nums[:100]],
+            physical_values=[v * factor + offset for v in working_nums[:100]],
         )
 
     # ── Byte order detection ──────────────────────────────────────────
@@ -482,6 +489,15 @@ class TraceReverseEngineer:
 
         Bits are indexed MSB-first (bit 0 = MSB of byte 0).
 
+        Both byte orders build the value by shifting left and OR-ing in bits
+        most-significant-first; they differ only in *which byte* is most
+        significant -- a byte's own internal bit order (MSB-first) never
+        flips. Motorola (big-endian): earlier byte = more significant, so
+        ascending ``pos`` order (byte0 MSB..LSB, then byte1 MSB..LSB, ...)
+        is already MSB-first end-to-end. Intel (little-endian): later byte
+        = more significant, so bytes are visited highest-index-first, but
+        each byte's own bits still go MSB-first within it.
+
         Args:
             bits: Bit positions (MSB-first indexing: bit 0 = byte 0 MSB).
             byte_order: 0=Intel (LSB first), 1=Motorola (MSB first).
@@ -494,30 +510,21 @@ class TraceReverseEngineer:
             return []
 
         max_len = max(len(p) for p in stats.payload_samples)
-        byte_width = max(b // 8 for b in bits) + 1 if bits else 1
+
+        if byte_order == 0:
+            ordered_bits = sorted(bits, key=lambda p: (-(p // 8), p))
+        else:
+            ordered_bits = sorted(bits)
 
         results: list[int] = []
         for payload in stats.payload_samples:
             padded = bytearray(payload) + b"\x00" * (max_len - len(payload))
             value = 0
-
-            if byte_order == 0:
-                for bit_pos in reversed(bits):
-                    byte_idx = bit_pos // 8
-                    bit_idx = bit_pos % 8
-                    b = padded[byte_idx]
-                    value = (value << 1) | ((b >> (7 - bit_idx)) & 1)
-            else:
-                sorted_bits = sorted(bits)
-                msb_byte = sorted_bits[0] // 8
-                for bit_pos in sorted_bits:
-                    byte_rel = msb_byte - (bit_pos // 8)
-                    bit_idx = bit_pos % 8
-                    actual_byte = msb_byte - byte_rel
-                    if 0 <= actual_byte < len(padded):
-                        b = padded[actual_byte]
-                        value = (value << 1) | ((b >> (7 - bit_idx)) & 1)
-
+            for bit_pos in ordered_bits:
+                byte_idx = bit_pos // 8
+                bit_idx = bit_pos % 8
+                b = padded[byte_idx]
+                value = (value << 1) | ((b >> (7 - bit_idx)) & 1)
             results.append(value)
 
         return results
@@ -525,19 +532,30 @@ class TraceReverseEngineer:
     # ── Value analysis ────────────────────────────────────────────────
 
     @staticmethod
+    def _to_signed(raw_values: list[int], length: int) -> list[int]:
+        """Two's-complement conversion: a raw value >= 2^(length-1) is
+        negative. Used so factor/offset/min/max and physical_values are all
+        derived from the *same* numeric reference frame for signed signals,
+        instead of mixing raw bit patterns with sign-converted numbers."""
+        if length <= 0:
+            return list(raw_values)
+        sign_bit = 1 << (length - 1)
+        modulus = 1 << length
+        return [v - modulus if v >= sign_bit else v for v in raw_values]
+
+    @staticmethod
     def _analyze_values(
         raw_values: list[int],
         length: int,
-        byte_order: int,
-    ) -> tuple[str, float, float, float, float, dict[str, str] | None]:
-        """Determine value type, range, scaling, and enumerations."""
+    ) -> tuple[str, float, float, float, float, dict[str, str] | None, bool]:
+        """Determine value type, range, scaling, and enumerations.
+
+        Returns (value_type, min_val, max_val, factor, offset, enum_vals, is_signed).
+        """
         if not raw_values:
-            return "Unsigned", 0.0, 1.0, 1.0, 0.0, None
+            return "Unsigned", 0.0, 1.0, 1.0, 0.0, None, False
 
         unique = list(set(raw_values))
-        max_raw = max(raw_values)
-        min_raw = min(raw_values)
-        span = max_raw - min_raw if max_raw != min_raw else 1
         full_range = (1 << length) - 1
 
         enum_vals = None
@@ -547,18 +565,28 @@ class TraceReverseEngineer:
                 enum_vals[str(v)] = f"State_{i}"
 
         if length == 1:
-            return "Bool", 0.0, 1.0, 1.0, 0.0, {"0": "False", "1": "True"}
+            return "Bool", 0.0, 1.0, 1.0, 0.0, {"0": "False", "1": "True"}, False
 
         is_bool = all(v in (0, 1) for v in unique)
         if is_bool:
-            return "Bool", 0.0, 1.0, 1.0, 0.0, {"0": "Off", "1": "On"}
+            return "Bool", 0.0, 1.0, 1.0, 0.0, {"0": "Off", "1": "On"}, False
 
-        mid = (1 << (length - 1))
-        signed_vals = [v - full_range - 1 if v > mid else v for v in raw_values]
-        is_signed = any(v > mid for v in raw_values) and min(signed_vals) < 0
+        # A raw value >= 2^(length-1) uses the sign bit in two's complement,
+        # but "any single value crosses the midpoint" is a weak signal on
+        # its own -- an ordinary unsigned byte legitimately takes values
+        # above 127 all the time. Require values comfortably on *both*
+        # sides of the wrap (bottom and top quarter of the range) before
+        # concluding the field is actually signed, not just numerically
+        # large.
+        sign_bit = 1 << (length - 1)
+        low_threshold = sign_bit // 2
+        high_threshold = sign_bit + sign_bit // 2
+        is_signed = (
+            any(v < low_threshold for v in unique)
+            and any(v >= high_threshold for v in unique)
+        )
 
-        if length == 32 or length == 64:
-            int_bytes = length // 8
+        if length in (32, 64):
             try:
                 import struct
                 float_candidates: list[float] = []
@@ -575,50 +603,53 @@ class TraceReverseEngineer:
                 if float_candidates and all(
                     abs(v - round(v)) > 0.001 for v in float_candidates
                 ):
-                    return "Float", min(float_candidates), max(float_candidates), 1.0, 0.0, None
+                    return "Float", min(float_candidates), max(float_candidates), 1.0, 0.0, None, False
             except Exception:
                 pass
 
-        raw_min = min(raw_values)
-        raw_max = max(raw_values)
-        if raw_max != raw_min:
-            factor = (raw_max - raw_min) / full_range
+        # factor/offset/min/max are all derived from the same "working"
+        # values: sign-converted for a signed signal, raw bit pattern
+        # otherwise -- and phys_min/phys_max use the identical v*factor+offset
+        # formula _build_signal uses for physical_values, so the reported
+        # Min/Max always match what the sample data actually shows.
+        working = TraceReverseEngineer._to_signed(raw_values, length) if is_signed else raw_values
+        w_min, w_max = min(working), max(working)
+        if w_max != w_min:
+            factor = (w_max - w_min) / full_range
             if factor <= 0:
                 factor = 1.0
         else:
             factor = 1.0
 
-        offset = float(raw_min)
-        phys_min = (raw_min - offset) * factor if is_signed else raw_min * factor
-        phys_max = (raw_max - offset) * factor if is_signed else raw_max * factor
+        offset = float(w_min)
+        phys_min = w_min * factor + offset
+        phys_max = w_max * factor + offset
 
-        if is_signed:
-            return "Signed", float(phys_min), float(phys_max), float(factor), offset, enum_vals
-        return "Unsigned", float(phys_min), float(phys_max), float(factor), float(offset), enum_vals
+        value_type = "Signed" if is_signed else "Unsigned"
+        return value_type, float(phys_min), float(phys_max), float(factor), offset, enum_vals, is_signed
 
     # ── Counter detection ─────────────────────────────────────────────
 
     @staticmethod
-    def _detect_counter(raw_values: list[int], stats: CanIdStats) -> bool:
+    def _detect_counter(raw_values: list[int], length: int) -> bool:
         """Detect if signal is a rolling counter.
 
-        A counter typically increments by 1 (or near-1) on consecutive frames.
+        A counter increments by 1 each frame and wraps at its own bit
+        width -- AUTOSAR E2E profiles commonly use 4-bit counters (8-bit
+        and 32-bit also occur), so masking wraparound to a fixed 8 bits
+        regardless of the signal's actual length would misjudge any
+        non-8-bit counter's wrap transition as a huge jump instead of +1.
         """
         if len(raw_values) < 5:
             return False
 
-        diffs = []
-        for i in range(1, len(raw_values)):
-            d = (raw_values[i] - raw_values[i - 1]) & 0xFF
-            diffs.append(d)
-
+        mask = (1 << length) - 1 if length > 0 else 0
+        diffs = [(raw_values[i] - raw_values[i - 1]) & mask for i in range(1, len(raw_values))]
         if not diffs:
             return False
 
-        one_count = sum(1 for d in diffs if d == 1 or d == 0xFF - raw_values[0] + raw_values[1])
-        if one_count / len(diffs) > 0.7:
-            return True
-        return False
+        one_count = sum(1 for d in diffs if d == 1)
+        return one_count / len(diffs) > 0.7
 
     # ── Checksum candidate detection ──────────────────────────────────
 
