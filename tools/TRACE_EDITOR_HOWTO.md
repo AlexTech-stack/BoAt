@@ -84,6 +84,47 @@ depend on the selected **Bus Type**.
   indicator), `0x04`=CANFD_FDF (FD frame format). Combine with bitwise OR — `0x05` is a typical FD
   frame with BRS. Leave at `0` for classic CAN.
 
+CAN has two *independent* guided-builder axes, mirroring how EtherType and L4 Protocol are
+independent for Ethernet: a **CAN ID Builder** (computes the CAN ID itself) and a **Payload
+Builder** (computes the Payload). Either, both, or neither can be active on the same frame.
+
+#### CAN ID Builder (J1939, CANopen)
+
+- **J1939** — fields: Priority (0-7), PGN (hex), Destination Address, Source Address. Builds the
+  full 29-bit extended CAN ID (`Priority | EDP | DP | PF | PS | SA`); extended framing is automatic
+  here for any CAN ID above `0x7FF`, no separate flag needed. Destination Address is only
+  meaningful for PGNs whose PDU Format byte is below `0xF0` (peer-to-peer/PDU1) — it's greyed out
+  and ignored for broadcast PGNs (PDU2, PF ≥ `0xF0`), where the address is folded into the PGN
+  itself instead.
+  - **This one deliberately does *not* auto-detect on frame open.** Any extended CAN ID can be
+    split into *some* set of J1939 fields — there's no signature byte to confirm it's actually
+    J1939 (unlike the Ethernet parsers, which can positively reject non-matching bytes) — so
+    picking J1939 from the dropdown is always an explicit "reinterpret this ID" action, never
+    something the editor guesses for you.
+- **CANopen** — fields: Message Type (NMT/SYNC/EMCY/Time Stamp/PDO1-4 Tx+Rx/SDO Tx+Rx/Heartbeat),
+  Node ID. Builds the 11-bit COB-ID from CiA-301's predefined connection set (a fixed base per
+  message type, plus Node ID for anything that isn't broadcast — NMT/SYNC/Time Stamp have a fixed
+  COB-ID and the Node ID field is disabled for those). A guided **SDO payload** builder (command
+  byte + index + sub-index + data) isn't available yet — set Payload directly for SDO frames.
+
+#### Payload Builder (UDS, OBD-II)
+
+Both build an ISO 15765-2 **Single Frame** only — `[PCI byte][Service ID or Mode][Data]`, up to 7
+data bytes total on classic CAN. This is one request or response frame; a real multi-frame
+exchange (First Frame/Consecutive Frame/Flow Control, needed once data exceeds 7 bytes) needs the
+live `can_tp` plugin, the same limitation already noted for TCP under Ethernet.
+
+- **UDS** — Service ID (a dropdown of common ones like `0x22` ReadDataByIdentifier, `0x2E`
+  WriteDataByIdentifier, `0x3E` TesterPresent, etc. — still a free-text field, so any hex value
+  works) + Data (hex, e.g. a DID or sub-function). Positive responses are conventionally Service ID
+  + `0x40`; negative responses are `0x7F`, the original Service ID, then a 1-byte NRC.
+- **OBD-II** — Mode (`0x01`-`0x0A`) + Data (hex). Whether Data starts with a PID byte depends on
+  the Mode: `0x01`/`0x02`/`0x09` take one, `0x03`/`0x04`/`0x0A` don't — just type it as the first
+  byte(s) of Data when it applies.
+- **Opening an existing frame auto-detects** UDS vs. OBD-II from the payload's PCI byte and
+  declared length (a real structural check, unlike J1939's CAN ID case above), falling back to raw
+  mode for anything that doesn't match.
+
 ### Ethernet
 
 `Frame.payload` for Ethernet frames is everything after the Ethernet header — there's no separate
@@ -93,15 +134,16 @@ The editor now does that construction for you:
 
 - **EtherType** and **VLAN ID** are plain L2 metadata, set independently of everything below.
   **EtherType is never auto-filled or overwritten** by the IP Version / L4 Protocol choice — set
-  it yourself to match (`0x0800` for IPv4, `0x86DD` for IPv6, `0x88A4` for EtherCAT). Leaving it
+  it yourself to match (`0x0800` IPv4, `0x86DD` IPv6, `0x88A4` EtherCAT, `0x0806` ARP). Leaving it
   inconsistent with the actual packet inside builds a frame a real receiver can't parse correctly;
   the editor won't catch that mismatch for you.
-- **L4 Protocol** controls the guided form: **None**, **UDP**, **ICMP** (both IP-based, see below),
-  or **EtherCAT** (no IP at all — see its own section below).
+- **L4 Protocol** controls the guided form: **None**, **UDP**, **ICMP**, **SOME/IP** (over UDP),
+  **DoIP** (over UDP, discovery only), **EtherCAT** (no IP at all), or **ARP** (no IP payload).
   - **UDP** — Src Port, Dst Port, Application Data (hex). Builds a full IP+UDP packet with correct
     length and checksum. IP Version (IPv4/IPv6) and Src/Dst IP apply here.
   - **ICMP** — Type, Code, Identifier, Sequence, Application Data (hex). IPv4 echo request/reply =
     `8`/`0` and `0`/`0`; IPv6 = `128`/`0` and `129`/`0`. IP Version and Src/Dst IP apply here too.
+  - **SOME/IP**, **DoIP**, **ARP**, **EtherCAT** — see their own sections below.
   - **None** — the Payload field becomes a plain hex editor again, for anything the guided form
     doesn't cover. This is also where TCP payloads go: this codebase treats TCP as
     connection-oriented and sends it through a dedicated TCP plugin, not as raw frames, so a
@@ -111,8 +153,9 @@ The editor now does that construction for you:
 - While a protocol is selected, the Payload field is a **read-only preview** of the exact bytes
   that will be sent, with checksum/length computed — switch L4 Protocol back to "None" to take
   over editing the raw bytes directly.
-- **Opening an existing frame** auto-detects UDP/ICMP/EtherCAT from its actual payload bytes (the
-  EtherCAT check only runs when EtherType is `0x88A4`) and pre-fills the guided fields; anything it
+- **Opening an existing frame** auto-detects UDP/ICMP/SOME/IP/DoIP/EtherCAT/ARP from its actual
+  payload bytes (EtherCAT and ARP are gated on EtherType being `0x88A4`/`0x0806`; SOME/IP and DoIP
+  are detected structurally inside a UDP payload) and pre-fills the guided fields; anything it
   can't recognize (TCP, a multi-datagram EtherCAT frame, or anything that isn't well-formed) is
   left in raw mode untouched — existing bytes are never silently reinterpreted.
 
@@ -145,11 +188,63 @@ multiple slaves per cycle — that's not constructible in this guided form. Swit
 "None" and hand-edit the raw bytes if you need a multi-datagram frame; opening such a frame later
 will correctly leave it in raw mode rather than truncating it to the first datagram.
 
+#### SOME/IP
+
+Builds the standard 16-byte SOME/IP header (Service ID, Method ID, Length, Client ID, Session ID,
+Protocol Version `0x01`, Interface Version, Message Type, Return Code) directly on top of UDP,
+mirroring the layout `someip_plugin.cpp`'s own header-builder uses, then your Application Data.
+Message Type is a dropdown (`0x00` REQUEST, `0x01` REQUEST_NO_RETURN, `0x02` NOTIFICATION, `0x80`
+RESPONSE, `0x81` ERROR). Auto-detect on frame open checks that the header's self-declared Length
+field exactly matches the actual byte count before accepting a UDP payload as SOME/IP, to avoid
+misreading arbitrary UDP traffic.
+
+#### DoIP (over Ethernet/UDP)
+
+This is the **lightweight** variant, meant for DoIP's UDP-carried discovery traffic (Vehicle
+Identification Request/Response, Alive Check, entity status) — just the generic 8-byte DoIP header
+(Protocol Version, inverse Protocol Version computed for you, Payload Type) plus Application Data
+as the raw body. Vehicle Identification Request (`0x0001`) has an empty body — leave Application
+Data blank. For DoIP's *diagnostic* traffic (Routing Activation, Diagnostic Message) with guided
+body fields instead of raw hex, build a **TCP** frame instead — see its own section below.
+
+#### ARP
+
+Builds a standard 28-byte IPv4-over-Ethernet ARP packet. Reuses fields you've already got: Sender
+Hardware/Protocol Address are the frame's own **Src MAC**/**Src IP**; Target Protocol Address is
+**Dst IP**. The only new field is **Target Hardware Address** — kept separate from **Dst MAC**
+on purpose, since a real ARP request's *L2* destination is the broadcast address
+`ff:ff:ff:ff:ff:ff`, while the *ARP payload's* target hardware address is the one being resolved
+(unknown, `00:00:00:00:00:00`) — conflating the two would build a frame that doesn't look like a
+real request. **Operation** is Request (`1`) or Reply (`2`); leave Target Hardware Address at all
+zeros for a request, fill it in for a reply.
+
 ### TCP / PDU
 
 TCP and PDU fields are more direct: IPs/ports/connection-id for TCP (`Conn Id`: `-1` opens a new
 connection, `-2` closes one, `>=0` reuses an existing one), just a numeric ID for PDU. Neither has
 a packed flags field.
+
+#### DoIP (over TCP — diagnostic traffic)
+
+DoIP's diagnostic traffic (the case that matters most for testing) rides on **TCP** in this
+codebase — `Frame.bus_type == TCP` frames already represent one segment's raw application bytes
+(per `_replay_tcp_streams()`'s buffering model), so the DoIP guided builder lives here as a
+**Payload Protocol** dropdown (None / DoIP), not on the Ethernet form. Builds the same 8-byte
+generic DoIP header as the Ethernet/UDP variant, plus a guided body for two Payload Types:
+
+- **Routing Activation Request** (`0x0005`) — Source Address (the tester's own logical address),
+  Activation Type (`0x00` = default). Reserved bytes are zero-filled for you.
+- **Diagnostic Message** (`0x8001`) — Source Address, Target Address, Service ID + Data (the same
+  field concept as the CAN payload builder's UDS option above). **No ISO-TP PCI byte here** —
+  unlike CAN, DoIP's own Payload Length field already frames the message, so User Data is just
+  `[Service ID][Data]` directly.
+- **Other (raw body hex)** — Payload Type (hex) + Body (hex), for anything else (entity status,
+  power mode, alive check, etc.) — just the generic header plus whatever raw bytes make up that
+  payload type's body.
+
+Opening an existing TCP frame auto-detects all of this (protocol version consistency + declared
+length must match exactly), pre-filling whichever guided sub-fields apply; anything that doesn't
+match DoIP's header structure is left as raw Payload hex.
 
 ## Gotchas and shared semantics
 

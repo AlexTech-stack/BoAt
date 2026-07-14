@@ -169,10 +169,90 @@ def _parse_ethercat_frame(payload: bytes) -> Optional[dict[str, Any]]:
     except Exception:
         return None
 
-def _parse_ip_l4(payload: bytes, ip_version: int) -> Optional[dict[str, Any]]:
-    """Best-effort parse of an existing raw payload as IPv4/IPv6 + UDP/ICMP.
+# ── UDS / OBD-II single-frame diagnostic payloads (ISO 15765-2 Single Frame) ──
+#
+# Classic-CAN Single Frame only (v1 scope): 1 PCI byte (0x0N, N=1-7 data
+# bytes) followed by N data bytes, first of which is the UDS Service ID or
+# OBD-II Mode. This builds/parses exactly one request or response frame --
+# a real multi-frame exchange needs the live can_tp plugin, same limitation
+# already documented for TCP.
 
-    Returns None if it doesn't look like one of those (e.g. TCP, or not even
+def _build_diag_sf(sid_or_mode: int, rest: bytes) -> bytes:
+    body = bytes([sid_or_mode & 0xFF]) + rest
+    if not (1 <= len(body) <= 7):
+        raise ValueError("Single Frame body (Service ID/Mode + data) must be 1-7 bytes on classic CAN")
+    return bytes([len(body)]) + body
+
+def _parse_diag_sf(payload: bytes) -> Optional[dict[str, Any]]:
+    if len(payload) < 2 or (payload[0] & 0xF0) != 0:
+        return None
+    n = payload[0] & 0x0F
+    if n < 1 or len(payload) != 1 + n:
+        return None
+    b1 = payload[1]
+    if 0x01 <= b1 <= 0x0A:
+        return {"kind": "obd2", "mode": b1, "data": payload[2:].hex().upper()}
+    return {"kind": "uds", "sid": b1, "data": payload[2:].hex().upper()}
+
+# SOME/IP header layout mirrors someip_plugin.cpp's own BuildSomeipHeader()
+# (boat-platform/src/plugins/someip/someip_plugin.cpp:58-67): Service ID(2) +
+# Method ID(2) + Length(4, covers everything after itself) + Client ID(2) +
+# Session ID(2) + Protocol Version(1, fixed 0x01) + Interface Version(1) +
+# Message Type(1) + Return Code(1) -- then payload. Always sent over UDP here.
+SOMEIP_PROTOCOL_VERSION = 0x01
+
+def _build_someip_header(service_id: int, method_id: int, client_id: int, session_id: int,
+                          iface_version: int, msg_type: int, return_code: int, data_len: int) -> bytes:
+    return struct.pack("!HHIHHBBBB", service_id & 0xFFFF, method_id & 0xFFFF, data_len + 8,
+                        client_id & 0xFFFF, session_id & 0xFFFF, SOMEIP_PROTOCOL_VERSION,
+                        iface_version & 0xFF, msg_type & 0xFF, return_code & 0xFF)
+
+def _parse_someip_header(data: bytes) -> Optional[dict[str, Any]]:
+    """Structural check only -- accepts as SOME/IP iff the self-declared
+    Length field exactly matches the actual remaining byte count, to avoid
+    false positives on arbitrary UDP traffic."""
+    if len(data) < 16:
+        return None
+    service_id, method_id, length, client_id, session_id, proto_ver, iface_ver, msg_type, ret_code = \
+        struct.unpack("!HHIHHBBBB", data[0:16])
+    if proto_ver != SOMEIP_PROTOCOL_VERSION or length != len(data) - 8:
+        return None
+    return {
+        "protocol": "someip", "service_id": service_id, "method_id": method_id,
+        "client_id": client_id, "session_id": session_id, "iface_version": iface_ver,
+        "msg_type": msg_type, "return_code": ret_code, "data": data[16:].hex().upper(),
+    }
+
+# ARP (IPv4-over-Ethernet only -- the only case worth guiding). No IP layer
+# either, same as EtherCAT: this is the whole Ethernet payload, gated on
+# EtherType 0x0806 for auto-detect.
+
+def _build_arp(operation: int, sender_mac: bytes, sender_ip: bytes,
+                target_mac: bytes, target_ip: bytes) -> bytes:
+    if len(sender_mac) != 6 or len(target_mac) != 6:
+        raise ValueError("ARP hardware addresses must be exactly 6 bytes")
+    if len(sender_ip) != 4 or len(target_ip) != 4:
+        raise ValueError("ARP protocol addresses must be exactly 4 bytes (IPv4)")
+    return (struct.pack("!HHBBH", 1, 0x0800, 6, 4, operation & 0xFFFF)
+            + sender_mac + sender_ip + target_mac + target_ip)
+
+def _parse_arp(payload: bytes) -> Optional[dict[str, Any]]:
+    if len(payload) != 28:
+        return None
+    hw_type, proto_type, hw_len, proto_len, op = struct.unpack("!HHBBH", payload[0:8])
+    if (hw_type, proto_type, hw_len, proto_len) != (1, 0x0800, 6, 4):
+        return None
+    return {
+        "protocol": "arp", "operation": op,
+        "sender_mac": _mac_to_str(payload[8:14]), "sender_ip": _ip_to_str(payload[14:18]),
+        "target_mac": _mac_to_str(payload[18:24]), "target_ip": _ip_to_str(payload[24:28]),
+    }
+
+def _parse_ip_l4(payload: bytes, ip_version: int) -> Optional[dict[str, Any]]:
+    """Best-effort parse of an existing raw payload as IPv4/IPv6 + UDP/ICMP
+    (and, for UDP, SOME/IP if the UDP payload itself looks like one).
+
+    Returns None if it doesn't look like any of those (e.g. TCP, or not even
     a valid IP packet) -- the caller falls back to raw hex editing.
     """
     try:
@@ -196,10 +276,19 @@ def _parse_ip_l4(payload: bytes, ip_version: int) -> Optional[dict[str, Any]]:
 
         if next_header == udp_proto and len(l4) >= 8:
             src_port, dst_port = struct.unpack("!HH", l4[0:4])
+            udp_data = l4[8:]
+            someip = _parse_someip_header(udp_data)
+            if someip:
+                someip["src_port"], someip["dst_port"] = src_port, dst_port
+                return someip
+            doip = _parse_doip_full(udp_data)
+            if doip:
+                doip["src_port"], doip["dst_port"] = src_port, dst_port
+                return doip
             return {
                 "protocol": "udp", "src_ip": src_ip, "dst_ip": dst_ip,
                 "src_port": src_port, "dst_port": dst_port,
-                "data": l4[8:].hex().upper(),
+                "data": udp_data.hex().upper(),
             }
         if next_header == icmp_proto and len(l4) >= 8:
             icmp_type, icmp_code, _csum, identifier, sequence = struct.unpack("!BBHHH", l4[0:8])
@@ -212,6 +301,156 @@ def _parse_ip_l4(payload: bytes, ip_version: int) -> Optional[dict[str, Any]]:
     except Exception:
         pass
     return None
+
+# ── CAN ID construction (J1939, CANopen) ───────────────────────────────────
+#
+# Unlike the Ethernet payload builders above, these compute the *CAN ID*
+# itself, not the payload -- a second, independent guided-form axis exposed
+# via /api/can/build-id and /api/can/parse-id. Extended (29-bit) vs standard
+# (11-bit) framing in this codebase is decided purely by magnitude
+# (SocketCanDriver::WriteFrame: can_id > 0x7FF -> CAN_EFF_FLAG), so no
+# separate "is_extended" field is needed here.
+
+def _build_j1939_id(priority: int, pgn: int, da: int, sa: int) -> int:
+    pf = (pgn >> 8) & 0xFF
+    edp = (pgn >> 17) & 1
+    dp = (pgn >> 16) & 1
+    ps = (pgn & 0xFF) if pf >= 0xF0 else (da & 0xFF)
+    return (priority & 7) << 26 | edp << 25 | dp << 24 | pf << 16 | ps << 8 | (sa & 0xFF)
+
+def _parse_j1939_id(can_id: int) -> Optional[dict[str, Any]]:
+    """Splits a 29-bit extended CAN ID into J1939 fields. Every extended ID
+    decodes into *something* structurally valid -- there's no signature byte
+    to positively confirm J1939, unlike the Ethernet parsers -- so this is a
+    best-effort reinterpretation, only offered when the caller explicitly
+    asks for it (never auto-applied on frame open)."""
+    if can_id > 0x1FFFFFFF or can_id <= 0x7FF:
+        return None
+    priority, edp, dp = (can_id >> 26) & 7, (can_id >> 25) & 1, (can_id >> 24) & 1
+    pf, ps, sa = (can_id >> 16) & 0xFF, (can_id >> 8) & 0xFF, can_id & 0xFF
+    pgn = edp << 17 | dp << 16 | pf << 8 | (ps if pf >= 0xF0 else 0)
+    da = 0xFF if pf >= 0xF0 else ps  # 0xFF = global/broadcast (PDU2, address not carried in the ID)
+    return {"priority": priority, "pgn": pgn, "da": da, "sa": sa}
+
+# CANopen (CiA-301 predefined connection set): 11-bit COB-ID = a fixed base
+# per message type, plus a Node ID (1-127) for the per-node message types.
+# SYNC (fixed 0x080) and EMCY (0x080 + Node ID) share a base -- resolved on
+# parse by checking fixed types for an *exact* match first, since Node ID 0
+# is not valid in real CANopen (so EMCY's range starts at base+1, never
+# colliding with SYNC's exact base+0).
+_CANOPEN_FIXED = {"nmt": 0x000, "sync": 0x080, "timestamp": 0x100}
+_CANOPEN_NODE = {
+    "emcy": 0x080, "pdo1_tx": 0x180, "pdo1_rx": 0x200, "pdo2_tx": 0x280, "pdo2_rx": 0x300,
+    "pdo3_tx": 0x380, "pdo3_rx": 0x400, "pdo4_tx": 0x480, "pdo4_rx": 0x500,
+    "sdo_tx": 0x580, "sdo_rx": 0x600, "heartbeat": 0x700,
+}
+
+def _build_canopen_id(msg_type: str, node_id: int) -> int:
+    if msg_type in _CANOPEN_FIXED:
+        return _CANOPEN_FIXED[msg_type]
+    if msg_type in _CANOPEN_NODE:
+        return _CANOPEN_NODE[msg_type] + (node_id & 0x7F)
+    raise ValueError(f"Unknown CANopen message type: {msg_type!r}")
+
+def _parse_canopen_id(can_id: int) -> Optional[dict[str, Any]]:
+    if can_id > 0x7FF:
+        return None  # extended -- CANopen's predefined connection set is 11-bit only
+    for msg_type, base in _CANOPEN_FIXED.items():
+        if can_id == base:
+            return {"msg_type": msg_type, "node_id": 0}
+    for msg_type, base in _CANOPEN_NODE.items():
+        if base < can_id <= base + 0x7F:
+            return {"msg_type": msg_type, "node_id": can_id - base}
+    return None
+
+# ── DoIP (ISO 13400, Diagnostics over Internet Protocol) ───────────────────
+#
+# Generic header (8 bytes, transport-independent): Protocol Version(1),
+# Inverse Protocol Version(1, bitwise NOT of the first byte), Payload
+# Type(2, big-endian), Payload Length(4, big-endian) -- then a
+# payload-type-specific body. Diagnostic traffic (the case that matters most
+# for testing) rides on TCP in this codebase's Frame model (see the TCP
+# guided fields below); Vehicle Identification/discovery rides on UDP and
+# reuses the Ethernet/UDP dropdown with a raw hex body -- only the two
+# TCP-side body types below get guided sub-fields in v1.
+DOIP_DEFAULT_PROTOCOL_VERSION = 0x02
+DOIP_PAYLOAD_TYPE_ROUTING_ACTIVATION_REQUEST = 0x0005
+DOIP_PAYLOAD_TYPE_DIAGNOSTIC_MESSAGE = 0x8001
+
+def _build_doip(payload_type: int, body: bytes, protocol_version: int = DOIP_DEFAULT_PROTOCOL_VERSION) -> bytes:
+    return struct.pack("!BBHI", protocol_version & 0xFF, (~protocol_version) & 0xFF,
+                        payload_type & 0xFFFF, len(body)) + body
+
+def _parse_doip(data: bytes) -> Optional[dict[str, Any]]:
+    if len(data) < 8:
+        return None
+    pv, inv_pv, ptype, plen = struct.unpack("!BBHI", data[0:8])
+    if inv_pv != (~pv & 0xFF) or 8 + plen != len(data):
+        return None
+    return {"protocol": "doip", "protocol_version": pv, "payload_type": ptype, "body": data[8:].hex().upper()}
+
+def _build_doip_routing_activation_request(source_address: int, activation_type: int) -> bytes:
+    return struct.pack("!HB", source_address & 0xFFFF, activation_type & 0xFF) + b"\x00\x00\x00\x00"
+
+def _parse_doip_routing_activation_request(body: bytes) -> Optional[dict[str, Any]]:
+    if len(body) != 7:
+        return None
+    source_address, activation_type = struct.unpack("!HB", body[0:3])
+    return {"source_address": source_address, "activation_type": activation_type}
+
+def _build_doip_diagnostic_message(source_address: int, target_address: int, user_data: bytes) -> bytes:
+    # No ISO-TP PCI byte here, unlike CAN -- DoIP's own Payload Length field
+    # already frames the message, so User Data is the raw UDS bytes
+    # (Service ID + data) directly, not an ISO 15765-2 Single Frame.
+    return struct.pack("!HH", source_address & 0xFFFF, target_address & 0xFFFF) + user_data
+
+def _parse_doip_diagnostic_message(body: bytes) -> Optional[dict[str, Any]]:
+    if len(body) < 4:
+        return None
+    source_address, target_address = struct.unpack("!HH", body[0:4])
+    return {"source_address": source_address, "target_address": target_address, "user_data": body[4:].hex().upper()}
+
+def _parse_doip_full(data: bytes) -> Optional[dict[str, Any]]:
+    """Generic header parse plus, for the two guided body types, the
+    decoded sub-fields. Shared between the dedicated /api/doip/parse
+    endpoint and DoIP-over-UDP auto-detect inside _parse_ip_l4."""
+    parsed = _parse_doip(data)
+    if not parsed:
+        return None
+    body = bytes.fromhex(parsed["body"])
+    if parsed["payload_type"] == DOIP_PAYLOAD_TYPE_ROUTING_ACTIVATION_REQUEST:
+        sub = _parse_doip_routing_activation_request(body)
+        if sub:
+            parsed["payload_type_name"] = "routing_activation_request"
+            parsed.update(sub)
+            return parsed
+    elif parsed["payload_type"] == DOIP_PAYLOAD_TYPE_DIAGNOSTIC_MESSAGE:
+        sub = _parse_doip_diagnostic_message(body)
+        if sub:
+            parsed["payload_type_name"] = "diagnostic_message"
+            parsed.update(sub)
+            return parsed
+    parsed["payload_type_name"] = "raw"
+    return parsed
+
+def _build_doip_message(fields: dict) -> bytes:
+    """Shared by /api/doip/build (TCP-side, raw DoIP bytes) and the
+    Ethernet/UDP 'doip' protocol branch (which wraps this in IP+UDP)."""
+    payload_type_name = fields.get("payload_type")
+    protocol_version = int(fields.get("protocol_version") or DOIP_DEFAULT_PROTOCOL_VERSION)
+    if payload_type_name == "routing_activation_request":
+        body_bytes = _build_doip_routing_activation_request(
+            int(fields.get("source_address") or 0), int(fields.get("activation_type") or 0))
+        return _build_doip(DOIP_PAYLOAD_TYPE_ROUTING_ACTIVATION_REQUEST, body_bytes, protocol_version)
+    if payload_type_name == "diagnostic_message":
+        user_data = bytes([int(fields.get("sid") or 0)]) + bytes.fromhex((fields.get("data") or "").replace(" ", ""))
+        body_bytes = _build_doip_diagnostic_message(
+            int(fields.get("source_address") or 0), int(fields.get("target_address") or 0), user_data)
+        return _build_doip(DOIP_PAYLOAD_TYPE_DIAGNOSTIC_MESSAGE, body_bytes, protocol_version)
+    if payload_type_name == "raw":
+        raw_body = bytes.fromhex((fields.get("raw_body") or "").replace(" ", ""))
+        return _build_doip(int(fields.get("payload_type_hex") or 0), raw_body, protocol_version)
+    raise ValueError(f"Unknown DoIP payload type: {payload_type_name!r}")
 
 def _frame_to_dict(frame, index: int) -> dict[str, Any]:
     d: dict[str, Any] = {
@@ -529,6 +768,97 @@ def api_frame_insert(body: dict):
         count = len(_current_frames)
     return {"status": "ok", "index": pos, "count": count}
 
+@app.post("/api/can/build-id")
+def api_can_build_id(body: dict):
+    """Build a CAN ID from structured protocol fields (J1939 today, more
+    builders land in the same endpoint alongside their own branch)."""
+    builder = body.get("builder")
+    try:
+        if builder == "j1939":
+            can_id = _build_j1939_id(
+                int(body.get("priority") or 0), int(body.get("pgn") or 0),
+                int(body.get("da") or 0), int(body.get("sa") or 0))
+        elif builder == "canopen":
+            can_id = _build_canopen_id(body.get("msg_type") or "", int(body.get("node_id") or 0))
+        else:
+            raise HTTPException(400, f"Unknown CAN ID builder: {builder!r}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Failed to build CAN ID: {e}")
+    return {"can_id": can_id, "can_id_hex": f"0x{can_id:X}"}
+
+@app.post("/api/can/parse-id")
+def api_can_parse_id(body: dict):
+    """Best-effort reinterpretation of an existing CAN ID as a specific
+    protocol's fields -- only called when the user explicitly picks a CAN ID
+    Builder in the UI, never automatically on frame open (see
+    _parse_j1939_id's docstring for why)."""
+    builder = body.get("builder")
+    try:
+        can_id = int(body.get("can_id") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Invalid can_id")
+    if builder == "j1939":
+        return {"parsed": _parse_j1939_id(can_id)}
+    if builder == "canopen":
+        return {"parsed": _parse_canopen_id(can_id)}
+    raise HTTPException(400, f"Unknown CAN ID builder: {builder!r}")
+
+@app.post("/api/can/build-payload")
+def api_can_build_payload(body: dict):
+    """Build a CAN/CANFD payload from structured diagnostic fields (UDS or
+    OBD-II single frame). Independent of /api/can/build-id -- this axis
+    builds the payload, not the CAN ID."""
+    protocol = body.get("protocol")
+    try:
+        rest = bytes.fromhex((body.get("data") or "").replace(" ", ""))
+    except ValueError:
+        raise HTTPException(400, "Invalid hex in 'data'")
+    try:
+        if protocol == "uds":
+            payload = _build_diag_sf(int(body.get("sid") or 0), rest)
+        elif protocol == "obd2":
+            payload = _build_diag_sf(int(body.get("mode") or 0), rest)
+        else:
+            raise HTTPException(400, f"Unknown CAN payload builder: {protocol!r}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Failed to build payload: {e}")
+    return {"payload": payload.hex().upper()}
+
+@app.post("/api/can/parse-payload")
+def api_can_parse_payload(body: dict):
+    """Best-effort parse of an existing CAN payload as a UDS/OBD-II Single
+    Frame -- structurally validated (PCI nibble + declared length), so this
+    is safe to run automatically when opening an existing frame, unlike the
+    CAN ID builders above."""
+    try:
+        payload = bytes.fromhex((body.get("payload") or "").replace(" ", ""))
+    except ValueError:
+        raise HTTPException(400, "Invalid hex payload")
+    return {"parsed": _parse_diag_sf(payload)}
+
+@app.post("/api/doip/build")
+def api_doip_build(body: dict):
+    """Build a raw DoIP message (generic header + body) -- this is the whole
+    Payload for a TCP-bus-type frame (see m-tcp-fields' DoIP option); the
+    Ethernet/UDP path wraps the same bytes in IP+UDP via /api/eth/build."""
+    try:
+        doip_bytes = _build_doip_message(body)
+    except Exception as e:
+        raise HTTPException(400, f"Failed to build DoIP message: {e}")
+    return {"payload": doip_bytes.hex().upper()}
+
+@app.post("/api/doip/parse")
+def api_doip_parse(body: dict):
+    try:
+        data = bytes.fromhex((body.get("data") or "").replace(" ", ""))
+    except ValueError:
+        raise HTTPException(400, "Invalid hex payload")
+    return {"parsed": _parse_doip_full(data)}
+
 @app.post("/api/eth/build")
 def api_eth_build(body: dict):
     """Build a full packet from structured fields -- IP+UDP/ICMP, or a raw
@@ -551,7 +881,7 @@ def api_eth_build(body: dict):
                 int(body.get("cmd") or 0), int(body.get("idx") or 0),
                 int(body.get("adp") or 0), int(body.get("ado") or 0),
                 data, int(body.get("wkc") or 0))
-        elif protocol in ("udp", "icmp"):
+        elif protocol in ("udp", "icmp", "someip", "doip"):
             ip_version = int(body.get("ip_version") or 4)
             try:
                 src_ip = _ip_from_str(body.get("src_ip") or "")
@@ -566,12 +896,38 @@ def api_eth_build(body: dict):
             if protocol == "udp":
                 packet = _build_udp_packet(ip_version, src_ip, dst_ip,
                                             int(body.get("src_port") or 0), int(body.get("dst_port") or 0), data)
-            else:
+            elif protocol == "icmp":
                 packet = _build_icmp_packet(ip_version, src_ip, dst_ip,
                                              int(body.get("icmp_type") or 0), int(body.get("icmp_code") or 0),
                                              int(body.get("identifier") or 0), int(body.get("sequence") or 0), data)
+            elif protocol == "someip":  # always carried over UDP here
+                someip_header = _build_someip_header(
+                    int(body.get("service_id") or 0), int(body.get("method_id") or 0),
+                    int(body.get("client_id") or 0), int(body.get("session_id") or 0),
+                    int(body.get("iface_version") or 1), int(body.get("msg_type") or 0),
+                    int(body.get("return_code") or 0), len(data))
+                packet = _build_udp_packet(ip_version, src_ip, dst_ip,
+                                            int(body.get("src_port") or 0), int(body.get("dst_port") or 0),
+                                            someip_header + data)
+            else:  # doip -- Vehicle Identification/discovery, carried over UDP
+                try:
+                    doip_bytes = _build_doip_message(body)
+                except Exception as e:
+                    raise HTTPException(400, f"Failed to build DoIP message: {e}")
+                packet = _build_udp_packet(ip_version, src_ip, dst_ip,
+                                            int(body.get("src_port") or 0), int(body.get("dst_port") or 0),
+                                            doip_bytes)
+        elif protocol == "arp":
+            try:
+                sender_mac = _mac_from_str(body.get("sender_mac") or "")
+                target_mac = _mac_from_str(body.get("target_mac") or "00:00:00:00:00:00")
+                sender_ip = _ip_from_str(body.get("sender_ip") or "")
+                target_ip = _ip_from_str(body.get("target_ip") or "")
+            except ValueError as e:
+                raise HTTPException(400, f"Invalid ARP address: {e}")
+            packet = _build_arp(int(body.get("operation") or 1), sender_mac, sender_ip, target_mac, target_ip)
         else:
-            raise HTTPException(400, f"Unknown protocol: {protocol!r} (expected 'udp', 'icmp', or 'ethercat')")
+            raise HTTPException(400, f"Unknown protocol: {protocol!r} (expected 'udp', 'icmp', 'someip', 'doip', 'ethercat', or 'arp')")
     except HTTPException:
         raise
     except Exception as e:
@@ -593,6 +949,8 @@ def api_eth_parse(body: dict):
     ethertype = int(body.get("ethertype") or 0)
     if ethertype == 0x88A4:
         return {"parsed": _parse_ethercat_frame(payload)}
+    if ethertype == 0x0806:
+        return {"parsed": _parse_arp(payload)}
     ip_version = int(body.get("ip_version") or 4)
     return {"parsed": _parse_ip_l4(payload, ip_version)}
 
@@ -808,6 +1166,63 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
 
     <div id="m-can-fields">
       <h3 style="font-size:12px;color:var(--muted);margin-top:12px">CAN metadata</h3>
+      <div class="field">
+        <label>CAN ID Builder</label>
+        <select id="m-can-idbuilder" onchange="onCanIdBuilderChange()">
+          <option value="">None (edit CAN ID directly below)</option>
+          <option value="j1939">J1939 (PGN-based, extended ID)</option>
+          <option value="canopen">CANopen (COB-ID based)</option>
+        </select>
+      </div>
+      <div id="m-can-j1939-fields" style="display:none">
+        <div class="field-row">
+          <div class="field"><label>Priority</label><input id="m-can-j1939-prio" type="number" min="0" max="7" oninput="onCanIdFieldChange()"/></div>
+          <div class="field"><label>PGN</label><input id="m-can-j1939-pgn" placeholder="0xF004" oninput="onCanIdFieldChange()"/></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label id="m-can-j1939-da-label">Destination Address</label><input id="m-can-j1939-da" placeholder="0xFF" oninput="onCanIdFieldChange()"/></div>
+          <div class="field"><label>Source Address</label><input id="m-can-j1939-sa" placeholder="0x00" oninput="onCanIdFieldChange()"/></div>
+        </div>
+        <div class="field-hint">
+          PGN's PDU Format byte (bits 15-8) decides addressing: below <code>0xF0</code> ("PDU1",
+          peer-to-peer) the message targets one node and Destination Address is meaningful;
+          <code>0xF0</code> and above ("PDU2", broadcast) folds a Group Extension into the PGN
+          itself instead, so Destination Address is ignored and the ID is built as a broadcast.
+          Extended (29-bit) framing is automatic here for any CAN ID above <code>0x7FF</code> --
+          no separate flag needed.
+        </div>
+      </div>
+      <div id="m-can-canopen-fields" style="display:none">
+        <div class="field-row">
+          <div class="field"><label>Message Type</label>
+            <select id="m-can-canopen-msgtype" onchange="onCanIdFieldChange()">
+              <option value="nmt">NMT</option>
+              <option value="sync">SYNC</option>
+              <option value="emcy">EMCY (Emergency)</option>
+              <option value="timestamp">Time Stamp</option>
+              <option value="pdo1_tx">PDO1 Tx</option>
+              <option value="pdo1_rx">PDO1 Rx</option>
+              <option value="pdo2_tx">PDO2 Tx</option>
+              <option value="pdo2_rx">PDO2 Rx</option>
+              <option value="pdo3_tx">PDO3 Tx</option>
+              <option value="pdo3_rx">PDO3 Rx</option>
+              <option value="pdo4_tx">PDO4 Tx</option>
+              <option value="pdo4_rx">PDO4 Rx</option>
+              <option value="sdo_tx">SDO Tx (server response)</option>
+              <option value="sdo_rx">SDO Rx (client request)</option>
+              <option value="heartbeat">Heartbeat</option>
+            </select>
+          </div>
+          <div class="field"><label id="m-can-canopen-node-label">Node ID</label><input id="m-can-canopen-node" type="number" min="1" max="127" oninput="onCanIdFieldChange()"/></div>
+        </div>
+        <div class="field-hint">
+          COB-ID = a fixed base per message type, plus Node ID for anything not broadcast. NMT,
+          SYNC, and Time Stamp don't carry a Node ID (fixed COB-ID, field disabled); everything
+          else does (1-127). A guided <strong>SDO payload</strong> builder (command byte + index +
+          sub-index + data) isn't built yet -- for now, set Payload directly for SDO frames.
+        </div>
+      </div>
+      <div id="m-can-idbuild-error" class="field-hint" style="display:none;border-color:var(--red);color:var(--red)"></div>
       <div class="field-row">
         <div class="field"><label>CAN ID (hex or dec)</label><input id="m-can-id"/></div>
         <div class="field"><label>DLC</label><input id="m-can-dlc" type="number" min="0" max="64" oninput="onDlcInput()"/></div>
@@ -821,6 +1236,71 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
         gets rounded up and zero-padded automatically when sent — you don't need to pre-pad it yourself.
       </div>
       <div id="m-dlc-warning" class="field-hint" style="display:none;border-color:var(--red);color:var(--red)"></div>
+
+      <div class="field">
+        <label>Payload Builder</label>
+        <select id="m-can-payloadbuilder" onchange="onCanPayloadBuilderChange()">
+          <option value="">None (edit Payload directly above)</option>
+          <option value="uds">UDS (single-frame request/response)</option>
+          <option value="obd2">OBD-II (single-frame, Mode/PID)</option>
+        </select>
+      </div>
+      <div id="m-can-uds-fields" style="display:none">
+        <div class="field-row">
+          <div class="field">
+            <label>Service ID</label>
+            <input id="m-can-uds-sid" list="uds-sid-list" placeholder="0x22" oninput="onCanPayloadFieldChange()"/>
+            <datalist id="uds-sid-list">
+              <option value="0x10">DiagnosticSessionControl</option>
+              <option value="0x11">ECUReset</option>
+              <option value="0x14">ClearDiagnosticInformation</option>
+              <option value="0x19">ReadDTCInformation</option>
+              <option value="0x22">ReadDataByIdentifier</option>
+              <option value="0x27">SecurityAccess</option>
+              <option value="0x28">CommunicationControl</option>
+              <option value="0x2E">WriteDataByIdentifier</option>
+              <option value="0x31">RoutineControl</option>
+              <option value="0x3E">TesterPresent</option>
+              <option value="0x7F">Negative Response</option>
+            </datalist>
+          </div>
+          <div class="field"><label>Data (hex)</label><input id="m-can-uds-data" placeholder="sub-function / DID / data" oninput="onCanPayloadFieldChange()"/></div>
+        </div>
+        <div class="field-hint">
+          Builds <code>[PCI 0x0N][Service ID][Data]</code> -- an ISO 15765-2 Single Frame, up to 7
+          data bytes total on classic CAN. This is one request or response frame only; a real
+          multi-frame UDS exchange (First Frame / Consecutive Frame / Flow Control, for payloads
+          over 7 bytes) needs the live <code>can_tp</code> plugin -- same limitation already noted
+          for TCP under Ethernet. Positive responses are conventionally Service ID +
+          <code>0x40</code>; negative responses are <code>0x7F</code>, the original Service ID,
+          then a 1-byte NRC.
+        </div>
+      </div>
+      <div id="m-can-obd2-fields" style="display:none">
+        <div class="field-row">
+          <div class="field">
+            <label>Mode</label>
+            <input id="m-can-obd2-mode" list="obd2-mode-list" placeholder="0x01" oninput="onCanPayloadFieldChange()"/>
+            <datalist id="obd2-mode-list">
+              <option value="0x01">Show current data</option>
+              <option value="0x02">Show freeze frame data</option>
+              <option value="0x03">Show stored DTCs</option>
+              <option value="0x04">Clear DTCs</option>
+              <option value="0x09">Request vehicle information</option>
+              <option value="0x0A">Show permanent DTCs</option>
+            </datalist>
+          </div>
+          <div class="field"><label>Data (hex)</label><input id="m-can-obd2-data" placeholder="PID + data, if the mode uses one" oninput="onCanPayloadFieldChange()"/></div>
+        </div>
+        <div class="field-hint">
+          Builds <code>[PCI 0x0N][Mode][Data]</code>. Whether Data starts with a PID byte depends
+          on the Mode -- <code>0x01</code>/<code>0x02</code>/<code>0x09</code> take one,
+          <code>0x03</code>/<code>0x04</code>/<code>0x0A</code> don't. Responses conventionally use
+          Mode + <code>0x40</code>.
+        </div>
+      </div>
+      <div id="m-can-payloadbuild-error" class="field-hint" style="display:none;border-color:var(--red);color:var(--red)"></div>
+
       <div class="field-row">
         <div class="field"><label>Flags</label><input id="m-can-flags"/></div>
         <div class="field"><label>Channel</label><input id="m-can-channel" type="number" min="0"/></div>
@@ -847,8 +1327,9 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
         any other value tags the frame with that VLAN (metadata only, not spliced into the packet bytes below).
         <strong>EtherType is set independently here</strong> and is never auto-filled or overwritten by the IP
         Version / L4 Protocol choices below -- set it yourself to match: <code>0x0800</code> for IPv4,
-        <code>0x86DD</code> for IPv6, <code>0x88A4</code> for EtherCAT. A mismatch (e.g. IPv6 payload with
-        EtherType left at IPv4) will build a packet a real receiver can't parse correctly.
+        <code>0x86DD</code> for IPv6, <code>0x88A4</code> for EtherCAT, <code>0x0806</code> for ARP. A
+        mismatch (e.g. IPv6 payload with EtherType left at IPv4) will build a packet a real receiver
+        can't parse correctly.
       </div>
 
       <h3 style="font-size:12px;color:var(--muted);margin-top:12px">Payload construction</h3>
@@ -864,7 +1345,10 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
             <option value="">None (edit raw packet bytes below)</option>
             <option value="udp">UDP</option>
             <option value="icmp">ICMP</option>
+            <option value="someip">SOME/IP (over UDP)</option>
+            <option value="doip">DoIP (over UDP, discovery/vehicle-id)</option>
             <option value="ethercat">EtherCAT (raw, no IP)</option>
+            <option value="arp">ARP (raw, no IP payload)</option>
           </select>
         </div>
       </div>
@@ -900,6 +1384,52 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
         <div class="field-hint">
           Type/code: IPv4 echo request = <code>8</code>/<code>0</code>, echo reply = <code>0</code>/<code>0</code>.
           IPv6 echo request = <code>128</code>/<code>0</code>, echo reply = <code>129</code>/<code>0</code>.
+        </div>
+      </div>
+
+      <div id="m-eth-someip-fields" style="display:none">
+        <div class="field-row">
+          <div class="field"><label>Service ID</label><input id="m-eth-someip-service" placeholder="0x1234" oninput="onEthFieldChange()"/></div>
+          <div class="field"><label>Method ID</label><input id="m-eth-someip-method" placeholder="0x0001" oninput="onEthFieldChange()"/></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Client ID</label><input id="m-eth-someip-client" placeholder="0x0000" oninput="onEthFieldChange()"/></div>
+          <div class="field"><label>Session ID</label><input id="m-eth-someip-session" placeholder="0x0001" oninput="onEthFieldChange()"/></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Interface Version</label><input id="m-eth-someip-ifver" type="number" min="0" max="255" oninput="onEthFieldChange()"/></div>
+          <div class="field"><label>Message Type</label>
+            <select id="m-eth-someip-msgtype" onchange="onEthFieldChange()">
+              <option value="0">0x00 REQUEST</option>
+              <option value="1">0x01 REQUEST_NO_RETURN</option>
+              <option value="2">0x02 NOTIFICATION</option>
+              <option value="128">0x80 RESPONSE</option>
+              <option value="129">0x81 ERROR</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Return Code</label><input id="m-eth-someip-retcode" type="number" min="0" max="255" oninput="onEthFieldChange()"/></div>
+        </div>
+        <div class="field-hint">
+          Header layout mirrors <code>someip_plugin.cpp</code>'s own <code>BuildSomeipHeader()</code> --
+          Service ID, Method ID, Length (computed for you), Client ID, Session ID, Protocol Version
+          (fixed <code>0x01</code>), Interface Version, Message Type, Return Code, then Application
+          Data. Sent over UDP using the Src/Dst Port fields above (also shared with the UDP form).
+        </div>
+      </div>
+
+      <div id="m-eth-doip-fields" style="display:none">
+        <div class="field-row">
+          <div class="field"><label>Protocol Version</label><input id="m-eth-doip-version" placeholder="0x02" oninput="onEthFieldChange()"/></div>
+          <div class="field"><label>Payload Type (hex)</label><input id="m-eth-doip-type" placeholder="0x0001" oninput="onEthFieldChange()"/></div>
+        </div>
+        <div class="field-hint">
+          Generic DoIP header only — for Vehicle Identification/discovery traffic, typically sent
+          over UDP (e.g. <code>0x0001</code> Vehicle Identification Request has an empty body:
+          leave Application Data blank). For diagnostic traffic (Routing Activation, Diagnostic
+          Message) with guided body fields, build a <strong>TCP</strong> frame instead — see its
+          Payload Protocol option.
         </div>
       </div>
 
@@ -947,6 +1477,27 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
         </div>
       </div>
 
+      <div id="m-eth-arp-fields" style="display:none">
+        <div class="field-row">
+          <div class="field"><label>Operation</label>
+            <select id="m-eth-arp-op" onchange="onEthFieldChange()">
+              <option value="1">1 - Request</option>
+              <option value="2">2 - Reply</option>
+            </select>
+          </div>
+          <div class="field"><label>Target Hardware Address</label><input id="m-eth-arp-target-mac" placeholder="00:00:00:00:00:00" oninput="onEthFieldChange()"/></div>
+        </div>
+        <div class="field-hint">
+          Sender Hardware/Protocol Address reuse the <strong>Src MAC</strong>/<strong>Src IP</strong>
+          fields above; Target Protocol Address reuses <strong>Dst IP</strong>. Only Target Hardware
+          Address is new here -- it's intentionally separate from the frame's own <strong>Dst
+          MAC</strong>, since a real ARP request's L2 destination is the broadcast address
+          <code>ff:ff:ff:ff:ff:ff</code>, not the (unknown) target hardware address being resolved.
+          Leave Target Hardware Address at <code>00:00:00:00:00:00</code> for a request; fill it in
+          for a reply.
+        </div>
+      </div>
+
       <div id="m-eth-appdata-field" class="field" style="display:none">
         <label id="m-eth-appdata-label">Application Data (hex)</label>
         <textarea id="m-eth-appdata" oninput="onEthFieldChange()" placeholder="Bytes after the UDP/ICMP header, if any"></textarea>
@@ -981,6 +1532,70 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
         TCP has no packed flags field either — connection lifecycle is carried entirely by Conn Id:
         <code>-1</code> opens a new connection, <code>-2</code> closes one, <code>&gt;=0</code> reuses an existing connection.
       </div>
+
+      <div class="field">
+        <label>Payload Protocol</label>
+        <select id="m-tcp-payloadproto" onchange="onTcpPayloadProtoChange()">
+          <option value="">None (edit Payload directly above)</option>
+          <option value="doip">DoIP (ISO 13400)</option>
+        </select>
+      </div>
+      <div id="m-tcp-doip-fields" style="display:none">
+        <div class="field-row">
+          <div class="field"><label>Protocol Version</label><input id="m-tcp-doip-version" placeholder="0x02" oninput="onTcpPayloadFieldChange()"/></div>
+          <div class="field"><label>Payload Type</label>
+            <select id="m-tcp-doip-type" onchange="onTcpDoipTypeChange()">
+              <option value="routing_activation_request">0x0005 Routing Activation Request</option>
+              <option value="diagnostic_message">0x8001 Diagnostic Message</option>
+              <option value="raw">Other (raw body hex)</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="m-tcp-doip-ra-fields" style="display:none">
+          <div class="field-row">
+            <div class="field"><label>Source Address</label><input id="m-tcp-doip-ra-source" placeholder="0x0E00" oninput="onTcpPayloadFieldChange()"/></div>
+            <div class="field"><label>Activation Type</label><input id="m-tcp-doip-ra-actype" placeholder="0x00" oninput="onTcpPayloadFieldChange()"/></div>
+          </div>
+          <div class="field-hint">
+            Requests routing of diagnostic messages to the given logical source address (the
+            tester's own address). Activation Type <code>0x00</code> = default. Reserved bytes are
+            always zero-filled for you.
+          </div>
+        </div>
+
+        <div id="m-tcp-doip-dm-fields" style="display:none">
+          <div class="field-row">
+            <div class="field"><label>Source Address</label><input id="m-tcp-doip-dm-source" placeholder="0x0E00" oninput="onTcpPayloadFieldChange()"/></div>
+            <div class="field"><label>Target Address</label><input id="m-tcp-doip-dm-target" placeholder="0x1000" oninput="onTcpPayloadFieldChange()"/></div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Service ID</label>
+              <input id="m-tcp-doip-dm-sid" list="uds-sid-list" placeholder="0x22" oninput="onTcpPayloadFieldChange()"/>
+            </div>
+            <div class="field"><label>Data (hex)</label><input id="m-tcp-doip-dm-data" placeholder="sub-function / DID / data" oninput="onTcpPayloadFieldChange()"/></div>
+          </div>
+          <div class="field-hint">
+            User Data is Service ID + Data directly — unlike CAN, DoIP needs no ISO-TP PCI byte,
+            since DoIP's own Payload Length field already frames the message (reuses the same
+            common-Service-ID suggestions as the CAN payload builder).
+          </div>
+        </div>
+
+        <div id="m-tcp-doip-raw-fields" style="display:none">
+          <div class="field-row">
+            <div class="field"><label>Payload Type (hex)</label><input id="m-tcp-doip-raw-type" placeholder="0x0001" oninput="onTcpPayloadFieldChange()"/></div>
+            <div class="field"><label>Body (hex)</label><input id="m-tcp-doip-raw-body" oninput="onTcpPayloadFieldChange()"/></div>
+          </div>
+          <div class="field-hint">
+            For anything else — Vehicle Identification (usually sent over UDP, see the Ethernet
+            form's DoIP option instead), Alive Check, entity status, etc: just the generic header
+            plus whatever raw bytes make up that payload type's body.
+          </div>
+        </div>
+      </div>
+      <div id="m-tcp-payloadbuild-error" class="field-hint" style="display:none;border-color:var(--red);color:var(--red)"></div>
     </div>
 
     <div id="m-pdu-fields" style="display:none">
@@ -1320,9 +1935,18 @@ async function fillModal(f) {
 
   const c = f.can || {};
   document.getElementById("m-can-id").value = c.can_id_hex || c.can_id || 0;
+  document.getElementById("m-can-idbuilder").value = "";
+  await onCanIdBuilderChange();  // resets to raw-hex mode; never auto-guesses a builder on open
   document.getElementById("m-can-dlc").value = c.dlc || 0;
   document.getElementById("m-can-flags").value = c.flags || 0;
   document.getElementById("m-can-channel").value = c.channel || 0;
+  // Runs the payload back through the guided builder for auto-detect, which
+  // (like onPayloadInput()) recomputes DLC from the rebuilt payload -- reset
+  // DLC from the stored value afterward so a pre-existing DLC/payload
+  // mismatch is still surfaced by checkDlcMismatch() below, not silently
+  // "fixed" just because the frame was opened.
+  await fillCanPayloadBuilderFields(f.bus_type, f.payload || "");
+  document.getElementById("m-can-dlc").value = c.dlc || 0;
 
   const e = f.eth || {};
   document.getElementById("m-eth-src-mac").value = e.src_mac || "";
@@ -1341,6 +1965,7 @@ async function fillModal(f) {
   document.getElementById("m-tcp-dst-port").value = t.dst_port || 0;
   document.getElementById("m-tcp-ipver").value = t.ip_version || 0;
   document.getElementById("m-tcp-conn-id").value = t.conn_id ?? -1;
+  await fillTcpDoipFields(f.bus_type, f.payload || "");
 
   const p = f.pdu || {};
   document.getElementById("m-pdu-id").value = p.pdu_id || 0;
@@ -1366,13 +1991,16 @@ function onModalBusTypeChange() {
 
 function onEthProtocolChange() {
   const proto = document.getElementById("m-eth-protocol").value;
-  document.getElementById("m-eth-udp-fields").style.display = proto === "udp" ? "block" : "none";
+  document.getElementById("m-eth-udp-fields").style.display = (proto === "udp" || proto === "someip" || proto === "doip") ? "block" : "none";
   document.getElementById("m-eth-icmp-fields").style.display = proto === "icmp" ? "block" : "none";
+  document.getElementById("m-eth-someip-fields").style.display = proto === "someip" ? "block" : "none";
+  document.getElementById("m-eth-doip-fields").style.display = proto === "doip" ? "block" : "none";
   document.getElementById("m-eth-ethercat-fields").style.display = proto === "ethercat" ? "block" : "none";
+  document.getElementById("m-eth-arp-fields").style.display = proto === "arp" ? "block" : "none";
   document.getElementById("m-eth-ipaddr-row").style.display = proto === "ethercat" ? "none" : "flex";
   document.getElementById("m-eth-appdata-label").textContent =
     proto === "ethercat" ? "Datagram Data (hex)" : "Application Data (hex)";
-  document.getElementById("m-eth-appdata-field").style.display = proto ? "block" : "none";
+  document.getElementById("m-eth-appdata-field").style.display = (proto && proto !== "arp") ? "block" : "none";
   document.getElementById("m-eth-preview-wrap").style.display = proto ? "block" : "none";
   document.getElementById("m-eth-preview-proto").textContent = proto.toUpperCase();
   const payloadEl = document.getElementById("m-payload");
@@ -1419,18 +2047,35 @@ async function rebuildEthPacket() {
     protocol: proto,
     data: (document.getElementById("m-eth-appdata").value || "").replace(/\s+/g,""),
   };
-  if (proto === "udp" || proto === "icmp") {
+  if (proto === "udp" || proto === "icmp" || proto === "someip" || proto === "doip") {
     body.ip_version = parseInt(document.getElementById("m-eth-ipver").value) || 4;
     body.src_ip = document.getElementById("m-eth-src-ip").value || "";
     body.dst_ip = document.getElementById("m-eth-dst-ip").value || "";
-    if (proto === "udp") {
+    if (proto === "udp" || proto === "someip" || proto === "doip") {
       body.src_port = parseInt(document.getElementById("m-eth-src-port").value) || 0;
       body.dst_port = parseInt(document.getElementById("m-eth-dst-port").value) || 0;
-    } else {
+    }
+    if (proto === "icmp") {
       body.icmp_type = parseInt(document.getElementById("m-eth-icmp-type").value) || 0;
       body.icmp_code = parseInt(document.getElementById("m-eth-icmp-code").value) || 0;
       body.identifier = parseInt(document.getElementById("m-eth-icmp-id").value) || 0;
       body.sequence = parseInt(document.getElementById("m-eth-icmp-seq").value) || 0;
+    }
+    if (proto === "someip") {
+      body.service_id = parseIntFlexible(document.getElementById("m-eth-someip-service").value);
+      body.method_id = parseIntFlexible(document.getElementById("m-eth-someip-method").value);
+      body.client_id = parseIntFlexible(document.getElementById("m-eth-someip-client").value);
+      body.session_id = parseIntFlexible(document.getElementById("m-eth-someip-session").value);
+      body.iface_version = parseInt(document.getElementById("m-eth-someip-ifver").value) || 0;
+      body.msg_type = parseInt(document.getElementById("m-eth-someip-msgtype").value) || 0;
+      body.return_code = parseInt(document.getElementById("m-eth-someip-retcode").value) || 0;
+    }
+    if (proto === "doip") {
+      // Lightweight form -- generic header + raw body only (Application Data field above).
+      body.payload_type = "raw";
+      body.payload_type_hex = parseIntFlexible(document.getElementById("m-eth-doip-type").value);
+      body.protocol_version = parseIntFlexible(document.getElementById("m-eth-doip-version").value) || 2;
+      body.raw_body = body.data;
     }
   } else if (proto === "ethercat") {
     body.cmd = parseIntFlexible(document.getElementById("m-eth-ecat-cmd").value);
@@ -1438,6 +2083,12 @@ async function rebuildEthPacket() {
     body.adp = parseIntFlexible(document.getElementById("m-eth-ecat-adp").value);
     body.ado = parseIntFlexible(document.getElementById("m-eth-ecat-ado").value);
     body.wkc = parseIntFlexible(document.getElementById("m-eth-ecat-wkc").value);
+  } else if (proto === "arp") {
+    body.operation = parseInt(document.getElementById("m-eth-arp-op").value) || 1;
+    body.sender_mac = document.getElementById("m-eth-src-mac").value || "";
+    body.sender_ip = document.getElementById("m-eth-src-ip").value || "";
+    body.target_mac = document.getElementById("m-eth-arp-target-mac").value || "00:00:00:00:00:00";
+    body.target_ip = document.getElementById("m-eth-dst-ip").value || "";
   }
   const errEl = document.getElementById("m-eth-build-error");
   try {
@@ -1472,16 +2123,38 @@ async function fillEthProtocolFields(busType, ipVersion, payloadHex, ethertype) 
       document.getElementById("m-eth-icmp-code").value = p.icmp_code;
       document.getElementById("m-eth-icmp-id").value = p.identifier;
       document.getElementById("m-eth-icmp-seq").value = p.sequence;
+    } else if (p.protocol === "someip") {
+      document.getElementById("m-eth-src-port").value = p.src_port;
+      document.getElementById("m-eth-dst-port").value = p.dst_port;
+      document.getElementById("m-eth-someip-service").value = "0x" + p.service_id.toString(16).toUpperCase();
+      document.getElementById("m-eth-someip-method").value = "0x" + p.method_id.toString(16).toUpperCase();
+      document.getElementById("m-eth-someip-client").value = "0x" + p.client_id.toString(16).toUpperCase();
+      document.getElementById("m-eth-someip-session").value = "0x" + p.session_id.toString(16).toUpperCase();
+      document.getElementById("m-eth-someip-ifver").value = p.iface_version;
+      document.getElementById("m-eth-someip-msgtype").value = p.msg_type;
+      document.getElementById("m-eth-someip-retcode").value = p.return_code;
+    } else if (p.protocol === "doip") {
+      document.getElementById("m-eth-src-port").value = p.src_port;
+      document.getElementById("m-eth-dst-port").value = p.dst_port;
+      document.getElementById("m-eth-doip-version").value = "0x" + p.protocol_version.toString(16).toUpperCase();
+      document.getElementById("m-eth-doip-type").value = "0x" + p.payload_type.toString(16).toUpperCase();
     } else if (p.protocol === "ethercat") {
       document.getElementById("m-eth-ecat-cmd").value = p.cmd;
       document.getElementById("m-eth-ecat-idx").value = "0x" + p.idx.toString(16).toUpperCase();
       document.getElementById("m-eth-ecat-adp").value = "0x" + p.adp.toString(16).toUpperCase();
       document.getElementById("m-eth-ecat-ado").value = "0x" + p.ado.toString(16).toUpperCase();
       document.getElementById("m-eth-ecat-wkc").value = "0x" + p.wkc.toString(16).toUpperCase();
+    } else if (p.protocol === "arp") {
+      // Sender MAC/IP and Target IP are left untouched -- they already reflect
+      // the frame's own eth metadata (m-eth-src-mac/-src-ip/-dst-ip), filled
+      // in by fillModal() before this function runs, same convention as UDP/ICMP.
+      document.getElementById("m-eth-arp-op").value = p.operation;
+      document.getElementById("m-eth-arp-target-mac").value = p.target_mac;
     } else {
       return;
     }
-    document.getElementById("m-eth-appdata").value = p.data;
+    if (p.protocol === "doip") document.getElementById("m-eth-appdata").value = p.body;
+    else if (p.protocol !== "arp") document.getElementById("m-eth-appdata").value = p.data;
     document.getElementById("m-eth-protocol").value = p.protocol;
     onEthProtocolChange();
     if (p.protocol === "ethercat") onEcatCmdChange();
@@ -1502,6 +2175,244 @@ function onPayloadInput() {
 
 function onDlcInput() {
   checkDlcMismatch();
+}
+
+// ── CAN ID guided builders (J1939 today) ─────────────────────────────────────
+// Independent of the Payload builders above -- this axis computes the CAN ID
+// itself via /api/can/build-id. Switching the builder ON re-parses whatever
+// CAN ID is currently in the field as a starting point (falling back to
+// sensible defaults if it doesn't look extended); this only ever happens as
+// a direct response to the user picking a builder, never automatically on
+// frame open (see fillModal), since any 29-bit ID "parses" as *something*.
+
+async function onCanIdBuilderChange() {
+  const builder = document.getElementById("m-can-idbuilder").value;
+  document.getElementById("m-can-j1939-fields").style.display = builder === "j1939" ? "block" : "none";
+  document.getElementById("m-can-canopen-fields").style.display = builder === "canopen" ? "block" : "none";
+  const idEl = document.getElementById("m-can-id");
+  idEl.readOnly = !!builder;
+  idEl.style.opacity = builder ? "0.65" : "1";
+  document.getElementById("m-can-idbuild-error").style.display = "none";
+  if (!builder) return;
+  if (builder === "j1939") {
+    let p = null;
+    try {
+      const r = await api("POST", "/api/can/parse-id", {builder: "j1939", can_id: parseIntFlexible(idEl.value)});
+      p = r.parsed;
+    } catch(e) { /* fall through to defaults */ }
+    document.getElementById("m-can-j1939-prio").value = p ? p.priority : 6;
+    document.getElementById("m-can-j1939-pgn").value = "0x" + (p ? p.pgn : 0).toString(16).toUpperCase();
+    document.getElementById("m-can-j1939-da").value = "0x" + (p ? p.da : 0xFF).toString(16).toUpperCase();
+    document.getElementById("m-can-j1939-sa").value = "0x" + (p ? p.sa : 0).toString(16).toUpperCase();
+  } else if (builder === "canopen") {
+    let p = null;
+    try {
+      const r = await api("POST", "/api/can/parse-id", {builder: "canopen", can_id: parseIntFlexible(idEl.value)});
+      p = r.parsed;
+    } catch(e) { /* fall through to defaults */ }
+    document.getElementById("m-can-canopen-msgtype").value = p ? p.msg_type : "heartbeat";
+    document.getElementById("m-can-canopen-node").value = p ? p.node_id : 1;
+  }
+  await rebuildCanId();
+}
+
+function onCanIdFieldChange() {
+  if (document.getElementById("m-can-idbuilder").value) rebuildCanId();
+}
+
+async function rebuildCanId() {
+  const builder = document.getElementById("m-can-idbuilder").value;
+  if (!builder) return;
+  const body = {builder};
+  if (builder === "j1939") {
+    body.priority = parseIntFlexible(document.getElementById("m-can-j1939-prio").value);
+    body.pgn = parseIntFlexible(document.getElementById("m-can-j1939-pgn").value);
+    body.da = parseIntFlexible(document.getElementById("m-can-j1939-da").value);
+    body.sa = parseIntFlexible(document.getElementById("m-can-j1939-sa").value);
+    const pf = (body.pgn >> 8) & 0xFF;
+    const daInput = document.getElementById("m-can-j1939-da");
+    const daLabel = document.getElementById("m-can-j1939-da-label");
+    daInput.disabled = pf >= 0xF0;
+    daLabel.textContent = pf >= 0xF0 ? "Destination Address (ignored, PDU2 broadcast)" : "Destination Address";
+  } else if (builder === "canopen") {
+    const msgType = document.getElementById("m-can-canopen-msgtype").value;
+    body.msg_type = msgType;
+    body.node_id = parseInt(document.getElementById("m-can-canopen-node").value) || 0;
+    const fixedTypes = ["nmt", "sync", "timestamp"];
+    const nodeInput = document.getElementById("m-can-canopen-node");
+    const nodeLabel = document.getElementById("m-can-canopen-node-label");
+    const isFixed = fixedTypes.includes(msgType);
+    nodeInput.disabled = isFixed;
+    nodeLabel.textContent = isFixed ? "Node ID (unused, fixed COB-ID)" : "Node ID";
+  }
+  const errEl = document.getElementById("m-can-idbuild-error");
+  try {
+    const r = await api("POST", "/api/can/build-id", body);
+    document.getElementById("m-can-id").value = r.can_id_hex;
+    errEl.style.display = "none";
+  } catch(e) {
+    errEl.style.display = "block";
+    errEl.textContent = "Could not build CAN ID: " + e.message;
+  }
+}
+
+// ── CAN payload guided builders (UDS / OBD-II single frame) ──────────────────
+// Independent of the CAN ID builders above -- this axis builds the Payload
+// field via /api/can/build-payload, same read-only-preview pattern as the
+// Ethernet builders. Unlike J1939's CAN ID builder, this one auto-detects on
+// frame open (fillCanPayloadBuilderFields), since ISO 15765-2's PCI nibble +
+// declared-length check is a real structural signal, not a guess.
+
+async function onCanPayloadBuilderChange() {
+  const builder = document.getElementById("m-can-payloadbuilder").value;
+  document.getElementById("m-can-uds-fields").style.display = builder === "uds" ? "block" : "none";
+  document.getElementById("m-can-obd2-fields").style.display = builder === "obd2" ? "block" : "none";
+  const payloadEl = document.getElementById("m-payload");
+  payloadEl.readOnly = !!builder;
+  payloadEl.style.opacity = builder ? "0.65" : "1";
+  document.getElementById("m-can-payloadbuild-error").style.display = "none";
+  if (builder) await rebuildCanPayload();
+}
+
+function onCanPayloadFieldChange() {
+  if (document.getElementById("m-can-payloadbuilder").value) rebuildCanPayload();
+}
+
+async function rebuildCanPayload() {
+  const builder = document.getElementById("m-can-payloadbuilder").value;
+  if (!builder) return;
+  const body = {protocol: builder};
+  if (builder === "uds") {
+    body.sid = parseIntFlexible(document.getElementById("m-can-uds-sid").value);
+    body.data = (document.getElementById("m-can-uds-data").value || "").replace(/\s+/g,"");
+  } else if (builder === "obd2") {
+    body.mode = parseIntFlexible(document.getElementById("m-can-obd2-mode").value);
+    body.data = (document.getElementById("m-can-obd2-data").value || "").replace(/\s+/g,"");
+  }
+  const errEl = document.getElementById("m-can-payloadbuild-error");
+  try {
+    const r = await api("POST", "/api/can/build-payload", body);
+    document.getElementById("m-payload").value = r.payload;
+    onPayloadInput();  // keeps DLC in sync with the newly-built payload, same as manual editing
+    errEl.style.display = "none";
+  } catch(e) {
+    errEl.style.display = "block";
+    errEl.textContent = "Could not build payload: " + e.message;
+  }
+}
+
+async function fillCanPayloadBuilderFields(busType, payloadHex) {
+  document.getElementById("m-can-payloadbuilder").value = "";
+  await onCanPayloadBuilderChange();
+  if ((busType !== "CAN" && busType !== "CANFD") || !payloadHex) return;
+  try {
+    const r = await api("POST", "/api/can/parse-payload", {payload: payloadHex});
+    const p = r.parsed;
+    if (!p) return;
+    if (p.kind === "uds") {
+      document.getElementById("m-can-uds-sid").value = "0x" + p.sid.toString(16).toUpperCase();
+      document.getElementById("m-can-uds-data").value = p.data;
+      document.getElementById("m-can-payloadbuilder").value = "uds";
+    } else if (p.kind === "obd2") {
+      document.getElementById("m-can-obd2-mode").value = "0x" + p.mode.toString(16).toUpperCase();
+      document.getElementById("m-can-obd2-data").value = p.data;
+      document.getElementById("m-can-payloadbuilder").value = "obd2";
+    } else {
+      return;
+    }
+    await onCanPayloadBuilderChange();
+  } catch(e) { /* leave in raw mode on any parse failure */ }
+}
+
+// ── TCP payload guided builder (DoIP) ─────────────────────────────────────────
+// DoIP diagnostic traffic (Routing Activation, Diagnostic Message) rides on
+// TCP in this codebase's Frame model, so this builder lives in m-tcp-fields
+// rather than the Ethernet dropdown -- see the Ethernet form's lightweight
+// "doip" option (generic header + raw body only) for the UDP-carried
+// Vehicle Identification/discovery case instead.
+
+async function onTcpPayloadProtoChange() {
+  const proto = document.getElementById("m-tcp-payloadproto").value;
+  document.getElementById("m-tcp-doip-fields").style.display = proto === "doip" ? "block" : "none";
+  const payloadEl = document.getElementById("m-payload");
+  payloadEl.readOnly = !!proto;
+  payloadEl.style.opacity = proto ? "0.65" : "1";
+  document.getElementById("m-tcp-payloadbuild-error").style.display = "none";
+  if (proto === "doip") onTcpDoipTypeChange();  // also triggers a rebuild
+}
+
+function onTcpDoipTypeChange() {
+  const type = document.getElementById("m-tcp-doip-type").value;
+  document.getElementById("m-tcp-doip-ra-fields").style.display = type === "routing_activation_request" ? "block" : "none";
+  document.getElementById("m-tcp-doip-dm-fields").style.display = type === "diagnostic_message" ? "block" : "none";
+  document.getElementById("m-tcp-doip-raw-fields").style.display = type === "raw" ? "block" : "none";
+  rebuildTcpPayload();
+}
+
+function onTcpPayloadFieldChange() {
+  if (document.getElementById("m-tcp-payloadproto").value) rebuildTcpPayload();
+}
+
+async function rebuildTcpPayload() {
+  const proto = document.getElementById("m-tcp-payloadproto").value;
+  if (proto !== "doip") return;
+  const type = document.getElementById("m-tcp-doip-type").value;
+  const body = {
+    payload_type: type,
+    protocol_version: parseIntFlexible(document.getElementById("m-tcp-doip-version").value) || 2,
+  };
+  if (type === "routing_activation_request") {
+    body.source_address = parseIntFlexible(document.getElementById("m-tcp-doip-ra-source").value);
+    body.activation_type = parseIntFlexible(document.getElementById("m-tcp-doip-ra-actype").value);
+  } else if (type === "diagnostic_message") {
+    body.source_address = parseIntFlexible(document.getElementById("m-tcp-doip-dm-source").value);
+    body.target_address = parseIntFlexible(document.getElementById("m-tcp-doip-dm-target").value);
+    body.sid = parseIntFlexible(document.getElementById("m-tcp-doip-dm-sid").value);
+    body.data = (document.getElementById("m-tcp-doip-dm-data").value || "").replace(/\s+/g,"");
+  } else if (type === "raw") {
+    body.payload_type_hex = parseIntFlexible(document.getElementById("m-tcp-doip-raw-type").value);
+    body.raw_body = (document.getElementById("m-tcp-doip-raw-body").value || "").replace(/\s+/g,"");
+  }
+  const errEl = document.getElementById("m-tcp-payloadbuild-error");
+  try {
+    const r = await api("POST", "/api/doip/build", body);
+    document.getElementById("m-payload").value = r.payload;
+    errEl.style.display = "none";
+  } catch(e) {
+    errEl.style.display = "block";
+    errEl.textContent = "Could not build DoIP message: " + e.message;
+  }
+}
+
+async function fillTcpDoipFields(busType, payloadHex) {
+  document.getElementById("m-tcp-payloadproto").value = "";
+  document.getElementById("m-tcp-doip-fields").style.display = "none";
+  document.getElementById("m-payload").readOnly = false;
+  document.getElementById("m-payload").style.opacity = "1";
+  if (busType !== "TCP" || !payloadHex) return;
+  try {
+    const r = await api("POST", "/api/doip/parse", {data: payloadHex});
+    const p = r.parsed;
+    if (!p) return;
+    document.getElementById("m-tcp-doip-version").value = "0x" + p.protocol_version.toString(16).toUpperCase();
+    document.getElementById("m-tcp-doip-type").value = p.payload_type_name;
+    if (p.payload_type_name === "routing_activation_request") {
+      document.getElementById("m-tcp-doip-ra-source").value = "0x" + p.source_address.toString(16).toUpperCase();
+      document.getElementById("m-tcp-doip-ra-actype").value = "0x" + p.activation_type.toString(16).toUpperCase();
+    } else if (p.payload_type_name === "diagnostic_message") {
+      document.getElementById("m-tcp-doip-dm-source").value = "0x" + p.source_address.toString(16).toUpperCase();
+      document.getElementById("m-tcp-doip-dm-target").value = "0x" + p.target_address.toString(16).toUpperCase();
+      if (p.user_data && p.user_data.length >= 2) {
+        document.getElementById("m-tcp-doip-dm-sid").value = "0x" + p.user_data.substring(0, 2).toUpperCase();
+        document.getElementById("m-tcp-doip-dm-data").value = p.user_data.substring(2);
+      }
+    } else {
+      document.getElementById("m-tcp-doip-raw-type").value = "0x" + p.payload_type.toString(16).toUpperCase();
+      document.getElementById("m-tcp-doip-raw-body").value = p.body;
+    }
+    document.getElementById("m-tcp-payloadproto").value = "doip";
+    onTcpDoipTypeChange();
+  } catch(e) { /* leave in raw mode on any parse failure */ }
 }
 
 function checkDlcMismatch() {

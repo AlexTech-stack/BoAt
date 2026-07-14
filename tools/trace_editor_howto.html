@@ -201,6 +201,60 @@ pre code { background:none; border:none; padding:0; color:inherit; }
     format). Combine with bitwise OR — <code>0x05</code> is a typical FD frame with BRS. Leave at
     <code>0</code> for classic CAN.
   </p>
+  <p>
+    CAN has two <em>independent</em> guided-builder axes, mirroring how EtherType and L4 Protocol
+    are independent for Ethernet: a <strong>CAN ID Builder</strong> (computes the CAN ID itself)
+    and a <strong>Payload Builder</strong> (computes the Payload). Either, both, or neither can be
+    active on the same frame.
+  </p>
+
+  <h4>CAN ID Builder (J1939, CANopen)</h4>
+  <table class="field-table">
+    <tr><th>Builder</th><th>Fields</th><th>Notes</th></tr>
+    <tr><td>J1939</td><td>Priority, PGN (hex), Destination Address, Source Address</td>
+      <td>Builds the full 29-bit extended CAN ID (Priority | EDP | DP | PF | PS | SA); extended
+        framing is automatic for any CAN ID above <code>0x7FF</code>. Destination Address is
+        greyed out/ignored for broadcast PGNs (PDU2, PGN's PF byte ≥ <code>0xF0</code>).</td></tr>
+    <tr><td>CANopen</td><td>Message Type (NMT/SYNC/EMCY/Time Stamp/PDO1-4 Tx+Rx/SDO Tx+Rx/Heartbeat),
+      Node ID</td>
+      <td>Builds the 11-bit COB-ID from CiA-301's predefined connection set. NMT/SYNC/Time Stamp
+        have a fixed COB-ID (Node ID field disabled); everything else adds Node ID to a base. A
+        guided SDO payload builder isn't available yet — set Payload directly for SDO frames.</td></tr>
+  </table>
+  <div class="callout warn">
+    J1939's CAN ID Builder <strong>deliberately does not auto-detect on frame open</strong>. Any
+    extended CAN ID can be split into <em>some</em> set of J1939 fields — there's no signature byte
+    to confirm it's actually J1939, unlike the Ethernet parsers below, which can positively reject
+    non-matching bytes — so picking J1939 from the dropdown is always an explicit "reinterpret this
+    ID" action, never something the editor guesses for you.
+  </div>
+
+  <h4>Payload Builder (UDS, OBD-II)</h4>
+  <p>
+    Both build an ISO 15765-2 <strong>Single Frame</strong> only —
+    <code>[PCI byte][Service ID or Mode][Data]</code>, up to 7 data bytes total on classic CAN.
+    This is one request or response frame; a real multi-frame exchange (needed once data exceeds 7
+    bytes) needs the live <code>can_tp</code> plugin, the same limitation already noted for TCP
+    under Ethernet below.
+  </p>
+  <table class="field-table">
+    <tr><th>Builder</th><th>Fields</th><th>Notes</th></tr>
+    <tr><td>UDS</td><td>Service ID, Data (hex)</td>
+      <td>Service ID has suggestions for common ones (<code>0x22</code> ReadDataByIdentifier,
+        <code>0x2E</code> WriteDataByIdentifier, <code>0x3E</code> TesterPresent, etc.) but is a
+        free-text field, so any hex value works. Positive responses are conventionally Service ID
+        + <code>0x40</code>; negative responses are <code>0x7F</code>, the original Service ID,
+        then a 1-byte NRC.</td></tr>
+    <tr><td>OBD-II</td><td>Mode, Data (hex)</td>
+      <td>Whether Data starts with a PID byte depends on the Mode: <code>0x01</code>/<code>0x02</code>/
+        <code>0x09</code> take one, <code>0x03</code>/<code>0x04</code>/<code>0x0A</code>
+        don't — just type it as the first byte(s) of Data when it applies.</td></tr>
+  </table>
+  <p>
+    <strong>Opening an existing frame auto-detects</strong> UDS vs. OBD-II from the payload's PCI
+    byte and declared length (a real structural check, unlike J1939's CAN ID case above), falling
+    back to raw mode for anything that doesn't match.
+  </p>
 
   <h3>Ethernet</h3>
   <p>
@@ -212,12 +266,13 @@ pre code { background:none; border:none; padding:0; color:inherit; }
   <div class="callout warn">
     <strong>EtherType and VLAN ID are plain L2 metadata, set independently of everything below.</strong>
     EtherType is never auto-filled or overwritten by the IP Version / L4 Protocol choice — set it
-    yourself to match (<code>0x0800</code> for IPv4, <code>0x86DD</code> for IPv6, <code>0x88A4</code>
-    for EtherCAT). Leaving it inconsistent with the actual packet inside builds a frame a real
-    receiver can't parse correctly; the editor won't catch that mismatch for you.
+    yourself to match (<code>0x0800</code> IPv4, <code>0x86DD</code> IPv6, <code>0x88A4</code>
+    EtherCAT, <code>0x0806</code> ARP). Leaving it inconsistent with the actual packet inside
+    builds a frame a real receiver can't parse correctly; the editor won't catch that mismatch for
+    you.
   </div>
-  <p><strong>L4 Protocol</strong> controls the guided form — None, UDP, ICMP (both IP-based), or
-    EtherCAT (no IP at all, see its own section below):</p>
+  <p><strong>L4 Protocol</strong> controls the guided form — None, UDP, ICMP, SOME/IP (over UDP),
+    DoIP (over UDP, discovery only), EtherCAT (no IP at all), or ARP (no IP payload):</p>
   <table class="field-table">
     <tr><th>Protocol</th><th>Fields</th><th>Notes</th></tr>
     <tr><td>UDP</td><td>Src Port, Dst Port, Application Data (hex)</td>
@@ -226,8 +281,7 @@ pre code { background:none; border:none; padding:0; color:inherit; }
       <td>IPv4 echo request/reply = <code>8</code>/<code>0</code> and <code>0</code>/<code>0</code>;
         IPv6 = <code>128</code>/<code>0</code> and <code>129</code>/<code>0</code>. IP Version and
         Src/Dst IP apply.</td></tr>
-    <tr><td>EtherCAT</td><td>Command, Index, Address ADP/ADO, Working Counter, Datagram Data (hex)</td>
-      <td>Builds one raw EtherCAT datagram directly on the Ethernet header, no IP layer. See below.</td></tr>
+    <tr><td>SOME/IP, DoIP, ARP, EtherCAT</td><td>See their own sections below</td><td></td></tr>
     <tr><td>None</td><td>Payload (hex) becomes a plain hex editor again</td>
       <td>For anything the guided form doesn't cover — including TCP: this codebase sends TCP
         through a dedicated connection-oriented plugin, not as raw frames, so a guided TCP builder
@@ -240,8 +294,9 @@ pre code { background:none; border:none; padding:0; color:inherit; }
     bytes directly.
   </p>
   <p>
-    <strong>Opening an existing frame</strong> auto-detects UDP/ICMP/EtherCAT from its actual
-    payload bytes (the EtherCAT check only runs when EtherType is <code>0x88A4</code>) and
+    <strong>Opening an existing frame</strong> auto-detects UDP/ICMP/SOME/IP/DoIP/EtherCAT/ARP from
+    its actual payload bytes (EtherCAT and ARP are gated on EtherType being <code>0x88A4</code>/
+    <code>0x0806</code>; SOME/IP and DoIP are detected structurally inside a UDP payload) and
     pre-fills the guided fields; anything it can't recognize (TCP, a multi-datagram EtherCAT frame,
     or anything that isn't well-formed) is left in raw mode untouched — existing bytes are never
     silently reinterpreted.
@@ -283,11 +338,80 @@ pre code { background:none; border:none; padding:0; color:inherit; }
     first datagram.
   </div>
 
+  <h4>SOME/IP</h4>
+  <p>
+    Builds the standard 16-byte SOME/IP header (Service ID, Method ID, Length, Client ID, Session
+    ID, Protocol Version <code>0x01</code>, Interface Version, Message Type, Return Code) directly
+    on top of UDP, mirroring the layout <code>someip_plugin.cpp</code>'s own header-builder uses,
+    then your Application Data. Message Type is a dropdown (<code>0x00</code> REQUEST,
+    <code>0x01</code> REQUEST_NO_RETURN, <code>0x02</code> NOTIFICATION, <code>0x80</code>
+    RESPONSE, <code>0x81</code> ERROR). Auto-detect on frame open checks that the header's
+    self-declared Length field exactly matches the actual byte count before accepting a UDP
+    payload as SOME/IP, to avoid misreading arbitrary UDP traffic.
+  </p>
+
+  <h4>DoIP (over Ethernet/UDP)</h4>
+  <p>
+    This is the <strong>lightweight</strong> variant, meant for DoIP's UDP-carried discovery
+    traffic (Vehicle Identification Request/Response, Alive Check, entity status) — just the
+    generic 8-byte DoIP header (Protocol Version, inverse Protocol Version computed for you,
+    Payload Type) plus Application Data as the raw body. Vehicle Identification Request
+    (<code>0x0001</code>) has an empty body — leave Application Data blank. For DoIP's
+    <em>diagnostic</em> traffic (Routing Activation, Diagnostic Message) with guided body fields
+    instead of raw hex, build a <strong>TCP</strong> frame instead — see its own section below.
+  </p>
+
+  <h4>ARP</h4>
+  <p>
+    Builds a standard 28-byte IPv4-over-Ethernet ARP packet. Reuses fields you've already got:
+    Sender Hardware/Protocol Address are the frame's own <strong>Src MAC</strong>/<strong>Src
+    IP</strong>; Target Protocol Address is <strong>Dst IP</strong>.
+  </p>
+  <div class="callout warn">
+    The only new field is <strong>Target Hardware Address</strong> — kept separate from
+    <strong>Dst MAC</strong> on purpose, since a real ARP request's <em>L2</em> destination is the
+    broadcast address <code>ff:ff:ff:ff:ff:ff</code>, while the <em>ARP payload's</em> target
+    hardware address is the one being resolved (unknown, <code>00:00:00:00:00:00</code>) —
+    conflating the two would build a frame that doesn't look like a real request.
+    <strong>Operation</strong> is Request (<code>1</code>) or Reply (<code>2</code>); leave Target
+    Hardware Address at all zeros for a request, fill it in for a reply.
+  </div>
+
   <h3>TCP / PDU</h3>
   <p>
     TCP and PDU fields are more direct: IPs/ports/connection-id for TCP (<strong>Conn Id</strong>:
     <code>-1</code> opens a new connection, <code>-2</code> closes one, <code>&gt;=0</code> reuses
     an existing one), just a numeric ID for PDU. Neither has a packed flags field.
+  </p>
+
+  <h4>DoIP (over TCP — diagnostic traffic)</h4>
+  <p>
+    DoIP's diagnostic traffic (the case that matters most for testing) rides on <strong>TCP</strong>
+    in this codebase — <code>Frame.bus_type == TCP</code> frames already represent one segment's
+    raw application bytes (per <code>_replay_tcp_streams()</code>'s buffering model), so the DoIP
+    guided builder lives here as a <strong>Payload Protocol</strong> dropdown (None / DoIP), not on
+    the Ethernet form. Builds the same 8-byte generic DoIP header as the Ethernet/UDP variant, plus
+    a guided body for two Payload Types:
+  </p>
+  <table class="field-table">
+    <tr><th>Payload Type</th><th>Fields</th><th>Notes</th></tr>
+    <tr><td>Routing Activation Request (<code>0x0005</code>)</td>
+      <td>Source Address, Activation Type</td>
+      <td>Source Address is the tester's own logical address; Activation Type <code>0x00</code> =
+        default. Reserved bytes are zero-filled for you.</td></tr>
+    <tr><td>Diagnostic Message (<code>0x8001</code>)</td>
+      <td>Source Address, Target Address, Service ID, Data (hex)</td>
+      <td>Service ID + Data is the same field concept as the CAN payload builder's UDS option.
+        <strong>No ISO-TP PCI byte here</strong> — unlike CAN, DoIP's own Payload Length field
+        already frames the message, so User Data is just Service ID + Data directly.</td></tr>
+    <tr><td>Other (raw body hex)</td><td>Payload Type (hex), Body (hex)</td>
+      <td>For anything else (entity status, power mode, alive check, etc.) — just the generic
+        header plus whatever raw bytes make up that payload type's body.</td></tr>
+  </table>
+  <p>
+    Opening an existing TCP frame auto-detects all of this (protocol version consistency +
+    declared length must match exactly), pre-filling whichever guided sub-fields apply; anything
+    that doesn't match DoIP's header structure is left as raw Payload hex.
   </p>
 
   <h2 id="gotchas">Gotchas and shared semantics</h2>
