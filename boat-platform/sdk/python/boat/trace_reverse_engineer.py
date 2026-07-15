@@ -154,54 +154,108 @@ class TraceReverseEngineer:
     # ── Per-CAN-ID analysis pipeline ──────────────────────────────────
 
     def _analyze_can_id(self, stats: CanIdStats) -> list[DiscoveredSignal]:
-        """Run the full signal analysis pipeline for a single CAN ID."""
+        """Run the full signal analysis pipeline for a single CAN ID, in
+        cycles: first find well-known, structurally-verifiable bit patterns
+        via dedicated scans (currently just counters; CRC/checksum scanning
+        is a natural next scan to add in the same shape), then run the
+        generic correlation-based clustering for whatever application
+        signals are left over the *remaining*, unclaimed bits.
+
+        This matters because a counter has an exact, directly-checkable
+        signature (+1 each frame, wraps at 2^length-1) that statistical
+        bit-correlation clustering can fail to isolate cleanly -- e.g. a
+        4-bit counter's slow-toggling high bit and fast-toggling low bit
+        don't necessarily correlate strongly enough to land in the same
+        cluster. Checking the signature directly at every naturally-aligned
+        candidate position is both more reliable and removes the counter's
+        bits from the pool the clustering step has to untangle.
+        """
         if not stats.payload_samples or stats.count < 2:
             return []
 
-        bit_matrix = self._build_bit_matrix(stats)
-        if bit_matrix is None or len(bit_matrix) < 2:
-            return []
-
-        clusters = self._cluster_correlated_bits(bit_matrix)
-
-        grouped: dict[int, list[int]] = {}
-        for bit_idx, cluster_id in clusters.items():
-            grouped.setdefault(cluster_id, []).append(bit_idx)
+        raw_values = self._compute_raw_values(stats)
+        max_len = max(len(p) for p in stats.payload_samples)
+        total_bits = max_len * 8
 
         signals: list[DiscoveredSignal] = []
         sig_id = 1
 
-        raw_values = self._compute_raw_values(stats)
+        # Pass 1: dedicated counter scan (claims its bits so pass 2 skips them).
+        counter_signals, claimed = self._scan_for_counters(stats, raw_values, total_bits, sig_id)
+        for sig in counter_signals:
+            signals.append(sig)
+            sig_id += 1
 
-        for cluster_id in sorted(grouped.keys()):
-            if cluster_id == -1:
-                continue  # "not active enough to cluster" bucket -- not a real signal group
-            bits = sorted(grouped[cluster_id])
-            if not bits:
-                continue
+        # Pass 2 (future extension point): CRC/checksum scan, informed by
+        # the counter width(s) already found -- not implemented yet.
 
-            start_pos = min(bits)
-            length = len(bits)
+        # Pass 3: generic bit-correlation clustering for application
+        # signals, over whatever bits pass 1 didn't already claim.
+        bit_matrix = self._build_bit_matrix(stats)
+        if bit_matrix is not None and len(bit_matrix) >= 2:
+            clusters = self._cluster_correlated_bits(bit_matrix, exclude=claimed)
 
-            contiguous = self._find_contiguous_groups(bits)
-            if contiguous and len(contiguous) > 1:
-                for group in contiguous:
-                    sig = self._build_signal(
-                        sig_id, group, raw_values, stats
-                    )
+            grouped: dict[int, list[int]] = {}
+            for bit_idx, cluster_id in clusters.items():
+                grouped.setdefault(cluster_id, []).append(bit_idx)
+
+            for cluster_id in sorted(grouped.keys()):
+                if cluster_id == -1:
+                    continue  # "not active enough to cluster" bucket -- not a real signal group
+                bits = sorted(grouped[cluster_id])
+                if not bits:
+                    continue
+
+                contiguous = self._find_contiguous_groups(bits)
+                if contiguous and len(contiguous) > 1:
+                    for group in contiguous:
+                        sig = self._build_signal(sig_id, group, raw_values, stats)
+                        if sig:
+                            signals.append(sig)
+                            sig_id += 1
+                else:
+                    sig = self._build_signal(sig_id, bits, raw_values, stats)
                     if sig:
                         signals.append(sig)
                         sig_id += 1
-            else:
-                sig = self._build_signal(
-                    sig_id, bits, raw_values, stats
-                )
-                if sig:
-                    signals.append(sig)
-                    sig_id += 1
 
         signals = self._post_process_signals(signals, stats)
         return signals
+
+    # ── Dedicated counter scan (pass 1) ────────────────────────────────
+
+    _COUNTER_WIDTHS = (32, 8, 4)  # widest first: an 8-bit counter's low
+    # nibble also independently looks like a valid 4-bit counter, so a
+    # narrower width must not get the chance to claim it out from under a
+    # genuinely wider counter.
+
+    def _scan_for_counters(
+        self,
+        stats: CanIdStats,
+        raw_values: list[dict[str, Any]],
+        total_bits: int,
+        start_sig_id: int,
+    ) -> tuple[list[DiscoveredSignal], set[int]]:
+        """Scan every byte/nibble-aligned candidate position for a 4/8/32-bit
+        AUTOSAR counter. Returns the signals found and the set of bit
+        positions they claim (for the clustering pass to exclude).
+        """
+        found: list[DiscoveredSignal] = []
+        claimed: set[int] = set()
+        sig_id = start_sig_id
+
+        for length in self._COUNTER_WIDTHS:
+            for start in range(0, total_bits - length + 1, length):
+                bits = list(range(start, start + length))
+                if any(b in claimed for b in bits):
+                    continue
+                sig = self._build_signal(sig_id, bits, raw_values, stats)
+                if sig is not None and sig.is_counter:
+                    found.append(sig)
+                    claimed.update(bits)
+                    sig_id += 1
+
+        return found, claimed
 
     # ── Bit matrix construction ───────────────────────────────────────
 
@@ -230,8 +284,15 @@ class TraceReverseEngineer:
     # ── Bit correlation clustering ────────────────────────────────────
 
     @staticmethod
-    def _cluster_correlated_bits(matrix: list[list[int]]) -> dict[int, int]:
+    def _cluster_correlated_bits(
+        matrix: list[list[int]], exclude: set[int] | None = None
+    ) -> dict[int, int]:
         """Cluster bit positions by change correlation.
+
+        `exclude` -- bit positions already claimed by an earlier dedicated
+        scan (e.g. a counter found by :meth:`_scan_for_counters`) -- are
+        treated as inactive here, so the generic clustering pass for
+        application signals never re-splits or re-absorbs them.
 
         Returns a dict mapping bit_position → cluster_id.
         """
@@ -242,12 +303,16 @@ class TraceReverseEngineer:
             return {}
 
         if _HAS_NUMPY:
-            return TraceReverseEngineer._cluster_numpy(matrix)
+            return TraceReverseEngineer._cluster_numpy(matrix, exclude)
         else:
-            return TraceReverseEngineer._cluster_pure_python(matrix, n_frames, n_bits)
+            return TraceReverseEngineer._cluster_pure_python(matrix, n_frames, n_bits, exclude)
 
     @staticmethod
-    def _active_bit_indices(matrix: list[list[int]], min_minority_fraction: float = 0.05) -> list[int]:
+    def _active_bit_indices(
+        matrix: list[list[int]],
+        min_minority_fraction: float = 0.05,
+        exclude: set[int] | None = None,
+    ) -> list[int]:
         """Bit positions with enough real variability to be signal candidates.
 
         A bit that's constant, or that only flips a handful of times across
@@ -265,8 +330,11 @@ class TraceReverseEngineer:
         if n_frames == 0:
             return []
         n_bits = len(matrix[0])
+        exclude = exclude or set()
         active = []
         for bit in range(n_bits):
+            if bit in exclude:
+                continue
             ones = sum(row[bit] for row in matrix)
             minority = min(ones, n_frames - ones)
             if minority / n_frames >= min_minority_fraction:
@@ -274,11 +342,11 @@ class TraceReverseEngineer:
         return active
 
     @staticmethod
-    def _cluster_numpy(matrix: list[list[int]]) -> dict[int, int]:
+    def _cluster_numpy(matrix: list[list[int]], exclude: set[int] | None = None) -> dict[int, int]:
         arr = np.array(matrix, dtype=np.int8)
         n_bits = arr.shape[1]
 
-        active = np.array(TraceReverseEngineer._active_bit_indices(matrix), dtype=np.int64)
+        active = np.array(TraceReverseEngineer._active_bit_indices(matrix, exclude=exclude), dtype=np.int64)
         if len(active) < 2:
             cluster_of = {int(i): i for i in active}
             for i in range(n_bits):
@@ -320,7 +388,7 @@ class TraceReverseEngineer:
 
     @staticmethod
     def _cluster_pure_python(
-        matrix: list[list[int]], n_frames: int, n_bits: int
+        matrix: list[list[int]], n_frames: int, n_bits: int, exclude: set[int] | None = None
     ) -> dict[int, int]:
         """Fallback clustering without numpy using Jaccard similarity on bit
         transitions."""
@@ -337,7 +405,7 @@ class TraceReverseEngineer:
                 prev = val
             transitions[bit] = t
 
-        active_bits = TraceReverseEngineer._active_bit_indices(matrix)
+        active_bits = TraceReverseEngineer._active_bit_indices(matrix, exclude=exclude)
 
         cluster_of: dict[int, int] = {}
         next_cluster = 0
