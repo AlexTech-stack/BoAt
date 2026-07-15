@@ -174,6 +174,8 @@ class TraceReverseEngineer:
         raw_values = self._compute_raw_values(stats)
 
         for cluster_id in sorted(grouped.keys()):
+            if cluster_id == -1:
+                continue  # "not active enough to cluster" bucket -- not a real signal group
             bits = sorted(grouped[cluster_id])
             if not bits:
                 continue
@@ -245,14 +247,44 @@ class TraceReverseEngineer:
             return TraceReverseEngineer._cluster_pure_python(matrix, n_frames, n_bits)
 
     @staticmethod
+    def _active_bit_indices(matrix: list[list[int]], min_minority_fraction: float = 0.05) -> list[int]:
+        """Bit positions with enough real variability to be signal candidates.
+
+        A bit that's constant, or that only flips a handful of times across
+        the whole capture (a stray glitch, a rare fault bit, a reserved bit
+        that happens to toggle once), isn't a meaningful signal. Require the
+        minority value to occur at least `min_minority_fraction` of the time
+        -- "changed at least once" (the old pure-Python filter) or "variance
+        above a small fixed threshold" (the old numpy filter, which a single
+        flip in a ~30-frame capture already clears) both let far too many
+        near-constant bits through, showing up as a wall of trivial
+        always-0-except-once Bool "signals". Shared by both clustering paths
+        so results don't depend on whether numpy happens to be installed.
+        """
+        n_frames = len(matrix)
+        if n_frames == 0:
+            return []
+        n_bits = len(matrix[0])
+        active = []
+        for bit in range(n_bits):
+            ones = sum(row[bit] for row in matrix)
+            minority = min(ones, n_frames - ones)
+            if minority / n_frames >= min_minority_fraction:
+                active.append(bit)
+        return active
+
+    @staticmethod
     def _cluster_numpy(matrix: list[list[int]]) -> dict[int, int]:
         arr = np.array(matrix, dtype=np.int8)
         n_bits = arr.shape[1]
 
-        col_var = np.var(arr, axis=0)
-        active = np.where(col_var > 0.01)[0]
+        active = np.array(TraceReverseEngineer._active_bit_indices(matrix), dtype=np.int64)
         if len(active) < 2:
-            return {int(i): i for i in active}
+            cluster_of = {int(i): i for i in active}
+            for i in range(n_bits):
+                if i not in cluster_of:
+                    cluster_of[i] = -1
+            return cluster_of
 
         active_arr = arr[:, active]
         corr = np.corrcoef(active_arr.T)
@@ -305,7 +337,7 @@ class TraceReverseEngineer:
                 prev = val
             transitions[bit] = t
 
-        active_bits = [b for b in range(n_bits) if sum(transitions[b]) > 0]
+        active_bits = TraceReverseEngineer._active_bit_indices(matrix)
 
         cluster_of: dict[int, int] = {}
         next_cluster = 0

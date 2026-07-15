@@ -506,7 +506,7 @@ function renderResults(result) {
   `).join("");
 
   const canIds = [...new Set(ids.map(d => d.can_id))].sort((a,b) => a-b);
-  nameDiv.innerHTML = canIds.slice(0,50).map(id => `
+  nameDiv.innerHTML = canIds.map(id => `
     <div class="mapping-row">
       <span style="font-family:var(--mono);font-size:12px;color:var(--muted);width:70px">0x${id.toString(16).toUpperCase()}</span>
       <input class="id-input" type="hidden" value="0x${id.toString(16).toUpperCase()}"/>

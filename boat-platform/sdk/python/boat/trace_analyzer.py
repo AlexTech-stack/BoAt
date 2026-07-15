@@ -169,7 +169,27 @@ class TraceAnalyzer:
             median_gap = statistics.median(gaps)
             mad = statistics.median(abs(g - median_gap) for g in gaps)
             if mad < median_gap * 0.3:
-                analysis.cycle_times_ms[aid] = round(median_gap, 1)
+                analysis.cycle_times_ms[aid] = TraceAnalyzer._snap_to_canonical_cycle_time(median_gap)
+
+    # Standard automotive scheduling raster values. A raw inter-frame gap is
+    # noisy (arbitration delays, bus load, timer granularity), so a message
+    # actually intended to run at e.g. 50ms typically measures as something
+    # like 49.8 or 50.1ms in a real capture -- reporting that raw number
+    # instead of the raster it's clearly jittering around is misleading.
+    _CANONICAL_CYCLE_TIMES_MS = (
+        1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000,
+    )
+
+    @staticmethod
+    def _snap_to_canonical_cycle_time(value_ms: float, tolerance: float = 0.1) -> float:
+        """Snap to the nearest standard cycle time if within `tolerance`
+        (10% by default) of it; otherwise report the raw measured value
+        unchanged, since forcing an unrelated gap onto a raster would be
+        just as misleading as reporting jitter as if it were exact."""
+        closest = min(TraceAnalyzer._CANONICAL_CYCLE_TIMES_MS, key=lambda c: abs(c - value_ms))
+        if abs(closest - value_ms) <= closest * tolerance:
+            return float(closest)
+        return round(value_ms, 1)
 
     @staticmethod
     def _compute_bit_liveness(analysis: TraceAnalysis) -> None:
