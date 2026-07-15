@@ -177,7 +177,7 @@ class TraceAnalyzer:
     # like 49.8 or 50.1ms in a real capture -- reporting that raw number
     # instead of the raster it's clearly jittering around is misleading.
     _CANONICAL_CYCLE_TIMES_MS = (
-        1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000,
+        1, 2, 5, 10, 20, 25, 40, 50, 80, 100, 200, 250, 400, 450, 500, 1000, 2000, 5000,
     )
 
     @staticmethod
