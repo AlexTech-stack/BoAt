@@ -447,9 +447,26 @@ class TraceReverseEngineer:
             bits, raw_nums, stats, is_counter, is_checksum
         )
 
+        if is_counter:
+            # AUTOSAR counters are always unsigned, with a 1:1 raw<->physical
+            # mapping across their full valid range (0..2^length-1) -- not
+            # whatever range _analyze_values happened to observe in this
+            # particular sample window, since a short capture may not have
+            # caught the counter's full wrap cycle. Overrides whatever
+            # _analyze_values guessed independently (e.g. "Bool" if every
+            # sample so far happened to be 0 or 1).
+            value_type = "Unsigned"
+            is_signed = False
+            factor = 1.0
+            offset = 0.0
+            min_val = 0.0
+            max_val = float((1 << length) - 1)
+            enum_vals = None
+
         # physical_values must use the same reference frame factor/offset
-        # were derived from in _analyze_values: the sign-converted numeric
-        # value for signed signals, the raw bit pattern otherwise.
+        # were derived from: the sign-converted numeric value for signed
+        # signals, the raw bit pattern otherwise (always the latter for a
+        # counter, since is_signed is forced False above).
         working_nums = (
             self._to_signed(raw_nums, length) if is_signed else raw_nums
         )
@@ -664,18 +681,25 @@ class TraceReverseEngineer:
 
     @staticmethod
     def _detect_counter(raw_values: list[int], length: int) -> bool:
-        """Detect if signal is a rolling counter.
+        """Detect if signal is a rolling AUTOSAR-style counter.
 
         A counter increments by 1 each frame and wraps at its own bit
-        width -- AUTOSAR E2E profiles commonly use 4-bit counters (8-bit
-        and 32-bit also occur), so masking wraparound to a fixed 8 bits
-        regardless of the signal's actual length would misjudge any
-        non-8-bit counter's wrap transition as a huge jump instead of +1.
+        width -- AUTOSAR counters are always unsigned and only ever 4, 8,
+        or 32 bits wide (masking wraparound to a fixed 8 bits regardless of
+        the signal's actual length would misjudge any other width's wrap
+        transition as a huge jump instead of +1). Restricting to those
+        three widths also rules out the degenerate 1-bit case, which is
+        indistinguishable from a plain boolean toggle under modular
+        arithmetic: incrementing by 1 mod 2 *is* flipping the bit, so an
+        ordinary 0,1,0,1,... flag would otherwise trivially score as a
+        "counter" too.
         """
+        if length not in (4, 8, 32):
+            return False
         if len(raw_values) < 5:
             return False
 
-        mask = (1 << length) - 1 if length > 0 else 0
+        mask = (1 << length) - 1
         diffs = [(raw_values[i] - raw_values[i - 1]) & mask for i in range(1, len(raw_values))]
         if not diffs:
             return False
