@@ -405,7 +405,7 @@ class TraceReverseEngineer:
             stats = self._analysis.can_stats.get(aid)
             if not stats or not stats.payload_samples:
                 continue
-            max_len = max(len(p) for p in stats.payload_samples)
+            active_len = self._active_payload_length(stats)
             claimed = {
                 b for c in counters for b in range(c.start_pos, c.start_pos + c.length)
             }
@@ -413,7 +413,7 @@ class TraceReverseEngineer:
             crc_signals: list[DiscoveredSignal] = []
             sig_id = 1
             for counter in counters:
-                sig = self._find_crc_for_counter(stats, counter, claimed, max_len, sig_id)
+                sig = self._find_crc_for_counter(stats, counter, claimed, active_len, sig_id)
                 if sig is not None:
                     crc_signals.append(sig)
                     claimed.update(range(sig.start_pos, sig.start_pos + sig.length))
@@ -554,6 +554,30 @@ class TraceReverseEngineer:
         return candidates
 
     @staticmethod
+    def _active_payload_length(stats: CanIdStats) -> int:
+        """Highest byte index (+1) that ever varies across the *entire*
+        capture -- bytes beyond this are constant for every observed
+        sample and are very likely CAN FD DLC padding (or reserved/
+        unused), not part of the logical PDU the sender's CRC was
+        actually computed over. A CRC search that includes them as
+        "other bytes" would never match a real AUTOSAR CRC, since the
+        transmitting ECU's own CRC calculation never saw them -- this
+        bounds both the candidate-position search and the "other bytes"
+        fed into every CRC computation to the payload's real extent.
+        Falls back to the full physical length if every byte is constant
+        (degenerate case, e.g. a single-frame sample).
+        """
+        if not stats.payload_samples:
+            return 0
+        max_len = max(len(p) for p in stats.payload_samples)
+        first = stats.payload_samples[0]
+        for idx in range(max_len - 1, -1, -1):
+            first_val = first[idx] if idx < len(first) else 0
+            if any((p[idx] if idx < len(p) else 0) != first_val for p in stats.payload_samples):
+                return idx + 1
+        return max_len
+
+    @staticmethod
     def _crc_candidate_looks_variable(
         stats: CanIdStats, start_byte: int, width_bytes: int
     ) -> bool:
@@ -585,6 +609,7 @@ class TraceReverseEngineer:
         algo: str,
         data_id: int | None,
         big_endian: bool,
+        active_len: int,
     ) -> bool:
         for payload in frames:
             if len(payload) < start_byte + width_bytes:
@@ -593,7 +618,7 @@ class TraceReverseEngineer:
                 bytes(payload[start_byte:start_byte + width_bytes]),
                 "big" if big_endian else "little",
             )
-            other = bytes(payload[:start_byte]) + bytes(payload[start_byte + width_bytes:])
+            other = bytes(payload[:start_byte]) + bytes(payload[start_byte + width_bytes:active_len])
             if _crc_autosar(other, algo, extra_byte=data_id) != observed:
                 return False
         return True
@@ -606,11 +631,14 @@ class TraceReverseEngineer:
         algo: str,
         data_id: int | None,
         big_endian: bool,
+        active_len: int,
     ) -> float:
         """Fraction of `frames` where computed CRC(algo, other bytes,
         data_id) matches the observed bytes at [start_byte, start_byte +
-        width_bytes) interpreted as `big_endian`/little. Shared by the
-        sample-level search and the full-trace verification pass.
+        width_bytes) interpreted as `big_endian`/little. "Other bytes" is
+        bounded to `active_len` (see :meth:`_active_payload_length`) so
+        CAN FD padding never gets fed into the CRC computation. Shared by
+        the sample-level search and the full-trace verification pass.
         """
         matches = 0
         total = 0
@@ -621,7 +649,7 @@ class TraceReverseEngineer:
                 bytes(payload[start_byte:start_byte + width_bytes]),
                 "big" if big_endian else "little",
             )
-            other = bytes(payload[:start_byte]) + bytes(payload[start_byte + width_bytes:])
+            other = bytes(payload[:start_byte]) + bytes(payload[start_byte + width_bytes:active_len])
             computed = _crc_autosar(other, algo, extra_byte=data_id)
             total += 1
             if computed == observed:
@@ -629,7 +657,7 @@ class TraceReverseEngineer:
         return matches / total if total else 0.0
 
     def _match_crc_algorithm(
-        self, stats: CanIdStats, start_byte: int, width_bytes: int, algo: str
+        self, stats: CanIdStats, start_byte: int, width_bytes: int, algo: str, active_len: int
     ) -> tuple[float, int | None, bool] | None:
         """Find the best-scoring (data_id, byte_order) for `algo` at this
         position, checked against a small sample first. Tries "no Data ID"
@@ -646,7 +674,9 @@ class TraceReverseEngineer:
 
         best: tuple[float, int | None, bool] = (0.0, None, True)
         for big_endian in (True, False):
-            frac = self._crc_match_fraction(sample, start_byte, width_bytes, algo, None, big_endian)
+            frac = self._crc_match_fraction(
+                sample, start_byte, width_bytes, algo, None, big_endian, active_len
+            )
             if frac > best[0]:
                 best = (frac, None, big_endian)
 
@@ -655,11 +685,11 @@ class TraceReverseEngineer:
             for data_id in range(256):
                 for big_endian in (True, False):
                     if not self._crc_probe_matches(
-                        probe, start_byte, width_bytes, algo, data_id, big_endian
+                        probe, start_byte, width_bytes, algo, data_id, big_endian, active_len
                     ):
                         continue
                     frac = self._crc_match_fraction(
-                        sample, start_byte, width_bytes, algo, data_id, big_endian
+                        sample, start_byte, width_bytes, algo, data_id, big_endian, active_len
                     )
                     if frac > best[0]:
                         best = (frac, data_id, big_endian)
@@ -673,7 +703,7 @@ class TraceReverseEngineer:
         stats: CanIdStats,
         counter: DiscoveredSignal,
         claimed: set[int],
-        max_len: int,
+        active_len: int,
         sig_id: int,
     ) -> DiscoveredSignal | None:
         """Search every algorithm x byte-aligned position near `counter`
@@ -681,6 +711,10 @@ class TraceReverseEngineer:
         the *entire* trace (not just the search sample) before being
         accepted -- a promising sample match that doesn't hold up on full
         verification is rejected outright, not just down-scored.
+        `active_len` (see :meth:`_active_payload_length`) bounds both the
+        candidate search and the "other bytes" fed into every CRC
+        computation to the payload's real extent, excluding CAN FD
+        padding.
         """
         counter_byte_start = counter.start_pos // 8
         counter_byte_end = (counter.start_pos + counter.length + 7) // 8
@@ -691,7 +725,7 @@ class TraceReverseEngineer:
         for algo, params in _AUTOSAR_CRC_ALGORITHMS.items():
             width_bytes = int(params["width"]) // 8
             for start_byte in self._crc_candidate_positions(
-                counter_byte_start, counter_byte_end, width_bytes, max_len
+                counter_byte_start, counter_byte_end, width_bytes, active_len
             ):
                 bits = set(range(start_byte * 8, (start_byte + width_bytes) * 8))
                 if bits & claimed:
@@ -699,7 +733,7 @@ class TraceReverseEngineer:
                 if not self._crc_candidate_looks_variable(stats, start_byte, width_bytes):
                     continue
 
-                match = self._match_crc_algorithm(stats, start_byte, width_bytes, algo)
+                match = self._match_crc_algorithm(stats, start_byte, width_bytes, algo, active_len)
                 if match is None:
                     continue
                 frac, data_id, big_endian = match
@@ -711,7 +745,7 @@ class TraceReverseEngineer:
 
         _sample_frac, algo, start_byte, width_bytes, data_id, big_endian = best
         full_frac = self._crc_match_fraction(
-            stats.payload_samples, start_byte, width_bytes, algo, data_id, big_endian
+            stats.payload_samples, start_byte, width_bytes, algo, data_id, big_endian, active_len
         )
         if full_frac < _CRC_MATCH_THRESHOLD:
             return None
@@ -724,12 +758,22 @@ class TraceReverseEngineer:
             if len(p) >= start_byte + width_bytes
         ]
 
+        # Byte order is meaningless for a single-byte field (CRC8/CRC8H2F --
+        # in practice the overwhelming majority of AUTOSAR CRC fields found
+        # here), and big_endian ties there since int.from_bytes gives the
+        # same result either way, so the tie-break would otherwise always
+        # export ByteOrder=1 (Motorola) by accident of loop order. Force
+        # Intel for those -- its DBC StartPos translation (_to_dbc_start_bit)
+        # is verified exact; Motorola's multi-byte translation is not, so
+        # only genuinely multi-byte (16/32-bit) CRCs keep the detected order.
+        byte_order = 0 if width_bytes == 1 else (1 if big_endian else 0)
+
         return DiscoveredSignal(
             id=sig_id,
             name=algo,
             start_pos=start_byte * 8,
             length=width_bytes * 8,
-            byte_order=1 if big_endian else 0,
+            byte_order=byte_order,
             value_type="Unsigned",
             factor=1.0,
             offset=0.0,
@@ -1398,6 +1442,36 @@ class TraceReverseEngineer:
 
     # ── Export to PDU database ────────────────────────────────────────
 
+    @staticmethod
+    def _to_dbc_start_bit(start_pos: int, length: int, byte_order: int) -> int:
+        """Translate this module's own internal bit numbering (bit 0 = MSB
+        of byte 0, ascending byte-major -- used throughout clustering/
+        counter/CRC detection) into the DBC/Vector "StartPos" convention
+        the PDU DB schema actually follows: dbc2boatjson.py copies a real
+        DBC file's `start_bit` straight through with no reinterpretation,
+        and boat/message.py's _pack_intel/_pack_motorola are the canonical
+        consumers of that value -- both confirm the classic Vector
+        convention, which is *not* the same numbering for both byte
+        orders:
+
+        - Motorola (1): StartPos is the signal's MSB position, itself
+          numbered byte-major MSB0 -- i.e. exactly this module's own
+          internal numbering already. No translation needed.
+        - Intel (0): StartPos is instead the signal's *LSB* position,
+          numbered LSB0 *within* each byte (byte_idx*8 + bit_offset_from_
+          LSB) -- the mirror image, within the byte its low end sits in,
+          of this module's MSB0 numbering. Getting this wrong doesn't
+          affect internal analysis (which only uses its own numbering
+          self-consistently) but silently exports a signal at the wrong
+          bit offset for anything that reads the DBC-standard StartPos
+          convention (real hardware traces, other DBC tooling).
+        """
+        if byte_order == 1:
+            return start_pos
+        low_byte = start_pos // 8
+        lsb_internal_pos = min(start_pos + length - 1, low_byte * 8 + 7)
+        return low_byte * 8 + (7 - (lsb_internal_pos % 8))
+
     def to_pdu_db(
         self,
         bus_mapping: dict[int, str] | None = None,
@@ -1433,7 +1507,7 @@ class TraceReverseEngineer:
                     "id": sig.id,
                     "SignalName": sig.name,
                     "Length": sig.length,
-                    "StartPos": sig.start_pos,
+                    "StartPos": self._to_dbc_start_bit(sig.start_pos, sig.length, sig.byte_order),
                     "ByteOrder": sig.byte_order,
                     "ValueType": sig.value_type,
                     "SigSendType": sig.is_counter or False,
