@@ -102,6 +102,7 @@ def api_blf_analyze(body: dict):
             "is_fd": s.is_fd,
             "cycle_time_ms": cycle_ms,
             "send_type": "Cyclic" if cycle_ms > 0 else "Spontaneous",
+            "duplicate_channels": s.duplicate_channels,
         })
 
     try:
@@ -465,6 +466,14 @@ function renderResults(result) {
       const sigBadge = sigs.length
         ? `<span class="badge" style="background:rgba(210,168,255,0.15);color:var(--purple);margin-left:4px">${sigs.length} sig</span>`
         : "";
+      const dupChannels = Object.keys(d.duplicate_channels || {});
+      const dupTitle = dupChannels.length
+        ? "Also seen on " + dupChannels.map(ch => `channel ${ch} (${d.duplicate_channels[ch]} frames)`).join(", ")
+          + " -- treated as a relay/duplicate of this channel and ignored for cycle time / signal analysis."
+        : "";
+      const dupBadge = dupChannels.length
+        ? `<span class="badge" style="background:rgba(255,166,87,0.15);color:var(--orange);margin-left:4px" title="${dupTitle}">multi-bus</span>`
+        : "";
       const detailRow = sigs.length ? `<tr id="${rowId}" style="display:none"><td></td><td colspan="7" style="padding:8px 8px 12px 24px;background:var(--bg)">
         ${sigs.map(s => `
           <div style="display:flex;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid var(--border)">
@@ -485,7 +494,7 @@ function renderResults(result) {
       <td>${d.max_dlc}</td>
       <td>${d.is_fd ? "CANFD" : "CAN"} ${d.is_extended ? "· Ext" : ""}</td>
       <td>${d.cycle_time_ms ? d.cycle_time_ms.toFixed(1) + " ms" : "—"}</td>
-      <td><span class="badge ${d.send_type === 'Cyclic' ? 'badge-cyclic' : 'badge-spont'}">${d.send_type}</span>${sigBadge}</td>
+      <td><span class="badge ${d.send_type === 'Cyclic' ? 'badge-cyclic' : 'badge-spont'}">${d.send_type}</span>${sigBadge}${dupBadge}</td>
     </tr>${detailRow}`;
     }).join("")}
     </tbody></table>
