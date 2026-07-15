@@ -556,20 +556,27 @@ class TraceReverseEngineer:
     @staticmethod
     def _active_payload_length(stats: CanIdStats) -> int:
         """Highest byte index (+1) that ever varies across the *entire*
-        capture -- bytes beyond this are constant for every observed
-        sample and are very likely CAN FD DLC padding (or reserved/
-        unused), not part of the logical PDU the sender's CRC was
-        actually computed over. A CRC search that includes them as
-        "other bytes" would never match a real AUTOSAR CRC, since the
-        transmitting ECU's own CRC calculation never saw them -- this
-        bounds both the candidate-position search and the "other bytes"
-        fed into every CRC computation to the payload's real extent.
-        Falls back to the full physical length if every byte is constant
-        (degenerate case, e.g. a single-frame sample).
+        capture, used to exclude CAN FD DLC padding from the CRC's "other
+        bytes" input (the transmitting ECU's own CRC calculation never
+        saw padding it never sent).
+
+        Only trims when `max_len > 8`: every DLC from 0-8 is directly
+        achievable in both classic CAN and CAN FD, so there's no such
+        thing as "padding" there -- a trailing constant byte in an
+        8-byte-or-smaller frame is just as likely a genuinely reserved
+        (if currently-unexercised) field as it is padding, and trimming
+        it broke real matches (found live on message 0x40: an always-0
+        trailing byte that WAS part of its real CRC input). Padding as a
+        structural phenomenon only exists once DLC jumps into CAN FD's
+        non-linear bucket sizes (12, 16, 20, 24, 32, 48, 64) -- there,
+        a message using only a couple of bytes in a 32-byte frame (as
+        seen on 0xB6) is unambiguous.
         """
         if not stats.payload_samples:
             return 0
         max_len = max(len(p) for p in stats.payload_samples)
+        if max_len <= 8:
+            return max_len
         first = stats.payload_samples[0]
         for idx in range(max_len - 1, -1, -1):
             first_val = first[idx] if idx < len(first) else 0
