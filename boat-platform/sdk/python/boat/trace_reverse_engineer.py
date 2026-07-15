@@ -103,29 +103,50 @@ class TraceReverseEngineer:
         self._min_confidence = min_confidence
 
     def reverse_engineer(self) -> ReverseEngineeringResult:
-        """Run the full reverse engineering pipeline."""
+        """Run the full reverse engineering pipeline (both stages together,
+        in order). For the staged web UI -- where each stage is run and
+        timed independently -- call :meth:`find_counters` and
+        :meth:`find_application_signals` directly instead; this method is
+        the right entry point for non-interactive/CLI use
+        (:meth:`to_pdu_db`, :meth:`save_pdu_db`).
+        """
         if self._analysis is None:
             raise RuntimeError("Call analyzer.analyze() before reverse_engineer()")
 
-        result = ReverseEngineeringResult(
-            numpy_available=_HAS_NUMPY,
-        )
+        counters_by_id = self.find_counters()
+        app_signals_by_id = self.find_application_signals(counters_by_id)
+        return self.combine_results(counters_by_id, app_signals_by_id)
+
+    def combine_results(
+        self,
+        counters_by_id: dict[int, list[DiscoveredSignal]] | None = None,
+        app_signals_by_id: dict[int, list[DiscoveredSignal]] | None = None,
+    ) -> ReverseEngineeringResult:
+        """Merge staged results into a :class:`ReverseEngineeringResult`
+        covering every CAN ID -- the same shape :meth:`reverse_engineer`
+        returns, but usable directly with whatever's actually been computed
+        so far. A caller that ran :meth:`find_counters`/
+        :meth:`find_application_signals` independently (e.g. the staged web
+        UI, caching each stage's result as it completes) calls this to
+        assemble an exportable result without recomputing anything; either
+        argument may be omitted if that stage hasn't run yet.
+        """
+        if self._analysis is None:
+            raise RuntimeError("Call analyzer.analyze() before combine_results()")
+
+        counters_by_id = counters_by_id or {}
+        app_signals_by_id = app_signals_by_id or {}
+
+        result = ReverseEngineeringResult(numpy_available=_HAS_NUMPY)
 
         for aid in sorted(self._analysis.can_stats.keys()):
             s = self._analysis.can_stats[aid]
-
-            # Bit-correlation clustering needs >=2 samples to mean anything,
-            # but a CAN ID observed only once is still a real message that
-            # belongs in the export -- only the signal *discovery* is
-            # skipped, not the message itself (matches TraceAnalyzer.to_pdu_db(),
-            # which includes every observed CAN ID regardless of count).
-            discovered_signals: list[DiscoveredSignal] = []
-            if s.count >= 2:
-                discovered_signals = self._analyze_can_id(s)
-                discovered_signals = [
-                    sig for sig in discovered_signals
-                    if sig.confidence >= self._min_confidence
-                ]
+            # Both stages already post-process (name/order) their own
+            # signals -- just merge and re-sort by position for presentation.
+            discovered_signals = sorted(
+                counters_by_id.get(aid, []) + app_signals_by_id.get(aid, []),
+                key=lambda sig: sig.start_pos,
+            )
 
             length = max(s.dlc_values) if s.dlc_values else 8
             cycle_ms = self._analysis.cycle_times_ms.get(aid, 0)
@@ -151,83 +172,146 @@ class TraceReverseEngineer:
         result.total_can_ids = len(result.messages)
         return result
 
-    # ── Per-CAN-ID analysis pipeline ──────────────────────────────────
+    # ── Staged analysis: independently runnable, independently cacheable ──
+    #
+    # Split so a caller (the web UI in particular) can run and time each
+    # stage on its own instead of one long blocking call: stage 2 (counters)
+    # has an exact, directly-checkable signature and is deliberately run
+    # before stage 3 (generic clustering) so counter bits never get
+    # re-absorbed or re-split by the statistical clustering pass. A future
+    # stage 2.5 (CRC/checksum scanning, informed by the counter width(s)
+    # already found, to identify the AUTOSAR E2E profile in use) fits the
+    # same shape but isn't implemented yet.
 
-    def _analyze_can_id(self, stats: CanIdStats) -> list[DiscoveredSignal]:
-        """Run the full signal analysis pipeline for a single CAN ID, in
-        cycles: first find well-known, structurally-verifiable bit patterns
-        via dedicated scans (currently just counters; CRC/checksum scanning
-        is a natural next scan to add in the same shape), then run the
-        generic correlation-based clustering for whatever application
-        signals are left over the *remaining*, unclaimed bits.
+    def find_counters(self) -> dict[int, list[DiscoveredSignal]]:
+        """Stage 2: dedicated counter scan across every CAN ID.
 
-        This matters because a counter has an exact, directly-checkable
-        signature (+1 each frame, wraps at 2^length-1) that statistical
-        bit-correlation clustering can fail to isolate cleanly -- e.g. a
-        4-bit counter's slow-toggling high bit and fast-toggling low bit
-        don't necessarily correlate strongly enough to land in the same
-        cluster. Checking the signature directly at every naturally-aligned
-        candidate position is both more reliable and removes the counter's
-        bits from the pool the clustering step has to untangle.
+        Returns discovered counters keyed by CAN ID (IDs with none found are
+        omitted). Independent of :meth:`find_application_signals` -- can run
+        before it, after it, or not at all.
         """
-        if not stats.payload_samples or stats.count < 2:
-            return []
+        if self._analysis is None:
+            raise RuntimeError("Call analyzer.analyze() before find_counters()")
 
-        raw_values = self._compute_raw_values(stats)
-        max_len = max(len(p) for p in stats.payload_samples)
-        total_bits = max_len * 8
+        result: dict[int, list[DiscoveredSignal]] = {}
+        for aid, s in self._analysis.can_stats.items():
+            if not s.payload_samples or s.count < 2:
+                continue
+            raw_values = self._compute_raw_values(s)
+            max_len = max(len(p) for p in s.payload_samples)
+            total_bits = max_len * 8
 
+            counter_signals, _claimed = self._scan_for_counters(s, raw_values, total_bits, 1)
+            counter_signals = [
+                sig for sig in counter_signals if sig.confidence >= self._min_confidence
+            ]
+            if counter_signals:
+                result[aid] = self._post_process_signals(counter_signals, s)
+        return result
+
+    def find_application_signals(
+        self, counters_by_id: dict[int, list[DiscoveredSignal]] | None = None
+    ) -> dict[int, list[DiscoveredSignal]]:
+        """Stage 3: generic bit-correlation clustering for application
+        signals across every CAN ID.
+
+        `counters_by_id` (typically :meth:`find_counters`'s own return
+        value) excludes each ID's already-claimed counter bits from
+        clustering; omit it (or pass `None`) to cluster every bit, same as
+        if no counter had been found for any ID.
+        """
+        if self._analysis is None:
+            raise RuntimeError("Call analyzer.analyze() before find_application_signals()")
+
+        counters_by_id = counters_by_id or {}
+        result: dict[int, list[DiscoveredSignal]] = {}
+        for aid, s in self._analysis.can_stats.items():
+            if not s.payload_samples or s.count < 2:
+                continue
+
+            claimed: set[int] = set()
+            next_sig_id = 1
+            for sig in counters_by_id.get(aid, []):
+                claimed.update(range(sig.start_pos, sig.start_pos + sig.length))
+                next_sig_id += 1
+
+            raw_values = self._compute_raw_values(s)
+            app_signals = self._cluster_application_signals(s, raw_values, claimed, next_sig_id)
+            app_signals = [
+                sig for sig in app_signals if sig.confidence >= self._min_confidence
+            ]
+            if app_signals:
+                result[aid] = self._post_process_signals(app_signals, s)
+        return result
+
+    def _cluster_application_signals(
+        self,
+        stats: CanIdStats,
+        raw_values: list[dict[str, Any]],
+        exclude: set[int],
+        start_sig_id: int,
+    ) -> list[DiscoveredSignal]:
+        """The generic correlation-clustering pass, over whatever bits
+        `exclude` (a counter scan's claimed bits, typically) doesn't cover.
+        """
         signals: list[DiscoveredSignal] = []
-        sig_id = 1
+        sig_id = start_sig_id
 
-        # Pass 1: dedicated counter scan (claims its bits so pass 2 skips them).
-        counter_signals, claimed = self._scan_for_counters(stats, raw_values, total_bits, sig_id)
-        for sig in counter_signals:
-            signals.append(sig)
-            sig_id += 1
-
-        # Pass 2 (future extension point): CRC/checksum scan, informed by
-        # the counter width(s) already found -- not implemented yet.
-
-        # Pass 3: generic bit-correlation clustering for application
-        # signals, over whatever bits pass 1 didn't already claim.
         bit_matrix = self._build_bit_matrix(stats)
-        if bit_matrix is not None and len(bit_matrix) >= 2:
-            clusters = self._cluster_correlated_bits(bit_matrix, exclude=claimed)
+        if bit_matrix is None or len(bit_matrix) < 2:
+            return signals
 
-            grouped: dict[int, list[int]] = {}
-            for bit_idx, cluster_id in clusters.items():
-                grouped.setdefault(cluster_id, []).append(bit_idx)
+        clusters = self._cluster_correlated_bits(bit_matrix, exclude=exclude)
 
-            for cluster_id in sorted(grouped.keys()):
-                if cluster_id == -1:
-                    continue  # "not active enough to cluster" bucket -- not a real signal group
-                bits = sorted(grouped[cluster_id])
-                if not bits:
-                    continue
+        grouped: dict[int, list[int]] = {}
+        for bit_idx, cluster_id in clusters.items():
+            grouped.setdefault(cluster_id, []).append(bit_idx)
 
-                contiguous = self._find_contiguous_groups(bits)
-                if contiguous and len(contiguous) > 1:
-                    for group in contiguous:
-                        sig = self._build_signal(sig_id, group, raw_values, stats)
-                        if sig:
-                            signals.append(sig)
-                            sig_id += 1
-                else:
-                    sig = self._build_signal(sig_id, bits, raw_values, stats)
+        for cluster_id in sorted(grouped.keys()):
+            if cluster_id == -1:
+                continue  # "not active enough to cluster" bucket -- not a real signal group
+            bits = sorted(grouped[cluster_id])
+            if not bits:
+                continue
+
+            contiguous = self._find_contiguous_groups(bits)
+            if contiguous and len(contiguous) > 1:
+                for group in contiguous:
+                    sig = self._build_signal(sig_id, group, raw_values, stats)
                     if sig:
                         signals.append(sig)
                         sig_id += 1
+            else:
+                sig = self._build_signal(sig_id, bits, raw_values, stats)
+                if sig:
+                    signals.append(sig)
+                    sig_id += 1
 
-        signals = self._post_process_signals(signals, stats)
         return signals
 
-    # ── Dedicated counter scan (pass 1) ────────────────────────────────
+    # ── Dedicated counter scan (stage 2) ───────────────────────────────
 
     _COUNTER_WIDTHS = (32, 8, 4)  # widest first: an 8-bit counter's low
     # nibble also independently looks like a valid 4-bit counter, so a
     # narrower width must not get the chance to claim it out from under a
     # genuinely wider counter.
+
+    def _quick_counter_check(self, bits: list[int], stats: CanIdStats, length: int) -> bool:
+        """Cheap pre-filter for :meth:`_scan_for_counters`: just extract raw
+        numbers and run :meth:`_detect_counter`, skipping the expensive parts
+        of :meth:`_build_signal` (byte-order smoothness heuristic, checksum
+        detection, confidence scoring) that only matter once a candidate is
+        already known to be a counter. Byte order is irrelevant for 4/8-bit
+        widths (a single nibble/byte has no ordering ambiguity); for 32-bit,
+        try both -- still far cheaper than the smoothness heuristic, which
+        itself extracts raw numbers twice per candidate.
+        """
+        orders = (0,) if length in (4, 8) else (0, 1)
+        for byte_order in orders:
+            raw_nums = self._extract_raw_numbers(bits, byte_order, stats)
+            if raw_nums and self._detect_counter(raw_nums, length):
+                return True
+        return False
 
     def _scan_for_counters(
         self,
@@ -239,6 +323,11 @@ class TraceReverseEngineer:
         """Scan every byte/nibble-aligned candidate position for a 4/8/32-bit
         AUTOSAR counter. Returns the signals found and the set of bit
         positions they claim (for the clustering pass to exclude).
+
+        :meth:`_quick_counter_check` pre-filters candidates cheaply; the full
+        :meth:`_build_signal` (and its authoritative `is_counter` check) still
+        runs before anything is accepted, so this changes *when* work happens,
+        not the detection result.
         """
         found: list[DiscoveredSignal] = []
         claimed: set[int] = set()
@@ -248,6 +337,8 @@ class TraceReverseEngineer:
             for start in range(0, total_bits - length + 1, length):
                 bits = list(range(start, start + length))
                 if any(b in claimed for b in bits):
+                    continue
+                if not self._quick_counter_check(bits, stats, length):
                     continue
                 sig = self._build_signal(sig_id, bits, raw_values, stats)
                 if sig is not None and sig.is_counter:

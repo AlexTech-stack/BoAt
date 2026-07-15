@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,7 +20,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from boat.trace_analyzer import TraceAnalyzer
-from boat.trace_reverse_engineer import TraceReverseEngineer
+from boat.trace_reverse_engineer import TraceReverseEngineer, _HAS_NUMPY
 
 _PORT = int(os.environ.get("BOAT_TRACE_ANALYZER_PORT", "8088"))
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "config"
@@ -33,8 +34,14 @@ _RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "tr
 
 app = FastAPI()
 
-_analysis_cache: dict[str, Any] = {}
-_analysis_lock = threading.Lock()
+# Staged-analysis state for whatever file was last loaded via stage 1 --
+# holds the live TraceAnalyzer/TraceReverseEngineer instances (not just
+# their JSON-serializable results) so stage 2/3 calls can build on stage 1's
+# work without re-reading/re-parsing the trace file. Loading a *different*
+# path resets everything (see api_blf_analyze) -- stage 2/3 results only
+# ever mean something for the file stage 1 was last run against.
+_stage_cache: dict[str, Any] = {}
+_stage_lock = threading.Lock()
 
 # ── API routes ──────────────────────────────────────────────────────────────
 
@@ -53,8 +60,29 @@ def api_blf_list():
 
 _SUPPORTED_SUFFIXES = (".blf", ".asc", ".trace")
 
+def _signal_preview(sig) -> dict[str, Any]:
+    """UI-only preview of a discovered signal -- never written to the
+    exported PDU DB, which follows the documented config schema."""
+    return {
+        "name": sig.name,
+        "value_type": sig.value_type,
+        "confidence": round(sig.confidence, 2),
+        "is_counter": sig.is_counter,
+        "is_checksum": sig.is_checksum,
+        "physical_values": sig.physical_values[:50],
+    }
+
+def _signals_preview_by_id(signals_by_id: dict[int, list]) -> dict[str, list]:
+    return {str(aid): [_signal_preview(sig) for sig in sigs] for aid, sigs in signals_by_id.items()}
+
 @app.post("/api/blf/analyze")
 def api_blf_analyze(body: dict):
+    """Stage 1: read the file, resolve multi-channel duplicates, detect
+    cycle times. Fast (no signal reverse-engineering) -- caches the live
+    TraceAnalyzer/TraceAnalysis so stage 2/3 calls can build on this
+    without re-reading the file. Loading a different path resets any
+    previously-cached stage 2/3 results, since they only mean something for
+    the file they were computed against."""
     path = body.get("path", "")
     fp = Path(path).expanduser()
     if not fp.exists():
@@ -62,17 +90,31 @@ def api_blf_analyze(body: dict):
     if fp.suffix.lower() not in _SUPPORTED_SUFFIXES:
         raise HTTPException(400, f"Unsupported format: {fp.suffix}. Supported: .blf, .asc, .trace")
 
+    bus_mapping_raw = body.get("bus_mapping", {})
+    bus_mapping = {int(k): v for k, v in bus_mapping_raw.items()}
+    message_names_raw = body.get("message_names", {})
+    message_names = {int(k, 0) if k.startswith("0x") else int(k): v for k, v in message_names_raw.items()}
+
+    t0 = time.perf_counter()
     try:
         analyzer = TraceAnalyzer(str(fp))
         analysis = analyzer.analyze()
     except Exception as e:
         raise HTTPException(400, f"Analysis failed: {e}")
+    elapsed = time.perf_counter() - t0
 
-    bus_mapping_raw = body.get("bus_mapping", {})
-    bus_mapping = {int(k): v for k, v in bus_mapping_raw.items()}
-    message_names_raw = body.get("message_names", {})
-    message_names = {int(k, 0) if k.startswith("0x") else int(k): v for k, v in message_names_raw.items()}
-    include_signals = body.get("include_signals", False)
+    with _stage_lock:
+        _stage_cache.clear()
+        _stage_cache.update({
+            "path": str(fp),
+            "analyzer": analyzer,
+            "analysis": analysis,
+            "engineer": None,
+            "counters_by_id": None,
+            "app_signals_by_id": None,
+            "bus_mapping": bus_mapping,
+            "message_names": message_names,
+        })
 
     result: dict[str, Any] = {
         "path": str(fp),
@@ -82,10 +124,8 @@ def api_blf_analyze(body: dict):
         "unique_ids": analysis.unique_ids,
         "channels": sorted(analysis.channels),
         "can_ids": [],
-        "pdu_db": {},
         "warnings": list(analysis.errors),
-        "discovered_signals": {},
-        "numpy_available": None,
+        "elapsed_s": round(elapsed, 2),
     }
 
     for aid in sorted(analysis.can_stats.keys()):
@@ -105,52 +145,96 @@ def api_blf_analyze(body: dict):
             "duplicate_channels": s.duplicate_channels,
         })
 
-    try:
-        if include_signals:
-            engineer = TraceReverseEngineer(analyzer)
-            # Compute once, share between the exported PDU DB and the
-            # UI-only signal preview below -- to_pdu_db() used to recompute
-            # this itself, doubling the cost of the expensive bit-clustering.
-            re_result = engineer.reverse_engineer()
-            pdu_db = engineer.to_pdu_db(bus_mapping=bus_mapping, message_names=message_names, result=re_result)
-            result["signal_count"] = re_result.total_signals_discovered
-            result["numpy_available"] = re_result.numpy_available
-            result["discovered_signals"] = {
-                str(msg.can_id): [
-                    {
-                        "name": sig.name,
-                        "value_type": sig.value_type,
-                        "confidence": round(sig.confidence, 2),
-                        "is_counter": sig.is_counter,
-                        "is_checksum": sig.is_checksum,
-                        # Preview only -- never written to the exported PDU DB,
-                        # which follows the documented config schema.
-                        "physical_values": sig.physical_values[:50],
-                    }
-                    for sig in msg.signals
-                ]
-                for msg in re_result.messages if msg.signals
-            }
-        else:
-            pdu_db = analyzer.to_pdu_db(bus_mapping=bus_mapping, message_names=message_names)
-            result["signal_count"] = 0
-        result["pdu_db"] = pdu_db
-    except Exception as e:
-        pdu_db = analyzer.to_pdu_db(bus_mapping=bus_mapping, message_names=message_names)
-        result["pdu_db"] = pdu_db
-        result["signal_error"] = str(e)
-        result["signal_count"] = 0
-
-    with _analysis_lock:
-        _analysis_cache["last"] = result
-
     return result
+
+def _require_stage1(fp: Path) -> tuple[TraceAnalyzer, TraceReverseEngineer]:
+    with _stage_lock:
+        if _stage_cache.get("path") != str(fp):
+            raise HTTPException(400, "Run Stage 1 (Identify Messages) for this file first")
+        analyzer = _stage_cache["analyzer"]
+        engineer = _stage_cache.get("engineer") or TraceReverseEngineer(analyzer)
+        _stage_cache["engineer"] = engineer
+    return analyzer, engineer
+
+@app.post("/api/blf/stage/counters")
+def api_stage_counters(body: dict):
+    """Stage 2: dedicated AUTOSAR counter scan (4/8/32-bit), across every
+    CAN ID found by Stage 1. Independent of Stage 3 -- can run before it,
+    or be skipped entirely."""
+    fp = Path(body.get("path", "")).expanduser()
+    _analyzer, engineer = _require_stage1(fp)
+
+    t0 = time.perf_counter()
+    counters_by_id = engineer.find_counters()
+    elapsed = time.perf_counter() - t0
+
+    with _stage_lock:
+        _stage_cache["counters_by_id"] = counters_by_id
+
+    return {
+        "elapsed_s": round(elapsed, 2),
+        "counter_count": sum(len(v) for v in counters_by_id.values()),
+        "discovered_signals": _signals_preview_by_id(counters_by_id),
+        "numpy_available": _HAS_NUMPY,
+    }
+
+@app.post("/api/blf/stage/signals")
+def api_stage_signals(body: dict):
+    """Stage 3: generic bit-correlation clustering for application signals,
+    across every CAN ID found by Stage 1. Uses Stage 2's counters (if it
+    was run) to exclude their bits from clustering; runs without them
+    (clustering every bit) otherwise."""
+    fp = Path(body.get("path", "")).expanduser()
+    _analyzer, engineer = _require_stage1(fp)
+    with _stage_lock:
+        counters_by_id = _stage_cache.get("counters_by_id")
+
+    t0 = time.perf_counter()
+    app_signals_by_id = engineer.find_application_signals(counters_by_id)
+    elapsed = time.perf_counter() - t0
+
+    with _stage_lock:
+        _stage_cache["app_signals_by_id"] = app_signals_by_id
+
+    return {
+        "elapsed_s": round(elapsed, 2),
+        "signal_count": sum(len(v) for v in app_signals_by_id.values()),
+        "discovered_signals": _signals_preview_by_id(app_signals_by_id),
+        "numpy_available": _HAS_NUMPY,
+        "ran_without_counters": counters_by_id is None,
+    }
 
 @app.post("/api/blf/export")
 def api_blf_export(body: dict):
-    with _analysis_lock:
-        pdu_db = body.get("pdu_db") or _analysis_cache.get("last", {}).get("pdu_db", {})
-    if not pdu_db or not pdu_db.get("messages"):
+    """Builds the PDU DB straight from whatever's currently cached -- Stage 1
+    alone exports fine (no signals); Stage 2/3 results, if present, are
+    merged in via combine_results(). Never re-runs analysis -- bus_mapping/
+    message_names come fresh from the request (the user may have edited the
+    Configure Mapping panel after the stages ran), everything else is reused
+    as-is from the cache."""
+    with _stage_lock:
+        analyzer = _stage_cache.get("analyzer")
+        analysis = _stage_cache.get("analysis")
+        engineer = _stage_cache.get("engineer")
+        counters_by_id = _stage_cache.get("counters_by_id")
+        app_signals_by_id = _stage_cache.get("app_signals_by_id")
+
+    if analyzer is None or analysis is None:
+        raise HTTPException(400, "No analysis data to export -- run Stage 1 first")
+
+    bus_mapping_raw = body.get("bus_mapping", {})
+    bus_mapping = {int(k): v for k, v in bus_mapping_raw.items()}
+    message_names_raw = body.get("message_names", {})
+    message_names = {int(k, 0) if k.startswith("0x") else int(k): v for k, v in message_names_raw.items()}
+
+    if counters_by_id is not None or app_signals_by_id is not None:
+        engineer = engineer or TraceReverseEngineer(analyzer)
+        combined = engineer.combine_results(counters_by_id, app_signals_by_id)
+        pdu_db = engineer.to_pdu_db(bus_mapping=bus_mapping, message_names=message_names, result=combined)
+    else:
+        pdu_db = analyzer.to_pdu_db(bus_mapping=bus_mapping, message_names=message_names)
+
+    if not pdu_db.get("messages"):
         raise HTTPException(400, "No analysis data to export")
 
     name = body.get("name", "trace_analysis")
@@ -324,13 +408,16 @@ input:checked + .slider:before { transform:translateX(16px); }
     <div class="sidebar-toolbar">
       <input id="file-path" type="text" placeholder="/path/to/trace.blf|.asc|.trace" style="flex:1;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px"/>
       <button class="btn-primary" onclick="browseFile()">Browse</button>
-      <button class="btn-add" onclick="analyze()">Analyze</button>
     </div>
-    <div class="sidebar-search" style="padding:6px 8px;border-bottom:1px solid var(--border)">
-      <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px">
-        <span>Reverse-engineer signals</span>
-        <label class="switch"><input type="checkbox" id="include-signals" checked/><span class="slider"></span></label>
-      </label>
+    <div class="sidebar-search" style="padding:8px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
+      <button class="btn btn-add" id="stage1-btn" onclick="runStage1()" style="width:100%">1. Identify Messages</button>
+      <button class="btn btn-primary" id="stage2-btn" onclick="runStage2()" disabled style="width:100%">2. Find AUTOSAR Counters</button>
+      <button class="btn btn-primary" id="stage3-btn" onclick="runStage3()" disabled style="width:100%">3. Discover Application Signals</button>
+      <button class="btn" id="stage4-btn" disabled title="Not yet implemented -- detecting when one message's data is derived from/relayed into a different CAN ID" style="width:100%;opacity:0.5;cursor:not-allowed">4. Routing Relationships</button>
+      <div id="stage-progress" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
+        <div class="spinner" style="width:12px;height:12px;border-width:2px;display:inline-block;border:2px solid var(--border);border-top-color:var(--blue);border-radius:50%;animation:spin 0.8s linear infinite"></div>
+        <span id="stage-progress-text"></span>
+      </div>
     </div>
     <div class="sidebar-list" id="config-panel" style="flex:1;overflow-y:auto;padding:8px">
       <div class="config-panel" id="mapping-panel" style="display:none">
@@ -358,7 +445,8 @@ input:checked + .slider:before { transform:translateX(16px); }
 <div id="toast-container"></div>
 
 <script>
-let lastResult = null;
+let lastResult = null;       // Stage 1 result: can_ids, total_frames, etc.
+let discoveredSignals = {};  // accumulated Stage 2 + Stage 3 signals, keyed by CAN ID string
 
 function toast(msg, type="info") {
   const el = document.createElement("div");
@@ -387,19 +475,44 @@ async function browseFile() {
   document.getElementById("file-path").value = fp;
 }
 
-async function analyze() {
+function setStageButtonsEnabled(s1, s2, s3) {
+  document.getElementById("stage1-btn").disabled = !s1;
+  document.getElementById("stage2-btn").disabled = !s2;
+  document.getElementById("stage3-btn").disabled = !s3;
+}
+
+function showStageProgress(text) {
+  document.getElementById("stage-progress-text").textContent = text;
+  document.getElementById("stage-progress").style.display = "flex";
+}
+
+function hideStageProgress() {
+  document.getElementById("stage-progress").style.display = "none";
+}
+
+function numpyHint(numpyAvailable) {
+  if (numpyAvailable === false) {
+    toast("numpy not installed — used the slower pure-Python fallback. Install with: pip install -e ./boat-platform/sdk/python[analysis]","info");
+  }
+}
+
+// Stage 1: read the file, resolve multi-channel duplicates, detect cycle
+// times. Fast -- no signal reverse-engineering. Resets any previously
+// discovered Stage 2/3 signals, since those only mean something for the
+// file Stage 1 was just run against.
+async function runStage1() {
   const path = document.getElementById("file-path").value.trim();
   if (!path) { toast("Enter a path to a .blf/.asc/.trace file","error"); return; }
 
   document.getElementById("empty-state").style.display = "none";
   document.getElementById("results").style.display = "none";
   document.getElementById("progress").style.display = "block";
+  setStageButtonsEnabled(false, false, false);
 
-  const includeSignals = document.getElementById("include-signals").checked;
   let busMappings = {};
   let nameMappings = {};
-
   if (lastResult && lastResult.can_ids) {
+    // preserve any hand-edited mappings across a re-run of Stage 1 on the same file
     document.querySelectorAll("#bus-mappings .mapping-row").forEach(row => {
       const chan = row.querySelector(".chan-input").value;
       const bus = row.querySelector(".bus-input").value;
@@ -413,33 +526,88 @@ async function analyze() {
   }
 
   try {
-    lastResult = await api("POST","/api/blf/analyze", {
-      path, include_signals: includeSignals,
-      bus_mapping: busMappings,
-      message_names: nameMappings,
-    });
-    renderResults(lastResult);
+    lastResult = await api("POST","/api/blf/analyze", {path, bus_mapping: busMappings, message_names: nameMappings});
+    discoveredSignals = {};
+    renderMappingPanel();
+    renderResults();
     document.getElementById("progress").style.display = "none";
     document.getElementById("results").style.display = "block";
-    toast(`Analyzed ${lastResult.file_name}: ${lastResult.total_frames} frames, ${lastResult.unique_ids} CAN IDs`,"success");
+    toast(`Stage 1 done in ${lastResult.elapsed_s}s: ${lastResult.file_name} — ${lastResult.total_frames} frames, ${lastResult.unique_ids} CAN IDs`,"success");
     (lastResult.warnings || []).forEach(w => toast(w, "info"));
-    if (includeSignals && lastResult.numpy_available === false) {
-      toast("numpy not installed — signal reverse-engineering used the slower pure-Python fallback. Install with: pip install -e ./boat-platform/sdk/python[analysis]","info");
-    }
+    setStageButtonsEnabled(true, true, true);
   } catch(e) {
     document.getElementById("progress").style.display = "none";
     document.getElementById("empty-state").style.display = "block";
-    toast("Analysis failed: " + e.message,"error");
+    toast("Stage 1 failed: " + e.message,"error");
+    setStageButtonsEnabled(true, false, false);
   }
 }
 
-function renderResults(result) {
+function mergeDiscoveredSignals(newSignals) {
+  for (const [canId, sigs] of Object.entries(newSignals || {})) {
+    discoveredSignals[canId] = (discoveredSignals[canId] || []).concat(sigs);
+  }
+}
+
+// Stage 2: dedicated AUTOSAR counter scan. Independent of Stage 3 -- can
+// run before it or be skipped entirely.
+async function runStage2() {
+  if (!lastResult) { toast("Run Stage 1 first","error"); return; }
+  setStageButtonsEnabled(false, false, false);
+  showStageProgress("Stage 2: scanning for AUTOSAR counters…");
+  try {
+    const r = await api("POST","/api/blf/stage/counters", {path: lastResult.path});
+    mergeDiscoveredSignals(r.discovered_signals);
+    renderResults();
+    toast(`Stage 2 done in ${r.elapsed_s}s: ${r.counter_count} counter(s) found`,"success");
+    numpyHint(r.numpy_available);
+  } catch(e) {
+    toast("Stage 2 failed: " + e.message,"error");
+  } finally {
+    hideStageProgress();
+    setStageButtonsEnabled(true, true, true);
+  }
+}
+
+// Stage 3: generic bit-correlation clustering for application signals.
+// Uses Stage 2's counters (if run) to exclude their bits from clustering.
+async function runStage3() {
+  if (!lastResult) { toast("Run Stage 1 first","error"); return; }
+  setStageButtonsEnabled(false, false, false);
+  showStageProgress("Stage 3: clustering application signals…");
+  try {
+    const r = await api("POST","/api/blf/stage/signals", {path: lastResult.path});
+    mergeDiscoveredSignals(r.discovered_signals);
+    renderResults();
+    toast(`Stage 3 done in ${r.elapsed_s}s: ${r.signal_count} signal(s) found`,"success");
+    if (r.ran_without_counters) {
+      toast("Stage 2 (counters) hasn't run yet — clustering ran over every bit, which can split a counter into several small signals. Run Stage 2 first for cleaner results.","info");
+    }
+    numpyHint(r.numpy_available);
+  } catch(e) {
+    toast("Stage 3 failed: " + e.message,"error");
+  } finally {
+    hideStageProgress();
+    setStageButtonsEnabled(true, true, true);
+  }
+}
+
+// Renders the stats bar + CAN ID table from the current lastResult (Stage 1)
+// and discoveredSignals (Stage 2/3, accumulated) globals. Deliberately does
+// NOT touch the Configure Mapping panel's inputs -- see renderMappingPanel(),
+// called only from runStage1() -- so re-rendering after Stage 2/3 never
+// wipes out mapping edits the user made in between.
+function renderResults() {
+  const result = lastResult;
+  if (!result) return;
+  const totalSignals = Object.values(discoveredSignals).reduce((sum, sigs) => sum + sigs.length, 0);
+
   const stats = document.getElementById("stats-bar");
   stats.innerHTML = `
     <div class="stat-card"><div class="value">${result.total_frames.toLocaleString()}</div><div class="label">Total Frames</div></div>
     <div class="stat-card"><div class="value">${result.unique_ids}</div><div class="label">Unique CAN IDs</div></div>
     <div class="stat-card"><div class="value">${result.channels.join(", ")}</div><div class="label">Channels</div></div>
-    <div class="stat-card"><div class="value">${result.signal_count}</div><div class="label">Discovered Signals</div></div>
+    <div class="stat-card"><div class="value">${totalSignals}</div><div class="label">Discovered Signals</div></div>
     <div class="stat-card"><div class="value">${(result.file_size / 1024).toFixed(0)} KB</div><div class="label">File Size</div></div>
   `;
 
@@ -451,7 +619,7 @@ function renderResults(result) {
     <button class="btn btn-primary" onclick="convertForTraceEditor()">↪ Convert & Send to Trace Editor</button>
   </div>`;
 
-  const discovered = result.discovered_signals || {};
+  const discovered = discoveredSignals;
 
   table.innerHTML = btns + `
     <table><thead><tr>
@@ -499,7 +667,14 @@ function renderResults(result) {
     }).join("")}
     </tbody></table>
   `;
+}
 
+// Builds the Configure Mapping panel's inputs from Stage 1's CAN ID list.
+// Called only right after Stage 1 completes -- never from renderResults(),
+// so it doesn't overwrite mapping values the user typed after Stage 1 when
+// Stage 2/3 finish and re-render the table.
+function renderMappingPanel() {
+  const ids = (lastResult && lastResult.can_ids) || [];
   const panel = document.getElementById("mapping-panel");
   panel.style.display = "none";
   const busDiv = document.getElementById("bus-mappings");
@@ -556,7 +731,7 @@ function toggleConfig() {
 function markDirty() {}
 
 async function exportDb() {
-  if (!lastResult || !lastResult.pdu_db) {
+  if (!lastResult) {
     toast("No analysis data to export","error");
     return;
   }
@@ -574,24 +749,16 @@ async function exportDb() {
     if (id && name) nameMappings[id] = name;
   });
 
-  const includeSignals = document.getElementById("include-signals").checked;
-
+  // Builds straight from whatever's cached server-side (Stage 1 alone, or
+  // with Stage 2/3 merged in) -- no re-analysis, just the current mapping
+  // panel state.
   try {
-    const r = await api("POST","/api/blf/analyze", {
-      path: lastResult.path,
-      include_signals: includeSignals,
+    const exportResult = await api("POST","/api/blf/export", {
       bus_mapping: busMappings,
       message_names: nameMappings,
-    });
-
-    const exportResult = await api("POST","/api/blf/export", {
-      pdu_db: r.pdu_db,
       name: lastResult.file_name.replace(/\.[^.]+$/, "") + "_pdu_db",
     });
     toast(`Exported ${exportResult.message_count} messages to ${exportResult.path}`,"success");
-
-    lastResult = r;
-    renderResults(lastResult);
   } catch(e) {
     toast("Export failed: " + e.message,"error");
   }
@@ -640,12 +807,12 @@ def index(path: Optional[str] = Query(None)):
     html = HTML
     if path:
         # Cross-link from the Trace Editor ("Analyze in Trace Analyzer"):
-        # pre-fill the path field and run the analysis automatically.
+        # pre-fill the path field and run Stage 1 automatically.
         # json.dumps for safe JS string escaping, not string interpolation.
         autorun = (
             "<script>window.addEventListener(\"DOMContentLoaded\",function(){"
             f"document.getElementById(\"file-path\").value={json.dumps(path)};"
-            "analyze();});</script>"
+            "runStage1();});</script>"
         )
         html = html.replace("</body>", autorun + "</body>")
     return HTMLResponse(html)
