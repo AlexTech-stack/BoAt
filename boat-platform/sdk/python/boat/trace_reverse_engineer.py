@@ -1236,6 +1236,12 @@ class TraceReverseEngineer:
 
     # ── Counter detection ─────────────────────────────────────────────
 
+    # A wider candidate's "extra" high-order bits (beyond the next-narrower
+    # canonical AUTOSAR width) must show real variation somewhere in the
+    # capture before it's trusted as genuinely that wide -- see
+    # _detect_counter's docstring for why.
+    _COUNTER_NARROWER_WIDTH = {32: 8, 8: 4}
+
     @staticmethod
     def _detect_counter(raw_values: list[int], length: int) -> bool:
         """Detect if signal is a rolling AUTOSAR-style counter.
@@ -1250,6 +1256,18 @@ class TraceReverseEngineer:
         arithmetic: incrementing by 1 mod 2 *is* flipping the bit, so an
         ordinary 0,1,0,1,... flag would otherwise trivially score as a
         "counter" too.
+
+        A parallel ambiguity exists one level up: a genuinely 4-bit counter
+        packed into a byte whose other nibble is reserved/unused (constant
+        0 for the whole capture) satisfies the 8-bit version of this same
+        test too, since "+1 mod 256" and "+1 mod 16" are indistinguishable
+        while the top nibble never changes. Because the widest-first scan
+        order (_COUNTER_WIDTHS) would otherwise let that 8-bit claim win
+        every time, require the wider width's extra high-order bits to
+        actually take a nonzero value *somewhere* in the capture -- real
+        evidence of a wider rollover, not just an unexercised window --
+        before accepting it; otherwise defer to the narrower scan that
+        runs after this one.
         """
         if length not in (4, 8, 32):
             return False
@@ -1262,7 +1280,14 @@ class TraceReverseEngineer:
             return False
 
         one_count = sum(1 for d in diffs if d == 1)
-        return one_count / len(diffs) > 0.7
+        if one_count / len(diffs) <= 0.7:
+            return False
+
+        narrower = TraceReverseEngineer._COUNTER_NARROWER_WIDTH.get(length)
+        if narrower is not None and max(raw_values) < (1 << narrower):
+            return False
+
+        return True
 
     # ── Checksum candidate detection ──────────────────────────────────
 
