@@ -20,7 +20,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from boat.trace_analyzer import TraceAnalyzer
-from boat.trace_reverse_engineer import TraceReverseEngineer, _HAS_NUMPY
+from boat.trace_reverse_engineer import TraceReverseEngineer, _HAS_NUMPY, guess_e2e_profile
 
 _PORT = int(os.environ.get("BOAT_TRACE_ANALYZER_PORT", "8088"))
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "config"
@@ -69,6 +69,7 @@ def _signal_preview(sig) -> dict[str, Any]:
         "confidence": round(sig.confidence, 2),
         "is_counter": sig.is_counter,
         "is_checksum": sig.is_checksum,
+        "crc_algorithm": sig.crc_algorithm,
         "physical_values": sig.physical_values[:50],
     }
 
@@ -111,6 +112,7 @@ def api_blf_analyze(body: dict):
             "analysis": analysis,
             "engineer": None,
             "counters_by_id": None,
+            "crcs_by_id": None,
             "app_signals_by_id": None,
             "bus_mapping": bus_mapping,
             "message_names": message_names,
@@ -158,39 +160,58 @@ def _require_stage1(fp: Path) -> tuple[TraceAnalyzer, TraceReverseEngineer]:
 
 @app.post("/api/blf/stage/counters")
 def api_stage_counters(body: dict):
-    """Stage 2: dedicated AUTOSAR counter scan (4/8/32-bit), across every
-    CAN ID found by Stage 1. Independent of Stage 3 -- can run before it,
-    or be skipped entirely."""
+    """Stage 2: dedicated AUTOSAR counter scan (4/8/32-bit) followed by a
+    CRC scan anchored on each counter found (AUTOSAR keeps a message's
+    counter and CRC fields adjacent) -- together identifying, where
+    possible, the AUTOSAR E2E profile in use. Independent of Stage 3 --
+    can run before it, or be skipped entirely."""
     fp = Path(body.get("path", "")).expanduser()
     _analyzer, engineer = _require_stage1(fp)
 
     t0 = time.perf_counter()
     counters_by_id = engineer.find_counters()
+    crcs_by_id = engineer.find_crcs(counters_by_id)
     elapsed = time.perf_counter() - t0
 
     with _stage_lock:
         _stage_cache["counters_by_id"] = counters_by_id
+        _stage_cache["crcs_by_id"] = crcs_by_id
+
+    merged = {
+        aid: counters_by_id.get(aid, []) + crcs_by_id.get(aid, [])
+        for aid in set(counters_by_id) | set(crcs_by_id)
+    }
+    e2e_profiles = {}
+    for aid, counters in counters_by_id.items():
+        crcs = crcs_by_id.get(aid)
+        if counters and crcs:
+            profile = guess_e2e_profile(counters[0], crcs[0])
+            if profile:
+                e2e_profiles[str(aid)] = profile
 
     return {
         "elapsed_s": round(elapsed, 2),
         "counter_count": sum(len(v) for v in counters_by_id.values()),
-        "discovered_signals": _signals_preview_by_id(counters_by_id),
+        "crc_count": sum(len(v) for v in crcs_by_id.values()),
+        "discovered_signals": _signals_preview_by_id(merged),
+        "e2e_profiles": e2e_profiles,
         "numpy_available": _HAS_NUMPY,
     }
 
 @app.post("/api/blf/stage/signals")
 def api_stage_signals(body: dict):
     """Stage 3: generic bit-correlation clustering for application signals,
-    across every CAN ID found by Stage 1. Uses Stage 2's counters (if it
-    was run) to exclude their bits from clustering; runs without them
-    (clustering every bit) otherwise."""
+    across every CAN ID found by Stage 1. Uses Stage 2's counters and CRCs
+    (if it was run) to exclude their bits from clustering; runs without
+    them (clustering every bit) otherwise."""
     fp = Path(body.get("path", "")).expanduser()
     _analyzer, engineer = _require_stage1(fp)
     with _stage_lock:
         counters_by_id = _stage_cache.get("counters_by_id")
+        crcs_by_id = _stage_cache.get("crcs_by_id")
 
     t0 = time.perf_counter()
-    app_signals_by_id = engineer.find_application_signals(counters_by_id)
+    app_signals_by_id = engineer.find_application_signals(counters_by_id, crcs_by_id)
     elapsed = time.perf_counter() - t0
 
     with _stage_lock:
@@ -217,6 +238,7 @@ def api_blf_export(body: dict):
         analysis = _stage_cache.get("analysis")
         engineer = _stage_cache.get("engineer")
         counters_by_id = _stage_cache.get("counters_by_id")
+        crcs_by_id = _stage_cache.get("crcs_by_id")
         app_signals_by_id = _stage_cache.get("app_signals_by_id")
 
     if analyzer is None or analysis is None:
@@ -227,9 +249,9 @@ def api_blf_export(body: dict):
     message_names_raw = body.get("message_names", {})
     message_names = {int(k, 0) if k.startswith("0x") else int(k): v for k, v in message_names_raw.items()}
 
-    if counters_by_id is not None or app_signals_by_id is not None:
+    if counters_by_id is not None or crcs_by_id is not None or app_signals_by_id is not None:
         engineer = engineer or TraceReverseEngineer(analyzer)
-        combined = engineer.combine_results(counters_by_id, app_signals_by_id)
+        combined = engineer.combine_results(counters_by_id, app_signals_by_id, crcs_by_id)
         pdu_db = engineer.to_pdu_db(bus_mapping=bus_mapping, message_names=message_names, result=combined)
     else:
         pdu_db = analyzer.to_pdu_db(bus_mapping=bus_mapping, message_names=message_names)
@@ -411,7 +433,7 @@ input:checked + .slider:before { transform:translateX(16px); }
     </div>
     <div class="sidebar-search" style="padding:8px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
       <button class="btn btn-add" id="stage1-btn" onclick="runStage1()" style="width:100%">1. Identify Messages</button>
-      <button class="btn btn-primary" id="stage2-btn" onclick="runStage2()" disabled style="width:100%">2. Find AUTOSAR Counters</button>
+      <button class="btn btn-primary" id="stage2-btn" onclick="runStage2()" disabled style="width:100%">2. Find AUTOSAR Counters &amp; CRCs</button>
       <button class="btn btn-primary" id="stage3-btn" onclick="runStage3()" disabled style="width:100%">3. Discover Application Signals</button>
       <button class="btn" id="stage4-btn" disabled title="Not yet implemented -- detecting when one message's data is derived from/relayed into a different CAN ID" style="width:100%;opacity:0.5;cursor:not-allowed">4. Routing Relationships</button>
       <div id="stage-progress" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
@@ -528,6 +550,7 @@ async function runStage1() {
   try {
     lastResult = await api("POST","/api/blf/analyze", {path, bus_mapping: busMappings, message_names: nameMappings});
     discoveredSignals = {};
+    e2eProfiles = {};
     renderMappingPanel();
     renderResults();
     document.getElementById("progress").style.display = "none";
@@ -549,17 +572,20 @@ function mergeDiscoveredSignals(newSignals) {
   }
 }
 
-// Stage 2: dedicated AUTOSAR counter scan. Independent of Stage 3 -- can
-// run before it or be skipped entirely.
+// Stage 2: dedicated AUTOSAR counter scan, plus a CRC scan anchored on
+// each counter found (and, when both are found, an E2E profile hint).
+// Independent of Stage 3 -- can run before it or be skipped entirely.
+let e2eProfiles = {};
 async function runStage2() {
   if (!lastResult) { toast("Run Stage 1 first","error"); return; }
   setStageButtonsEnabled(false, false, false);
-  showStageProgress("Stage 2: scanning for AUTOSAR counters…");
+  showStageProgress("Stage 2: scanning for AUTOSAR counters & CRCs…");
   try {
     const r = await api("POST","/api/blf/stage/counters", {path: lastResult.path});
     mergeDiscoveredSignals(r.discovered_signals);
+    e2eProfiles = r.e2e_profiles || {};
     renderResults();
-    toast(`Stage 2 done in ${r.elapsed_s}s: ${r.counter_count} counter(s) found`,"success");
+    toast(`Stage 2 done in ${r.elapsed_s}s: ${r.counter_count} counter(s), ${r.crc_count} CRC(s) found`,"success");
     numpyHint(r.numpy_available);
   } catch(e) {
     toast("Stage 2 failed: " + e.message,"error");
@@ -642,6 +668,10 @@ function renderResults() {
       const dupBadge = dupChannels.length
         ? `<span class="badge" style="background:rgba(255,166,87,0.15);color:var(--orange);margin-left:4px" title="${dupTitle}">multi-bus</span>`
         : "";
+      const e2eProfile = e2eProfiles[String(d.can_id)];
+      const e2eBadge = e2eProfile
+        ? `<span class="badge" style="background:rgba(210,168,255,0.15);color:var(--purple);margin-left:4px" title="Best-effort hint from the matched counter width + CRC algorithm -- not verified against the full E2E protocol spec.">${e2eProfile}</span>`
+        : "";
       const detailRow = sigs.length ? `<tr id="${rowId}" style="display:none"><td></td><td colspan="7" style="padding:8px 8px 12px 24px;background:var(--bg)">
         ${sigs.map(s => `
           <div style="display:flex;align-items:center;gap:10px;padding:4px 0;border-bottom:1px solid var(--border)">
@@ -649,7 +679,7 @@ function renderResults() {
             <span class="badge" style="background:rgba(88,166,255,0.15);color:var(--blue)">${s.value_type}</span>
             <span class="badge" style="background:rgba(63,185,80,0.15);color:var(--green)">conf ${s.confidence}</span>
             ${s.is_counter ? `<span class="badge badge-cyclic">counter</span>` : ""}
-            ${s.is_checksum ? `<span class="badge badge-spont">checksum</span>` : ""}
+            ${s.is_checksum ? `<span class="badge badge-spont" title="${s.crc_algorithm ? 'Matched AUTOSAR ' + s.crc_algorithm + ' against every observed frame' : 'Weak XOR-correlation heuristic, not a verified CRC match'}">${s.crc_algorithm || "checksum"}</span>` : ""}
             ${sparkline(s.physical_values)}
           </div>
         `).join("")}
@@ -662,7 +692,7 @@ function renderResults() {
       <td>${d.max_dlc}</td>
       <td>${d.is_fd ? "CANFD" : "CAN"} ${d.is_extended ? "· Ext" : ""}</td>
       <td>${d.cycle_time_ms ? d.cycle_time_ms.toFixed(1) + " ms" : "—"}</td>
-      <td><span class="badge ${d.send_type === 'Cyclic' ? 'badge-cyclic' : 'badge-spont'}">${d.send_type}</span>${sigBadge}${dupBadge}</td>
+      <td><span class="badge ${d.send_type === 'Cyclic' ? 'badge-cyclic' : 'badge-spont'}">${d.send_type}</span>${sigBadge}${dupBadge}${e2eBadge}</td>
     </tr>${detailRow}`;
     }).join("")}
     </tbody></table>

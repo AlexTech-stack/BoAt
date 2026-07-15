@@ -55,6 +55,12 @@ class DiscoveredSignal:
     confidence: float
     raw_values: list[int] = field(default_factory=list)
     physical_values: list[float] = field(default_factory=list)
+    # Set only when this checksum was identified by the dedicated AUTOSAR CRC
+    # scan (find_crcs()) rather than the older, weaker XOR-based heuristic in
+    # _detect_checksum() -- crc_algorithm names exactly which of the six
+    # AUTOSAR_SWS_CRCLibrary-defined algorithms matched every observed frame.
+    crc_algorithm: str | None = None
+    crc_data_id: int | None = None
 
 
 @dataclass
@@ -73,6 +79,13 @@ class ReverseEngineeredMessage:
     cycle_time_ms: float
     send_type: str
     signals: list[DiscoveredSignal] = field(default_factory=list)
+    # Best-effort AUTOSAR E2E Profile label (e.g. "E2E_Profile_2"), set only
+    # when both a counter and a CRC were found for this message and their
+    # combination matches a well-known standard profile definition -- see
+    # _E2E_PROFILE_HINTS. A hint, not a verified classification: it isn't
+    # checked against the full AUTOSAR E2E protocol spec, only the CRC
+    # algorithm parameters themselves are spec-verified.
+    e2e_profile: str | None = None
 
 
 @dataclass
@@ -82,6 +95,116 @@ class ReverseEngineeringResult:
     total_can_ids: int = 0
     total_signals_discovered: int = 0
     numpy_available: bool = False
+
+
+# ── AUTOSAR CRC engine ──────────────────────────────────────────────────
+#
+# Bit-by-bit (MSB-first, no lookup table -- candidate counts here are small
+# enough that table-driven speed doesn't matter) implementation of the six
+# byte-oriented CRC algorithms defined in AUTOSAR_SWS_CRCLibrary (R22-11).
+# Every parameter below is verified against *every* "Check" value (CRC of
+# ASCII "123456789") and every full worked test-vector table in the spec --
+# 100% match. CRC64 (ECMA) is defined there too but deliberately out of
+# scope: a 64-bit field is vanishingly rare in a CAN payload and would
+# balloon the brute-force search space for little practical benefit.
+_AUTOSAR_CRC_ALGORITHMS: dict[str, dict[str, int | bool]] = {
+    "CRC8":     dict(width=8,  poly=0x1D,       init=0xFF,       refin=False, refout=False, xorout=0xFF),
+    "CRC8H2F":  dict(width=8,  poly=0x2F,       init=0xFF,       refin=False, refout=False, xorout=0xFF),
+    "CRC16":    dict(width=16, poly=0x1021,     init=0xFFFF,     refin=False, refout=False, xorout=0x0000),
+    "CRC16ARC": dict(width=16, poly=0x8005,     init=0x0000,     refin=True,  refout=True,  xorout=0x0000),
+    "CRC32":    dict(width=32, poly=0x04C11DB7, init=0xFFFFFFFF, refin=True,  refout=True,  xorout=0xFFFFFFFF),
+    "CRC32P4":  dict(width=32, poly=0xF4ACFB13, init=0xFFFFFFFF, refin=True,  refout=True,  xorout=0xFFFFFFFF),
+}
+
+# Sample size for the cheap first pass (variability prefilter, "no Data ID"
+# check, and the bounded Data-ID brute force) before a promising candidate
+# is re-verified against the *entire* trace. Both this and the match
+# threshold bound the otherwise-expensive Data-ID search to a manageable
+# cost per candidate position.
+_CRC_SAMPLE_SIZE = 20
+_CRC_MATCH_THRESHOLD = 0.95
+
+# AUTOSAR E2E's Data ID is only folded in as "one extra input byte" this
+# simply for the 1-byte-wide CRC profiles (Profile 1/2's Crc_CalculateCRC8
+# is called a second time with the first result as its start value, over
+# the Data ID's low byte -- mathematically identical to appending it to the
+# input). Wider CRCs' Data ID handling varies by profile and isn't folded
+# in this uniformly, so brute-forcing it here would be both more expensive
+# and less trustworthy -- only these two get the brute force.
+_CRC_DATA_ID_ALGOS = ("CRC8", "CRC8H2F")
+
+
+def _reflect(value: int, width: int) -> int:
+    """Bit-reverse `value` within `width` bits (CRC refin/refout)."""
+    r = 0
+    for _ in range(width):
+        r = (r << 1) | (value & 1)
+        value >>= 1
+    return r
+
+
+def _crc_autosar(data: bytes, algo: str, extra_byte: int | None = None) -> int:
+    """Compute the named AUTOSAR CRC algorithm over `data`. `extra_byte`,
+    when given, models a 1-byte Data ID folded in after `data` -- see
+    _CRC_DATA_ID_ALGOS.
+    """
+    params = _AUTOSAR_CRC_ALGORITHMS[algo]
+    width = int(params["width"])
+    poly = int(params["poly"])
+    mask = (1 << width) - 1
+    top_bit = 1 << (width - 1)
+    crc = int(params["init"]) & mask
+    payload = data if extra_byte is None else bytes(data) + bytes([extra_byte])
+    for byte in payload:
+        b = _reflect(byte, 8) if params["refin"] else byte
+        crc ^= (b << (width - 8)) & mask
+        for _ in range(8):
+            if crc & top_bit:
+                crc = ((crc << 1) ^ poly) & mask
+            else:
+                crc = (crc << 1) & mask
+    if params["refout"]:
+        crc = _reflect(crc, width)
+    return (crc ^ int(params["xorout"])) & mask
+
+
+# Best-effort AUTOSAR E2E Profile hint from (counter_length_bits,
+# crc_algorithm) -- NOT verified against the full E2E protocol spec, only
+# the CRC algorithm parameters themselves are (_AUTOSAR_CRC_ALGORITHMS).
+# Confidence varies by entry: (4, CRC8) and (4, CRC8H2F) are unambiguous,
+# single-profile combinations straight from the profile definitions; the
+# rest share their CRC algorithm across profiles that differ in ways (exact
+# Data ID convention, framing) not distinguishable from a passive capture
+# alone, so treat those as plausible hints, not a firm classification.
+_E2E_PROFILE_HINTS: dict[tuple[int, str], str] = {
+    (4, "CRC8"): "E2E_Profile_1",
+    (4, "CRC8H2F"): "E2E_Profile_2",
+    (16, "CRC32P4"): "E2E_Profile_4",
+    (8, "CRC16"): "E2E_Profile_5",
+    (8, "CRC16ARC"): "E2E_Profile_6",
+    (8, "CRC32P4"): "E2E_Profile_7",
+}
+
+
+def guess_e2e_profile(counter: DiscoveredSignal, crc: DiscoveredSignal) -> str | None:
+    """Best-effort AUTOSAR E2E Profile hint for a (counter, CRC) pair found
+    on the same message -- see _E2E_PROFILE_HINTS for per-entry confidence
+    caveats. Returns None if the pair doesn't match any known combination.
+    """
+    if crc.crc_algorithm is None:
+        return None
+    return _E2E_PROFILE_HINTS.get((counter.length, crc.crc_algorithm))
+
+
+def _e2e_profile_number(e2e_profile: str | None) -> int:
+    """Extract the bare profile number from a "E2E_Profile_N" hint string
+    for the PDU DB schema's `isE2E` field (an AUTOSAR E2E profile number,
+    or 0 if none) -- 0 if no hint was set or it doesn't parse.
+    """
+    if not e2e_profile:
+        return 0
+    suffix = e2e_profile.rsplit("_", 1)[-1]
+    return int(suffix) if suffix.isdigit() else 0
 
 
 class TraceReverseEngineer:
@@ -103,53 +226,65 @@ class TraceReverseEngineer:
         self._min_confidence = min_confidence
 
     def reverse_engineer(self) -> ReverseEngineeringResult:
-        """Run the full reverse engineering pipeline (both stages together,
+        """Run the full reverse engineering pipeline (all stages together,
         in order). For the staged web UI -- where each stage is run and
-        timed independently -- call :meth:`find_counters` and
-        :meth:`find_application_signals` directly instead; this method is
-        the right entry point for non-interactive/CLI use
-        (:meth:`to_pdu_db`, :meth:`save_pdu_db`).
+        timed independently -- call :meth:`find_counters`,
+        :meth:`find_crcs`, and :meth:`find_application_signals` directly
+        instead; this method is the right entry point for
+        non-interactive/CLI use (:meth:`to_pdu_db`, :meth:`save_pdu_db`).
         """
         if self._analysis is None:
             raise RuntimeError("Call analyzer.analyze() before reverse_engineer()")
 
         counters_by_id = self.find_counters()
-        app_signals_by_id = self.find_application_signals(counters_by_id)
-        return self.combine_results(counters_by_id, app_signals_by_id)
+        crcs_by_id = self.find_crcs(counters_by_id)
+        app_signals_by_id = self.find_application_signals(counters_by_id, crcs_by_id)
+        return self.combine_results(counters_by_id, app_signals_by_id, crcs_by_id)
 
     def combine_results(
         self,
         counters_by_id: dict[int, list[DiscoveredSignal]] | None = None,
         app_signals_by_id: dict[int, list[DiscoveredSignal]] | None = None,
+        crcs_by_id: dict[int, list[DiscoveredSignal]] | None = None,
     ) -> ReverseEngineeringResult:
         """Merge staged results into a :class:`ReverseEngineeringResult`
         covering every CAN ID -- the same shape :meth:`reverse_engineer`
         returns, but usable directly with whatever's actually been computed
-        so far. A caller that ran :meth:`find_counters`/
+        so far. A caller that ran :meth:`find_counters`/:meth:`find_crcs`/
         :meth:`find_application_signals` independently (e.g. the staged web
         UI, caching each stage's result as it completes) calls this to
-        assemble an exportable result without recomputing anything; either
-        argument may be omitted if that stage hasn't run yet.
+        assemble an exportable result without recomputing anything; any
+        argument may be omitted if that stage hasn't run yet. When both a
+        counter and a CRC are present for a message, also sets
+        :attr:`ReverseEngineeredMessage.e2e_profile` via
+        :func:`guess_e2e_profile`.
         """
         if self._analysis is None:
             raise RuntimeError("Call analyzer.analyze() before combine_results()")
 
         counters_by_id = counters_by_id or {}
         app_signals_by_id = app_signals_by_id or {}
+        crcs_by_id = crcs_by_id or {}
 
         result = ReverseEngineeringResult(numpy_available=_HAS_NUMPY)
 
         for aid in sorted(self._analysis.can_stats.keys()):
             s = self._analysis.can_stats[aid]
+            counters = counters_by_id.get(aid, [])
+            crcs = crcs_by_id.get(aid, [])
             # Both stages already post-process (name/order) their own
             # signals -- just merge and re-sort by position for presentation.
             discovered_signals = sorted(
-                counters_by_id.get(aid, []) + app_signals_by_id.get(aid, []),
+                counters + crcs + app_signals_by_id.get(aid, []),
                 key=lambda sig: sig.start_pos,
             )
 
             length = max(s.dlc_values) if s.dlc_values else 8
             cycle_ms = self._analysis.cycle_times_ms.get(aid, 0)
+
+            e2e_profile = None
+            if counters and crcs:
+                e2e_profile = guess_e2e_profile(counters[0], crcs[0])
 
             msg = ReverseEngineeredMessage(
                 can_id=aid,
@@ -165,6 +300,7 @@ class TraceReverseEngineer:
                 cycle_time_ms=cycle_ms,
                 send_type="Cyclic" if cycle_ms > 0 else "Spontaneous",
                 signals=discovered_signals,
+                e2e_profile=e2e_profile,
             )
             result.messages.append(msg)
             result.total_signals_discovered += len(discovered_signals)
@@ -175,13 +311,13 @@ class TraceReverseEngineer:
     # ── Staged analysis: independently runnable, independently cacheable ──
     #
     # Split so a caller (the web UI in particular) can run and time each
-    # stage on its own instead of one long blocking call: stage 2 (counters)
-    # has an exact, directly-checkable signature and is deliberately run
-    # before stage 3 (generic clustering) so counter bits never get
-    # re-absorbed or re-split by the statistical clustering pass. A future
-    # stage 2.5 (CRC/checksum scanning, informed by the counter width(s)
-    # already found, to identify the AUTOSAR E2E profile in use) fits the
-    # same shape but isn't implemented yet.
+    # stage on its own instead of one long blocking call: stage 2 (counters,
+    # then CRCs) has an exact, directly-checkable signature and is
+    # deliberately run before stage 3 (generic clustering) so those bits
+    # never get re-absorbed or re-split by the statistical clustering pass.
+    # find_crcs() runs after find_counters() and takes its result as input --
+    # CRC fields are searched *relative to* counter positions, not
+    # independently (see find_crcs()'s docstring).
 
     def find_counters(self) -> dict[int, list[DiscoveredSignal]]:
         """Stage 2: dedicated counter scan across every CAN ID.
@@ -210,20 +346,23 @@ class TraceReverseEngineer:
         return result
 
     def find_application_signals(
-        self, counters_by_id: dict[int, list[DiscoveredSignal]] | None = None
+        self,
+        counters_by_id: dict[int, list[DiscoveredSignal]] | None = None,
+        crcs_by_id: dict[int, list[DiscoveredSignal]] | None = None,
     ) -> dict[int, list[DiscoveredSignal]]:
         """Stage 3: generic bit-correlation clustering for application
         signals across every CAN ID.
 
-        `counters_by_id` (typically :meth:`find_counters`'s own return
-        value) excludes each ID's already-claimed counter bits from
-        clustering; omit it (or pass `None`) to cluster every bit, same as
-        if no counter had been found for any ID.
+        `counters_by_id`/`crcs_by_id` (typically :meth:`find_counters`'s
+        and :meth:`find_crcs`'s own return values) exclude each ID's
+        already-claimed counter/CRC bits from clustering; omit either (or
+        both) to cluster those bits too, same as if that stage hadn't run.
         """
         if self._analysis is None:
             raise RuntimeError("Call analyzer.analyze() before find_application_signals()")
 
         counters_by_id = counters_by_id or {}
+        crcs_by_id = crcs_by_id or {}
         result: dict[int, list[DiscoveredSignal]] = {}
         for aid, s in self._analysis.can_stats.items():
             if not s.payload_samples or s.count < 2:
@@ -231,7 +370,7 @@ class TraceReverseEngineer:
 
             claimed: set[int] = set()
             next_sig_id = 1
-            for sig in counters_by_id.get(aid, []):
+            for sig in counters_by_id.get(aid, []) + crcs_by_id.get(aid, []):
                 claimed.update(range(sig.start_pos, sig.start_pos + sig.length))
                 next_sig_id += 1
 
@@ -242,6 +381,49 @@ class TraceReverseEngineer:
             ]
             if app_signals:
                 result[aid] = self._post_process_signals(app_signals, s)
+        return result
+
+    def find_crcs(
+        self, counters_by_id: dict[int, list[DiscoveredSignal]]
+    ) -> dict[int, list[DiscoveredSignal]]:
+        """Stage 2.5: AUTOSAR CRC scan, run after and informed by
+        :meth:`find_counters` -- CRC fields are searched byte-aligned near
+        each counter's own byte position (AUTOSAR convention keeps them
+        adjacent within a message), not independently across the whole
+        payload, since an unconstrained byte-aligned x algorithm x Data-ID
+        search over every CAN ID would be far too expensive. IDs with no
+        counter are skipped entirely: without a counter position to anchor
+        the search there's nowhere sensible to look.
+        """
+        if self._analysis is None:
+            raise RuntimeError("Call analyzer.analyze() before find_crcs()")
+
+        result: dict[int, list[DiscoveredSignal]] = {}
+        for aid, counters in counters_by_id.items():
+            if not counters:
+                continue
+            stats = self._analysis.can_stats.get(aid)
+            if not stats or not stats.payload_samples:
+                continue
+            max_len = max(len(p) for p in stats.payload_samples)
+            claimed = {
+                b for c in counters for b in range(c.start_pos, c.start_pos + c.length)
+            }
+
+            crc_signals: list[DiscoveredSignal] = []
+            sig_id = 1
+            for counter in counters:
+                sig = self._find_crc_for_counter(stats, counter, claimed, max_len, sig_id)
+                if sig is not None:
+                    crc_signals.append(sig)
+                    claimed.update(range(sig.start_pos, sig.start_pos + sig.length))
+                    sig_id += 1
+
+            crc_signals = [
+                sig for sig in crc_signals if sig.confidence >= self._min_confidence
+            ]
+            if crc_signals:
+                result[aid] = self._post_process_signals(crc_signals, stats)
         return result
 
     def _cluster_application_signals(
@@ -347,6 +529,222 @@ class TraceReverseEngineer:
                     sig_id += 1
 
         return found, claimed
+
+    # ── Dedicated CRC scan (stage 2.5) ─────────────────────────────────
+
+    @staticmethod
+    def _crc_candidate_positions(
+        counter_byte_start: int, counter_byte_end: int, width_bytes: int, max_len: int
+    ) -> list[int]:
+        """Byte-aligned start positions to try for a CRC field: a 2-byte
+        window immediately before/after the counter's own bytes (per the
+        user's domain observation that AUTOSAR keeps the two adjacent),
+        excluding any overlap with the counter itself.
+        """
+        candidates = []
+        lo = max(0, counter_byte_start - 2)
+        hi = min(max_len - width_bytes, counter_byte_end + 2)
+        for start in range(lo, hi + 1):
+            end = start + width_bytes
+            if end > max_len:
+                continue
+            if start < counter_byte_end and end > counter_byte_start:
+                continue  # overlaps the counter's own bytes
+            candidates.append(start)
+        return candidates
+
+    @staticmethod
+    def _crc_candidate_looks_variable(
+        stats: CanIdStats, start_byte: int, width_bytes: int
+    ) -> bool:
+        """Cheap prefilter: a real CRC changes on nearly every frame (it's
+        a function of the counter, which itself changes every frame), so a
+        candidate position with few distinct values across the sample
+        can't be one -- skip it before paying for any CRC computation.
+        """
+        sample = stats.payload_samples[:_CRC_SAMPLE_SIZE]
+        seen = set()
+        for p in sample:
+            if len(p) >= start_byte + width_bytes:
+                seen.add(bytes(p[start_byte:start_byte + width_bytes]))
+        return len(seen) >= max(3, int(0.5 * len(sample)))
+
+    # Tiny all-or-nothing probe checked before scoring each Data-ID guess
+    # during the brute force: a wrong guess has only a 1/256 chance of
+    # matching any single frame, so it almost always fails on the very
+    # first one -- exiting immediately there (instead of always scoring a
+    # full _CRC_SAMPLE_SIZE-frame fraction) is what keeps the 256-guess
+    # brute force cheap in the common case where no CRC is actually present.
+    _CRC_PROBE_SIZE = 6
+
+    @staticmethod
+    def _crc_probe_matches(
+        frames: list,
+        start_byte: int,
+        width_bytes: int,
+        algo: str,
+        data_id: int | None,
+        big_endian: bool,
+    ) -> bool:
+        for payload in frames:
+            if len(payload) < start_byte + width_bytes:
+                continue
+            observed = int.from_bytes(
+                bytes(payload[start_byte:start_byte + width_bytes]),
+                "big" if big_endian else "little",
+            )
+            other = bytes(payload[:start_byte]) + bytes(payload[start_byte + width_bytes:])
+            if _crc_autosar(other, algo, extra_byte=data_id) != observed:
+                return False
+        return True
+
+    @staticmethod
+    def _crc_match_fraction(
+        frames: list,
+        start_byte: int,
+        width_bytes: int,
+        algo: str,
+        data_id: int | None,
+        big_endian: bool,
+    ) -> float:
+        """Fraction of `frames` where computed CRC(algo, other bytes,
+        data_id) matches the observed bytes at [start_byte, start_byte +
+        width_bytes) interpreted as `big_endian`/little. Shared by the
+        sample-level search and the full-trace verification pass.
+        """
+        matches = 0
+        total = 0
+        for payload in frames:
+            if len(payload) < start_byte + width_bytes:
+                continue
+            observed = int.from_bytes(
+                bytes(payload[start_byte:start_byte + width_bytes]),
+                "big" if big_endian else "little",
+            )
+            other = bytes(payload[:start_byte]) + bytes(payload[start_byte + width_bytes:])
+            computed = _crc_autosar(other, algo, extra_byte=data_id)
+            total += 1
+            if computed == observed:
+                matches += 1
+        return matches / total if total else 0.0
+
+    def _match_crc_algorithm(
+        self, stats: CanIdStats, start_byte: int, width_bytes: int, algo: str
+    ) -> tuple[float, int | None, bool] | None:
+        """Find the best-scoring (data_id, byte_order) for `algo` at this
+        position, checked against a small sample first. Tries "no Data ID"
+        (cheap: one CRC per frame per byte order) before brute-forcing a
+        1-byte Data ID, which is bounded to :data:`_CRC_DATA_ID_ALGOS`;
+        each guess is first rejected cheaply via :meth:`_crc_probe_matches`
+        (see its docstring) before paying for a full-sample score, and the
+        loop breaks as soon as the threshold is cleared. Returns None if
+        nothing clears :data:`_CRC_MATCH_THRESHOLD` on the sample; the
+        caller must still re-verify against the full trace before
+        accepting.
+        """
+        sample = stats.payload_samples[:_CRC_SAMPLE_SIZE]
+
+        best: tuple[float, int | None, bool] = (0.0, None, True)
+        for big_endian in (True, False):
+            frac = self._crc_match_fraction(sample, start_byte, width_bytes, algo, None, big_endian)
+            if frac > best[0]:
+                best = (frac, None, big_endian)
+
+        if best[0] < _CRC_MATCH_THRESHOLD and algo in _CRC_DATA_ID_ALGOS:
+            probe = sample[: self._CRC_PROBE_SIZE]
+            for data_id in range(256):
+                for big_endian in (True, False):
+                    if not self._crc_probe_matches(
+                        probe, start_byte, width_bytes, algo, data_id, big_endian
+                    ):
+                        continue
+                    frac = self._crc_match_fraction(
+                        sample, start_byte, width_bytes, algo, data_id, big_endian
+                    )
+                    if frac > best[0]:
+                        best = (frac, data_id, big_endian)
+                if best[0] >= _CRC_MATCH_THRESHOLD:
+                    break
+
+        return best if best[0] >= _CRC_MATCH_THRESHOLD else None
+
+    def _find_crc_for_counter(
+        self,
+        stats: CanIdStats,
+        counter: DiscoveredSignal,
+        claimed: set[int],
+        max_len: int,
+        sig_id: int,
+    ) -> DiscoveredSignal | None:
+        """Search every algorithm x byte-aligned position near `counter`
+        for the single best-matching AUTOSAR CRC field, verified against
+        the *entire* trace (not just the search sample) before being
+        accepted -- a promising sample match that doesn't hold up on full
+        verification is rejected outright, not just down-scored.
+        """
+        counter_byte_start = counter.start_pos // 8
+        counter_byte_end = (counter.start_pos + counter.length + 7) // 8
+
+        # (sample_frac, algo, start_byte, width_bytes, data_id, big_endian)
+        best: tuple[float, str, int, int, int | None, bool] | None = None
+
+        for algo, params in _AUTOSAR_CRC_ALGORITHMS.items():
+            width_bytes = int(params["width"]) // 8
+            for start_byte in self._crc_candidate_positions(
+                counter_byte_start, counter_byte_end, width_bytes, max_len
+            ):
+                bits = set(range(start_byte * 8, (start_byte + width_bytes) * 8))
+                if bits & claimed:
+                    continue
+                if not self._crc_candidate_looks_variable(stats, start_byte, width_bytes):
+                    continue
+
+                match = self._match_crc_algorithm(stats, start_byte, width_bytes, algo)
+                if match is None:
+                    continue
+                frac, data_id, big_endian = match
+                if best is None or frac > best[0]:
+                    best = (frac, algo, start_byte, width_bytes, data_id, big_endian)
+
+        if best is None:
+            return None
+
+        _sample_frac, algo, start_byte, width_bytes, data_id, big_endian = best
+        full_frac = self._crc_match_fraction(
+            stats.payload_samples, start_byte, width_bytes, algo, data_id, big_endian
+        )
+        if full_frac < _CRC_MATCH_THRESHOLD:
+            return None
+
+        raw_nums = [
+            int.from_bytes(
+                bytes(p[start_byte:start_byte + width_bytes]), "big" if big_endian else "little"
+            )
+            for p in stats.payload_samples
+            if len(p) >= start_byte + width_bytes
+        ]
+
+        return DiscoveredSignal(
+            id=sig_id,
+            name=algo,
+            start_pos=start_byte * 8,
+            length=width_bytes * 8,
+            byte_order=1 if big_endian else 0,
+            value_type="Unsigned",
+            factor=1.0,
+            offset=0.0,
+            min_val=0.0,
+            max_val=float((1 << (width_bytes * 8)) - 1),
+            unit="",
+            enum_values=None,
+            is_counter=False,
+            is_checksum=True,
+            confidence=min(1.0, 0.5 + full_frac / 2),
+            raw_values=raw_nums[:100],
+            physical_values=[float(v) for v in raw_nums[:100]],
+            crc_algorithm=algo,
+            crc_data_id=data_id,
+        )
 
     # ── Bit matrix construction ───────────────────────────────────────
 
@@ -965,7 +1363,7 @@ class TraceReverseEngineer:
                 counter_idx += 1
                 sig.name = f"Counter_{counter_idx}"
             elif sig.is_checksum:
-                sig.name = "Checksum"
+                sig.name = sig.crc_algorithm if sig.crc_algorithm else "Checksum"
             elif sig.enum_values and len(sig.enum_values) <= 4:
                 sig.name = f"State_{sig.id}"
             elif len(sig.raw_values) >= 3:
@@ -1039,7 +1437,7 @@ class TraceReverseEngineer:
                 "RoutingType": 0,
                 "TargetDbIds": None,
                 "SourceDbId": None,
-                "isE2E": 0,
+                "isE2E": _e2e_profile_number(msg.e2e_profile),
                 "SendType": msg.send_type,
                 "CycleTime": int(msg.cycle_time_ms),
                 "CycleTimeFast": 0,
