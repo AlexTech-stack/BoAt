@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "boat-platform" / "sdk" / "python"))
 
@@ -30,6 +31,14 @@ _RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "tr
 _SUPPORTED_SUFFIXES = (".pcap",)
 
 app = FastAPI()
+
+# Holds the live EthTraceAnalyzer/EthTraceAnalysis after Stage 1 so a
+# Stage 2 call (find_autosar_pdus(), which does its own second pass over
+# the file) can reuse Stage 1's flow classification without re-running it.
+# Loading a different path resets this -- Stage 2 only means something for
+# the file Stage 1 was last run against.
+_stage_cache: dict[str, Any] = {}
+_stage_lock = threading.Lock()
 
 # ── API routes ──────────────────────────────────────────────────────────────
 
@@ -66,11 +75,46 @@ def api_pcap_analyze(body: dict):
         raise HTTPException(400, f"Analysis failed: {e}")
     elapsed = time.perf_counter() - t0
 
+    with _stage_lock:
+        _stage_cache.clear()
+        _stage_cache.update({"path": str(fp), "analyzer": analyzer, "analysis": analysis})
+
     summary = analyzer.to_summary(analysis)
     summary["file_name"] = fp.name
     summary["file_size"] = fp.stat().st_size
     summary["elapsed_s"] = round(elapsed, 2)
     return summary
+
+@app.post("/api/pcap/stage/pdus")
+def api_pcap_stage_pdus(body: dict):
+    """Stage 2: AUTOSAR PDU-multiplex deep dive. Requires Stage 1 to have
+    run for this exact file (uses its flow classification); does its own
+    second pass over the capture to build each PDU Header-ID's full
+    history, eliminate routed/relayed duplicates, and classify sending
+    behavior. No signal-level decoding -- Header-ID, length, and raw
+    payload only."""
+    path = body.get("path", "")
+    fp = Path(path).expanduser()
+    with _stage_lock:
+        if _stage_cache.get("path") != str(fp):
+            raise HTTPException(400, "Run Stage 1 (Analyze) for this file first")
+        analyzer: EthTraceAnalyzer = _stage_cache["analyzer"]
+        analysis = _stage_cache["analysis"]
+
+    t0 = time.perf_counter()
+    try:
+        pdus = analyzer.find_autosar_pdus(analysis)
+    except Exception as e:
+        raise HTTPException(400, f"PDU analysis failed: {e}")
+    elapsed = time.perf_counter() - t0
+
+    rows = analyzer.pdu_summary(pdus, analysis)
+    return {
+        "elapsed_s": round(elapsed, 2),
+        "pdu_count": len(rows),
+        "pdus_with_duplicates": sum(1 for r in rows if r["duplicate_flows"]),
+        "pdus": rows,
+    }
 
 # ── HTML ────────────────────────────────────────────────────────────────────
 
@@ -189,11 +233,12 @@ tr:hover td { background:rgba(88,166,255,0.03); }
       <input id="file-path" type="text" placeholder="/path/to/capture.pcap"/>
       <button class="btn btn-primary" onclick="browseFile()">Browse</button>
     </div>
-    <div style="padding:8px;border-bottom:1px solid var(--border)">
-      <button class="btn btn-add" id="analyze-btn" onclick="runAnalyze()" style="width:100%">Analyze</button>
-      <div id="progress" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-top:8px">
+    <div style="padding:8px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
+      <button class="btn btn-add" id="analyze-btn" onclick="runAnalyze()" style="width:100%">1. Analyze</button>
+      <button class="btn btn-primary" id="pdu-stage-btn" onclick="runPduStage()" disabled style="width:100%">2. Find AUTOSAR PDU Messages</button>
+      <div id="progress" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
         <div class="spinner" style="width:12px;height:12px;border-width:2px;display:inline-block"></div>
-        <span>Reading capture...</span>
+        <span id="progress-text">Reading capture...</span>
       </div>
     </div>
     <div id="file-list" style="flex:1;overflow-y:auto;padding:8px;font-size:12px"></div>
@@ -253,23 +298,45 @@ function browseFile() {
 }
 
 let lastResult = null;
+let pduResult = null;
 
 async function runAnalyze() {
   const path = document.getElementById("file-path").value.trim();
   if (!path) { toast("Enter a .pcap path first", "error"); return; }
   document.getElementById("analyze-btn").disabled = true;
+  document.getElementById("pdu-stage-btn").disabled = true;
+  document.getElementById("progress-text").textContent = "Reading capture...";
   document.getElementById("progress").style.display = "flex";
   try {
     lastResult = await api("POST", "/api/pcap/analyze", {path});
+    pduResult = null;
     renderResults();
     document.getElementById("empty-state").style.display = "none";
     document.getElementById("results").style.display = "block";
     toast(`Analyzed in ${lastResult.elapsed_s}s: ${lastResult.file_name} — ${lastResult.total_frames.toLocaleString()} frames, ${lastResult.duration_s}s span`, "success");
     (lastResult.warnings || []).forEach(w => toast(w, "info"));
+    document.getElementById("pdu-stage-btn").disabled = false;
   } catch(e) {
     toast("Analysis failed: " + e.message, "error");
   } finally {
     document.getElementById("analyze-btn").disabled = false;
+    document.getElementById("progress").style.display = "none";
+  }
+}
+
+async function runPduStage() {
+  if (!lastResult) { toast("Run Analyze first", "error"); return; }
+  document.getElementById("pdu-stage-btn").disabled = true;
+  document.getElementById("progress-text").textContent = "Scanning AUTOSAR PDU-multiplex traffic...";
+  document.getElementById("progress").style.display = "flex";
+  try {
+    pduResult = await api("POST", "/api/pcap/stage/pdus", {path: lastResult.path});
+    renderResults();
+    toast(`PDU stage done in ${pduResult.elapsed_s}s: ${pduResult.pdu_count} PDU IDs (${pduResult.pdus_with_duplicates} with routed duplicates eliminated)`, "success");
+  } catch(e) {
+    toast("PDU stage failed: " + e.message, "error");
+  } finally {
+    document.getElementById("pdu-stage-btn").disabled = false;
     document.getElementById("progress").style.display = "none";
   }
 }
@@ -431,6 +498,23 @@ function renderResults() {
     </tbody></table>
     ${!r.gptp.ports.length ? '<div style="color:var(--muted)">no gPTP traffic found</div>' : ''}
   </div>`;
+
+  if (pduResult) {
+    html += `<div class="section"><h3>AUTOSAR PDU messages (Stage 2) <span class="hint">routed/relayed duplicates eliminated -- same principle as CAN's multi-channel dedup; the flow whose copy of each payload value appeared earliest is kept as the original. No signal-level decoding -- Header-ID, length, and raw payload only.</span></h3>
+      <table><thead><tr><th>Header-ID</th><th>Original flow</th><th>Frames</th><th>Length</th><th>Cycle</th><th>Type</th><th>Routed duplicates eliminated</th></tr></thead><tbody>
+      ${pduResult.pdus.slice(0, 150).map(p => `<tr>
+        <td>${p.header_id}</td>
+        <td>${p.flow}</td>
+        <td>${p.count.toLocaleString()}</td>
+        <td>${p.length_is_stable ? p.length_values[0] : p.length_values.join(", ") + ' <span style="color:var(--yellow)">(varies)</span>'}</td>
+        <td>${p.cycle_time_ms ? p.cycle_time_ms.toFixed(3) + " ms" : "—"}</td>
+        <td><span class="badge ${p.send_type === 'Cyclic' ? 'badge-cyclic' : 'badge-bursty'}">${p.send_type}</span></td>
+        <td>${p.duplicate_flows.length ? p.duplicate_flows.map(d => `${d.flow} (${d.count.toLocaleString()} frames)`).join("; ") : "—"}</td>
+      </tr>`).join("")}
+      </tbody></table>
+      ${pduResult.pdus.length > 150 ? `<div style="color:var(--muted);padding-top:6px">... and ${pduResult.pdus.length-150} more</div>` : ''}
+    </div>`;
+  }
 
   el.innerHTML = html;
 }

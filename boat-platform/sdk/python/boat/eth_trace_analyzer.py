@@ -135,16 +135,19 @@ def _is_multicast_ip(ip: str) -> bool:
 _PDU_MUX_HEADER_SIZE = 8  # 4-byte Header-ID + 4-byte Length
 
 
-def _try_parse_pdu_multiplex(payload: bytes) -> list[tuple[int, int]] | None:
-    """Parse `payload` as repeated (header_id, length) AUTOSAR SoAd PDU
-    records, each followed by `length` bytes of I-PDU data. Returns the
-    list of (header_id, length) pairs only if the *entire* payload is
-    consumed exactly by one or more such records, else None.
+def _parse_pdu_multiplex(payload: bytes) -> list[tuple[int, bytes]] | None:
+    """Parse `payload` as repeated AUTOSAR SoAd PDU records: 4-byte
+    Header-ID + 4-byte Length + `Length` bytes of I-PDU data, repeated.
+    Returns [(header_id, pdu_payload), ...] only if the *entire* payload
+    is consumed exactly by one or more such records, else None. The
+    canonical parser -- both the cheap Stage 1 shape-check
+    (_try_parse_pdu_multiplex) and the Stage 2 per-PDU deep dive
+    (EthTraceAnalyzer.find_autosar_pdus) use this.
     """
     pos, n = 0, len(payload)
     if n < _PDU_MUX_HEADER_SIZE:
         return None
-    records: list[tuple[int, int]] = []
+    records: list[tuple[int, bytes]] = []
     while pos < n:
         if pos + _PDU_MUX_HEADER_SIZE > n:
             return None
@@ -153,9 +156,20 @@ def _try_parse_pdu_multiplex(payload: bytes) -> list[tuple[int, int]] | None:
         pos += _PDU_MUX_HEADER_SIZE
         if length == 0 or pos + length > n:
             return None
-        records.append((header_id, length))
+        records.append((header_id, payload[pos:pos + length]))
         pos += length
     return records if records else None
+
+
+def _try_parse_pdu_multiplex(payload: bytes) -> list[tuple[int, int]] | None:
+    """Shape-check wrapper around :func:`_parse_pdu_multiplex` returning
+    just (header_id, length) pairs -- used in Stage 1's hot path, where
+    only confirming the shape (and each record's length) is needed, not
+    the actual payload bytes."""
+    records = _parse_pdu_multiplex(payload)
+    if records is None:
+        return None
+    return [(hid, len(data)) for hid, data in records]
 
 
 # How many frames per flow to run the PDU-multiplex shape check against --
@@ -386,6 +400,122 @@ class TcpSession:
     @property
     def total_frames(self) -> int:
         return self.frames_a_to_b + self.frames_b_to_a
+
+
+@dataclass
+class PduChannelStats:
+    """Statistics for one AUTOSAR PDU (Header-ID) as observed on ONE
+    particular UDP flow -- an intermediate, per-flow view used before
+    multi-flow dedup (see PduStats / EthTraceAnalyzer.find_autosar_pdus),
+    analogous to CAN's per-(id, channel) stats before
+    _select_original_channel picks the real source."""
+    header_id: int
+    flow_key: tuple
+    length_values: list[int] = field(default_factory=list)
+    payload_samples: list[bytes] = field(default_factory=list)
+    timestamps: list[float] = field(default_factory=list)
+    count: int = 0
+
+
+@dataclass
+class PduStats:
+    """Statistics for one AUTOSAR PDU (Header-ID) after multi-flow dedup:
+    the winning ("original") flow's own data, with any other flow it was
+    also observed on recorded as a likely relay/routed duplicate --
+    directly analogous to CAN's CanIdStats.duplicate_channels. No
+    signal-level decoding of the payload is attempted here -- Header-ID,
+    length, raw payload samples, and sending behavior only.
+    """
+    header_id: int
+    flow_key: tuple
+    length_values: list[int] = field(default_factory=list)
+    payload_samples: list[bytes] = field(default_factory=list)
+    timestamps: list[float] = field(default_factory=list)
+    duplicate_flows: dict[tuple, int] = field(default_factory=dict)  # other flow_key -> frame count
+
+    @property
+    def count(self) -> int:
+        return len(self.timestamps)
+
+    @property
+    def length_is_stable(self) -> bool:
+        return len(set(self.length_values)) <= 1
+
+    @property
+    def duration_s(self) -> float:
+        if len(self.timestamps) < 2:
+            return 0.0
+        return max(0.0, self.timestamps[-1] - self.timestamps[0])
+
+    @property
+    def cycle_time_ms(self) -> float:
+        if len(self.timestamps) < 3:
+            return 0.0
+        gaps = [self.timestamps[i] - self.timestamps[i - 1] for i in range(1, len(self.timestamps))]
+        return statistics.mean(gaps) * 1000
+
+    @property
+    def cycle_jitter_cv(self) -> float:
+        if len(self.timestamps) < 3:
+            return 0.0
+        gaps = [self.timestamps[i] - self.timestamps[i - 1] for i in range(1, len(self.timestamps))]
+        mean = statistics.mean(gaps)
+        if mean <= 0:
+            return 0.0
+        return statistics.stdev(gaps) / mean
+
+    @property
+    def send_type(self) -> str:
+        if self.count < 5:
+            return "Spontaneous"
+        return "Cyclic" if self.cycle_jitter_cv < 0.3 else "Bursty"
+
+
+def _select_original_pdu_flow(candidates: dict[tuple, PduChannelStats]) -> tuple[tuple, PduChannelStats]:
+    """Among several UDP flows all carrying the same AUTOSAR PDU
+    Header-ID, pick the "original" source -- directly analogous to
+    :mod:`boat.trace_analyzer`'s CAN-side ``_select_original_channel``:
+    for each distinct payload value observed, note which flow's copy of
+    it appeared earliest; the flow that leads most often is the original,
+    the rest are downstream relay/routed duplicates (verified on a real
+    trace: a gateway node's copy of the same PDU consistently arrives
+    10-50ms before a second node's copy of the identical bytes -- the
+    same relay pattern found on the CAN side). Falls back to the flow
+    with the most frames if no comparable value transitions exist (e.g.
+    every candidate's payload happens to be constant throughout).
+    """
+    if len(candidates) == 1:
+        only_key = next(iter(candidates))
+        return only_key, candidates[only_key]
+
+    first_seen_by_flow: dict[tuple, dict[bytes, float]] = {}
+    for flow_key, stats in candidates.items():
+        seen: dict[bytes, float] = {}
+        for ts, payload in zip(stats.timestamps, stats.payload_samples):
+            if payload not in seen:
+                seen[payload] = ts
+        first_seen_by_flow[flow_key] = seen
+
+    all_values: set[bytes] = set()
+    for seen in first_seen_by_flow.values():
+        all_values.update(seen.keys())
+
+    lead_counts: Counter = Counter()
+    for value in all_values:
+        timings = [
+            (flow_key, seen[value]) for flow_key, seen in first_seen_by_flow.items() if value in seen
+        ]
+        if len(timings) < 2:
+            continue
+        leader = min(timings, key=lambda kv: kv[1])[0]
+        lead_counts[leader] += 1
+
+    if lead_counts:
+        winner = lead_counts.most_common(1)[0][0]
+    else:
+        winner = max(candidates.keys(), key=lambda k: candidates[k].count)
+
+    return winner, candidates[winner]
 
 
 @dataclass
@@ -977,6 +1107,122 @@ class EthTraceAnalyzer:
         links.sort(key=lambda l: -l["exchange_count"])
 
         return {"ports": ports, "links": links}
+
+    # ── Stage 2: AUTOSAR PDU-multiplex deep dive ─────────────────────────
+    #
+    # Deliberately a *second* pass over the capture, not folded into
+    # analyze(): Stage 1 only samples up to _PDU_MUX_CHECK_LIMIT frames
+    # per UDP flow to *classify* it as PDU-multiplex-shaped, so it never
+    # builds a full per-PDU timeline. Mirrors the CAN side's staged
+    # design (find_counters()/find_application_signals() as separate,
+    # independently-timed passes rather than one long blocking call).
+
+    def find_autosar_pdus(self, result: EthTraceAnalysis | None = None) -> dict[int, PduStats]:
+        """Stage 2 for AUTOSAR PDU-multiplex traffic identified in Stage 1
+        (FlowStats.is_pdu_multiplex / EthTraceAnalysis.autosar_pdu_catalog):
+        re-reads the capture, restricted to already-known PDU-multiplex
+        flows, to collect each Header-ID's full history, then:
+
+          1. Eliminates routed/relayed duplicates -- the same Header-ID
+             often appears on more than one UDP flow (a gateway
+             forwarding the same PDU onward to a different multicast
+             group/VLAN, the same relay pattern already handled on the
+             CAN side) -- kept only the flow :func:`_select_original_pdu_
+             flow` picks as the original source.
+          2. Reports Header-ID, observed length(s), and raw payload
+             samples -- no signal-level decoding of the payload.
+          3. Classifies sending behavior (Cyclic/Bursty/Spontaneous) per
+             PDU, not per flow -- a multiplexed datagram's own set of
+             bundled PDUs isn't necessarily identical frame to frame, so
+             a given PDU's own cadence can differ from its flow's.
+        """
+        result = result or self._analysis
+        if result is None:
+            raise RuntimeError("Call analyze() first")
+
+        pdu_flow_keys = {key for key, f in result.udp_flows.items() if f.is_pdu_multiplex}
+        if not pdu_flow_keys:
+            return {}
+
+        per_channel: dict[int, dict[tuple, PduChannelStats]] = defaultdict(dict)
+
+        with EthernetPcapReader(self._path) as reader:
+            for frame in reader:
+                payload, ethertype = frame.payload, frame.ethertype
+                for _ in range(2):
+                    if ethertype == 0x8100 and len(payload) >= 4:
+                        ethertype = (payload[2] << 8) | payload[3]
+                        payload = payload[4:]
+                    else:
+                        break
+                if ethertype != 0x86DD or len(payload) < 40 or payload[6] != 17:
+                    continue
+                src_ip = socket.inet_ntop(socket.AF_INET6, payload[8:24])
+                dst_ip = socket.inet_ntop(socket.AF_INET6, payload[24:40])
+                l4 = payload[40:]
+                if len(l4) < 8:
+                    continue
+                sport = (l4[0] << 8) | l4[1]
+                dport = (l4[2] << 8) | l4[3]
+                flow_key = (src_ip, dst_ip, sport, dport)
+                if flow_key not in pdu_flow_keys:
+                    continue
+                records = _parse_pdu_multiplex(l4[8:])
+                if records is None:
+                    continue
+                for header_id, pdu_payload in records:
+                    stats = per_channel[header_id].get(flow_key)
+                    if stats is None:
+                        stats = PduChannelStats(header_id=header_id, flow_key=flow_key)
+                        per_channel[header_id][flow_key] = stats
+                    stats.count += 1
+                    stats.length_values.append(len(pdu_payload))
+                    stats.timestamps.append(frame.timestamp)
+                    stats.payload_samples.append(pdu_payload)
+
+        pdus: dict[int, PduStats] = {}
+        for header_id, candidates in per_channel.items():
+            winner_key, winner_stats = _select_original_pdu_flow(candidates)
+            duplicate_flows = {k: v.count for k, v in candidates.items() if k != winner_key}
+            pdus[header_id] = PduStats(
+                header_id=header_id,
+                flow_key=winner_key,
+                length_values=winner_stats.length_values,
+                payload_samples=winner_stats.payload_samples,
+                timestamps=winner_stats.timestamps,
+                duplicate_flows=duplicate_flows,
+            )
+        return pdus
+
+    def pdu_summary(self, pdus: dict[int, PduStats], result: EthTraceAnalysis | None = None) -> list[dict[str, Any]]:
+        """JSON-serializable view of :meth:`find_autosar_pdus`'s result."""
+        result = result or self._analysis
+        if result is None:
+            raise RuntimeError("Call analyze() first")
+        labels = self._build_node_labels(result)
+
+        def _flow_label(flow_key: tuple) -> str:
+            src_ip, dst_ip, sport, dport = flow_key
+            return f"{labels.get(src_ip, src_ip)}:{sport} -> {dst_ip}:{dport}"
+
+        rows = []
+        for header_id, p in pdus.items():
+            rows.append({
+                "header_id": f"0x{header_id:X}",
+                "flow": _flow_label(p.flow_key),
+                "count": p.count,
+                "length_values": sorted(set(p.length_values)),
+                "length_is_stable": p.length_is_stable,
+                "duration_s": round(p.duration_s, 3),
+                "cycle_time_ms": round(p.cycle_time_ms, 3),
+                "send_type": p.send_type,
+                "sample_payloads": [b.hex() for b in p.payload_samples[:5]],
+                "duplicate_flows": [
+                    {"flow": _flow_label(fk), "count": c} for fk, c in p.duplicate_flows.items()
+                ],
+            })
+        rows.sort(key=lambda r: -r["count"])
+        return rows
 
     def to_summary(self, result: EthTraceAnalysis | None = None) -> dict[str, Any]:
         """JSON-serializable summary for the web UI / export."""
