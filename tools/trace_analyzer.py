@@ -679,7 +679,7 @@ function renderResults() {
             <span class="badge" style="background:rgba(88,166,255,0.15);color:var(--blue)">${s.value_type}</span>
             <span class="badge" style="background:rgba(63,185,80,0.15);color:var(--green)">conf ${s.confidence}</span>
             ${s.is_counter ? `<span class="badge badge-cyclic">counter</span>` : ""}
-            ${s.is_checksum ? `<span class="badge badge-spont" title="${s.crc_algorithm ? 'Matched AUTOSAR ' + s.crc_algorithm + ' against every observed frame' : 'Weak XOR-correlation heuristic, not a verified CRC match'}">${s.crc_algorithm || "checksum"}</span>` : ""}
+            ${s.is_checksum ? `<span class="badge badge-spont" title="${s.crc_algorithm ? 'Matched AUTOSAR ' + s.crc_algorithm + ' against every observed frame' : 'No exact AUTOSAR CRC algorithm matched, but it behaves like a checksum (full-range values, changes whenever the rest of the payload does, no natural ceiling) rather than a physical signal'}">${s.crc_algorithm || "checksum"}</span>` : ""}
             ${sparkline(s.physical_values)}
           </div>
         `).join("")}

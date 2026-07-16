@@ -705,6 +705,73 @@ class TraceReverseEngineer:
 
         return best if best[0] >= _CRC_MATCH_THRESHOLD else None
 
+    @staticmethod
+    def _looks_like_checksum(
+        raw_values: list[int],
+        length: int,
+        stats: CanIdStats,
+        field_bytes: range,
+    ) -> bool:
+        """Behavioral fallback for a candidate that doesn't match any known
+        AUTOSAR CRC algorithm exactly (a non-standard/proprietary checksum,
+        or one whose Data ID/init scheme isn't covered by the brute force
+        in :meth:`_match_crc_algorithm`). Rather than searching for the
+        exact formula, recognize a checksum from how it *behaves*, the way
+        a human looking at a trace would: an ordinary physical signal
+        (speed, temperature, torque, ...) is scaled so its real-world
+        range sits comfortably inside the field's bit-width headroom (an
+        8-bit speed signal practically never reaches 255) and changes
+        gradually frame to frame; a checksum has no such natural ceiling,
+        is a near-injective function of the rest of the payload, and jumps
+        around unpredictably. Three checks, all must pass:
+
+          1. Uses close to its full bit-width range (unlike a physical
+             signal, which rarely approaches its field's extremes).
+          2. Changes on almost every frame where anything ELSE in the
+             payload changes (a physical signal varies independently of
+             unrelated fields; a checksum is a function of them).
+          3. Frame-to-frame deltas are spread widely, not clustered near
+             zero (a slow physical ramp) -- a real counter would already
+             have been claimed by :meth:`_scan_for_counters` and excluded
+             via `claimed`, so a small, camped delta here is a physical
+             signal, not this.
+        """
+        if len(raw_values) < 10 or len(stats.payload_samples) < 10:
+            return False
+
+        full_range = (1 << length) - 1
+        if full_range <= 0:
+            return False
+
+        span = max(raw_values) - min(raw_values)
+        if span / full_range < 0.6:
+            return False
+
+        other_changed = 0
+        this_changed_given_other = 0
+        for i in range(1, len(stats.payload_samples)):
+            prev, cur = stats.payload_samples[i - 1], stats.payload_samples[i]
+            width = max(len(prev), len(cur))
+            other_diff = any(
+                (prev[b] if b < len(prev) else 0) != (cur[b] if b < len(cur) else 0)
+                for b in range(width)
+                if b not in field_bytes
+            )
+            if not other_diff:
+                continue
+            other_changed += 1
+            if i < len(raw_values) and raw_values[i] != raw_values[i - 1]:
+                this_changed_given_other += 1
+        if other_changed == 0 or this_changed_given_other / other_changed < 0.9:
+            return False
+
+        diffs = [abs(raw_values[i] - raw_values[i - 1]) for i in range(1, len(raw_values))]
+        mean_delta = sum(diffs) / len(diffs) if diffs else 0.0
+        if mean_delta / full_range < 0.15:
+            return False
+
+        return True
+
     def _find_crc_for_counter(
         self,
         stats: CanIdStats,
@@ -748,7 +815,9 @@ class TraceReverseEngineer:
                     best = (frac, algo, start_byte, width_bytes, data_id, big_endian)
 
         if best is None:
-            return None
+            return self._find_checksum_by_behavior(
+                stats, counter_byte_start, counter_byte_end, claimed, active_len, sig_id
+            )
 
         _sample_frac, algo, start_byte, width_bytes, data_id, big_endian = best
         full_frac = self._crc_match_fraction(
@@ -796,6 +865,66 @@ class TraceReverseEngineer:
             crc_algorithm=algo,
             crc_data_id=data_id,
         )
+
+    def _find_checksum_by_behavior(
+        self,
+        stats: CanIdStats,
+        counter_byte_start: int,
+        counter_byte_end: int,
+        claimed: set[int],
+        active_len: int,
+        sig_id: int,
+    ) -> DiscoveredSignal | None:
+        """Fallback for when no candidate near the counter matches a known
+        AUTOSAR CRC algorithm exactly: check the same candidate positions
+        for checksum-*shaped* behavior instead (see
+        :meth:`_looks_like_checksum`). Identifies "this is very likely
+        some kind of checksum" without knowing its exact formula --
+        `crc_algorithm`/`crc_data_id` are left unset (so no E2E profile
+        gets guessed from it) and confidence is capped below what a
+        verified exact match gets.
+        """
+        for width_bytes in (1, 2, 4):
+            for start_byte in self._crc_candidate_positions(
+                counter_byte_start, counter_byte_end, width_bytes, active_len
+            ):
+                bits = set(range(start_byte * 8, (start_byte + width_bytes) * 8))
+                if bits & claimed:
+                    continue
+                if not self._crc_candidate_looks_variable(stats, start_byte, width_bytes):
+                    continue
+
+                raw_values = [
+                    int.from_bytes(bytes(p[start_byte:start_byte + width_bytes]), "big")
+                    for p in stats.payload_samples
+                    if len(p) >= start_byte + width_bytes
+                ]
+                field_bytes = range(start_byte, start_byte + width_bytes)
+                if not self._looks_like_checksum(raw_values, width_bytes * 8, stats, field_bytes):
+                    continue
+
+                return DiscoveredSignal(
+                    id=sig_id,
+                    name="Checksum",
+                    start_pos=start_byte * 8,
+                    length=width_bytes * 8,
+                    byte_order=0,
+                    value_type="Unsigned",
+                    factor=1.0,
+                    offset=0.0,
+                    min_val=0.0,
+                    max_val=float((1 << (width_bytes * 8)) - 1),
+                    unit="",
+                    enum_values=None,
+                    is_counter=False,
+                    is_checksum=True,
+                    confidence=0.55,
+                    raw_values=raw_values[:100],
+                    physical_values=[float(v) for v in raw_values[:100]],
+                    crc_algorithm=None,
+                    crc_data_id=None,
+                )
+        return None
 
     # ── Bit matrix construction ───────────────────────────────────────
 
