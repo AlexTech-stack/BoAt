@@ -669,8 +669,13 @@ function renderResults() {
         ? `<span class="badge" style="background:rgba(255,166,87,0.15);color:var(--orange);margin-left:4px" title="${dupTitle}">multi-bus</span>`
         : "";
       const e2eProfile = e2eProfiles[String(d.can_id)];
+      const e2eIsUnknown = e2eProfile === "E2E_Unknown";
+      const e2eLabel = e2eIsUnknown ? "E2E?" : e2eProfile;
+      const e2eTitle = e2eIsUnknown
+        ? "A counter and a checksum were both found on this message -- strong evidence of AUTOSAR E2E protection -- but the checksum didn't match any known profile's algorithm, so which profile (if any standard one at all) can't be stated."
+        : "Best-effort hint from the matched counter width + CRC algorithm -- not verified against the full E2E protocol spec.";
       const e2eBadge = e2eProfile
-        ? `<span class="badge" style="background:rgba(210,168,255,0.15);color:var(--purple);margin-left:4px" title="Best-effort hint from the matched counter width + CRC algorithm -- not verified against the full E2E protocol spec.">${e2eProfile}</span>`
+        ? `<span class="badge" style="background:rgba(210,168,255,0.15);color:var(--purple);margin-left:4px" title="${e2eTitle}">${e2eLabel}</span>`
         : "";
       const detailRow = sigs.length ? `<tr id="${rowId}" style="display:none"><td></td><td colspan="7" style="padding:8px 8px 12px 24px;background:var(--bg)">
         ${sigs.map(s => `

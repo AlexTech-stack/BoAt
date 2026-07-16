@@ -185,15 +185,32 @@ _E2E_PROFILE_HINTS: dict[tuple[int, str], str] = {
     (8, "CRC32P4"): "E2E_Profile_7",
 }
 
+# A message pairing a counter with *some* checksum right next to it is
+# itself strong evidence of E2E protection, independent of whether the
+# exact profile number could be pinned down -- either the checksum's
+# algorithm was identified but the (counter width, algorithm) combination
+# isn't one of the standard profiles above, or it was only recognized by
+# _looks_like_checksum()'s behavioral fallback (formula unknown entirely).
+# Kept distinct from a real "E2E_Profile_N" string so callers (e.g. the
+# PDU DB export's `isE2E`, which is a real profile number or 0) can tell
+# "protected, profile unknown" apart from an actual identified profile.
+E2E_UNKNOWN_PROFILE = "E2E_Unknown"
 
-def guess_e2e_profile(counter: DiscoveredSignal, crc: DiscoveredSignal) -> str | None:
-    """Best-effort AUTOSAR E2E Profile hint for a (counter, CRC) pair found
-    on the same message -- see _E2E_PROFILE_HINTS for per-entry confidence
-    caveats. Returns None if the pair doesn't match any known combination.
+
+def guess_e2e_profile(counter: DiscoveredSignal, crc: DiscoveredSignal) -> str:
+    """Best-effort AUTOSAR E2E Profile hint for a (counter, CRC/checksum)
+    pair found on the same message -- see _E2E_PROFILE_HINTS for per-entry
+    confidence caveats. Returns the specific profile name when the
+    (counter width, CRC algorithm) combination matches a known profile,
+    otherwise E2E_UNKNOWN_PROFILE -- callers already only call this once
+    both a counter and a checksum have been found on the same message, so
+    there's always *something* to report here.
     """
-    if crc.crc_algorithm is None:
-        return None
-    return _E2E_PROFILE_HINTS.get((counter.length, crc.crc_algorithm))
+    if crc.crc_algorithm is not None:
+        hint = _E2E_PROFILE_HINTS.get((counter.length, crc.crc_algorithm))
+        if hint:
+            return hint
+    return E2E_UNKNOWN_PROFILE
 
 
 def _e2e_profile_number(e2e_profile: str | None) -> int:
