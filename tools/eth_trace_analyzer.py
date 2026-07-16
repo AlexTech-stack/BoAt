@@ -278,25 +278,37 @@ function fmtVlans(vlans) {
   return vlans && vlans.length ? vlans.map(v => `<span class="badge" style="background:rgba(255,166,87,0.12);color:var(--orange)">${v}</span>`).join(" ") : "—";
 }
 
+function fmtRoleHints(hints) {
+  if (!hints || !hints.length) return "";
+  const colorFor = h => h.startsWith("DoIP Server") ? "var(--purple)" : h.startsWith("Likely Diagnostic") ? "var(--orange)" : h.startsWith("SOME/IP") ? "var(--blue)" : "var(--muted)";
+  return hints.map(h => `<span class="badge" style="background:rgba(255,255,255,0.06);color:${colorFor(h)};margin-right:3px">${h}</span>`).join("");
+}
+
 function renderResults() {
   const r = lastResult;
   const el = document.getElementById("results");
 
   const nodeCount = r.nodes.length;
+  const mcastCount = r.multicast_groups.length;
   const udpCount = r.udp_flows.length;
   const tcpCount = r.tcp_sessions.length;
   const doipCount = r.doip_servers.length;
   const someipCount = r.someip_catalog.length;
+  const pduCount = r.autosar_pdu_catalog.length;
+  const gptpLinkCount = r.gptp.links.length;
 
   let html = `
     <div class="stat-grid">
       <div class="stat-card"><div class="value">${r.total_frames.toLocaleString()}</div><div class="label">Total Frames</div></div>
       <div class="stat-card"><div class="value">${r.duration_s}s</div><div class="label">Capture Span</div></div>
-      <div class="stat-card"><div class="value">${nodeCount}</div><div class="label">IP Nodes</div></div>
+      <div class="stat-card"><div class="value">${nodeCount}</div><div class="label">Nodes</div></div>
+      <div class="stat-card"><div class="value">${mcastCount}</div><div class="label">Multicast Groups</div></div>
       <div class="stat-card"><div class="value">${udpCount}</div><div class="label">UDP Flows</div></div>
       <div class="stat-card"><div class="value">${tcpCount}</div><div class="label">TCP Sessions</div></div>
       <div class="stat-card"><div class="value">${doipCount}</div><div class="label">DoIP Servers</div></div>
       <div class="stat-card"><div class="value">${someipCount}</div><div class="label">SOME/IP Service+Method IDs</div></div>
+      <div class="stat-card"><div class="value">${pduCount}</div><div class="label">AUTOSAR PDU IDs</div></div>
+      <div class="stat-card"><div class="value">${gptpLinkCount}</div><div class="label">gPTP Links</div></div>
       <div class="stat-card"><div class="value">${(r.file_size/1024/1024).toFixed(1)} MB</div><div class="label">File Size</div></div>
     </div>
   `;
@@ -313,22 +325,35 @@ function renderResults() {
     </tbody></table>
   </div></div>`;
 
-  html += `<div class="section"><h3>DoIP servers <span class="hint">confirmed via SYN-ACK on port 13400 -- an ECU inventory, effectively for free</span></h3>
+  html += `<div class="section"><h3>DoIP servers <span class="hint">confirmed via SYN-ACK on port 13400</span></h3>
     ${r.doip_servers.length ? `<table><thead><tr><th>IP</th></tr></thead><tbody>${r.doip_servers.map(ip => `<tr><td>${ip}</td></tr>`).join("")}</tbody></table>` : '<div style="color:var(--muted)">none found</div>'}
   </div>`;
 
-  html += `<div class="section"><h3>Nodes <span class="hint">by IP address, sorted by total traffic</span></h3>
-    <table><thead><tr><th></th><th>IP</th><th>Sent</th><th>Received</th><th>VLANs seen</th><th></th></tr></thead><tbody>
+  html += `<div class="section"><h3>Nodes <span class="hint">unicast IP addresses only -- sorted by total traffic; see Multicast Groups below for group addresses</span></h3>
+    <table><thead><tr><th>Node</th><th>IP</th><th>Sent</th><th>Received</th><th>VLANs seen</th><th>Role hints</th></tr></thead><tbody>
     ${r.nodes.slice(0, 60).map(n => `<tr>
-      <td></td>
+      <td><strong>${n.label}</strong></td>
       <td>${n.ip}</td>
       <td>${n.frames_sent.toLocaleString()}</td>
       <td>${n.frames_received.toLocaleString()}</td>
       <td>${fmtVlans(n.vlan_ids)}</td>
-      <td>${n.is_multicast ? '<span class="badge badge-mcast">multicast</span>' : ''}</td>
+      <td>${fmtRoleHints(n.role_hints)}</td>
     </tr>`).join("")}
     </tbody></table>
     ${r.nodes.length > 60 ? `<div style="color:var(--muted);padding-top:6px">... and ${r.nodes.length-60} more</div>` : ''}
+  </div>`;
+
+  html += `<div class="section"><h3>Multicast groups <span class="hint">a multicast address is a group, not a node -- "Senders" are directly observed; "Confirmed members" only come from an actual MLD Report${r.mld_observed ? '' : ' (none observed in this capture -- membership can\'t be confirmed for any group here)'}</span></h3>
+    ${r.multicast_groups.length ? `<table><thead><tr><th>Group Address</th><th>VLANs</th><th>Frames</th><th>Senders</th><th>Confirmed members (MLD)</th></tr></thead><tbody>
+      ${r.multicast_groups.slice(0, 60).map(g => `<tr>
+        <td>${g.address}</td>
+        <td>${fmtVlans(g.vlan_ids)}</td>
+        <td>${g.frame_count.toLocaleString()}</td>
+        <td>${g.sender_labels.join(", ") || "—"}</td>
+        <td>${g.confirmed_member_labels.length ? g.confirmed_member_labels.join(", ") : '<span style="color:var(--muted)">not observed</span>'}</td>
+      </tr>`).join("")}
+    </tbody></table>
+    ${r.multicast_groups.length > 60 ? `<div style="color:var(--muted);padding-top:6px">... and ${r.multicast_groups.length-60} more</div>` : ''}` : '<div style="color:var(--muted)">none found</div>'}
   </div>`;
 
   html += `<div class="section"><h3>UDP flows <span class="hint">Cyclic = consistent inter-frame timing (low jitter); Bursty = irregular/multiplexed</span></h3>
@@ -345,6 +370,7 @@ function renderResults() {
         ${f.is_doip_port ? '<span class="badge badge-doip">DoIP</span>' : ''}
         ${f.is_someip_sd ? '<span class="badge badge-someip">SOME/IP-SD</span>' : ''}
         ${f.is_someip_like ? '<span class="badge badge-someip">SOME/IP</span>' : ''}
+        ${f.is_pdu_multiplex ? `<span class="badge badge-someip" style="background:rgba(210,168,255,0.15);color:var(--purple)" title="AUTOSAR SoAd PDU-multiplex records: ${f.pdu_ids.join(', ')}">PDU-Mux (${f.pdu_ids.length} IDs)</span>` : ''}
       </td>
     </tr>`).join("")}
     </tbody></table>
@@ -370,6 +396,39 @@ function renderResults() {
     ${r.someip_catalog.length ? `<table><thead><tr><th>Service ID</th><th>Method ID</th><th>Frames sampled matching</th></tr></thead><tbody>
       ${r.someip_catalog.slice(0, 60).map(c => `<tr><td>${c.service_id}</td><td>${c.method_id}</td><td>${c.count}</td></tr>`).join("")}
     </tbody></table>` : '<div style="color:var(--muted)">none found</div>'}
+  </div>`;
+
+  html += `<div class="section"><h3>AUTOSAR PDU catalog <span class="hint">Header-IDs recognized from repeated (ID+Length+data) SoAd PDU-multiplex records; not signal-level decoded</span></h3>
+    ${r.autosar_pdu_catalog.length ? `<table><thead><tr><th>Header-ID</th><th>Frames sampled matching</th></tr></thead><tbody>
+      ${r.autosar_pdu_catalog.slice(0, 60).map(c => `<tr><td>${c.header_id}</td><td>${c.count}</td></tr>`).join("")}
+    </tbody></table>
+    ${r.autosar_pdu_catalog.length > 60 ? `<div style="color:var(--muted);padding-top:6px">... and ${r.autosar_pdu_catalog.length-60} more</div>` : ''}` : '<div style="color:var(--muted)">none found</div>'}
+  </div>`;
+
+  html += `<div class="section"><h3>gPTP (IEEE 802.1AS) <span class="hint">identified by MAC address only -- see hover text on a port row for why an IP label isn't used here</span></h3>
+    <h4 style="font-size:12px;color:var(--muted);margin:4px 0 6px">Ports</h4>
+    <table><thead><tr><th>MAC</th><th>Port</th><th>Messages</th><th>Sync interval</th><th>Sync jitter</th><th>Mean correction</th><th>Seq. gaps</th></tr></thead><tbody>
+    ${r.gptp.ports.map(p => `<tr>
+      <td title="${p.associated_ip_count ? 'Sourced IP traffic for ' + p.associated_ip_count + ' address(es) in this capture (may include traffic merely routed through this device, not necessarily its own): ' + p.associated_ips.join(', ') + (p.associated_ip_count > p.associated_ips.length ? ', ...' : '') : 'No IP traffic observed from this MAC in this capture'}">${p.label}</td>
+      <td>${p.port_number}</td>
+      <td>${Object.entries(p.message_counts).map(([k,v]) => `${k}: ${v}`).join(", ")}</td>
+      <td>${p.sync_interval_ms ? p.sync_interval_ms.toFixed(3) + " ms" : "—"}</td>
+      <td>${p.sync_jitter_ms ? p.sync_jitter_ms.toFixed(3) + " ms" : "—"}</td>
+      <td>${p.mean_correction_ns ? p.mean_correction_ns.toFixed(0) + " ns" : "—"}</td>
+      <td style="color:${p.sequence_gap_count ? 'var(--yellow)' : 'var(--muted)'}">${p.sequence_gap_count} / ${p.sequence_total_count}</td>
+    </tr>`).join("")}
+    </tbody></table>
+    <h4 style="font-size:12px;color:var(--muted);margin:14px 0 6px">Links <span class="hint" style="font-weight:400">each resolved Pdelay_Req/Resp/Follow_Up exchange is direct evidence of a physical point-to-point link -- turnaround is exact (from the messages' own embedded timestamps); capture RTT is this capture's own frame-arrival-time approximation, not gPTP's own path-delay computation</span></h4>
+    <table><thead><tr><th>Port A</th><th>Port B</th><th>Exchanges</th><th>Turnaround (mean / stdev)</th><th>Capture RTT (mean / stdev)</th></tr></thead><tbody>
+    ${r.gptp.links.map(l => `<tr>
+      <td>${l.port_a}</td>
+      <td>${l.port_b}</td>
+      <td>${l.exchange_count.toLocaleString()}</td>
+      <td>${(l.turnaround_ns_mean/1000).toFixed(1)} &micro;s / ${(l.turnaround_ns_stdev/1000).toFixed(1)} &micro;s</td>
+      <td>${l.capture_rtt_ms_mean.toFixed(4)} ms / ${l.capture_rtt_ms_stdev.toFixed(4)} ms</td>
+    </tr>`).join("")}
+    </tbody></table>
+    ${!r.gptp.ports.length ? '<div style="color:var(--muted)">no gPTP traffic found</div>' : ''}
   </div>`;
 
   el.innerHTML = html;
