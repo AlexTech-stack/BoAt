@@ -173,6 +173,8 @@ button.btn:hover { background:var(--panel); }
 h2 { font-size:16px; font-weight:600; margin:0 0 12px; }
 h3 { font-size:14px; font-weight:600; margin:20px 0 8px; color:var(--text); display:flex; align-items:center; gap:8px; }
 h3 .hint { font-size:11px; color:var(--muted); font-weight:400; }
+.export-btn { font-size:10px; font-weight:400; padding:2px 7px; border:1px solid var(--border); border-radius:3px; background:transparent; color:var(--muted); cursor:pointer; white-space:nowrap; }
+.export-btn:hover { color:var(--text); border-color:var(--blue); }
 table { width:100%; border-collapse:collapse; font-size:12px; }
 th { text-align:left; padding:6px 8px; border-bottom:2px solid var(--border); color:var(--muted); font-weight:600; font-size:11px; position:sticky; top:0; background:var(--bg); white-space:nowrap; }
 td { padding:5px 8px; border-bottom:1px solid var(--border); font-family:var(--mono); font-size:11px; }
@@ -351,6 +353,156 @@ function fmtRoleHints(hints) {
   return hints.map(h => `<span class="badge" style="background:rgba(255,255,255,0.06);color:${colorFor(h)};margin-right:3px">${h}</span>`).join("");
 }
 
+// ── CSV export ────────────────────────────────────────────────────────────
+// Every export is generated client-side from the full (untruncated) arrays
+// already held in lastResult/pduResult -- the on-screen tables only render
+// the first N rows for readability, but the underlying data behind every
+// section is complete, so exporting needs no server round-trip.
+
+function csvCell(v) {
+  if (v === null || v === undefined) return "";
+  if (Array.isArray(v)) v = v.join("; ");
+  else if (typeof v === "object") v = JSON.stringify(v);
+  v = String(v);
+  if (/[",\r\n]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"';
+  return v;
+}
+
+function downloadCSV(filename, rows, columns) {
+  if (!rows || !rows.length) { toast("Nothing to export", "info"); return; }
+  const header = columns.map(c => csvCell(c.label)).join(",");
+  const lines = rows.map(row => columns.map(c => csvCell(c.get(row))).join(","));
+  const csv = [header, ...lines].join("\r\n");
+  const blob = new Blob(["﻿" + csv], {type: "text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast(`Exported ${rows.length} rows to ${filename}`, "success");
+}
+
+function exportDoipServers() {
+  downloadCSV("doip_servers.csv", (lastResult.doip_servers || []).map(ip => ({ip})), [
+    {label: "IP", get: r => r.ip},
+  ]);
+}
+
+function exportNodes() {
+  downloadCSV("nodes.csv", lastResult.nodes, [
+    {label: "Label", get: r => r.label},
+    {label: "IP", get: r => r.ip},
+    {label: "FramesSent", get: r => r.frames_sent},
+    {label: "FramesReceived", get: r => r.frames_received},
+    {label: "VLANs", get: r => r.vlan_ids},
+    {label: "RoleHints", get: r => r.role_hints},
+  ]);
+}
+
+function exportMulticastGroups() {
+  downloadCSV("multicast_groups.csv", lastResult.multicast_groups, [
+    {label: "Address", get: r => r.address},
+    {label: "Port", get: r => r.port},
+    {label: "VLANs", get: r => r.vlan_ids},
+    {label: "Frames", get: r => r.frame_count},
+    {label: "Bytes", get: r => r.byte_count},
+    {label: "Senders", get: r => r.sender_labels},
+    {label: "ConfirmedMembers", get: r => r.confirmed_member_labels},
+  ]);
+}
+
+function exportUdpFlows() {
+  downloadCSV("udp_flows.csv", lastResult.udp_flows, [
+    {label: "SrcIP", get: r => r.src_ip},
+    {label: "SrcPort", get: r => r.src_port},
+    {label: "DstIP", get: r => r.dst_ip},
+    {label: "DstPort", get: r => r.dst_port},
+    {label: "Frames", get: r => r.frame_count},
+    {label: "Bytes", get: r => r.byte_count},
+    {label: "CycleTimeMs", get: r => r.cycle_time_ms},
+    {label: "SendType", get: r => r.send_type},
+    {label: "IsMulticastDst", get: r => r.is_multicast_dst},
+    {label: "IsDoipPort", get: r => r.is_doip_port},
+    {label: "IsSomeIpSD", get: r => r.is_someip_sd},
+    {label: "IsSomeIp", get: r => r.is_someip_like},
+    {label: "IsPduMultiplex", get: r => r.is_pdu_multiplex},
+    {label: "PduIds", get: r => r.pdu_ids},
+  ]);
+}
+
+function exportTcpSessions() {
+  downloadCSV("tcp_sessions.csv", lastResult.tcp_sessions, [
+    {label: "Client", get: r => r.client || r.endpoint_a},
+    {label: "Server", get: r => r.server || r.endpoint_b},
+    {label: "RoleConfidence", get: r => r.role_confidence},
+    {label: "TotalFrames", get: r => r.total_frames},
+    {label: "BytesClientToServer", get: r => r.bytes_a_to_b},
+    {label: "BytesServerToClient", get: r => r.bytes_b_to_a},
+    {label: "IsDoIP", get: r => r.is_doip},
+    {label: "SawFinOrRst", get: r => r.saw_fin_or_rst},
+    {label: "VLANs", get: r => r.vlan_ids},
+  ]);
+}
+
+function exportSomeipCatalog() {
+  downloadCSV("someip_catalog.csv", lastResult.someip_catalog, [
+    {label: "ServiceID", get: r => r.service_id},
+    {label: "MethodID", get: r => r.method_id},
+    {label: "Count", get: r => r.count},
+  ]);
+}
+
+function exportPduCatalog() {
+  downloadCSV("autosar_pdu_catalog.csv", lastResult.autosar_pdu_catalog, [
+    {label: "HeaderID", get: r => r.header_id},
+    {label: "Count", get: r => r.count},
+  ]);
+}
+
+function exportGptpPorts() {
+  downloadCSV("gptp_ports.csv", lastResult.gptp.ports, [
+    {label: "MAC", get: r => r.label},
+    {label: "Port", get: r => r.port_number},
+    {label: "Messages", get: r => Object.entries(r.message_counts).map(([k, v]) => `${k}:${v}`).join("; ")},
+    {label: "SyncIntervalMs", get: r => r.sync_interval_ms},
+    {label: "SyncJitterMs", get: r => r.sync_jitter_ms},
+    {label: "MeanCorrectionNs", get: r => r.mean_correction_ns},
+    {label: "SeqGaps", get: r => r.sequence_gap_count},
+    {label: "SeqTotal", get: r => r.sequence_total_count},
+    {label: "AssociatedIPCount", get: r => r.associated_ip_count},
+    {label: "AssociatedIPsSample", get: r => r.associated_ips},
+  ]);
+}
+
+function exportGptpLinks() {
+  downloadCSV("gptp_links.csv", lastResult.gptp.links, [
+    {label: "PortA", get: r => r.port_a},
+    {label: "PortB", get: r => r.port_b},
+    {label: "Exchanges", get: r => r.exchange_count},
+    {label: "TurnaroundNsMean", get: r => r.turnaround_ns_mean},
+    {label: "TurnaroundNsStdev", get: r => r.turnaround_ns_stdev},
+    {label: "CaptureRttMsMean", get: r => r.capture_rtt_ms_mean},
+    {label: "CaptureRttMsStdev", get: r => r.capture_rtt_ms_stdev},
+  ]);
+}
+
+function exportPduMessages() {
+  if (!pduResult) { toast("Run the PDU stage first", "error"); return; }
+  downloadCSV("autosar_pdu_messages.csv", pduResult.pdus, [
+    {label: "HeaderID", get: r => r.header_id},
+    {label: "OriginalFlow", get: r => r.flow},
+    {label: "Frames", get: r => r.count},
+    {label: "Length", get: r => r.length_values},
+    {label: "LengthStable", get: r => r.length_is_stable},
+    {label: "CycleTimeMs", get: r => r.cycle_time_ms},
+    {label: "SendType", get: r => r.send_type},
+    {label: "DuplicateFlows", get: r => r.duplicate_flows.map(d => `${d.flow} (${d.count})`).join("; ")},
+  ]);
+}
+
 function renderResults() {
   const r = lastResult;
   const el = document.getElementById("results");
@@ -392,11 +544,11 @@ function renderResults() {
     </tbody></table>
   </div></div>`;
 
-  html += `<div class="section"><h3>DoIP servers <span class="hint">confirmed via SYN-ACK on port 13400</span></h3>
+  html += `<div class="section"><h3>DoIP servers <button class="export-btn" onclick="exportDoipServers()">&#8681; CSV</button><span class="hint">confirmed via SYN-ACK on port 13400</span></h3>
     ${r.doip_servers.length ? `<table><thead><tr><th>IP</th></tr></thead><tbody>${r.doip_servers.map(ip => `<tr><td>${ip}</td></tr>`).join("")}</tbody></table>` : '<div style="color:var(--muted)">none found</div>'}
   </div>`;
 
-  html += `<div class="section"><h3>Nodes <span class="hint">unicast IP addresses only -- sorted by total traffic; see Multicast Groups below for group addresses</span></h3>
+  html += `<div class="section"><h3>Nodes <button class="export-btn" onclick="exportNodes()">&#8681; CSV</button><span class="hint">unicast IP addresses only -- sorted by total traffic; see Multicast Groups below for group addresses</span></h3>
     <table><thead><tr><th>Node</th><th>IP</th><th>Sent</th><th>Received</th><th>VLANs seen</th><th>Role hints</th></tr></thead><tbody>
     ${r.nodes.slice(0, 60).map(n => `<tr>
       <td><strong>${n.label}</strong></td>
@@ -410,7 +562,7 @@ function renderResults() {
     ${r.nodes.length > 60 ? `<div style="color:var(--muted);padding-top:6px">... and ${r.nodes.length-60} more</div>` : ''}
   </div>`;
 
-  html += `<div class="section"><h3>Multicast groups <span class="hint">grouped by (address, port) -- one address can carry several distinct channels on different ports; "Senders" are directly observed, "Confirmed members" only come from an actual MLD Report${r.mld_observed ? '' : ' (none observed in this capture -- membership can\'t be confirmed for any channel here)'}</span></h3>
+  html += `<div class="section"><h3>Multicast groups <button class="export-btn" onclick="exportMulticastGroups()">&#8681; CSV</button><span class="hint">grouped by (address, port) -- one address can carry several distinct channels on different ports; "Senders" are directly observed, "Confirmed members" only come from an actual MLD Report${r.mld_observed ? '' : ' (none observed in this capture -- membership can\'t be confirmed for any channel here)'}</span></h3>
     ${r.multicast_groups.length ? `<table><thead><tr><th>Group Address</th><th>Port</th><th>VLANs</th><th>Frames</th><th>Senders</th><th>Confirmed members (MLD)</th></tr></thead><tbody>
       ${r.multicast_groups.slice(0, 60).map(g => `<tr>
         <td>${g.address}</td>
@@ -424,7 +576,7 @@ function renderResults() {
     ${r.multicast_groups.length > 60 ? `<div style="color:var(--muted);padding-top:6px">... and ${r.multicast_groups.length-60} more</div>` : ''}` : '<div style="color:var(--muted)">none found</div>'}
   </div>`;
 
-  html += `<div class="section"><h3>UDP flows <span class="hint">Cyclic = consistent inter-frame timing (low jitter); Bursty = irregular/multiplexed</span></h3>
+  html += `<div class="section"><h3>UDP flows <button class="export-btn" onclick="exportUdpFlows()">&#8681; CSV</button><span class="hint">Cyclic = consistent inter-frame timing (low jitter); Bursty = irregular/multiplexed</span></h3>
     <table><thead><tr><th>Src</th><th>Dst</th><th>Frames</th><th>Bytes</th><th>Cycle</th><th>Type</th><th>Tags</th></tr></thead><tbody>
     ${r.udp_flows.slice(0, 80).map(f => `<tr>
       <td>${f.src_ip}:${f.src_port}</td>
@@ -445,7 +597,7 @@ function renderResults() {
     ${r.udp_flows.length > 80 ? `<div style="color:var(--muted);padding-top:6px">... and ${r.udp_flows.length-80} more</div>` : ''}
   </div>`;
 
-  html += `<div class="section"><h3>TCP sessions <span class="hint">client/server roles from observed SYN / SYN-ACK; "unknown" means the handshake wasn't captured</span></h3>
+  html += `<div class="section"><h3>TCP sessions <button class="export-btn" onclick="exportTcpSessions()">&#8681; CSV</button><span class="hint">client/server roles from observed SYN / SYN-ACK; "unknown" means the handshake wasn't captured</span></h3>
     <table><thead><tr><th>Client</th><th>Server</th><th>Role</th><th>Frames</th><th>Bytes c&rarr;s</th><th>Bytes s&rarr;c</th><th>Tags</th></tr></thead><tbody>
     ${r.tcp_sessions.slice(0, 80).map(s => `<tr>
       <td>${s.client || s.endpoint_a}</td>
@@ -460,13 +612,13 @@ function renderResults() {
     ${r.tcp_sessions.length > 80 ? `<div style="color:var(--muted);padding-top:6px">... and ${r.tcp_sessions.length-80} more</div>` : ''}
   </div>`;
 
-  html += `<div class="section"><h3>SOME/IP service catalog <span class="hint">Service+Method ID pairs recognized by header shape, not semantic meaning</span></h3>
+  html += `<div class="section"><h3>SOME/IP service catalog <button class="export-btn" onclick="exportSomeipCatalog()">&#8681; CSV</button><span class="hint">Service+Method ID pairs recognized by header shape, not semantic meaning</span></h3>
     ${r.someip_catalog.length ? `<table><thead><tr><th>Service ID</th><th>Method ID</th><th>Frames sampled matching</th></tr></thead><tbody>
       ${r.someip_catalog.slice(0, 60).map(c => `<tr><td>${c.service_id}</td><td>${c.method_id}</td><td>${c.count}</td></tr>`).join("")}
     </tbody></table>` : '<div style="color:var(--muted)">none found</div>'}
   </div>`;
 
-  html += `<div class="section"><h3>AUTOSAR PDU catalog <span class="hint">Header-IDs recognized from repeated (ID+Length+data) SoAd PDU-multiplex records; not signal-level decoded</span></h3>
+  html += `<div class="section"><h3>AUTOSAR PDU catalog <button class="export-btn" onclick="exportPduCatalog()">&#8681; CSV</button><span class="hint">Header-IDs recognized from repeated (ID+Length+data) SoAd PDU-multiplex records; not signal-level decoded</span></h3>
     ${r.autosar_pdu_catalog.length ? `<table><thead><tr><th>Header-ID</th><th>Frames sampled matching</th></tr></thead><tbody>
       ${r.autosar_pdu_catalog.slice(0, 60).map(c => `<tr><td>${c.header_id}</td><td>${c.count}</td></tr>`).join("")}
     </tbody></table>
@@ -474,7 +626,7 @@ function renderResults() {
   </div>`;
 
   html += `<div class="section"><h3>gPTP (IEEE 802.1AS) <span class="hint">identified by MAC address only -- see hover text on a port row for why an IP label isn't used here</span></h3>
-    <h4 style="font-size:12px;color:var(--muted);margin:4px 0 6px">Ports</h4>
+    <h4 style="font-size:12px;color:var(--muted);margin:4px 0 6px;display:flex;align-items:center;gap:8px">Ports <button class="export-btn" onclick="exportGptpPorts()">&#8681; CSV</button></h4>
     <table><thead><tr><th>MAC</th><th>Port</th><th>Messages</th><th>Sync interval</th><th>Sync jitter</th><th>Mean correction</th><th>Seq. gaps</th></tr></thead><tbody>
     ${r.gptp.ports.map(p => `<tr>
       <td title="${p.associated_ip_count ? 'Sourced IP traffic for ' + p.associated_ip_count + ' address(es) in this capture (may include traffic merely routed through this device, not necessarily its own): ' + p.associated_ips.join(', ') + (p.associated_ip_count > p.associated_ips.length ? ', ...' : '') : 'No IP traffic observed from this MAC in this capture'}">${p.label}</td>
@@ -486,7 +638,7 @@ function renderResults() {
       <td style="color:${p.sequence_gap_count ? 'var(--yellow)' : 'var(--muted)'}">${p.sequence_gap_count} / ${p.sequence_total_count}</td>
     </tr>`).join("")}
     </tbody></table>
-    <h4 style="font-size:12px;color:var(--muted);margin:14px 0 6px">Links <span class="hint" style="font-weight:400">each resolved Pdelay_Req/Resp/Follow_Up exchange is direct evidence of a physical point-to-point link -- turnaround is exact (from the messages' own embedded timestamps); capture RTT is this capture's own frame-arrival-time approximation, not gPTP's own path-delay computation</span></h4>
+    <h4 style="font-size:12px;color:var(--muted);margin:14px 0 6px;display:flex;align-items:center;gap:8px">Links <button class="export-btn" onclick="exportGptpLinks()">&#8681; CSV</button><span class="hint" style="font-weight:400">each resolved Pdelay_Req/Resp/Follow_Up exchange is direct evidence of a physical point-to-point link -- turnaround is exact (from the messages' own embedded timestamps); capture RTT is this capture's own frame-arrival-time approximation, not gPTP's own path-delay computation</span></h4>
     <table><thead><tr><th>Port A</th><th>Port B</th><th>Exchanges</th><th>Turnaround (mean / stdev)</th><th>Capture RTT (mean / stdev)</th></tr></thead><tbody>
     ${r.gptp.links.map(l => `<tr>
       <td>${l.port_a}</td>
@@ -500,7 +652,7 @@ function renderResults() {
   </div>`;
 
   if (pduResult) {
-    html += `<div class="section"><h3>AUTOSAR PDU messages (Stage 2) <span class="hint">routed/relayed duplicates eliminated -- same principle as CAN's multi-channel dedup; the flow whose copy of each payload value appeared earliest is kept as the original. No signal-level decoding -- Header-ID, length, and raw payload only.</span></h3>
+    html += `<div class="section"><h3>AUTOSAR PDU messages (Stage 2) <button class="export-btn" onclick="exportPduMessages()">&#8681; CSV</button><span class="hint">routed/relayed duplicates eliminated -- same principle as CAN's multi-channel dedup; the flow whose copy of each payload value appeared earliest is kept as the original. No signal-level decoding -- Header-ID, length, and raw payload only.</span></h3>
       <table><thead><tr><th>Header-ID</th><th>Original flow</th><th>Frames</th><th>Length</th><th>Cycle</th><th>Type</th><th>Routed duplicates eliminated</th></tr></thead><tbody>
       ${pduResult.pdus.slice(0, 150).map(p => `<tr>
         <td>${p.header_id}</td>
