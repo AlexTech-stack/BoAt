@@ -1091,6 +1091,7 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
   <a class="nav-link" data-port="8087">PDU Editor</a>
   <a class="nav-link" data-port="8088">Trace Analyzer</a>
   <a class="nav-link" data-port="8089" style="color:var(--blue)">Trace Editor</a>
+  <a class="nav-link" data-port="8090">Eth Analyzer</a>
 </nav>
 
 <div class="toolbar">

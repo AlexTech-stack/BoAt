@@ -423,6 +423,7 @@ input:checked + .slider:before { transform:translateX(16px); }
   <a class="nav-link" data-port="8087">PDU Editor</a>
   <a class="nav-link" data-port="8088" style="color:var(--blue)">Trace Analyzer</a>
   <a class="nav-link" data-port="8089">Trace Editor</a>
+  <a class="nav-link" data-port="8090">Eth Analyzer</a>
 </nav>
 
 <div class="layout">
