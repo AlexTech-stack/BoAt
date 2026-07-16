@@ -289,11 +289,16 @@ class TraceReverseEngineer:
             s = self._analysis.can_stats[aid]
             counters = counters_by_id.get(aid, [])
             crcs = crcs_by_id.get(aid, [])
-            # Both stages already post-process (name/order) their own
-            # signals -- just merge and re-sort by position for presentation.
-            discovered_signals = sorted(
-                counters + crcs + app_signals_by_id.get(aid, []),
-                key=lambda sig: sig.start_pos,
+            # Each stage already post-processed (named/ordered) its own
+            # signals independently, so e.g. a genuinely counter-shaped
+            # value _merge_adjacent_smooth_signals() assembled in stage 3
+            # (find_application_signals) and the real counter stage 2
+            # (find_counters) found would both be independently named
+            # "Counter_1" -- re-running _post_process_signals on the fully
+            # merged, cross-stage list renumbers everything from scratch so
+            # names stay unique and sequential in the combined result.
+            discovered_signals = self._post_process_signals(
+                counters + crcs + app_signals_by_id.get(aid, []), s
             )
 
             length = max(s.dlc_values) if s.dlc_values else 8
@@ -486,7 +491,101 @@ class TraceReverseEngineer:
                     signals.append(sig)
                     sig_id += 1
 
-        return signals
+        return self._merge_adjacent_smooth_signals(signals, raw_values, stats, start_sig_id)
+
+    @staticmethod
+    def _is_smoothly_varying(raw_values: list[int], length: int) -> bool:
+        """True if a (combined) multi-bit value's frame-to-frame steps are
+        small relative to its full range -- the signature of one coherent
+        changing quantity (a counter, sequence number, or an ordinary
+        slowly-ramping physical signal), as opposed to unrelated bits that
+        just happen to sit next to each other, or a high-entropy field
+        (random-looking flags, a checksum) that jumps around.
+
+        Uses *circular* distance (the shorter way around the value's own
+        modulus), not a literal absolute difference -- a rolling value's
+        wrap (e.g. 15 -> 0 for a 4-bit field) is a smooth +1 step, not a
+        huge jump, exactly like :meth:`_detect_counter`'s masked diff.
+        """
+        if len(raw_values) < 5:
+            return False
+        full_range = (1 << length) - 1
+        modulus = 1 << length
+        if full_range <= 0:
+            return False
+        diffs = []
+        for i in range(1, len(raw_values)):
+            d = (raw_values[i] - raw_values[i - 1]) % modulus
+            diffs.append(min(d, modulus - d))
+        mean_delta = sum(diffs) / len(diffs) if diffs else 0.0
+        return (mean_delta / full_range) < 0.1
+
+    def _merge_adjacent_smooth_signals(
+        self,
+        signals: list[DiscoveredSignal],
+        raw_values: list[dict[str, Any]],
+        stats: CanIdStats,
+        start_sig_id: int,
+    ) -> list[DiscoveredSignal]:
+        """Merge bit-adjacent clustered signals when their COMBINED value
+        changes smoothly -- catches the case where correlation-based
+        clustering (:meth:`_cluster_correlated_bits`) splits the
+        constituent bits of one coherent multi-bit quantity into several
+        spurious single-bit "flags". A binary counter's own bits don't
+        pairwise correlate the way clustering looks for: each bit toggles
+        at a *different* rate (related by carry, not by co-occurring
+        transitions -- the LSB flips every step, the next bit every other
+        step, ...), so two bits of the very same counter can easily fail
+        both the numpy path's Pearson-correlation threshold and the
+        pure-Python path's Jaccard-similarity-of-transitions threshold,
+        landing in separate clusters (or singleton bit-adjacent clusters)
+        despite obviously belonging together once you read them as one
+        number. Greedily tries widening each signal into its immediate
+        right-hand neighbor (both must already be plain, non-counter,
+        non-checksum clustered signals) and keeps the merge only if the
+        wider value is itself smoothly-varying -- a merge across two truly
+        unrelated adjacent fields would show large jumps whenever either
+        one moves independently, so this is self-correcting rather than
+        indiscriminately merging every neighboring pair.
+        """
+        if len(signals) < 2:
+            return signals
+
+        ordered = sorted(signals, key=lambda s: s.start_pos)
+        merged: list[DiscoveredSignal] = []
+        i = 0
+        while i < len(ordered):
+            current = ordered[i]
+            j = i + 1
+            while (
+                j < len(ordered)
+                and not current.is_counter
+                and not current.is_checksum
+                and not ordered[j].is_counter
+                and not ordered[j].is_checksum
+                and ordered[j].start_pos == current.start_pos + current.length
+                and current.length + ordered[j].length <= 32
+            ):
+                combined_bits = list(range(current.start_pos, ordered[j].start_pos + ordered[j].length))
+                # Judge smoothness on the *full* extraction, not the 100-sample
+                # preview DiscoveredSignal.raw_values is truncated to -- a real
+                # capture easily runs to thousands of frames, and a jump past
+                # frame 100 would otherwise go unnoticed.
+                byte_order = self._detect_byte_order(combined_bits, stats)
+                full_raw = self._extract_raw_numbers(combined_bits, byte_order, stats)
+                if not full_raw or not self._is_smoothly_varying(full_raw, len(combined_bits)):
+                    break
+                candidate = self._build_signal(current.id, combined_bits, raw_values, stats)
+                if candidate is None:
+                    break
+                current = candidate
+                j += 1
+            merged.append(current)
+            i = j if j > i + 1 else i + 1
+
+        for offset, sig in enumerate(merged):
+            sig.id = start_sig_id + offset
+        return merged
 
     # ── Dedicated counter scan (stage 2) ───────────────────────────────
 
