@@ -343,10 +343,11 @@ function renderResults() {
     ${r.nodes.length > 60 ? `<div style="color:var(--muted);padding-top:6px">... and ${r.nodes.length-60} more</div>` : ''}
   </div>`;
 
-  html += `<div class="section"><h3>Multicast groups <span class="hint">a multicast address is a group, not a node -- "Senders" are directly observed; "Confirmed members" only come from an actual MLD Report${r.mld_observed ? '' : ' (none observed in this capture -- membership can\'t be confirmed for any group here)'}</span></h3>
-    ${r.multicast_groups.length ? `<table><thead><tr><th>Group Address</th><th>VLANs</th><th>Frames</th><th>Senders</th><th>Confirmed members (MLD)</th></tr></thead><tbody>
+  html += `<div class="section"><h3>Multicast groups <span class="hint">grouped by (address, port) -- one address can carry several distinct channels on different ports; "Senders" are directly observed, "Confirmed members" only come from an actual MLD Report${r.mld_observed ? '' : ' (none observed in this capture -- membership can\'t be confirmed for any channel here)'}</span></h3>
+    ${r.multicast_groups.length ? `<table><thead><tr><th>Group Address</th><th>Port</th><th>VLANs</th><th>Frames</th><th>Senders</th><th>Confirmed members (MLD)</th></tr></thead><tbody>
       ${r.multicast_groups.slice(0, 60).map(g => `<tr>
         <td>${g.address}</td>
+        <td>${g.port !== null ? g.port : "—"}</td>
         <td>${fmtVlans(g.vlan_ids)}</td>
         <td>${g.frame_count.toLocaleString()}</td>
         <td>${g.sender_labels.join(", ") || "—"}</td>

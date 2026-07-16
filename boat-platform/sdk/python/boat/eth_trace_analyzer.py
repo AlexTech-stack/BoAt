@@ -390,16 +390,25 @@ class TcpSession:
 
 @dataclass
 class MulticastGroupStats:
-    """Statistics for one multicast destination address. A multicast
-    address is a *group*, not a node -- it has no single sender/owner, and
-    (short of seeing an MLD Report) a passive capture can only observe who
-    *sends* to it, not who's actually listening."""
+    """Statistics for one multicast (address, port) channel. Grouped by
+    port as well as address, not address alone -- a single multicast IP
+    can legitimately carry several distinct logical channels on different
+    ports (e.g. SOME/IP-SD conventionally uses both 30490 and 30491 on
+    the same group address; treating those as one channel would credit
+    each with senders that actually belong to the other). `port` is None
+    for multicast traffic that isn't UDP/TCP (e.g. some ICMPv6 types are
+    legitimately multicast-addressed).
+
+    A multicast address is a *group*, not a node -- it has no single
+    sender/owner, and (short of seeing an MLD Report) a passive capture
+    can only observe who *sends* to it, not who's actually listening.
+    """
     address: str
+    port: int | None
     vlan_ids: set[int] = field(default_factory=set)
     frame_count: int = 0
     byte_count: int = 0
     sender_ips: set[str] = field(default_factory=set)
-    confirmed_member_ips: set[str] = field(default_factory=set)  # via MLD Report, if any
 
 
 @dataclass
@@ -452,7 +461,12 @@ class EthTraceAnalysis:
     tcp_sessions: dict[tuple, TcpSession] = field(default_factory=dict)
     someip_catalog: Counter = field(default_factory=Counter)  # (service_id, method_id) -> count
     autosar_pdu_catalog: Counter = field(default_factory=Counter)  # header_id -> frame count
-    multicast_groups: dict[str, MulticastGroupStats] = field(default_factory=dict)
+    multicast_groups: dict[tuple, MulticastGroupStats] = field(default_factory=dict)  # (address, port|None) -> stats
+    # MLD-confirmed group membership is address-scoped (MLD itself has no
+    # concept of "port"), tracked separately from the per-(address,port)
+    # channel stats above and merged into every matching channel's
+    # summary -- see multicast_group_summary().
+    mcast_confirmed_members: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
     gptp_ports: dict[tuple, GptpPortStats] = field(default_factory=dict)
     gptp_links: dict[tuple, GptpLinkStats] = field(default_factory=dict)
     # Pending Pdelay_Req / Pdelay_Resp exchanges awaiting their matching
@@ -558,12 +572,23 @@ class EthTraceAnalyzer:
         result.ip_proto_counts[proto] += 1
         result.mac_to_ips[src_mac.hex(":")].add(src_ip)
 
+        # Determined up front (not inside _process_udp/_process_tcp) since
+        # multicast-group bookkeeping needs it too -- a single multicast
+        # address can carry several distinct logical channels on
+        # different ports (e.g. SOME/IP-SD's 30490 and 30491 on the same
+        # group address), so grouping by address alone would wrongly
+        # attribute one channel's senders to the other.
+        dst_port: int | None = None
+        if proto in (6, 17) and len(l4) >= 4:
+            dst_port = (l4[2] << 8) | l4[3]
+
         is_group = _is_multicast_ip(dst_ip)
         if is_group:
-            group = result.multicast_groups.get(dst_ip)
+            group_key = (dst_ip, dst_port)
+            group = result.multicast_groups.get(group_key)
             if group is None:
-                group = MulticastGroupStats(address=dst_ip)
-                result.multicast_groups[dst_ip] = group
+                group = MulticastGroupStats(address=dst_ip, port=dst_port)
+                result.multicast_groups[group_key] = group
             group.frame_count += 1
             group.byte_count += len(l4)
             group.sender_ips.add(src_ip)
@@ -594,11 +619,7 @@ class EthTraceAnalyzer:
         if icmp_type not in (_MLDV1_REPORT, _MLDV2_REPORT):
             return
         for addr in _parse_mld_report_addresses(icmpv6[4:], icmp_type):
-            group = result.multicast_groups.get(addr)
-            if group is None:
-                group = MulticastGroupStats(address=addr)
-                result.multicast_groups[addr] = group
-            group.confirmed_member_ips.add(src_ip)
+            result.mcast_confirmed_members[addr].add(src_ip)
 
     def _process_udp(
         self, l4: bytes, src_ip: str, dst_ip: str, vlan_id: int | None, ts: float,
@@ -839,13 +860,15 @@ class EthTraceAnalyzer:
         return nodes
 
     def multicast_group_summary(self, result: EthTraceAnalysis | None = None) -> list[dict[str, Any]]:
-        """Per-multicast-group summary. A group's *senders* are directly
-        observed (every packet to the group names its own source address);
-        its *members* generally are not -- a passive capture only learns
-        who's listening if a listener happens to (re-)send an MLD Report
-        while the capture is running (see :data:`EthTraceAnalysis.
-        multicast_groups`'s `confirmed_member_ips`). Node identities in
-        both lists use the same short labels as :meth:`node_inventory`.
+        """Per-(address, port) multicast channel summary. A channel's
+        *senders* are directly observed (every packet to it names its own
+        source address); its *members* generally are not -- a passive
+        capture only learns who's listening if a listener happens to
+        (re-)send an MLD Report while the capture is running. MLD
+        membership is address-scoped (not port-scoped), so a confirmed
+        member is attached to *every* channel sharing that address, not
+        just one. Node identities in both lists use the same short labels
+        as :meth:`node_inventory`.
         """
         result = result or self._analysis
         if result is None:
@@ -853,14 +876,16 @@ class EthTraceAnalyzer:
         labels = self._build_node_labels(result)
 
         groups = []
-        for addr, g in result.multicast_groups.items():
+        for (addr, port), g in result.multicast_groups.items():
+            members = result.mcast_confirmed_members.get(addr, set())
             groups.append({
                 "address": addr,
+                "port": port,
                 "vlan_ids": sorted(g.vlan_ids),
                 "frame_count": g.frame_count,
                 "byte_count": g.byte_count,
                 "sender_labels": sorted(labels.get(ip, ip) for ip in g.sender_ips),
-                "confirmed_member_labels": sorted(labels.get(ip, ip) for ip in g.confirmed_member_ips),
+                "confirmed_member_labels": sorted(labels.get(ip, ip) for ip in members),
             })
         groups.sort(key=lambda g: -g["frame_count"])
         return groups
@@ -1010,7 +1035,7 @@ class EthTraceAnalyzer:
             for hid, count in result.autosar_pdu_catalog.most_common()
         ]
 
-        mld_observed = any(g.confirmed_member_ips for g in result.multicast_groups.values())
+        mld_observed = bool(result.mcast_confirmed_members)
 
         return {
             "schema_version": "1.0",
