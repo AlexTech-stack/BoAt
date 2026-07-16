@@ -1446,6 +1446,32 @@ class TraceReverseEngineer:
         return [v - modulus if v >= sign_bit else v for v in raw_values]
 
     @staticmethod
+    def _signed_reading_is_smoother(raw_values: list[int], length: int) -> bool:
+        """Compare frame-to-frame smoothness of the raw (unsigned) values
+        against their two's-complement (signed) reinterpretation, using
+        plain, non-circular differences -- deliberately not the circular
+        distance :meth:`_is_smoothly_varying` uses elsewhere, since the
+        point here is exactly to catch the artificial jump two's
+        complement introduces where a value crosses the nominal sign bit
+        despite nothing having actually happened there (a value that
+        smoothly ramps straight through it, e.g. 6, 7, ..., 31 for a
+        5-bit field, is *not* the same situation as a value that
+        genuinely wraps/rolls over -- see :meth:`_is_smoothly_varying`
+        for that case). Only consulted as a tie-breaker once
+        :meth:`_analyze_values`'s quadrant-span precondition already
+        suggests "maybe signed"; a value that never approaches the sign
+        boundary is left alone regardless of what this returns.
+        """
+        if len(raw_values) < 5:
+            return False
+        modulus = 1 << length
+        sign_bit = modulus >> 1
+        signed_values = [v - modulus if v >= sign_bit else v for v in raw_values]
+        unsigned_total = sum(abs(raw_values[i] - raw_values[i - 1]) for i in range(1, len(raw_values)))
+        signed_total = sum(abs(signed_values[i] - signed_values[i - 1]) for i in range(1, len(signed_values)))
+        return signed_total < unsigned_total
+
+    @staticmethod
     def _analyze_values(
         raw_values: list[int],
         length: int,
@@ -1477,15 +1503,24 @@ class TraceReverseEngineer:
         # but "any single value crosses the midpoint" is a weak signal on
         # its own -- an ordinary unsigned byte legitimately takes values
         # above 127 all the time. Require values comfortably on *both*
-        # sides of the wrap (bottom and top quarter of the range) before
-        # concluding the field is actually signed, not just numerically
-        # large.
+        # sides of the wrap (bottom and top quarter of the range) as a
+        # necessary precondition, but that alone isn't sufficient: a value
+        # that just smoothly ramps straight through the nominal sign
+        # boundary (e.g. 6, 7, 8, ..., 31 for a 5-bit field) also spans
+        # both quadrants despite never actually going negative -- treating
+        # it as signed would introduce an artificial jump right where the
+        # raw value crosses 15 -> 16 (found on a real merged application
+        # signal: total frame-to-frame "jumpiness" more than doubled under
+        # the signed reading versus the plain unsigned one). Only commit to
+        # signed if that reinterpretation is actually smoother, not just
+        # numerically possible.
         sign_bit = 1 << (length - 1)
         low_threshold = sign_bit // 2
         high_threshold = sign_bit + sign_bit // 2
         is_signed = (
             any(v < low_threshold for v in unique)
             and any(v >= high_threshold for v in unique)
+            and TraceReverseEngineer._signed_reading_is_smoother(raw_values, length)
         )
 
         if length in (32, 64):
