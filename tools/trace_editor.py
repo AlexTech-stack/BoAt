@@ -1083,15 +1083,10 @@ td.payload-cell { max-width:320px; overflow:hidden; text-overflow:ellipsis; }
 </header>
 
 <nav id="panel-nav">
-  <a class="nav-link" data-port="8086">Launcher</a>
-  <a class="nav-link" data-port="8080">Dashboard</a>
-  <a class="nav-link" data-port="8081">Nodes</a>
-  <a class="nav-link" data-port="8082">Commander</a>
-  <a class="nav-link" data-port="8083">Recorder</a>
-  <a class="nav-link" data-port="8087">PDU Editor</a>
-  <a class="nav-link" data-port="8088">Trace Analyzer</a>
   <a class="nav-link" data-port="8089" style="color:var(--blue)">Trace Editor</a>
+  <a class="nav-link" data-port="8088">Trace Analyzer</a>
   <a class="nav-link" data-port="8090">Eth Analyzer</a>
+  <a class="nav-link" data-port="8087">PDU Editor</a>
 </nav>
 
 <div class="toolbar">

@@ -457,15 +457,10 @@ tr.selected td { background:rgba(88,166,255,0.1); }
 </header>
 
 <nav id="panel-nav">
-  <a class="nav-link" data-port="8086">Launcher</a>
-  <a class="nav-link" data-port="8080">Dashboard</a>
-  <a class="nav-link" data-port="8081">Nodes</a>
-  <a class="nav-link" data-port="8082">Commander</a>
-  <a class="nav-link" data-port="8083">Recorder</a>
-  <a class="nav-link" data-port="8087" style="color:var(--blue)">PDU Editor</a>
-  <a class="nav-link" data-port="8088">Trace Analyzer</a>
   <a class="nav-link" data-port="8089">Trace Editor</a>
+  <a class="nav-link" data-port="8088">Trace Analyzer</a>
   <a class="nav-link" data-port="8090">Eth Analyzer</a>
+  <a class="nav-link" data-port="8087" style="color:var(--blue)">PDU Editor</a>
 </nav>
 
 <div class="layout">
