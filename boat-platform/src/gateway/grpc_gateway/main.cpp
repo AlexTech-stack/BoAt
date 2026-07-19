@@ -212,6 +212,24 @@ int main() {
       node_manager.DispatchFrame(abi);
     });
 
+    // v9: Forward always-on signal-bus values to node plugins that implement
+    // on_signal (device setpoints/commands, e.g. "psu.main.voltage.set",
+    // "relay.kl15.set"). Numeric/bool signals only; plugins filter by name.
+    // Subscribed before any plugin is loaded so no publish races this setup.
+    signal_bus.Subscribe({}, [&node_manager](const boat::core::BusSignal& s) {
+      double value = 0.0;
+      if (const auto* d = std::get_if<double>(&s.value)) {
+        value = *d;
+      } else if (const auto* i = std::get_if<std::int64_t>(&s.value)) {
+        value = static_cast<double>(*i);
+      } else if (const auto* b = std::get_if<bool>(&s.value)) {
+        value = *b ? 1.0 : 0.0;
+      } else {
+        return;  // string/bytes are not deliverable as a double
+      }
+      node_manager.DispatchSignal(s.name.c_str(), value);
+    });
+
     // Load node plugins from BOAT_NODE_PLUGINS env var.
     // Entries are separated by commas.  Each entry may optionally append a JSON
     // config with '?':
