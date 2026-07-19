@@ -164,6 +164,7 @@ td code { white-space:nowrap; }
   <a href="#howto-pdu-db">Build a PDU database</a>
   <a href="#howto-pdu-routing">Set up PDU routing</a>
   <a href="#howto-cantp">Diagnostics with CAN-TP</a>
+  <a href="#howto-devices">Drive devices (PSU / relay)</a>
   <a href="#howto-hardware">Use real hardware</a>
   <a href="#howto-tests">Run the test suites</a>
   <a href="#howto-ai">AI assistants</a>
@@ -745,6 +746,74 @@ boat can-tp send --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 \
 <p>Because CAN-TP runs in the always-on node manager, it answers incoming diagnostic
 requests even when no simulation is active.</p>
 
+<h2 id="howto-devices">How-To: Drive a power supply, relay, or generator</h2>
+
+<p>Beyond buses and frames, BoAt models <strong>electrical devices</strong> — programmable
+DC power supplies, relays/contactors, generators, electronic loads, generic I/O. They are
+<em>not</em> a new bus type: each device lives as <strong>named signals on the always-on
+signal bus</strong> following <code>&lt;kind&gt;.&lt;id&gt;.&lt;channel&gt;[.&lt;role&gt;]</code>
+(e.g. <code>psu.main.voltage.set</code> in, <code>psu.main.voltage.meas</code> out). A typed
+<strong>DeviceService</strong> (<code>boat device</code>) gives a device-shaped view over that
+convention, backed by deterministic <strong>virtual</strong> models or real
+<strong>SCPI</strong> hardware — the same control surface either way.</p>
+
+<h3>Virtual power supply + ignition relay</h3>
+<pre><code>GW=build/debug/src/gateway/grpc_gateway/boat_gateway
+P=build/debug/src/plugins
+
+# Devices are signal-domain — no CAN interface needed.
+BOAT_CAN_INTERFACES="" \
+BOAT_NODE_PLUGINS="$P/device_manager/device_manager.so,\
+$P/virtual_psu/virtual_psu.so?{\"id\":\"main\",\"r_load\":3.0},\
+$P/virtual_relay/virtual_relay.so?{\"id\":\"kl15\"}" \
+  $GW</code></pre>
+
+<pre><code>boat device list                       # discovered devices + channels (*=settable)
+boat device set psu.main voltage 24    # setpoint
+boat device set relay.kl15 state 1     # close the contact (0 = open)
+boat device read psu.main              # voltage=24 V, current=8 A  (24 V / 3 Ω)</code></pre>
+
+<p>The <code>device_manager</code> plugin discovers devices by observing their published
+measurements, and the <code>DeviceService</code> delegates to it (the same pattern
+<code>PduService</code> uses for <code>pdu_router</code>). Programmatically, use
+<code>from boat.device_node import DeviceNode</code>; for quick interactive use without a
+rebuild, the Python nodes <code>demo/virtual_psu_node.py</code> and
+<code>demo/virtual_relay_node.py</code> speak the same signals.</p>
+
+<h3>Ignition-gated restbus (KL15)</h3>
+<p>Wire a relay into the restbus so cyclic transmission follows the ignition, like a real
+vehicle:</p>
+<pre><code>python3 demo/restbus_simulator.py config/&lt;db&gt;.json --kl15-relay kl15
+boat device set relay.kl15 state 1     # ignition ON  → cyclic frames start
+boat device set relay.kl15 state 0     # ignition OFF → bus goes quiet</code></pre>
+
+<h3>Record &amp; replay device state</h3>
+<pre><code># record (run the gateway from boat-platform/ so boat_events.db lands here)
+BOAT_RECORD_BUS_SIGNALS=devrec BOAT_RECORD_BUS_PREFIXES=psu. \
+BOAT_NODE_PLUGINS="$P/virtual_psu/virtual_psu.so?{\"id\":\"main\",\"r_load\":3.0}" $GW
+# … drive psu.main voltage, then stop the gateway …
+
+# replay the recorded curve back onto the bus (as named signals, not fake frames)
+boat replay from-events --sim-id devrec --signal-id psu.main.voltage.meas -s accelerated -m 20</code></pre>
+
+<h3>Real hardware over SCPI</h3>
+<p><code>scpi_device</code> drives a bench supply / e-load over TCP (the LXI/raw-socket port,
+commonly <code>5025</code>) using the <em>same</em> signal contract as the virtual PSU:</p>
+<pre><code>BOAT_NODE_PLUGINS="$P/device_manager/device_manager.so,\
+$P/scpi_device/scpi_device.so?{\"id\":\"main\",\"host\":\"192.168.0.5\",\"port\":5025}" $GW
+boat device set psu.main voltage 5     # → VOLT 5 over SCPI; MEAS:VOLT?/MEAS:CURR? polled back</code></pre>
+
+<div class="callout note">
+  Physical devices are <strong>live-only</strong>: HIL-gated, excluded from the determinism
+  seed test, and never a replay target (a replay reconstitutes recorded state into a
+  <em>virtual</em> model). <code>gpio</code>/<code>modbus</code> are future
+  <code>IDeviceDriver</code> backends implementing the same seam.
+</div>
+
+<p>Details: <code>docs/howto/devices.md</code> and
+<code>docs/architecture/device-integration-plan.md</code>; system tests in
+<code>test/Devices.md</code> (run <code>python3 test/test_device_integration.py</code>).</p>
+
 <h2 id="howto-hardware">How-To: Use real hardware</h2>
 
 <h3>Physical CAN (PEAK, Kvaser, gs_usb — anything SocketCAN)</h3>
@@ -832,6 +901,8 @@ boat ai bus-setup "vcan0 with pdu_router"</code></pre>
   <tr><td><code>BOAT_NODE_PLUGINS</code></td><td>gateway</td><td>Comma-separated <code>.so</code> paths for the always-on node manager, each optionally with <code>?{json}</code> config.</td></tr>
   <tr><td><code>BOAT_NODE_TICK_MS</code> / <code>BOAT_NODE_TICK_US</code></td><td>gateway</td><td>Node tick interval (minimum cycle time; default 1 ms, µs wins if both set, practical floor ~100 µs).</td></tr>
   <tr><td><code>BOAT_HIL_ENABLED=1</code></td><td>tests</td><td>Enables HIL test binaries that need real hardware.</td></tr>
+  <tr><td><code>BOAT_RECORD_BUS_SIGNALS</code></td><td>gateway</td><td>Record always-on bus signals (device measurements, etc.) into the event store under this sim-id tag; replay via <code>boat replay from-events</code>. Off by default.</td></tr>
+  <tr><td><code>BOAT_RECORD_BUS_PREFIXES</code></td><td>gateway</td><td>Comma-separated name prefixes to narrow bus-signal recording (e.g. <code>psu.,relay.</code>). Empty = record all numeric signals.</td></tr>
   <tr><td><code>BOAT_GATEWAY</code></td><td>UIs/tools</td><td>Gateway gRPC address (default <code>localhost:50051</code>).</td></tr>
   <tr><td><code>BOAT_GATEWAY_BIN</code></td><td>Launcher</td><td>Path to the gateway binary to start.</td></tr>
   <tr><td><code>BOAT_TRACES_DIR</code></td><td>Recorder</td><td>Output directory for recordings (default <code>traces/</code>).</td></tr>

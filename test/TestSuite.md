@@ -19,11 +19,12 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [PDU] | [PDU.md](PDU.md) | 10 | Routes, cyclic schedules, I-PDU groups, signal packing, E2E, db inspection, plugin delegation |
 | [CanTp] | [CanTp.md](CanTp.md) | 5 | ISO 15765-2 sessions, single/multi-frame, flow control, always-on reception |
 | [Plugins] | [Plugins.md](Plugins.md) | 7 | Register/list/info/unload, JSON config, bus-type filtering, dual managers, replay delivery |
+| [Devices] | [Devices.md](Devices.md) | 12 | Virtual PSU/relay, DeviceService list/set/read/stream, discovery, record→replay, SCPI physical device, determinism |
 | [WebUIs] | [WebUIs.md](WebUIs.md) | 10 | Launcher, Dashboard, Nodes, Commander, Recorder UI, Debug inspector, nav, gateway-down behavior |
 | [Tools] | [Tools.md](Tools.md) | 18 | PDU Editor, Trace Analyzer, Trace Editor, Eth Analyzer, dbc2boatjson, offline operation |
 | [CLI] | [CLI.md](CLI.md) | 7 | Global flags, JSON mode, help accuracy, failure behavior, test runner, AI assistants |
 
-**Total: 126 TestCases.**
+**Total: 138 TestCases.**
 
 ## Cross-cutting TestSets (no own file)
 
@@ -32,10 +33,10 @@ These sets exist only as `[tags]` on TestCases defined in the files above:
 | TestSet | Meaning | Index |
 |---|---|---|
 | [Error] | Error handling & edge cases | [ErrorHandling.md](ErrorHandling.md) |
-| [Determinism] | Seed-reproducibility guarantees | TC_Simulation_003/006/007 |
+| [Determinism] | Seed-reproducibility guarantees | TC_Simulation_003/006/007, TC_Devices_011 |
 | [PCAPNG] | Mixed CAN+Ethernet capture format | TC_Replay_007/017/018/019/022, TC_Recording_001/008, TC_Tools_009/012/016 |
 | [Frame] | Unified FrameService semantics | TC_Ethernet_006, TC_PDU_009 |
-| [Hardware] | Requires physical CAN/Ethernet hardware | TC_Gateway_003, TC_Ethernet_004 |
+| [Hardware] | Requires physical CAN/Ethernet/instrument hardware | TC_Gateway_003, TC_Ethernet_004, TC_Devices_009 |
 | [Performance] | Load/throughput behavior | TC_CAN_010 |
 | [AI] | LLM-assistant features | TC_Scenario_005, TC_CLI_007 |
 | [TraceAnalysis] | Analyzer functionality | TC_Tools_005–009, TC_Tools_014–016 |
