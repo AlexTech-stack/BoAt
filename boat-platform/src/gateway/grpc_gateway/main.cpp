@@ -22,6 +22,7 @@
 #include "debug_service_impl.h"
 #include "ethernet_bus_registry.h"
 #include "ethernet_service_impl.h"
+#include "device_service_impl.h"
 #include "frame_service_impl.h"
 #include "rpc_audit_interceptor.h"
 #include "rpc_audit_log.h"
@@ -371,6 +372,7 @@ int main() {
   boat::gateway::PduServiceImpl pdu_impl(ctx);
   boat::gateway::DebugServiceImpl debug_impl(audit_log);
   boat::gateway::FrameServiceImpl frame_impl(ctx);
+  boat::gateway::DeviceServiceImpl device_impl(ctx);
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort("0.0.0.0:50051", grpc::InsecureServerCredentials());
@@ -395,6 +397,7 @@ int main() {
   builder.RegisterService(&pdu_impl);
   builder.RegisterService(&debug_impl);
   builder.RegisterService(&frame_impl);
+  builder.RegisterService(&device_impl);
 
   g_server = builder.BuildAndStart();
   g_scheduler = &sim.scheduler();

@@ -54,7 +54,7 @@ the same shape.
 |---|---|---|---|
 | **1** | `virtual_psu` + `virtual_relay` plugins & Python nodes; signal-bus naming convention; KL15 restbus demo | `on_signal` host→plugin hook (ABI v9) | frame stays frame-only; deterministic |
 | **1.5** | Replay engine fix — `StartReplayFromEvents` republishes event-store records as named signals on the signal bus (not fake CAN frames) | none (fixes existing RPC) | tick-ordered; deterministic |
-| **2** | `DeviceService` + `device_manager` plugin (discovery, typed control, capabilities) | `device.proto` (delegating service) | core stays thin dispatcher |
+| **2** ✅ | `DeviceService` + `device_manager` plugin (discovery, typed control, capabilities) + SDK/CLI | `device.proto` (15th service, delegating) | core stays thin dispatcher |
 | **2.5** | Unified tick-ordered trace (frames + device signals) + signal forwarder in `ReplayController` | trace record extension | frame/signal ordering preserved |
 | **3** | `IDeviceDriver` HAL + `DeviceRegistry` + `environment.schema.json` `devices:` block | new HAL family | virtual/physical split; physical = live-only |
 
@@ -246,6 +246,39 @@ frame).
 device_service_impl.*` (registered in `main.cpp` alongside the other services);
 `src/plugins/device_manager/`; `sdk/python/boat/device_node.py` + CLI
 `boat device list|set|read`.
+
+### Phase 2 implementation (delivered)
+
+- `proto/boat/v1/device.proto` — `DeviceService` (ListDevices / SetControl /
+  ReadState / StreamState), `DeviceKind`, `DeviceInfo`, `DeviceChannel`. This is
+  the **15th** gRPC service. Python stubs regenerated.
+- `src/core/device_manager_interface.h` — `IDeviceManager` (the delegation
+  contract), mirroring `IPduRouter`.
+- `src/plugins/device_manager/` — **convention-driven** aggregator: discovers
+  devices from observed `.meas`/`.state` signals via the v9 `on_signal` hook,
+  seeds each device's controllable channels from a per-kind table
+  (`ControlTable`), and `SetControl` publishes the derived setpoint signal via
+  the bus publisher (`SetSignalFor`). Exports `IDeviceManager` via
+  `boat_plugin_service_name`/`_ptr`. No config, no JSON parsing — the naming
+  convention is the whole contract, so it works with any device (C++ plugin or
+  Python node) that follows it.
+- `src/gateway/grpc_gateway/device_service_impl.*` — thin facade delegating via
+  `FindService("device_manager")`; registered in `main.cpp`.
+- `sdk/python/boat/device_node.py` + `client.device`; CLI `boat device
+  list|set|read` (`cli/boat_cli/device.py`).
+
+**Design note:** discovery is by observation, so a device appears once it
+publishes a measurement; controllable channels are advertised up front from the
+per-kind table (and `SetControl` also works pre-discovery by inferring kind from
+the id prefix). A device with no measurements stays invisible until it emits one
+— acceptable for our devices, which all publish state.
+
+**Verified end-to-end** (gateway + `device_manager` + `virtual_psu` +
+`virtual_relay`): `ListDevices` discovers both devices with correct kinds and
+settable/readable channel flags; `SetControl(psu.main, voltage, 24)` →
+`voltage.meas` 24 V / `current.meas` 8 A (24 V / 3 Ω); `SetControl(relay.kl15,
+state, 1)` → `state` 1.0; an unknown channel is rejected. All exercised through
+both the Python SDK and the `boat device` CLI.
 
 ---
 
