@@ -53,7 +53,7 @@ the same shape.
 | Phase | Deliverable | New surface | Invariants |
 |---|---|---|---|
 | **1** | `virtual_psu` + `virtual_relay` plugins & Python nodes; signal-bus naming convention; KL15 restbus demo | `on_signal` host→plugin hook (ABI v9) | frame stays frame-only; deterministic |
-| **1.5** | Device state in replay — fix `StartReplayFromEvents` to republish recorded named signals on the signal bus | none (fixes existing RPC) | tick-ordered; deterministic |
+| **1.5** | Replay engine fix — `StartReplayFromEvents` republishes event-store records as named signals on the signal bus (not fake CAN frames) | none (fixes existing RPC) | tick-ordered; deterministic |
 | **2** | `DeviceService` + `device_manager` plugin (discovery, typed control, capabilities) | `device.proto` (delegating service) | core stays thin dispatcher |
 | **2.5** | Unified tick-ordered trace (frames + device signals) + signal forwarder in `ReplayController` | trace record extension | frame/signal ordering preserved |
 | **3** | `IDeviceDriver` HAL + `DeviceRegistry` + `environment.schema.json` `devices:` block | new HAL family | virtual/physical split; physical = live-only |
@@ -188,6 +188,28 @@ change. Lays the forwarder groundwork Phase 2.5 generalizes.
 
 **Determinism:** events carry ticks; publishing them in tick order onto the
 signal bus preserves ordering. Replay targets **virtual** device plugins only.
+
+### Phase 1.5 implementation (delivered — engine fix only)
+
+- `src/replay/replay_engine/replay_engine.{h,cpp}` — added a `SignalForwarder`
+  (`SetSignalForwarder`) and rewrote `StartFromEvents` to run a dedicated
+  `ReplaySignalLoop`: it queries the event store, sorts by tick, and replays
+  each record as its **original named signal** (`signal_id` + a
+  `DecodeNumericBlob`-decoded `double`) through the forwarder, honouring
+  speed/pause/step and absolute-time scheduling — no more synthetic CAN frames.
+- `src/gateway/grpc_gateway/main.cpp` — wired `SetSignalForwarder` →
+  `signal_bus.Publish`.
+- `src/tests/unit/test_replay_engine.cpp` — updated to assert the signal
+  contract (name preserved, values decode exactly, tick order).
+
+**Scope call-out (important):** this is the **engine fix only**. Investigation
+found that the always-on `SignalBus` (where devices live) is **not persisted to
+the event store** today — the event store is written only by the frame
+`ReplayLoop`. So the fix makes event-store replay signal-shaped and correct, but
+**replaying a recorded device curve end-to-end still needs a recording path**
+(persisting bus signals into a trace/store). That recording half is deferred to
+**Phase 2.5** (unified tick-ordered trace + formalized bus-signal recording).
+The `ui/recorder.py` JSONL sidecar remains the interim capture mechanism.
 
 ---
 

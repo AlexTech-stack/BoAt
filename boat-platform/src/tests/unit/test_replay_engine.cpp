@@ -369,21 +369,36 @@ TEST_CASE("ReplayController multiple Start calls stop previous replay", "[unit][
   REQUIRE(trace_store.unmapped.size() == 2);
 }
 
-TEST_CASE("ReplayController StartFromEvents replays events from event store", "[unit][replay]") {
+TEST_CASE("ReplayController StartFromEvents replays events as named signals", "[unit][replay]") {
   MockTraceStore trace_store;
   MockEventStore event_store;
   boat::core::EventBus event_bus;
   ReplayController controller(trace_store, event_store, event_bus);
 
+  // Numeric event values are stored as a raw little-endian double blob.
+  auto blob = [](double v) {
+    std::vector<std::uint8_t> b(sizeof(double));
+    std::memcpy(b.data(), &v, sizeof(double));
+    return b;
+  };
+
   std::vector<EventRecord> events = {
-      {.id = "e1", .simulation_id = "sim1", .tick = 100, .wall_time_ns = 100000000, .signal_id = "sig1",
-       .value_type = 1, .value_blob = {0x01, 0x02}, .tags = "{}"},
-      {.id = "e2", .simulation_id = "sim1", .tick = 110, .wall_time_ns = 110000000, .signal_id = "sig1",
-       .value_type = 1, .value_blob = {0x03, 0x04}, .tags = "{}"},
-      {.id = "e3", .simulation_id = "sim1", .tick = 120, .wall_time_ns = 120000000, .signal_id = "sig1",
-       .value_type = 1, .value_blob = {0x05, 0x06}, .tags = "{}"},
+      {.id = "e1", .simulation_id = "sim1", .tick = 100, .wall_time_ns = 100000000,
+       .signal_id = "psu.main.voltage.meas", .value_type = 1, .value_blob = blob(12.0), .tags = "{}"},
+      {.id = "e2", .simulation_id = "sim1", .tick = 110, .wall_time_ns = 110000000,
+       .signal_id = "psu.main.voltage.meas", .value_type = 1, .value_blob = blob(13.5), .tags = "{}"},
+      {.id = "e3", .simulation_id = "sim1", .tick = 120, .wall_time_ns = 120000000,
+       .signal_id = "psu.main.voltage.meas", .value_type = 1, .value_blob = blob(24.0), .tags = "{}"},
   };
   event_store.QueryResult = events;
+
+  // The engine replays each event as its original named signal (not a frame).
+  std::mutex mu;
+  std::vector<std::pair<std::string, double>> got;
+  controller.SetSignalForwarder([&](const std::string& name, double value) {
+    std::lock_guard<std::mutex> lock(mu);
+    got.emplace_back(name, value);
+  });
 
   EventFilter filter;
   filter.simulation_id = "sim1";
@@ -391,13 +406,18 @@ TEST_CASE("ReplayController StartFromEvents replays events from event store", "[
   ReplayConfig cfg;
   cfg.speed = ReplaySpeed::ACCELERATED;
   cfg.speed_multiplier = 100.0;
-  cfg.start_tick = 100;
   controller.StartFromEvents(filter, cfg);
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
-  REQUIRE(event_store.inserted.size() >= 3);
+  std::lock_guard<std::mutex> lock(mu);
+  REQUIRE(got.size() == 3);
+  // Original signal name is preserved, values decode exactly, order by tick.
+  REQUIRE(got[0].first == "psu.main.voltage.meas");
+  REQUIRE(got[0].second == 12.0);
+  REQUIRE(got[1].second == 13.5);
+  REQUIRE(got[2].second == 24.0);
 }
 
 TEST_CASE("ReplayController StartFromEvents handles empty result", "[unit][replay]") {

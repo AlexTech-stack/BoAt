@@ -282,6 +282,15 @@ int main() {
         frame_sink.Publish(core_frame);
       });
 
+  // Event-store (signal-domain) replay re-publishes each recorded event as its
+  // original named signal on the always-on signal bus — so a replayed device
+  // curve (e.g. psu.main.voltage.meas) is observed by plugins/subscribers
+  // exactly as when it was recorded, rather than as synthetic CAN traffic.
+  replay_controller.SetSignalForwarder(
+      [&signal_bus](const std::string& name, double value) {
+        signal_bus.Publish(name, value);
+      });
+
 
   // Wire the PDU publisher so plugins (e.g. CanTp) can deliver reassembled
   // I-PDUs into the frame bus (handled by PduRouter plugin if loaded).
