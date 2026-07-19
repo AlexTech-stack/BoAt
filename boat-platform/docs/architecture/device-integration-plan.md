@@ -56,7 +56,7 @@ the same shape.
 | **1.5** | Replay engine fix — `StartReplayFromEvents` republishes event-store records as named signals on the signal bus (not fake CAN frames) | none (fixes existing RPC) | tick-ordered; deterministic |
 | **2** ✅ | `DeviceService` + `device_manager` plugin (discovery, typed control, capabilities) + SDK/CLI | `device.proto` (15th service, delegating) | core stays thin dispatcher |
 | **2.5** ✅ | Bus-signal recording into the event store — closes the device record→replay loop (reuses Phase 1.5 replay) | env-gated recorder | opt-in; determinism unaffected |
-| **3** | `IDeviceDriver` HAL + `DeviceRegistry` + `environment.schema.json` `devices:` block | new HAL family | virtual/physical split; physical = live-only |
+| **3** ✅ | `IDeviceDriver` seam + SCPI-over-TCP driver + `scpi_device` plugin + `environment.schema.json` `devices:` block | device HAL family | virtual/physical split; physical = live-only |
 
 Each phase is independently useful and shippable.
 
@@ -378,6 +378,38 @@ deterministic, preserving the `boat_determinism_seed` guarantee.
 **Physical = live only:** physical device plugins are HIL-gated
 (`BOAT_HIL_ENABLED`), excluded from determinism tests, and are **never** the
 target of a replay (replay always reconstitutes into virtual device models).
+
+### Phase 3 implementation (delivered)
+
+Rather than a core-owned `DeviceRegistry` mirroring `CanBusRegistry`, the seam
+lives **inside the device plugin** — consistent with the Phases 1–2 rule that
+devices are plugins (the `tcp` plugin already owns its own socket). So a physical
+device is the *same* signal-bus contract with a hardware backend swapped in
+behind an `IDeviceDriver`; no new core transport, no new registry.
+
+- `src/hil/device/device_driver.h` — `IDeviceDriver` (Open/Close/Write/Read),
+  the backend seam; `line_transport.h` — `ILineTransport` (newline text wire).
+- `src/hil/device/tcp_line_transport.{h,cpp}` — real TCP socket transport
+  (LXI/raw-socket, port 5025), blocking with per-read poll timeout.
+- `src/hil/device/scpi_device_driver.{h,cpp}` — SCPI instrument as an
+  `IDeviceDriver`; channels map to SCPI command templates (`VOLT {v}`,
+  `OUTP {ONOFF}`, `MEAS:VOLT?`), with `PowerSupplyDefaults()`. Transport is
+  injected, so it is fully testable against an in-process mock.
+- `src/plugins/scpi_device/` — v9 plugin wrapping `ScpiDeviceDriver` behind the
+  signal contract; **owns its own worker thread** so slow/unreachable-instrument
+  I/O never stalls the gateway tick loop. Config `{"id","host","port","poll_ms"}`.
+  Without a reachable instrument it simply idles (live-only).
+- `config/tests/environment.schema.json` — `devices:` block (`DeviceConfig`:
+  `type` ∈ virtual/scpi/gpio/modbus, `kind`, `host`/`port`/`resource`/`poll_ms`),
+  mirroring the bus `virtual`/`physical` split.
+- `src/tests/unit/test_scpi_device.cpp` — drives `ScpiDeviceDriver` over a **real
+  loopback socket** against an in-process mock SCPI PSU (no hardware).
+
+`gpio`/`modbus` remain future `IDeviceDriver` backends implementing the same
+seam. **Verified end-to-end** (no hardware): a Python mock SCPI PSU + gateway
+with `scpi_device` + `device_manager` — `boat device set psu.main voltage 24`
+drove `VOLT 24` over SCPI and read back `voltage=24 V`, `current=8 A`, through
+the identical DeviceService/CLI path used by the virtual devices.
 
 ---
 
