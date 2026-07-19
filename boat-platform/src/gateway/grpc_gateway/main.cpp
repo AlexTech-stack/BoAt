@@ -39,6 +39,7 @@
 #include "metrics_service_impl.h"
 #include "plugin/plugin_manager.h"
 #include "plugin_service_impl.h"
+#include "bus_signal_recorder.h"
 #include "replay_engine/replay_engine.h"
 #include "replay_service_impl.h"
 #include "scenario/scenario_loader.h"
@@ -273,6 +274,35 @@ int main() {
       }
     }
     }
+
+  // Optional: record always-on bus signals (device measurements, etc.) into the
+  // event store so they can be replayed as named signals via
+  // `replay from-events --sim-id <tag>`. Off by default — no effect on the
+  // determinism seed test. Enable with BOAT_RECORD_BUS_SIGNALS=<sim_id>;
+  // narrow with BOAT_RECORD_BUS_PREFIXES=psu.,relay. (comma-separated).
+  std::unique_ptr<boat::replay::BusSignalRecorder> bus_recorder;
+  {
+    const char* rec_env = std::getenv("BOAT_RECORD_BUS_SIGNALS");
+    if (rec_env != nullptr && rec_env[0] != '\0') {
+      boat::replay::BusSignalRecorder::Config rc;
+      rc.simulation_id = rec_env;
+      const char* pfx_env = std::getenv("BOAT_RECORD_BUS_PREFIXES");
+      if (pfx_env != nullptr && pfx_env[0] != '\0') {
+        std::istringstream ps(pfx_env);
+        std::string p;
+        while (std::getline(ps, p, ',')) {
+          if (!p.empty()) rc.prefixes.push_back(p);
+        }
+      }
+      bus_recorder = std::make_unique<boat::replay::BusSignalRecorder>(
+          signal_bus, event_store, rc);
+      bus_recorder->Start();
+      std::fprintf(stderr,
+                   "[Gateway] Recording bus signals -> event store "
+                   "(sim_id=%s%s)\n",
+                   rec_env, rc.prefixes.empty() ? "" : ", filtered");
+    }
+  }
 
   // Replay transmits each trace frame straight through the single core sink.
   // The registry's RX dispatch then delivers it to node plugins' on_frame

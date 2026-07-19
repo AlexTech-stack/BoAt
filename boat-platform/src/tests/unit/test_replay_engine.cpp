@@ -14,9 +14,11 @@
 #include <vector>
 
 #include "boat/v1/frame.pb.h"
+#include "bus_signal_recorder.h"
 #include "event/event_bus.h"
 #include "event_store/event_store.h"
 #include "replay_engine/replay_engine.h"
+#include "signal/signal_bus.h"
 #include "trace_store/trace_store.h"
 
 using namespace boat::replay;
@@ -418,6 +420,42 @@ TEST_CASE("ReplayController StartFromEvents replays events as named signals", "[
   REQUIRE(got[0].second == 12.0);
   REQUIRE(got[1].second == 13.5);
   REQUIRE(got[2].second == 24.0);
+}
+
+TEST_CASE("BusSignalRecorder persists numeric bus signals to the event store",
+          "[unit][replay]") {
+  boat::core::SignalBus bus;
+  MockEventStore store;
+
+  BusSignalRecorder::Config cfg;
+  cfg.simulation_id = "devrec";
+  cfg.prefixes = {"psu."};  // record only psu.* signals
+
+  BusSignalRecorder recorder(bus, store, cfg);
+  recorder.Start();
+
+  bus.Publish("psu.main.voltage.meas", 12.0);
+  bus.Publish("psu.main.current.meas", 4.0);
+  bus.Publish("relay.kl15.state", 1.0);  // filtered out (no psu. prefix)
+  bus.Publish("psu.main.label",
+              boat::core::BusSignalValue{std::string("x")});  // non-numeric
+
+  for (int i = 0; i < 200 && recorder.RecordedCount() < 2; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  recorder.Stop();
+
+  REQUIRE(store.inserted.size() == 2);
+  std::unordered_map<std::string, double> got;
+  for (const auto& e : store.inserted) {
+    REQUIRE(e.simulation_id == "devrec");
+    REQUIRE(e.value_blob.size() == sizeof(double));
+    double v = 0.0;
+    std::memcpy(&v, e.value_blob.data(), sizeof(double));
+    got[e.signal_id] = v;
+  }
+  REQUIRE(got.at("psu.main.voltage.meas") == 12.0);
+  REQUIRE(got.at("psu.main.current.meas") == 4.0);
 }
 
 TEST_CASE("ReplayController StartFromEvents handles empty result", "[unit][replay]") {

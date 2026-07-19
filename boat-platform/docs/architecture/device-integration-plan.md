@@ -55,7 +55,7 @@ the same shape.
 | **1** | `virtual_psu` + `virtual_relay` plugins & Python nodes; signal-bus naming convention; KL15 restbus demo | `on_signal` host→plugin hook (ABI v9) | frame stays frame-only; deterministic |
 | **1.5** | Replay engine fix — `StartReplayFromEvents` republishes event-store records as named signals on the signal bus (not fake CAN frames) | none (fixes existing RPC) | tick-ordered; deterministic |
 | **2** ✅ | `DeviceService` + `device_manager` plugin (discovery, typed control, capabilities) + SDK/CLI | `device.proto` (15th service, delegating) | core stays thin dispatcher |
-| **2.5** | Unified tick-ordered trace (frames + device signals) + signal forwarder in `ReplayController` | trace record extension | frame/signal ordering preserved |
+| **2.5** ✅ | Bus-signal recording into the event store — closes the device record→replay loop (reuses Phase 1.5 replay) | env-gated recorder | opt-in; determinism unaffected |
 | **3** | `IDeviceDriver` HAL + `DeviceRegistry` + `environment.schema.json` `devices:` block | new HAL family | virtual/physical split; physical = live-only |
 
 Each phase is independently useful and shippable.
@@ -282,10 +282,48 @@ both the Python SDK and the `boat device` CLI.
 
 ---
 
-## Phase 2.5 — Unified tick-ordered trace (full replay story)
+## Phase 2.5 — Device recording → replay (delivered)
 
-**Goal:** record and replay device state as a first-class, tick-ordered part of
-the trace, interleaved with frames.
+**Goal delivered:** close the Phase 1.5 caveat so a recorded device curve
+replays end-to-end. The key realization: the **event store already is a unified
+tick-ordered store** — the frame `ReplayLoop` writes frame-derived events, and
+Phase 1.5 replays event-store records as named signals. So the missing half was
+purely *recording device signals into that store*; no new trace-file format was
+required.
+
+### Phase 2.5 implementation (delivered)
+
+- `src/replay/bus_signal_recorder.{h,cpp}` — `BusSignalRecorder` subscribes to
+  the always-on `SignalBus`, and a **background writer thread** persists each
+  numeric/bool signal as an `EventRecord` (`signal_id` = name, value = 8-byte
+  double blob, `tick` = elapsed / tick_duration) under a simulation-id tag, with
+  an optional name-prefix filter. Signal callbacks only enqueue, so the hot
+  publish path is never blocked by SQLite.
+- `src/gateway/grpc_gateway/main.cpp` — env-gated wiring:
+  `BOAT_RECORD_BUS_SIGNALS=<sim_id>` starts the recorder;
+  `BOAT_RECORD_BUS_PREFIXES=psu.,relay.` narrows it. **Off by default**, so the
+  determinism seed test and normal runs are unaffected.
+- Replay reuses Phase 1.5 unchanged: `replay from-events --sim-id <tag>
+  [--signal-id <name>]` republishes the recorded curve onto the signal bus.
+- `src/tests/unit/test_replay_engine.cpp` — unit test for the recorder
+  (filtering, numeric-only, exact value round-trip).
+
+**Verified end-to-end:** a gateway run with recording on + `virtual_psu`
+captured a 0→20 V ramp (203 rows); a second run replayed
+`psu.main.voltage.meas` via `from-events`, and a `BusNode` subscriber received
+all 101 values ramping 0.0 → 20.0. The record→replay loop is closed.
+
+### Deferred (optional): single interleaved trace *file*
+
+A combined trace-file format carrying **frames and signals interleaved in one
+file** (with a `signal_map` retarget field on `StartReplayRequest`) remains a
+possible future enhancement — but it is no longer on the critical path, since
+the event store already provides the unified tick-ordered timeline for both.
+The original design sketch:
+
+**Trace extension:** add a signal/device record type alongside `boat.v1.Frame`
+records so **one trace file carries an interleaved, tick-ordered timeline** of
+frames *and* device signals.
 
 **Trace extension:** add a signal/device record type alongside `boat.v1.Frame`
 records so **one trace file carries an interleaved, tick-ordered timeline** of
