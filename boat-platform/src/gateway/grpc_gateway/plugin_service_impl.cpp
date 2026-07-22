@@ -41,6 +41,7 @@ grpc::Status PluginServiceImpl::RegisterPlugin(grpc::ServerContext*, const boat:
     plugin->set_name(handle.name);
     plugin->set_version(std::to_string(handle.abi_version));
     plugin->set_loaded(true);
+    plugin->set_config_json(handle.config_json);
     return grpc::Status::OK;
   } catch (const std::exception& ex) {
     return MapPluginException(ex);
@@ -62,6 +63,7 @@ grpc::Status PluginServiceImpl::ListPlugins(grpc::ServerContext*, const boat::v1
       plugin->set_name(plugins[i]);
       plugin->set_version("unknown");
       plugin->set_loaded(true);
+      plugin->set_config_json(ctx_.sim.plugin_manager().GetConfigJson(plugins[i]));
     }
     response->mutable_page()->set_total_size(static_cast<std::uint32_t>(plugins.size()));
     if (end < plugins.size()) {
@@ -88,6 +90,7 @@ grpc::Status PluginServiceImpl::GetPluginInfo(grpc::ServerContext*, const boat::
     plugin->set_name(*it);
     plugin->set_version("unknown");
     plugin->set_loaded(true);
+    plugin->set_config_json(ctx_.sim.plugin_manager().GetConfigJson(*it));
     return grpc::Status::OK;
   } catch (const std::exception& ex) {
     return MapPluginException(ex);

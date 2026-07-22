@@ -3,11 +3,15 @@ import importlib
 
 def test_generated_stub_modules_import_from_boat_v1_package():
     modules = [
+        "boat.v1.can_tp_pb2",
+        "boat.v1.can_tp_pb2_grpc",
         "boat.v1.common_pb2",
         "boat.v1.fault_pb2",
         "boat.v1.fault_pb2_grpc",
         "boat.v1.metrics_pb2",
         "boat.v1.metrics_pb2_grpc",
+        "boat.v1.node_plugin_pb2",
+        "boat.v1.node_plugin_pb2_grpc",
         "boat.v1.plugin_pb2",
         "boat.v1.plugin_pb2_grpc",
         "boat.v1.replay_pb2",
@@ -26,11 +30,13 @@ def test_generated_stub_modules_import_from_boat_v1_package():
 
 
 def test_boat_client_loads_all_service_stubs(boat_client):
+    assert boat_client.can_tp is not None
     assert boat_client.simulation is not None
     assert boat_client.signal is not None
     assert boat_client.scenario is not None
     assert boat_client.replay is not None
     assert boat_client.plugin is not None
+    assert boat_client.node_plugin is not None
     assert boat_client.metrics is not None
     assert boat_client.trace is not None
     assert boat_client.fault is not None
@@ -54,6 +60,19 @@ def test_replay_stub_has_new_rpcs():
     assert hasattr(replay_pb2_grpc.ReplayServiceServicer, "StopReplay")
     assert hasattr(replay_pb2_grpc.ReplayServiceServicer, "ImportTraceData")
     assert hasattr(replay_pb2_grpc.ReplayServiceServicer, "StartReplayFromEvents")
+
+
+def test_can_tp_stub_has_list_sessions_rpc():
+    from boat.v1 import can_tp_pb2, can_tp_pb2_grpc
+
+    assert hasattr(can_tp_pb2, "ListSessionsRequest")
+    assert hasattr(can_tp_pb2, "ListSessionsResponse")
+    assert hasattr(can_tp_pb2, "CanTpSession")
+    assert hasattr(can_tp_pb2_grpc.CanTpServiceServicer, "ListSessions")
+
+    session = can_tp_pb2.CanTpSession(iface="vcan0", nsdu_id=0x7E0, rx_state="IDLE", tx_state="IDLE")
+    assert session.iface == "vcan0"
+    assert session.nsdu_id == 0x7E0
 
 
 def test_start_replay_request_has_speed_fields():

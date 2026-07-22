@@ -7,14 +7,20 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include "boat/v1/can_tp.grpc.pb.h"
+#include "boat/v1/node_plugin.grpc.pb.h"
 #include "boat/v1/pdu.grpc.pb.h"
+#include "boat/v1/plugin.grpc.pb.h"
 #include "boat/v1/scenario.grpc.pb.h"
 #include "boat/v1/signal.grpc.pb.h"
 #include "boat/v1/simulation.grpc.pb.h"
 #include "event_store/event_store.h"
+#include "gateway/grpc_gateway/can_tp_service_impl.h"
 #include "gateway/grpc_gateway/frame_sink.h"
 #include "gateway/grpc_gateway/gateway_context.h"
+#include "gateway/grpc_gateway/node_plugin_service_impl.h"
 #include "gateway/grpc_gateway/pdu_service_impl.h"
+#include "gateway/grpc_gateway/plugin_service_impl.h"
 #include "gateway/grpc_gateway/scenario_service_impl.h"
 #include "gateway/grpc_gateway/signal_service_impl.h"
 #include "gateway/grpc_gateway/simulation_service_impl.h"
@@ -283,3 +289,223 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   std::filesystem::remove(event_db_path);
   std::filesystem::remove(trace_db_path);
 }
+
+#ifdef PDU_ROUTER_SO
+TEST_CASE("PluginService and NodePluginService see disjoint PluginManager scopes",
+          "[integration][gateway][plugin]") {
+  // Regression test for the gap that motivated NodePluginService: a plugin
+  // loaded into the always-on "node" manager (ctx.plugin_manager, what
+  // BOAT_NODE_PLUGINS populates in the real gateway) must be invisible to
+  // PluginService (which only ever talks to the simulation-scoped manager,
+  // ctx.sim.plugin_manager()) and only visible through NodePluginService.
+  std::filesystem::remove("boat_config.db");
+  const auto temp_dir = std::filesystem::temp_directory_path();
+  const auto event_db_path = temp_dir / "boat_integration_gateway_scope_events.db";
+  const auto trace_db_path = temp_dir / "boat_integration_gateway_scope_traces.db";
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+
+  boat::core::SimulationContext sim(778, 2);
+  boat::core::SignalBus signal_bus;
+  boat::core::ScenarioLoader scenario_loader;
+  boat::store::SqliteEventStore event_store(event_db_path.string());
+  boat::store::FlatFileTraceStore trace_store(trace_db_path.string());
+  boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
+  boat::hil::CanBusRegistry can_registry;
+  boat::hil::EthernetBusRegistry eth_registry;
+  boat::core::PluginManager node_manager;  // stands in for main.cpp's node_manager
+  boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
+  boat::gateway::RpcAuditLog audit_log;
+
+  boat::gateway::GatewayContext ctx{
+      .sim = sim,
+      .signal_bus = signal_bus,
+      .scenario_loader = scenario_loader,
+      .event_store = event_store,
+      .trace_store = trace_store,
+      .replay_controller = replay_controller,
+      .can_bus_registry = can_registry,
+      .ethernet_bus_registry = eth_registry,
+      .plugin_manager = node_manager,
+      .frame_sink = frame_sink,
+      .audit_log = audit_log,
+  };
+
+  boat::gateway::PluginServiceImpl plugin_service(ctx);
+  boat::gateway::NodePluginServiceImpl node_plugin_service(ctx);
+
+  grpc::ServerBuilder builder;
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
+  builder.RegisterService(&plugin_service);
+  builder.RegisterService(&node_plugin_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  auto channel = server->InProcessChannel({});
+
+  auto plugin_stub = boat::v1::PluginService::NewStub(channel);
+  auto node_plugin_stub = boat::v1::NodePluginService::NewStub(channel);
+
+  // Load directly into the node-scoped manager (mirrors BOAT_NODE_PLUGINS),
+  // not via RegisterPlugin RPC (which only ever targets the sim-scoped one).
+  const auto handle = node_manager.Load(PDU_ROUTER_SO, R"({"iface":"vcan0"})");
+
+  // Visible via NodePluginService...
+  boat::v1::ListNodePluginsResponse node_list_resp;
+  grpc::ClientContext node_list_ctx;
+  REQUIRE(node_plugin_stub->ListNodePlugins(&node_list_ctx, boat::v1::ListNodePluginsRequest(), &node_list_resp).ok());
+  bool found_in_node_scope = false;
+  for (const auto& p : node_list_resp.plugins()) {
+    if (p.plugin_id() == handle.name) {
+      found_in_node_scope = true;
+      REQUIRE(p.config_json() == R"({"iface":"vcan0"})");
+    }
+  }
+  REQUIRE(found_in_node_scope);
+
+  boat::v1::GetNodePluginInfoRequest node_info_req;
+  node_info_req.set_plugin_id(handle.name);
+  boat::v1::PluginResponse node_info_resp;
+  grpc::ClientContext node_info_ctx;
+  REQUIRE(node_plugin_stub->GetNodePluginInfo(&node_info_ctx, node_info_req, &node_info_resp).ok());
+  REQUIRE(node_info_resp.plugin().loaded());
+
+  // ...but invisible via the sim-scoped PluginService.
+  boat::v1::ListPluginsResponse sim_list_resp;
+  grpc::ClientContext sim_list_ctx;
+  REQUIRE(plugin_stub->ListPlugins(&sim_list_ctx, boat::v1::ListPluginsRequest(), &sim_list_resp).ok());
+  for (const auto& p : sim_list_resp.plugins()) {
+    REQUIRE(p.plugin_id() != handle.name);
+  }
+
+  boat::v1::GetPluginInfoRequest sim_info_req;
+  sim_info_req.set_plugin_id(handle.name);
+  boat::v1::PluginResponse sim_info_resp;
+  grpc::ClientContext sim_info_ctx;
+  const auto sim_info_status = plugin_stub->GetPluginInfo(&sim_info_ctx, sim_info_req, &sim_info_resp);
+  REQUIRE_FALSE(sim_info_status.ok());
+  REQUIRE(sim_info_status.error_code() == grpc::StatusCode::NOT_FOUND);
+
+  // Unload requires explicit confirm=true.
+  boat::v1::UnloadNodePluginRequest unload_req;
+  unload_req.set_plugin_id(handle.name);
+  boat::v1::UnloadNodePluginResponse unload_resp;
+  grpc::ClientContext unload_ctx;
+  const auto unload_status = node_plugin_stub->UnloadNodePlugin(&unload_ctx, unload_req, &unload_resp);
+  REQUIRE_FALSE(unload_status.ok());
+  REQUIRE(unload_status.error_code() == grpc::StatusCode::FAILED_PRECONDITION);
+
+  unload_req.set_confirm(true);
+  boat::v1::UnloadNodePluginResponse unload_resp2;
+  grpc::ClientContext unload_ctx2;
+  REQUIRE(node_plugin_stub->UnloadNodePlugin(&unload_ctx2, unload_req, &unload_resp2).ok());
+  REQUIRE(unload_resp2.unloaded());
+
+  boat::v1::ListNodePluginsResponse node_list_resp2;
+  grpc::ClientContext node_list_ctx2;
+  REQUIRE(node_plugin_stub->ListNodePlugins(&node_list_ctx2, boat::v1::ListNodePluginsRequest(), &node_list_resp2).ok());
+  for (const auto& p : node_list_resp2.plugins()) {
+    REQUIRE(p.plugin_id() != handle.name);
+  }
+
+  server->Shutdown();
+  std::filesystem::remove("boat_config.db");
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+}
+#endif
+
+#ifdef CAN_TP_SO
+TEST_CASE("CanTpService.ListSessions aggregates across every loaded instance",
+          "[integration][gateway][can_tp]") {
+  std::filesystem::remove("boat_config.db");
+  const auto temp_dir = std::filesystem::temp_directory_path();
+  const auto event_db_path = temp_dir / "boat_integration_gateway_cantp_events.db";
+  const auto trace_db_path = temp_dir / "boat_integration_gateway_cantp_traces.db";
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+
+  boat::core::SimulationContext sim(779, 2);
+  boat::core::SignalBus signal_bus;
+  boat::core::ScenarioLoader scenario_loader;
+  boat::store::SqliteEventStore event_store(event_db_path.string());
+  boat::store::FlatFileTraceStore trace_store(trace_db_path.string());
+  boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
+  boat::hil::CanBusRegistry can_registry;
+  boat::hil::EthernetBusRegistry eth_registry;
+  boat::core::PluginManager node_manager;
+  boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
+  boat::gateway::RpcAuditLog audit_log;
+
+  boat::gateway::GatewayContext ctx{
+      .sim = sim,
+      .signal_bus = signal_bus,
+      .scenario_loader = scenario_loader,
+      .event_store = event_store,
+      .trace_store = trace_store,
+      .replay_controller = replay_controller,
+      .can_bus_registry = can_registry,
+      .ethernet_bus_registry = eth_registry,
+      .plugin_manager = node_manager,
+      .frame_sink = frame_sink,
+      .audit_log = audit_log,
+  };
+
+  boat::gateway::CanTpServiceImpl can_tp_service(ctx);
+
+  grpc::ServerBuilder builder;
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
+  builder.RegisterService(&can_tp_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  auto channel = server->InProcessChannel({});
+  auto can_tp_stub = boat::v1::CanTpService::NewStub(channel);
+
+  // Two instances, mirroring BOAT_NODE_PLUGINS with two ?{"iface":...} entries.
+  node_manager.Load(CAN_TP_SO, R"({"iface":"vcan0"})");
+  node_manager.Load(CAN_TP_SO, R"({"iface":"vcan1"})");
+
+  auto configure_on = [&](const std::string& iface, uint32_t nsdu_id) {
+    boat::v1::ConfigureRequest req;
+    req.set_iface(iface);
+    req.mutable_config()->set_nsdu_id(nsdu_id);
+    req.mutable_config()->set_source_addr(nsdu_id);
+    req.mutable_config()->set_target_addr(nsdu_id + 0x100);
+    req.mutable_config()->set_can_dlc(8);
+    boat::v1::ConfigureResponse resp;
+    grpc::ClientContext client_ctx;
+    REQUIRE(can_tp_stub->Configure(&client_ctx, req, &resp).ok());
+    REQUIRE(resp.ok());
+  };
+  configure_on("vcan0", 0x100);
+  configure_on("vcan1", 0x300);
+
+  // No iface filter -> sessions from both instances, each correctly tagged.
+  boat::v1::ListSessionsRequest all_req;
+  boat::v1::ListSessionsResponse all_resp;
+  grpc::ClientContext all_ctx;
+  REQUIRE(can_tp_stub->ListSessions(&all_ctx, all_req, &all_resp).ok());
+  REQUIRE(all_resp.sessions_size() == 2);
+  bool found_vcan0 = false, found_vcan1 = false;
+  for (const auto& s : all_resp.sessions()) {
+    if (s.iface() == "vcan0") { REQUIRE(s.nsdu_id() == 0x100); found_vcan0 = true; }
+    if (s.iface() == "vcan1") { REQUIRE(s.nsdu_id() == 0x300); found_vcan1 = true; }
+  }
+  REQUIRE(found_vcan0);
+  REQUIRE(found_vcan1);
+
+  // iface filter -> only that instance's sessions.
+  boat::v1::ListSessionsRequest scoped_req;
+  scoped_req.set_iface("vcan0");
+  boat::v1::ListSessionsResponse scoped_resp;
+  grpc::ClientContext scoped_ctx;
+  REQUIRE(can_tp_stub->ListSessions(&scoped_ctx, scoped_req, &scoped_resp).ok());
+  REQUIRE(scoped_resp.sessions_size() == 1);
+  REQUIRE(scoped_resp.sessions(0).iface() == "vcan0");
+  REQUIRE(scoped_resp.sessions(0).nsdu_id() == 0x100);
+
+  server->Shutdown();
+  std::filesystem::remove("boat_config.db");
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+}
+#endif

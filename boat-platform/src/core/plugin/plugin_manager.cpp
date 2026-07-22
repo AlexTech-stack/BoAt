@@ -35,6 +35,36 @@ std::uint32_t ParseDeclaredBusMask(const char* decl) {
   return mask == 0 ? kAllBusMask : mask;
 }
 
+// Extract the "iface" value from a plugin's config JSON (e.g.
+// {"iface":"vcan0"}), using the same manual substring-scan style
+// ParseDeclaredBusMask already uses rather than pulling in a JSON library
+// for this one field. Returns "" if absent/malformed.
+std::string ExtractConfigIface(const std::string& config_json) {
+  const char* key = "\"iface\"";
+  const auto key_pos = config_json.find(key);
+  if (key_pos == std::string::npos) return "";
+  auto pos = config_json.find('"', key_pos + std::strlen(key));
+  if (pos == std::string::npos) return "";
+  ++pos;
+  const auto end = config_json.find('"', pos);
+  if (end == std::string::npos) return "";
+  return config_json.substr(pos, end - pos);
+}
+
+// Key a loaded plugin by so_path plus (if present) its config's iface, so
+// two instances of the same .so with different ifaces (e.g. CanTp on
+// vcan0 and vcan1) get distinct entries in plugins_ instead of silently
+// overwriting each other. Two instances with a genuinely identical iface
+// still collide on this key -- intentional: that's a real bus-level
+// conflict (both instances would process the same wire traffic), not
+// just a bookkeeping one, so rejecting it here is correct. Falls back to
+// bare so_path when no "iface" key is present, preserving prior behavior
+// for plugins that don't use per-instance config.
+std::string PluginKey(const std::string& so_path, const std::string& config_json) {
+  const std::string iface = ExtractConfigIface(config_json);
+  return iface.empty() ? so_path : (so_path + "?iface=" + iface);
+}
+
 }  // namespace
 
 void PluginManager::SetPublisher(SignalPublishFn fn) {
@@ -96,7 +126,8 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
     throw std::runtime_error("Plugin initialize() failed");
   }
 
-  PluginHandle handle{dl_handle, plugin, so_path, abi_version, destroy_fn, {}};
+  PluginHandle handle{dl_handle, plugin, PluginKey(so_path, config_json),
+                      abi_version, destroy_fn, config_json, {}};
 
   // Cache the plugin's declared bus types so DispatchFrame can pre-filter
   // instead of calling on_frame for every plugin on every frame.
@@ -114,11 +145,11 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
   auto service_ptr_fn = reinterpret_cast<boat_plugin_service_ptr_fn>(
       dlsym(dl_handle, "boat_plugin_service_ptr"));
   if (service_name_fn != nullptr && service_ptr_fn != nullptr) {
-    const char* service_name = service_name_fn();
+    const char* service_name = service_name_fn(plugin->ctx);
     void* service_ptr = service_ptr_fn(plugin->ctx);
     if (service_name != nullptr && service_name[0] != '\0' && service_ptr != nullptr) {
       RegisterService(service_name, service_ptr);
-      handle.registered_services.emplace_back(service_name);
+      handle.registered_services.emplace_back(service_name, service_ptr);
     }
   }
 
@@ -188,10 +219,18 @@ void PluginManager::Unload(const std::string& name) {
   }
   // Remove any services this plugin registered before destroying it --
   // otherwise FindService() would keep handing out a dangling pointer.
+  // Compare-and-erase: only remove services_[name] if it still points at
+  // *this* handle's registered pointer. A newer plugin instance may have
+  // since registered the same service name (overwriting this handle's
+  // entry) -- erasing unconditionally by name would delete that newer,
+  // still-live registration instead of this handle's stale one.
   if (!handle.registered_services.empty()) {
     std::lock_guard<std::mutex> lock(services_mutex_);
-    for (const auto& service_name : handle.registered_services) {
-      services_.erase(service_name);
+    for (const auto& [service_name, service_ptr] : handle.registered_services) {
+      auto it = services_.find(service_name);
+      if (it != services_.end() && it->second == service_ptr) {
+        services_.erase(it);
+      }
     }
   }
 #ifndef _WIN32
@@ -270,6 +309,12 @@ std::vector<std::string> PluginManager::List() const {
   return names;
 }
 
+std::string PluginManager::GetConfigJson(const std::string& name) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = plugins_.find(name);
+  return (it != plugins_.end()) ? it->second.config_json : std::string();
+}
+
 void PluginManager::RegisterService(const std::string& name, void* service) {
   std::lock_guard<std::mutex> lock(services_mutex_);
   services_[name] = service;
@@ -279,6 +324,17 @@ void* PluginManager::FindService(const std::string& name) const {
   std::lock_guard<std::mutex> lock(services_mutex_);
   auto it = services_.find(name);
   return (it != services_.end()) ? it->second : nullptr;
+}
+
+std::vector<std::string> PluginManager::ListServices() const {
+  std::lock_guard<std::mutex> lock(services_mutex_);
+  std::vector<std::string> names;
+  names.reserve(services_.size());
+  for (const auto& [name, service] : services_) {
+    (void)service;
+    names.push_back(name);
+  }
+  return names;
 }
 
 }  // namespace boat::core

@@ -14,12 +14,14 @@ python3 -m grpc_tools.protoc \
   --grpc_python_out="${OUT_DIR}" \
   "${PROTO_DIR}/boat/v1/bus.proto" \
   "${PROTO_DIR}/boat/v1/can.proto" \
+  "${PROTO_DIR}/boat/v1/can_tp.proto" \
   "${PROTO_DIR}/boat/v1/common.proto" \
   "${PROTO_DIR}/boat/v1/control.proto" \
   "${PROTO_DIR}/boat/v1/debug.proto" \
   "${PROTO_DIR}/boat/v1/ethernet.proto" \
   "${PROTO_DIR}/boat/v1/fault.proto" \
   "${PROTO_DIR}/boat/v1/metrics.proto" \
+  "${PROTO_DIR}/boat/v1/node_plugin.proto" \
   "${PROTO_DIR}/boat/v1/pdu.proto" \
   "${PROTO_DIR}/boat/v1/plugin.proto" \
   "${PROTO_DIR}/boat/v1/replay.proto" \

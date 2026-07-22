@@ -86,6 +86,8 @@ Both managers use the same C ABI (`BoatPluginVTable`) and can load the same `.so
 
 The node tick thread also ticks the `pdu_router` plugin (via its `on_tick`), driving the PDU transmission engine so scheduled CAN/Ethernet frames are sent on time even outside simulation. As of ABI v8 the PDU router is itself a node plugin (`pdu_router.so`) rather than gateway-core logic.
 
+**gRPC surface follows the same split.** `PluginService` (`boat plugin register`) only ever talks to `plugin_manager` (the simulation-scoped one) — node plugins loaded via `BOAT_NODE_PLUGINS` are invisible to it. `NodePluginService` (`ListNodePlugins`/`GetNodePluginInfo`/`UnloadNodePlugin`) exposes `node_manager` instead — no register RPC, since node plugins are only ever loaded at gateway startup today. `boat plugin list` queries both and merges them into one table with a `scope` column so you don't need to know which manager a given plugin lives in; `boat plugin unload <id> --scope {sim,node}` requires an explicit scope, and `--scope node` additionally requires `--yes` since it's immediate and gateway-wide, not scoped to any simulation.
+
 ## Known issues
 
 - **Ubuntu 22.04** ships cmake 3.22 (too old). Use the [Kitware binary release](https://github.com/Kitware/CMake/releases) or the official APT repo.

@@ -104,7 +104,7 @@ extern "C" uint32_t boat_plugin_abi_version() { return BOAT_PLUGIN_ABI_VERSION; 
 // Exposes this plugin's router as the "pdu_router" service so
 // PluginManager::Load() registers it and PduServiceImpl can find it via
 // FindService("pdu_router") -- see boat/plugin.h's service-export docs.
-extern "C" const char* boat_plugin_service_name() { return "pdu_router"; }
+extern "C" const char* boat_plugin_service_name(void* /*ctx*/) { return "pdu_router"; }
 
 extern "C" void* boat_plugin_service_ptr(void* ctx) {
   auto* p = static_cast<PduRouterPlugin*>(ctx);

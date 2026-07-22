@@ -94,11 +94,14 @@ uint32_t boat_plugin_abi_version();
    an IPduRouter* for PduServiceImpl to delegate to. Omit both symbols
    entirely if the plugin has no such service; this is independent of
    BoatPluginVTable, so it does not require an ABI version bump for
-   plugins that don't use it. boat_plugin_service_ptr is called once,
-   right after initialize() succeeds, with the same ctx passed to every
-   other vtable function -- the returned pointer must stay valid until
-   shutdown() returns. */
-typedef const char* (*boat_plugin_service_name_fn)();
+   plugins that don't use it. Both are called once, right after
+   initialize() succeeds, with the same ctx passed to every other vtable
+   function -- boat_plugin_service_ptr's returned pointer must stay valid
+   until shutdown() returns. boat_plugin_service_name takes ctx too so a
+   plugin that supports multiple loaded instances (e.g. CanTp, one per CAN
+   interface) can return a per-instance name (e.g. "can_tp:vcan0") instead
+   of a single fixed string every instance would collide on. */
+typedef const char* (*boat_plugin_service_name_fn)(void* ctx);
 typedef void* (*boat_plugin_service_ptr_fn)(void* ctx);
 
 #ifdef __cplusplus

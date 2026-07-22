@@ -16,6 +16,18 @@ constexpr uint8_t kFcContinue   = 0x00;  // FC flags: Continue To Send
 constexpr uint8_t kFcWait       = 0x01;  // FC flags: Wait
 constexpr uint8_t kFcOverflow   = 0x02;  // FC flags: Overflow / abort
 
+constexpr uint8_t kPadByte = 0x55;  // fill byte for unused trailing data bytes
+
+// Every CanTp-emitted frame (SF/FF/CF/FC) is sent at the connection's fixed
+// can_dlc, not the length actually in use -- unused trailing bytes are
+// filled with kPadByte. `used` is the number of meaningful bytes already
+// written to buf (PCI/addressing + payload); pads buf[used..dlc) and
+// returns dlc, the DLC/payload_len to publish the frame with.
+uint8_t pad_frame(uint8_t* buf, uint8_t used, uint8_t dlc) {
+  for (uint8_t i = used; i < dlc; ++i) buf[i] = kPadByte;
+  return dlc;
+}
+
 // ── STmin helpers ──────────────────────────────────────────────────────────
 
 // Convert ISO 15765-2 STmin byte to microseconds.
@@ -99,7 +111,7 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
         std::memcpy(cf_buf + idx, conn->tx_buffer.data() + conn->tx_offset,
                     chunk);
       }
-      const uint8_t cf_dlc = static_cast<uint8_t>(idx + chunk);
+      const uint8_t cf_dlc = pad_frame(cf_buf, static_cast<uint8_t>(idx + chunk), dlc);
 
       auto cf = BoatFrameOwner::Can(
           plugin->iface, conn->source_addr,
@@ -155,6 +167,7 @@ int tp_initialize(void* ctx, const char* config_json) {
     }
   }
   if (plugin->iface.empty()) plugin->iface = "vcan0";
+  plugin->service_name = "can_tp:" + plugin->iface;
 
   // Start the TX pacing thread
   plugin->tx_stop.store(false);
@@ -198,6 +211,32 @@ void tp_set_pdu_publisher(void* ctx, BoatPduPublishFn fn, void* publisher_ctx) {
 void tp_on_frame(void* ctx, const BoatFrame* frame) {
   auto* plugin = static_cast<CanTpPlugin*>(ctx);
   if (plugin == nullptr || frame == nullptr || frame->payload_len < 1) return;
+
+  if (frame->bus_type == BOAT_BUS_PDU) {
+    // Generic PDU-bus dispatch: segment-and-send if this frame's pdu_id
+    // matches a configured connection's nsdu_id -- symmetric with the RX
+    // side, which already publishes reassembled I-PDUs the same way
+    // (pf.pdu_id = conn->nsdu_id, below). This is a second way to trigger a
+    // send alongside CanTpService.Send (both end up calling can_tp_send()).
+    //
+    // Require iface to be set and match this instance -- NOT the "empty
+    // iface = accept from anyone" rule the CAN-bus path below uses. Reason:
+    // this plugin's own RX-reassembly-complete path (pdu_publish_fn, below)
+    // republishes onto the very same PDU bus via DispatchFrame, with no
+    // iface set (main.cpp's PduPublisher wiring never sets one) and
+    // pdu_id == this connection's own nsdu_id -- if empty iface were
+    // accepted here, that internal echo would loop straight back into
+    // can_tp_send() and re-transmit the payload we just finished receiving.
+    // Requiring a real, matching iface closes that off entirely (an
+    // external caller must explicitly set --iface to target an instance,
+    // e.g. `boat frame send --bus-type pdu --iface vcan0 ...`), at the cost
+    // of also requiring nsdu_id to be unique across every CanTp instance
+    // sharing a PDU-bus namespace for callers that rely on iface alone.
+    if (frame->iface == nullptr || frame->iface[0] == '\0' || frame->iface != plugin->iface) return;
+    can_tp_send(plugin, frame->meta.pdu.pdu_id, frame->payload,
+               static_cast<uint32_t>(frame->payload_len));
+    return;
+  }
 
   // Only handle CAN and CAN-FD frames
   if (frame->bus_type != BOAT_BUS_CAN && frame->bus_type != BOAT_BUS_CANFD) return;
@@ -295,13 +334,14 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
       fc_buf[idx++] = kPciFc | kFcOverflow;
       fc_buf[idx++] = 0;  // BS (don't care for overflow)
       fc_buf[idx++] = 0;  // STmin (don't care for overflow)
+      const uint8_t fc_dlc = pad_frame(fc_buf, idx, conn->config.can_dlc);
 
       {
         auto fc = BoatFrameOwner::Can(
             plugin->iface, conn->source_addr,
-            static_cast<uint8_t>(idx),
+            fc_dlc,
             static_cast<uint8_t>(is_fd ? 0x04 : 0),
-            std::vector<uint8_t>(fc_buf, fc_buf + idx), is_fd);
+            std::vector<uint8_t>(fc_buf, fc_buf + fc_dlc), is_fd);
         plugin->frame_publish_fn(plugin->frame_publisher_ctx, fc.get());
       }
       return;
@@ -327,13 +367,14 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     fc_buf[idx++] = kPciFc | kFcContinue;
     fc_buf[idx++] = conn->config.block_size;  // BS (0 = unlimited)
     fc_buf[idx++] = conn->config.st_min;      // STmin
+    const uint8_t fc_dlc = pad_frame(fc_buf, idx, conn->config.can_dlc);
 
     {
       auto fc = BoatFrameOwner::Can(
           plugin->iface, conn->source_addr,
-          static_cast<uint8_t>(idx),
+          fc_dlc,
           static_cast<uint8_t>(is_fd ? 0x04 : 0),
-          std::vector<uint8_t>(fc_buf, fc_buf + idx), is_fd);
+          std::vector<uint8_t>(fc_buf, fc_buf + fc_dlc), is_fd);
       plugin->frame_publish_fn(plugin->frame_publisher_ctx, fc.get());
     }
     return;
@@ -377,12 +418,13 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
         fc_buf[fcidx++] = kPciFc | kFcContinue;
         fc_buf[fcidx++] = conn->config.block_size;
         fc_buf[fcidx++] = conn->config.st_min;
+        const uint8_t fc_dlc = pad_frame(fc_buf, fcidx, conn->config.can_dlc);
 
         auto fc = BoatFrameOwner::Can(
             plugin->iface, conn->source_addr,
-            static_cast<uint8_t>(fcidx),
+            fc_dlc,
             static_cast<uint8_t>(is_fd ? 0x04 : 0),
-            std::vector<uint8_t>(fc_buf, fc_buf + fcidx), is_fd);
+            std::vector<uint8_t>(fc_buf, fc_buf + fc_dlc), is_fd);
         plugin->frame_publish_fn(plugin->frame_publisher_ctx, fc.get());
       }
     }
@@ -391,7 +433,7 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
 }
 
 const char* can_tp_declared_buses(void* /*ctx*/) {
-  return "[\"can\"]";
+  return "[\"can\",\"pdu\"]";
 }
 
 }  // anonymous namespace
@@ -435,8 +477,16 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
 
   if (len == 0) return -1;
 
-  // Find connection by nsdu_id (fallback) or source_addr
+  // Find connection by nsdu_id (fallback) or source_addr. Copy the fields
+  // this function needs into locals while still holding tx_mutex -- a
+  // concurrent can_tp_configure() targeting the same connection overwrites
+  // NsduConnection::config in place (same map slot, same pointer), so
+  // reading conn->config.* unlocked after releasing the lock could observe
+  // a torn mix of old/new values.
   NsduConnection* conn = nullptr;
+  uint8_t dlc;
+  bool extended_addressing;
+  uint32_t target_addr;
   {
     std::lock_guard<std::mutex> lock(plugin->tx_mutex);
     auto it = plugin->connections.find(nsdu_id);
@@ -454,22 +504,29 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
     }
 
     if (conn->tx_state != NsduConnection::TX_IDLE) return -1;  // busy
+
+    dlc = conn->config.can_dlc;
+    extended_addressing = conn->config.extended_addressing;
+    target_addr = conn->target_addr;
   }
 
-  const uint8_t dlc = conn->config.can_dlc;
   const uint32_t max_payload = dlc;
-  const bool is_fd = (conn->config.can_dlc > 8);
+  const bool is_fd = (dlc > 8);
 
-  if (len <= 7) {
+  // Extended addressing reserves 1 data byte for the target-address byte,
+  // shrinking the max Single Frame payload from 7 to 6.
+  const uint32_t sf_max_len = extended_addressing ? 6 : 7;
+
+  if (len <= sf_max_len) {
     // Single Frame — send directly, no state machine needed
     uint8_t sf_buf[64];
     uint8_t idx = 0;
-    if (conn->config.extended_addressing) {
-      sf_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
+    if (extended_addressing) {
+      sf_buf[idx++] = static_cast<uint8_t>(target_addr & 0xFF);
     }
     sf_buf[idx++] = kPciSf | static_cast<uint8_t>(len);
     std::memcpy(sf_buf + idx, data, len);
-    const uint8_t sf_dlc = static_cast<uint8_t>(idx + len);
+    const uint8_t sf_dlc = pad_frame(sf_buf, static_cast<uint8_t>(idx + len), dlc);
 
     {
       auto sf = BoatFrameOwner::Can(
@@ -486,14 +543,14 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
   // First Frame
   uint8_t ff_buf[64];
   uint8_t idx = 0;
-  if (conn->config.extended_addressing) {
-    ff_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
+  if (extended_addressing) {
+    ff_buf[idx++] = static_cast<uint8_t>(target_addr & 0xFF);
   }
   ff_buf[idx++] = kPciFf | static_cast<uint8_t>((len >> 8) & 0x0F);
   ff_buf[idx++] = static_cast<uint8_t>(len & 0xFF);
   const uint32_t ff_payload = std::min(len, max_payload - 2);
   std::memcpy(ff_buf + idx, data, ff_payload);
-  const uint8_t ff_dlc = static_cast<uint8_t>(idx + ff_payload);
+  const uint8_t ff_dlc = pad_frame(ff_buf, static_cast<uint8_t>(idx + ff_payload), dlc);
 
   {
     auto ff = BoatFrameOwner::Can(
@@ -553,3 +610,20 @@ extern "C" void boat_plugin_destroy(BoatPlugin* plugin) {
 }
 
 extern "C" uint32_t boat_plugin_abi_version() { return BOAT_PLUGIN_ABI_VERSION; }
+
+// Exposes this plugin instance as a "can_tp:<iface>" service so
+// PluginManager::Load() registers it and CanTpServiceImpl can find it via
+// FindService("can_tp:" + iface) -- see boat/plugin.h's service-export docs
+// and pdu_router_plugin.cpp for the base pattern this mirrors. Iface-scoped
+// (rather than a single fixed "can_tp") so multiple loaded instances, one
+// per CAN interface, register distinct, independently-addressable names.
+extern "C" const char* boat_plugin_service_name(void* ctx) {
+  auto* p = static_cast<CanTpPlugin*>(ctx);
+  return (p != nullptr) ? p->service_name.c_str() : nullptr;
+}
+
+extern "C" void* boat_plugin_service_ptr(void* ctx) {
+  auto* p = static_cast<CanTpPlugin*>(ctx);
+  if (p == nullptr) return nullptr;
+  return static_cast<boat::core::ICanTp*>(p);
+}

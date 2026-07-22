@@ -27,6 +27,11 @@ if(TARGET pdu_router)
   target_compile_definitions(boat_unit_plugin_manager PRIVATE
     PDU_ROUTER_SO="$<TARGET_FILE:pdu_router>")
 endif()
+if(TARGET can_tp)
+  add_dependencies(boat_unit_plugin_manager can_tp)
+  target_compile_definitions(boat_unit_plugin_manager PRIVATE
+    CAN_TP_SO="$<TARGET_FILE:can_tp>")
+endif()
 catch_discover_tests(boat_unit_plugin_manager)
 
 add_executable(boat_unit_signal_bus unit/test_signal_bus.cpp)
@@ -73,6 +78,9 @@ add_executable(
   ../gateway/grpc_gateway/simulation_service_impl.cpp
   ../gateway/grpc_gateway/scenario_service_impl.cpp
   ../gateway/grpc_gateway/signal_service_impl.cpp
+  ../gateway/grpc_gateway/plugin_service_impl.cpp
+  ../gateway/grpc_gateway/node_plugin_service_impl.cpp
+  ../gateway/grpc_gateway/can_tp_service_impl.cpp
 )
 target_include_directories(boat_integration_gateway PRIVATE
   ${CMAKE_SOURCE_DIR}/src
@@ -91,6 +99,16 @@ target_link_libraries(
     protobuf::libprotobuf
     Catch2::Catch2WithMain
 )
+if(TARGET pdu_router)
+  add_dependencies(boat_integration_gateway pdu_router)
+  target_compile_definitions(boat_integration_gateway PRIVATE
+    PDU_ROUTER_SO="$<TARGET_FILE:pdu_router>")
+endif()
+if(TARGET can_tp)
+  add_dependencies(boat_integration_gateway can_tp)
+  target_compile_definitions(boat_integration_gateway PRIVATE
+    CAN_TP_SO="$<TARGET_FILE:can_tp>")
+endif()
 catch_discover_tests(boat_integration_gateway)
 
 add_executable(boat_integration_ipc_control_transport integration/test_ipc_control_transport.cpp)

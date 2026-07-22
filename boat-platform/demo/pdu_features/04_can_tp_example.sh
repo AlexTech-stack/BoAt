@@ -25,12 +25,12 @@ echo "   BOAT_NODE_PLUGINS=$PLUGIN_PATH BOAT_CAN_INTERFACES=vcan0"
 echo "   (Start in a separate terminal)"
 
 echo ""
-echo "3. Configure the session (optional — auto-created on first send)"
-echo "   boat can-tp configure --nsdu-id my_session --source-addr 0x7E0 --target-addr 0x7E8 --bs 0 --stmin 0"
+echo "3. Configure the session (required before send -- no auto-create)"
+echo "   boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --bs 0 --stmin 0"
 
 echo ""
 echo "4. Send a large PDU via CanTp CLI"
-echo "   boat can-tp send --nsdu-id my_session --source-addr 0x7E0 --target-addr 0x7E8 \\"
+echo "   boat can-tp send --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 \\"
 echo "     --data 0123456789ABCDEF00112233..."
 
 echo ""

@@ -6,11 +6,13 @@ add_executable(
   debug_service_impl.cpp
   ethernet_service_impl.cpp
   pdu_service_impl.cpp
+  can_tp_service_impl.cpp
   simulation_service_impl.cpp
   signal_service_impl.cpp
   scenario_service_impl.cpp
   replay_service_impl.cpp
   plugin_service_impl.cpp
+  node_plugin_service_impl.cpp
   metrics_service_impl.cpp
   trace_service_impl.cpp
   fault_service_impl.cpp

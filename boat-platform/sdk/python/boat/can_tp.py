@@ -1,14 +1,16 @@
 """Python interface for CAN Transport Protocol (ISO 15765-2).
 
-This is a high-level wrapper around the CanTp plugin's standalone C ABI.
-The plugin must be loaded via BOAT_NODE_PLUGINS or registered via the
-PluginService gRPC API.
+This is a high-level wrapper around the CanTpService gRPC API, which
+delegates to the live CanTp plugin instance running inside the gateway
+process (loaded via BOAT_NODE_PLUGINS). Unlike the plugin's raw C ABI
+(boat/can_tp.h), this always talks to the actual running gateway instance --
+there is no local/offline mode.
 
 This module provides:
 
-- CanTpHandle(so_path): load the CanTp shared library and get a handle
-- configure(handle, nsdu_id, ...): configure an N-SDU connection
-- send(handle, nsdu_id, data): send a large PDU through CanTp segmentation
+- CanTpHandle(client_or_address): connect to a gateway's CanTpService
+- configure(nsdu_id, ...): configure an N-SDU connection
+- send(nsdu_id, data): send a large PDU through CanTp segmentation
 
 For the CLI, use::
     boat can-tp send --nsdu-id 0x7E0 --data 0123456789ABCDEF...
@@ -16,66 +18,39 @@ For the CLI, use::
 
 from __future__ import annotations
 
-import ctypes
-import os
-from typing import Optional
+from typing import Union
 
-
-class CanTpConfig(ctypes.Structure):
-    """Mirrors the C struct CanTpConfig from boat/can_tp.h.
-    A connection represents one session between source_addr (this node)
-    and target_addr (peer node)."""
-    _fields_ = [
-        ("nsdu_id", ctypes.c_uint32),
-        ("source_addr", ctypes.c_uint32),
-        ("target_addr", ctypes.c_uint32),
-        ("rx_buffer_size", ctypes.c_uint32),
-        ("block_size", ctypes.c_uint8),
-        ("st_min", ctypes.c_uint8),
-        ("can_dlc", ctypes.c_uint8),
-        ("extended_addressing", ctypes.c_bool),
-    ]
+from boat.client import BoAtClient
+from boat.v1 import can_tp_pb2
 
 
 class CanTpHandle:
-    """Handle to a loaded CanTp plugin .so.
+    """Handle to a gateway's live CanTp plugin instance, via CanTpService.
 
-    The handle loads the shared library and resolves the can_tp_send and
-    can_tp_configure symbols.
+    Args:
+        client_or_address: an existing BoAtClient, or a "host:port" address
+            to open a new one (defaults to the gateway's default address).
+
+    RPC failures (e.g. the CanTp plugin isn't loaded, or the request is
+    invalid) raise grpc.RpcError -- callers that want the CLI's friendlier
+    error messages should catch it themselves.
     """
 
-    def __init__(self, so_path: str) -> None:
-        if not os.path.exists(so_path):
-            raise FileNotFoundError(f"CanTp plugin not found: {so_path}")
-        self._lib = ctypes.CDLL(so_path)
+    def __init__(self, client_or_address: Union[BoAtClient, str] = "localhost:50051") -> None:
+        if isinstance(client_or_address, BoAtClient):
+            self._client = client_or_address
+        else:
+            self._client = BoAtClient(address=client_or_address)
 
-        # can_tp_configure(void* tp_ctx, CanTpConfig* config) -> int32_t
-        self._lib.can_tp_configure.argtypes = [
-            ctypes.c_void_p,
-            ctypes.POINTER(CanTpConfig),
-        ]
-        self._lib.can_tp_configure.restype = ctypes.c_int32
-
-        # can_tp_send(void* tp_ctx, uint32_t nsdu_id, uint8_t* data, uint32_t len) -> int32_t
-        self._lib.can_tp_send.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_uint32,
-            ctypes.POINTER(ctypes.c_uint8),
-            ctypes.c_uint32,
-        ]
-        self._lib.can_tp_send.restype = ctypes.c_int32
-
-        # We need the plugin instance pointer. The CanTp plugin is loaded
-        # by the gateway's node_manager, not by Python. For Python-level
-        # access, callers provide a (host, port) and we use the CanTp gRPC
-        # service instead, or load a second instance locally.
-        self._ctx = None
-
-    def configure(self, nsdu_id: int, **kwargs) -> bool:
+    def configure(self, nsdu_id: int, iface: str = "", **kwargs) -> bool:
         """Configure an N-SDU connection.
 
         Args:
             nsdu_id: N-SDU identifier.
+            iface: which loaded CanTp instance to target (one per CAN
+                interface). Only needed if more than one is loaded --
+                leave empty while there's exactly one; the RPC fails with
+                a clear "ambiguous, specify iface" error otherwise.
             **kwargs: Override CanTpConfig fields (source_addr, target_addr,
                       rx_buffer_size, block_size, st_min, can_dlc,
                       extended_addressing).
@@ -88,7 +63,7 @@ class CanTpHandle:
         if source_addr == 0 and target_addr == 0:
             source_addr = nsdu_id
             target_addr = nsdu_id
-        config = CanTpConfig(
+        config = can_tp_pb2.CanTpConfig(
             nsdu_id=nsdu_id,
             source_addr=source_addr,
             target_addr=target_addr,
@@ -98,19 +73,43 @@ class CanTpHandle:
             can_dlc=kwargs.get("can_dlc", 8),
             extended_addressing=kwargs.get("extended_addressing", False),
         )
-        result = self._lib.can_tp_configure(None, ctypes.byref(config))
-        return result == 0
+        resp = self._client.can_tp.Configure(
+            can_tp_pb2.ConfigureRequest(config=config, iface=iface))
+        return resp.ok
 
-    def send(self, nsdu_id: int, data: bytes) -> bool:
-        """Send a large PDU through CanTp segmentation.
+    def send(self, nsdu_id: int, data: bytes, iface: str = "") -> bool:
+        """Send a PDU through CanTp segmentation.
+
+        Small payloads are sent as a single CAN frame directly; larger
+        payloads are segmented into First Frame + Consecutive Frames, paced
+        by the gateway plugin's internal TX thread.
 
         Args:
             nsdu_id: N-SDU identifier.
             data: PDU payload bytes.
+            iface: which loaded CanTp instance to target -- see configure().
 
         Returns:
-            True if the send was initiated.
+            True if the send was accepted (either sent immediately as a
+            single frame, or a multi-frame transfer was initiated).
         """
-        buf = (ctypes.c_uint8 * len(data)).from_buffer_copy(data)
-        result = self._lib.can_tp_send(None, nsdu_id, buf, len(data))
-        return result > 0
+        resp = self._client.can_tp.Send(
+            can_tp_pb2.SendRequest(nsdu_id=nsdu_id, data=data, iface=iface))
+        return resp.result in (
+            can_tp_pb2.SEND_RESULT_SINGLE_FRAME,
+            can_tp_pb2.SEND_RESULT_MULTI_FRAME_INITIATED,
+        )
+
+    def list_sessions(self, iface: str = "") -> list:
+        """List currently-configured N-SDU connections.
+
+        Args:
+            iface: scope to one loaded instance; "" lists across every
+                loaded instance, each session tagged with its iface.
+
+        Returns:
+            A list of CanTpSession protobuf messages (nsdu_id, source_addr,
+            target_addr, rx_state, tx_state, etc.).
+        """
+        resp = self._client.can_tp.ListSessions(can_tp_pb2.ListSessionsRequest(iface=iface))
+        return list(resp.sessions)

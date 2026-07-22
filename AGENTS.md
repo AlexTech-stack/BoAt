@@ -120,6 +120,8 @@ pytest sdk/python/tests cli/tests -v
 
 Test binary naming: `boat_unit_*` (unit), `boat_integration_*`, `boat_hil_*`, `boat_determinism_seed`.
 
+Manual verification runbooks for specific feature areas live under `boat-platform/docs/testing/`, e.g. `cantp-plugin-manager-verification.md` (CanTp gRPC bridge, multi-instance `--iface`, `NodePluginService`/`boat plugin list`, PDU-bus dispatch).
+
 ## Python SDK / CLI
 
 ```bash
@@ -160,6 +162,7 @@ Each service is a standalone `python3 ui/<name>.py` FastAPI/uvicorn app with emb
   - Plugin vtable (9 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`
   - `BOAT_PLUGIN_ABI_VERSION = 8` — v7 plugins rejected with clear error
   - `PduRouter` is a plugin (`pdu_router.so`), loaded by the gateway
+  - `boat plugin list` shows loaded plugins from **both** `PluginManager` instances (sim-scoped + always-on `node_manager`) in one table with a `scope` column — `PluginService` (register/list/info/unload) only ever reaches the sim-scoped one; `NodePluginService` (list/info/unload, no register) reaches `node_manager`. `boat plugin info|unload` need `--scope {sim,node}`; `--scope node` unload additionally needs `--yes`. See `README.md`'s "Dual PluginManager".
   - `FrameService` gRPC provides unified send/subscribe for all bus types
   - `boat frame send` / `boat frame subscribe` CLI replaces `boat can` / `boat eth`
   - TCP plugin uses v8 ABI (config-driven, gateway-resident); old C API removed
@@ -282,47 +285,80 @@ uint32_t crc32 = E2eCrc32(data, len);
 
 ### CanTp — CAN Transport Protocol (Plugin)
 
-ISO 15765-2 segmentation/reassembly for PDUs larger than 8 bytes. Operates as a `BOAT_NODE_PLUGINS` node plugin using the v8 ABI (`on_frame`/`set_frame_publisher`) with its own C API for external configuration.
+ISO 15765-2 segmentation/reassembly for PDUs larger than 8 bytes. Operates as a `BOAT_NODE_PLUGINS` node plugin using the v8 ABI (`on_frame`/`set_frame_publisher`). `boat can-tp configure`/`send` talk to the live plugin instance inside the gateway process via the `CanTpService` gRPC service (`CanTpServiceImpl` looks it up via `PluginManager::FindService("can_tp:" + iface)`) — there is no offline/local mode.
 
 Each connection represents a session between `source_addr` (this node) and
 `target_addr` (peer node).  Both IDs must be configured so that the plugin
 can correctly associate frames and distinguish ISO-TP traffic from regular
-signal frames on the bus.
+signal frames on the bus. `nsdu_id` must be numeric (`int(x, 0)` — hex or
+decimal, not a symbolic name).
 
 ```bash
 # Build plugin
 cmake --build --preset debug
 
 # Run gateway with CanTp plugin
-BOAT_NODE_PLUGINS=./build/debug/src/plugins/can_tp/can_tp.so \
+BOAT_NODE_PLUGINS=./build/debug/src/plugins/can_tp/can_tp.so?{"iface":"vcan0"} \
   BOAT_CAN_INTERFACES=vcan0 \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 
 # Configure a session (dual-ID, tester→ECU)
-boat can-tp configure --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 --bs 0 --stmin 0
+boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --bs 0 --stmin 0
 
-# Send large PDU via CanTp CLI (--dlc 8 for classic CAN, --dlc 64 for CAN-FD)
-boat can-tp send --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 --dlc 8 --data 0123456789ABCDEF...
+# Send large PDU via CanTp CLI -- SF or FF+CF is chosen automatically by
+# payload length (--dlc 8 for classic CAN, --dlc 64 for CAN-FD)
+boat can-tp send --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --dlc 8 --data 0123456789ABCDEF...
+
+# List currently-configured sessions (nsdu_id, addrs, rx/tx state) --
+# across every loaded instance, or scoped to one with --iface
+boat can-tp list-sessions
 ```
 
-Programmatic (C API):
-```c
-#include <boat/can_tp.h>
+**Multiple instances (one per CAN interface).** Each loaded CanTp instance is
+bound to exactly one interface at load time and registers itself under an
+iface-scoped service name. Load one entry per interface in `BOAT_NODE_PLUGINS`
+(comma-separated, each with its own `?{"iface":...}` config):
 
-CanTpConfig cfg;
-cfg.nsdu_id = 0x7E0;
-cfg.source_addr = 0x7E0;
-cfg.target_addr = 0x7E8;
-cfg.rx_buffer_size = 4095;
-cfg.block_size = 0;      // unlimited CF per FC
-cfg.st_min = 0;          // no min separation
-cfg.can_dlc = 8;
-cfg.extended_addressing = false;
-can_tp_configure(plugin_ctx, &cfg);
+```bash
+BOAT_NODE_PLUGINS='./build/debug/src/plugins/can_tp/can_tp.so?{"iface":"vcan0"},./build/debug/src/plugins/can_tp/can_tp.so?{"iface":"vcan1"}' \
+  BOAT_CAN_INTERFACES=vcan0,vcan1 \
+  ./build/debug/src/gateway/grpc_gateway/boat_gateway
 
-uint8_t data[] = {0x01, 0x02, ..., 0xFF};  // 255 bytes
-can_tp_send(plugin_ctx, 0x7E0, data, 255);  // segmented into SF or FF+CF
+boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --iface vcan1
+boat can-tp send --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --data 0123 --iface vcan1
 ```
+
+`--iface` is only *required* once more than one instance is loaded — while
+there's exactly one, omitting it falls back to that instance automatically.
+That fallback is fragile across config changes: a command that worked without
+`--iface` today will start failing with a `FAILED_PRECONDITION` "multiple
+CanTp instances loaded... specify --iface" error the moment a second
+interface is added, with no other warning. Prefer always passing `--iface`
+in scripts/automation that might later run against a multi-interface gateway.
+
+The plugin's raw C ABI (`boat/can_tp.h`'s `can_tp_configure`/`can_tp_send`)
+is still what the gRPC layer calls into internally, and remains available for
+plugins/tests that link against `can_tp.so` directly in-process (see
+`src/tests/hw_can_tp_hil_test.py`) — but it operates on whatever instance's
+`ctx` you pass it, with no gRPC/CLI path involved.
+
+**Two ways to trigger a send.** CanTp declares `["can","pdu"]` in
+`declared_buses()`, so a send can be triggered either via the bespoke
+`CanTpService.Send` RPC (above), or generically via any `BOAT_BUS_PDU`
+frame whose `pdu_id` matches a configured connection's `nsdu_id` (e.g.
+`boat frame send --bus-type pdu --iface vcan0 --id 0x7E0 --data 0123`) --
+symmetric with the RX side, which already emits reassembled I-PDUs as
+`BOAT_BUS_PDU` frames the same way (`pdu_id = nsdu_id`). **The PDU-bus path
+requires `iface` to be set and match the target instance** -- unlike the
+CAN-bus RX path, where an absent iface means "accept from anyone". This is
+deliberate: the plugin's own RX-reassembly-complete handler republishes
+onto the same PDU bus with no iface set, and if an absent iface were
+accepted here that internal echo would loop straight back into
+`can_tp_send()` and re-transmit the payload it just finished receiving.
+Practical implication: if you drive CanTp via the generic PDU bus rather
+than `CanTpService`, `nsdu_id` must stay unique across every CanTp instance
+sharing that PDU-bus namespace, since there's no ambiguity-detection here
+the way `CanTpService.Send`'s "multiple instances loaded" error provides.
 
 ### SOME/IP Plugin
 

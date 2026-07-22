@@ -52,7 +52,7 @@ boat replay       Trace replay (start, seek, stream, pause, resume, stop, from-e
 boat frame        Unified frame send/subscribe, list-ifaces (CAN, CANFD, Ethernet, TCP, PDU)
 boat can-tp       CAN Transport Protocol (configure, send) — ISO 15765-2
 boat pdu          PDU routing (send, route, remove-route, container, group, list-routes, subscribe)
-boat plugin       Plugin management (register, list, info, unload)
+boat plugin       Plugin management across sim+node scopes (register, list, info, unload)
 boat db           PDU database inspection (list, show, signal-routes)
 boat trace        Trace recording (start, stop, status)
 boat test         System test runner (list-environments, run)
@@ -129,14 +129,61 @@ boat pdu list-groups
 ### 5. CAN Transport Protocol (ISO 15765-2)
 
 ```bash
-# Configure a CanTp session
-boat can-tp configure --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8
+# Configure a CanTp session (nsdu_id must be numeric, hex or decimal)
+boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8
 
-# Send a large PDU (auto-segmented)
-boat can-tp send --nsdu-id diag --source-addr 0x7E0 --target-addr 0x7E8 --data 0123456789ABCDEF...
+# Send a PDU -- small payloads go as a Single Frame automatically,
+# larger ones are segmented into First Frame + Consecutive Frames
+boat can-tp send --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --data 0123456789ABCDEF...
 ```
 
-### 6. PDU Database Inspection
+If more than one CanTp instance is loaded (one per CAN interface, e.g. a
+gateway started with `BOAT_NODE_PLUGINS` pointing at `can_tp.so` twice with
+different `iface` configs), pick one with `--iface`:
+
+```bash
+boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --iface vcan1
+boat can-tp send --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --data 0123 --iface vcan1
+```
+
+List currently-configured sessions -- across every loaded instance by
+default (each row tagged with its `iface`), or scoped to one:
+
+```bash
+boat can-tp list-sessions
+boat can-tp list-sessions --iface vcan0
+```
+
+### 6. Plugin Management
+
+Plugins live in one of two `PluginManager` instances (see `README.md`'s
+"Dual PluginManager"): `sim` (simulation-scoped, hot-loadable per running
+scenario) or `node` (always-on, loaded once at gateway startup from
+`BOAT_NODE_PLUGINS` — CanTp, PduRouter, TCP, SOME/IP, Probe). `plugin list`
+shows both in one table with a `scope` column, so this is the answer to
+"what CanTp interfaces are currently running" — `config_json` reveals the
+`iface` each instance is bound to.
+
+```bash
+# List every loaded plugin, both scopes, with their load-time config
+boat plugin list
+
+# Load a plugin into the simulation-scoped manager at runtime
+boat plugin register --path ./build/debug/src/plugins/probe/probe.so --config '{}'
+
+# Inspect one plugin (--scope defaults to sim; pass --scope node for a node plugin)
+boat plugin info "./build/debug/src/plugins/can_tp/can_tp.so?iface=vcan0" --scope node
+
+# Unload -- --scope is always required; --scope node additionally requires
+# --yes, since it's immediate and gateway-wide, not scoped to any simulation
+boat plugin unload scn-plugin-id --scope sim
+boat plugin unload "./build/debug/src/plugins/can_tp/can_tp.so?iface=vcan0" --scope node --yes
+```
+
+There is no `register` for node plugins -- they're only ever loaded via
+`BOAT_NODE_PLUGINS` at gateway startup today.
+
+### 7. PDU Database Inspection
 
 ```bash
 # List available databases
@@ -149,7 +196,7 @@ boat db show --db pdu_db.json
 boat db signal-routes --db pdu_db.json --signal MotorSpeed
 ```
 
-### 7. Trace Recording & Replay
+### 8. Trace Recording & Replay
 
 ```bash
 # Start recording
@@ -162,7 +209,7 @@ boat trace stop
 boat replay start --trace-id <id>
 ```
 
-### 8. AI Assistants
+### 9. AI Assistants
 
 AI commands use an LLM backend (default: Ollama with `qwen2.5-coder:3b`):
 

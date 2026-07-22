@@ -101,6 +101,25 @@ uint32_t boat_plugin_abi_version();  // returns 8
 
 Communication between the gateway and plugins uses **direct C function calls** through the vtable (`BoatPluginVTable`, 9 fields). The gateway calls `initialize`, `on_tick`, `shutdown`, and `on_frame` on each plugin. Plugins call back via `set_frame_publisher`, `set_publisher`, `set_bus_publisher`, and `set_pdu_publisher` to publish frames, signals, and PDUs back to the bus.
 
+### Two `PluginManager` instances
+
+The gateway runs **two independent `PluginManager` instances** (each just an in-process object, not a separate process): an always-on `node_manager` (`main.cpp`, gateway lifetime, loaded once from the `BOAT_NODE_PLUGINS` env var — CanTp, PduRouter, TCP, SOME/IP, Probe all live here) and a simulation-scoped one owned by `SimulationContext` (hot-loadable per running scenario via `PluginService.RegisterPlugin`). `PluginService` (`boat plugin list/info/unload/register`) talks **only** to the simulation-scoped manager — node plugins are not reachable through it. See `README.md`'s "Dual PluginManager" section for the full lifecycle/tick-domain comparison.
+
+Plugins are keyed in `PluginManager::plugins_` by `so_path`, plus `?iface=<iface>` appended when the plugin's config JSON contains an `"iface"` key (parsed via the same manual substring-scan style `ParseDeclaredBusMask` uses, not a JSON library) — so two instances of the same `.so` loaded with different ifaces (e.g. CanTp on `vcan0` and `vcan1`) get independent entries instead of the second silently overwriting the first. Two instances configured for the *same* iface still collide (last-loaded wins) — that's intentional, since it's a real bus-level conflict, not just bookkeeping.
+
+### Service export (`FindService`)
+
+A plugin may optionally export two extra C symbols to expose a named C++ service pointer that gateway-side gRPC code looks up:
+
+```c
+const char* boat_plugin_service_name(void* ctx);
+void*       boat_plugin_service_ptr(void* ctx);
+```
+
+Both are called once, right after `initialize()` succeeds, with the plugin's own `ctx`. `PluginManager::Load()` registers the returned `(name, ptr)` pair; gRPC service impls resolve it via `PluginManager::FindService(name)`. `boat_plugin_service_name` takes `ctx` specifically so a plugin supporting multiple loaded instances can return a per-instance name — CanTp returns `"can_tp:" + iface` (so `FindService("can_tp:vcan0")` and `FindService("can_tp:vcan1")` resolve independently), while single-instance plugins like PduRouter ignore `ctx` and return a fixed name (`"pdu_router"`). `PluginManager::ListServices()` returns every currently-registered name, letting callers prefix-scan for "every loaded instance of plugin X" (used by `CanTpServiceImpl` to fall back to "the only loaded instance" when no `iface` is specified, and to report a clear disambiguation error when more than one is loaded).
+
+`PluginManager::Unload()` compare-and-erases each service registration (only removes `services_[name]` if it still points at *this* handle's registered pointer) rather than erasing by name alone — otherwise unloading a stale handle whose service name was since re-registered by a newer instance would delete that newer, still-live registration.
+
 ## Component Graph
 
 ```mermaid
@@ -130,6 +149,7 @@ graph TD
 Key data flows:
 - **Frame I/O**: Plugin `on_frame` receives frames from the bus; `set_frame_publisher` sends frames to the bus
 - **PDU routing**: PduRouter plugin registers itself as `IPduRouter` service; `PduServiceImpl` delegates via `FindService("pdu_router")`
+- **CanTp**: each loaded CanTp instance registers itself as `ICanTp`, iface-scoped (`FindService("can_tp:" + iface)`); `CanTpServiceImpl` delegates, falling back to "the only loaded instance" when the caller doesn't specify one. CanTp is also both a producer and consumer of the `BOAT_BUS_PDU` frame bus: its RX-reassembly-complete path emits reassembled I-PDUs as `BOAT_BUS_PDU` frames (`pdu_id = nsdu_id`, no `iface` set), and (declaring `"pdu"` in `declared_buses()`) it also *consumes* inbound `BOAT_BUS_PDU` frames whose `pdu_id` matches a configured `nsdu_id`, segmenting and sending them the same way `CanTpService.Send` does — but only when the inbound frame's `iface` is set and matches, specifically to avoid its own un-scoped RX-echo frames looping back into a send.
 - **Replay**: replay engine (in core) publishes events as `BoatFrame` to the frame bus
 - **Tick**: gateway tick thread calls `PluginManager::TickAll(tick)` which calls each plugin's `on_tick`
 

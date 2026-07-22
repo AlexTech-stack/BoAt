@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package boat.v1;
+
+import "boat/v1/common.proto";
+import "boat/v1/plugin.proto";
+
+// Introspects and manages the gateway's always-on "node" PluginManager --
+// the one loaded once at startup from BOAT_NODE_PLUGINS (CanTp, PduRouter,
+// TCP, SOME/IP, Probe), and kept alive for the gateway's whole lifetime
+// regardless of simulation state. This is a *different* PluginManager
+// instance than PluginService operates on (which is simulation-scoped,
+// hot-loadable per running scenario) -- see README.md's "Dual PluginManager"
+// section. Reuses the Plugin message from plugin.proto.
+//
+// No RegisterNodePlugin: node plugins are only ever loaded via
+// BOAT_NODE_PLUGINS at gateway startup today. Adding runtime hot-load into
+// the persistent gateway process is a separate capability with its own
+// authorization questions, deliberately out of scope here.
+message ListNodePluginsRequest {
+  PaginationRequest page = 1;
+}
+message ListNodePluginsResponse {
+  repeated Plugin plugins = 1;
+  PaginationResponse page = 2;
+}
+
+message GetNodePluginInfoRequest {
+  string plugin_id = 1;
+}
+
+message UnloadNodePluginRequest {
+  string plugin_id = 1;
+  // Node plugins are always-on and may be mid-session (e.g. an active CAN-TP
+  // diagnostic exchange) -- callers must set this to acknowledge the unload
+  // is immediate and not scoped to any simulation.
+  bool confirm = 2;
+}
+message UnloadNodePluginResponse {
+  bool unloaded = 1;
+  ErrorDetail error = 2;
+}
+
+service NodePluginService {
+  rpc ListNodePlugins(ListNodePluginsRequest) returns (ListNodePluginsResponse);
+  rpc GetNodePluginInfo(GetNodePluginInfoRequest) returns (PluginResponse);
+  rpc UnloadNodePlugin(UnloadNodePluginRequest) returns (UnloadNodePluginResponse);
+}

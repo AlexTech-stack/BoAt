@@ -33,6 +33,18 @@ vtable. Plugins own **stateful conversations / variation** only — the kept set
 `pdu_router`, `can_tp` (ISO-TP), `tcp`, `someip`. Stateless CAN/Ethernet
 transport is core (the gateway `FrameSink` + bus registries), not a plugin.
 
+`PduRouterPlugin` and `CanTpPlugin` additionally export an optional pair of
+symbols, independent of `BoatPluginVTable` (not shown on `IPlugin` above,
+since they're not part of the required vtable contract): `const char*
+boat_plugin_service_name(void* ctx)` and `void* boat_plugin_service_ptr(void*
+ctx)`. `PluginManager::Load()` registers the returned pointer under that name
+so gateway-side gRPC code can look it up via `FindService(name)` instead of
+going through the vtable — `PduRouterPlugin` implements `IPduRouter` and
+registers the fixed name `"pdu_router"`; `CanTpPlugin` implements `ICanTp` and
+registers an iface-scoped name (`"can_tp:vcan0"`, `"can_tp:vcan1"`, ...) so
+multiple loaded instances stay independently addressable. See
+`docs/architecture/system-architecture.md`'s "Service export" section.
+
 Key v8 methods:
 - `on_frame(BoatFrame)` — the plugin receives frames dispatched by
   `PluginManager::DispatchFrame()`, filtered to the bus types it declared.

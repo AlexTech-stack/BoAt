@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package boat.v1;
+
+// Mirrors CanTpConfig from sdk/cpp/include/boat/can_tp.h (ISO 15765-2).
+// A connection represents one session between source_addr (this node)
+// and target_addr (peer node): we send FF/CF and receive FC on
+// source_addr; we receive SF/FF/CF and send FC on target_addr.
+message CanTpConfig {
+  uint32 nsdu_id             = 1;  // logical session identifier
+  uint32 source_addr         = 2;  // CAN ID of this node (0 = use nsdu_id, only if target_addr is also 0)
+  uint32 target_addr         = 3;  // CAN ID of the peer node (0 = use nsdu_id, only if source_addr is also 0)
+  uint32 rx_buffer_size      = 4;  // max reassembly buffer (default 4095 if 0)
+  uint32 block_size          = 5;  // BS to advertise in sent FC (0 = unlimited); truncated to uint8 server-side
+  uint32 st_min              = 6;  // STmin to advertise in sent FC; truncated to uint8 server-side
+  uint32 can_dlc             = 7;  // max CAN DLC for this connection — must be 8 or 64
+  bool   extended_addressing = 8;  // use first data byte as target address
+}
+
+message ConfigureRequest {
+  CanTpConfig config = 1;
+  // Which loaded CanTp instance to target, when more than one is loaded
+  // (e.g. one per CAN interface). "" selects the only loaded instance if
+  // there is exactly one; if there are several, the RPC fails with
+  // FAILED_PRECONDITION asking the caller to disambiguate.
+  string iface = 2;
+}
+
+message ConfigureResponse {
+  bool   ok    = 1;
+  string iface = 2;  // the CanTp plugin's actual bound iface (from its load-time
+                      // config), for optional client-side --iface validation
+}
+
+// Outcome of a Send() call. Distinguishes an immediate single-frame send from
+// an asynchronously-initiated multi-frame transfer (paced by the plugin's
+// internal TX thread) — the two map to can_tp_send()'s 1 / 0 return values.
+enum SendResult {
+  SEND_RESULT_UNSPECIFIED           = 0;
+  SEND_RESULT_SINGLE_FRAME          = 1;
+  SEND_RESULT_MULTI_FRAME_INITIATED = 2;
+}
+
+message SendRequest {
+  uint32 nsdu_id = 1;
+  bytes  data    = 2;
+  // See ConfigureRequest.iface -- selects which loaded instance to target.
+  string iface   = 3;
+}
+
+message SendResponse {
+  SendResult result = 1;
+}
+
+// One configured N-SDU connection, as reported by ListSessions.
+message CanTpSession {
+  string iface               = 1;  // which loaded instance this session belongs to
+  uint32 nsdu_id              = 2;
+  uint32 source_addr          = 3;
+  uint32 target_addr          = 4;
+  uint32 rx_buffer_size       = 5;
+  uint32 block_size           = 6;
+  uint32 st_min               = 7;
+  uint32 can_dlc              = 8;
+  bool   extended_addressing  = 9;
+  string rx_state             = 10;  // "IDLE" | "WAIT_CF"
+  string tx_state             = 11;  // "IDLE" | "WAIT_FC" | "SEND_CF" | "COMPLETE"
+}
+
+message ListSessionsRequest {
+  // "" lists sessions across every loaded CanTp instance (each tagged with
+  // its iface in the response); set to scope to just one instance.
+  string iface = 1;
+}
+
+message ListSessionsResponse {
+  repeated CanTpSession sessions = 1;
+}
+
+// Exposes the CanTp plugin's live gateway-side instance(s) (loaded via
+// BOAT_NODE_PLUGINS, one per CAN interface) to CLI/SDK clients.
+// See PluginManager::FindService("can_tp:" + iface).
+service CanTpService {
+  rpc Configure(ConfigureRequest) returns (ConfigureResponse);
+  rpc Send(SendRequest) returns (SendResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+}

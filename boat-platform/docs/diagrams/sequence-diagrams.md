@@ -28,14 +28,20 @@ sequenceDiagram
     Agent->>Core: Transition to STOPPED
 ```
 
-## 2) Plugin Hot-Load During Running Simulation
+## 2) Plugin Hot-Load During Running Simulation (sim-scoped)
+
+`PluginService` only ever operates on the simulation-scoped `PluginManager`
+(`plugin_manager` in `main.cpp`) -- this diagram does not cover node plugins
+(CanTp, PduRouter, TCP, SOME/IP, Probe), which are loaded once at gateway
+startup from `BOAT_NODE_PLUGINS` into a separate, always-on `node_manager`.
+See diagram 3 below and `README.md`'s "Dual PluginManager" section.
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant Gateway
     participant PluginSvc as PluginService
-    participant PM as PluginManager
+    participant PM as PluginManager (sim-scoped)
     participant Core as Simulation Core
 
     Client->>Gateway: RegisterPlugin(path)
@@ -46,7 +52,40 @@ sequenceDiagram
     PM-->>Client: Plugin registered and active
 ```
 
-## 3) Signal Subscription and Streaming to gRPC Client
+## 3) Node Plugin Introspection and Unload
+
+`NodePluginService` exposes the always-on `node_manager` (loaded once from
+`BOAT_NODE_PLUGINS` at gateway startup) -- a separate `PluginManager`
+instance from diagram 2's sim-scoped one, with no register RPC (node
+plugins aren't hot-loadable today). `boat plugin list` calls both
+`PluginService.ListPlugins` and `NodePluginService.ListNodePlugins` and
+merges the results client-side into one table with a `scope` column.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant NodePluginSvc as NodePluginService
+    participant NM as PluginManager (node_manager)
+
+    Client->>Gateway: ListNodePlugins
+    Gateway->>NodePluginSvc: ListNodePlugins
+    NodePluginSvc->>NM: List() + GetConfigJson(name) per entry
+    NM-->>NodePluginSvc: [Plugin{plugin_id, config_json, ...}]
+    NodePluginSvc-->>Client: ListNodePluginsResponse
+
+    Client->>Gateway: UnloadNodePlugin(plugin_id, confirm=false)
+    Gateway->>NodePluginSvc: UnloadNodePlugin
+    NodePluginSvc-->>Client: FAILED_PRECONDITION (confirm required)
+
+    Client->>Gateway: UnloadNodePlugin(plugin_id, confirm=true)
+    Gateway->>NodePluginSvc: UnloadNodePlugin
+    NodePluginSvc->>NM: Unload(plugin_id)
+    NM-->>NodePluginSvc: dlclose'd, service registrations erased
+    NodePluginSvc-->>Client: unloaded=true
+```
+
+## 4) Signal Subscription and Streaming to gRPC Client
 
 ```mermaid
 sequenceDiagram
@@ -64,7 +103,7 @@ sequenceDiagram
     SignalSvc-->>Client: StreamSignalValue
 ```
 
-## 4) Deterministic Replay Flow (ABI v8, core sink)
+## 5) Deterministic Replay Flow (ABI v8, core sink)
 
 Replay no longer injects events directly into the core, nor through a forwarder
 plugin. It parses trace records into `core::Frame` and transmits each through the
@@ -96,7 +135,7 @@ sequenceDiagram
     ReplaySvc-->>Client: StreamReplay events
 ```
 
-## 5) Fault Injection Sequence
+## 6) Fault Injection Sequence
 
 ```mermaid
 sequenceDiagram

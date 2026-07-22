@@ -35,6 +35,8 @@
 #include "pdu/pdu_types.h"
 #include "pdu/tick_timer.h"
 #include "pdu_service_impl.h"
+#include "can_tp_service_impl.h"
+#include "node_plugin_service_impl.h"
 #include "metrics_service_impl.h"
 #include "plugin/plugin_manager.h"
 #include "plugin_service_impl.h"
@@ -337,11 +339,13 @@ int main() {
   boat::gateway::ScenarioServiceImpl scenario_impl(ctx);
   boat::gateway::ReplayServiceImpl replay_impl(ctx);
   boat::gateway::PluginServiceImpl plugin_impl(ctx);
+  boat::gateway::NodePluginServiceImpl node_plugin_impl(ctx);
   boat::gateway::MetricsServiceImpl metrics_impl(ctx);
   boat::gateway::TraceServiceImpl trace_impl(ctx);
   boat::gateway::FaultServiceImpl fault_impl(ctx);
   boat::gateway::CanServiceImpl can_impl(ctx);
   boat::gateway::PduServiceImpl pdu_impl(ctx);
+  boat::gateway::CanTpServiceImpl can_tp_impl(ctx);
   boat::gateway::DebugServiceImpl debug_impl(audit_log);
   boat::gateway::FrameServiceImpl frame_impl(ctx);
 
@@ -361,11 +365,13 @@ int main() {
   builder.RegisterService(&scenario_impl);
   builder.RegisterService(&replay_impl);
   builder.RegisterService(&plugin_impl);
+  builder.RegisterService(&node_plugin_impl);
   builder.RegisterService(&metrics_impl);
   builder.RegisterService(&trace_impl);
   builder.RegisterService(&fault_impl);
   builder.RegisterService(&can_impl);
   builder.RegisterService(&pdu_impl);
+  builder.RegisterService(&can_tp_impl);
   builder.RegisterService(&debug_impl);
   builder.RegisterService(&frame_impl);
 
