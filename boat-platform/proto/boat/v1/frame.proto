@@ -15,7 +15,11 @@ message CanMetadata {
                         // gap if it isn't already one of those 8 values; it does not
                         // reach further into `payload` to do so, so dlc should
                         // normally just equal payload.size().
-  uint32 flags   = 3;  // CANFD_BRS=0x01, CANFD_ESI=0x02, CANFD_FDF=0x04
+  uint32 flags   = 3;  // CANFD_BRS=0x01, CANFD_ESI=0x02, CANFD_FDF=0x04,
+                        // BOAT_CAN_FLAG_SELF_SENT=0x08. The registry send path
+                        // sets SELF_SENT on every frame the gateway transmits
+                        // itself, so a client that both injects into a bus and
+                        // subscribes to it can tell its own echo from wire RX.
   uint32 channel = 4;  // 1-based trace channel; 0 = unknown/unset.
                         // Import stores the original channel instead of a
                         // baked interface name, so replay can map it to any
@@ -30,6 +34,8 @@ message EthMetadata {
   bytes  src_ip     = 5;  // 4 bytes (v4) or 16 bytes (v6)
   bytes  dst_ip     = 6;  // same
   uint32 ip_version = 7;  // 4 or 6
+  uint32 flags      = 8;  // BOAT_ETH_FLAG_SELF_SENT=0x01 — the Ethernet
+                          // counterpart of CanMetadata.flags' SELF_SENT bit.
 }
 
 message TcpMetadata {
@@ -82,7 +88,35 @@ message SubscribeFramesRequest {
   string iface_filter = 2;              // empty = all
 }
 
+/* One message on the ingress half of StreamFrames.
+
+   A client that bridges an external bus into the gateway sends `subscribe`
+   first to configure what it wants back, then streams `frame` messages. The
+   subscribe message is optional: omit it to push frames without receiving any.
+   Sending it more than once replaces the previous subscription. */
+message StreamFramesRequest {
+  oneof kind {
+    SubscribeFramesRequest subscribe = 1;
+    Frame                  frame     = 2;
+  }
+}
+
 service FrameService {
   rpc SendFrame(SendFrameRequest) returns (SendFrameResponse);
   rpc SubscribeFrames(SubscribeFramesRequest) returns (stream Frame);
+
+  /* Bidirectional frame bridge.
+
+     SendFrame is one round-trip per frame, which cannot keep up with a loaded
+     bus; StreamFrames carries ingress and egress over a single connection so a
+     remote adapter (e.g. a phone-attached USB CAN interface bridged onto a vcan)
+     can run at bus rates.
+
+     Ingress frames go through the same FrameSink as every other producer, so
+     they are tagged SELF_SENT and observed by plugins, PDU routing and trace
+     recording exactly like locally-generated traffic. An ingress frame naming
+     an interface the gateway does not have fails the whole call rather than
+     being dropped: the interface is fixed for the life of a bridge session, so
+     that is a configuration error and silence would hide it. */
+  rpc StreamFrames(stream StreamFramesRequest) returns (stream Frame);
 }

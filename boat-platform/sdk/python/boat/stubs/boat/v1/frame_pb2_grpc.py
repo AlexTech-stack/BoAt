@@ -44,6 +44,11 @@ class FrameServiceStub:
                 request_serializer=boat_dot_v1_dot_frame__pb2.SubscribeFramesRequest.SerializeToString,
                 response_deserializer=boat_dot_v1_dot_frame__pb2.Frame.FromString,
                 _registered_method=True)
+        self.StreamFrames = channel.stream_stream(
+                '/boat.v1.FrameService/StreamFrames',
+                request_serializer=boat_dot_v1_dot_frame__pb2.StreamFramesRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_frame__pb2.Frame.FromString,
+                _registered_method=True)
 
 
 class FrameServiceServicer:
@@ -61,6 +66,25 @@ class FrameServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def StreamFrames(self, request_iterator, context):
+        """Bidirectional frame bridge.
+
+        SendFrame is one round-trip per frame, which cannot keep up with a loaded
+        bus; StreamFrames carries ingress and egress over a single connection so a
+        remote adapter (e.g. a phone-attached USB CAN interface bridged onto a vcan)
+        can run at bus rates.
+
+        Ingress frames go through the same FrameSink as every other producer, so
+        they are tagged SELF_SENT and observed by plugins, PDU routing and trace
+        recording exactly like locally-generated traffic. An ingress frame naming
+        an interface the gateway does not have fails the whole call rather than
+        being dropped: the interface is fixed for the life of a bridge session, so
+        that is a configuration error and silence would hide it. 
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_FrameServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -72,6 +96,11 @@ def add_FrameServiceServicer_to_server(servicer, server):
             'SubscribeFrames': grpc.unary_stream_rpc_method_handler(
                     servicer.SubscribeFrames,
                     request_deserializer=boat_dot_v1_dot_frame__pb2.SubscribeFramesRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_frame__pb2.Frame.SerializeToString,
+            ),
+            'StreamFrames': grpc.stream_stream_rpc_method_handler(
+                    servicer.StreamFrames,
+                    request_deserializer=boat_dot_v1_dot_frame__pb2.StreamFramesRequest.FromString,
                     response_serializer=boat_dot_v1_dot_frame__pb2.Frame.SerializeToString,
             ),
     }
@@ -128,6 +157,33 @@ class FrameService:
             target,
             '/boat.v1.FrameService/SubscribeFrames',
             boat_dot_v1_dot_frame__pb2.SubscribeFramesRequest.SerializeToString,
+            boat_dot_v1_dot_frame__pb2.Frame.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StreamFrames(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_stream(
+            request_iterator,
+            target,
+            '/boat.v1.FrameService/StreamFrames',
+            boat_dot_v1_dot_frame__pb2.StreamFramesRequest.SerializeToString,
             boat_dot_v1_dot_frame__pb2.Frame.FromString,
             options,
             channel_credentials,

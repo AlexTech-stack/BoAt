@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <functional>
+#include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -93,6 +96,7 @@ static void FrameToProto(const boat::core::Frame& f, boat::v1::Frame* proto) {
       em->set_ethertype(f.eth_meta().ethertype);
       em->set_vlan_id(f.eth_meta().vlan_id);
       em->set_ip_version(f.eth_meta().ip_version);
+      em->set_flags(f.eth_meta().flags);
       if (f.eth_meta().ip_version == 4) {
         em->set_src_ip(f.eth_meta().src_ip, 4);
         em->set_dst_ip(f.eth_meta().dst_ip, 4);
@@ -127,6 +131,97 @@ static void FrameToProto(const boat::core::Frame& f, boat::v1::Frame* proto) {
   }
 }
 
+/* ── Shared subscription plumbing ───────────────────────────────────── */
+
+/* RX callbacks registered for the lifetime of one streaming RPC.
+   Unsubscribes on destruction, so callbacks can never outlive the stream
+   they write to. */
+class FrameSubscription {
+ public:
+  FrameSubscription(GatewayContext& ctx,
+                    const boat::v1::SubscribeFramesRequest& request,
+                    std::function<void(const boat::v1::Frame&)> emit)
+      : ctx_(ctx) {
+    bool want_can = true;
+    bool want_eth = true;
+    if (!request.bus_types().empty()) {
+      want_can = false;
+      want_eth = false;
+      for (auto bt : request.bus_types()) {
+        if (bt == boat::v1::Frame::CAN || bt == boat::v1::Frame::CANFD) want_can = true;
+        if (bt == boat::v1::Frame::ETHERNET) want_eth = true;
+      }
+    }
+
+    // An empty filter means every interface, matching SubscribeFramesRequest.
+    const std::string iface_filter = request.iface_filter();
+    auto forward = [emit = std::move(emit), iface_filter](const boat::core::Frame& f) {
+      if (!iface_filter.empty() && f.iface() != iface_filter) return;
+      boat::v1::Frame proto;
+      FrameToProto(f, &proto);
+      emit(proto);
+    };
+
+    if (want_can) can_.push_back(ctx_.can_bus_registry.SubscribeFrame(forward));
+    if (want_eth) eth_.push_back(ctx_.ethernet_bus_registry.SubscribeFrame(forward));
+  }
+
+  ~FrameSubscription() {
+    for (auto id : can_) ctx_.can_bus_registry.UnsubscribeFrame(id);
+    for (auto id : eth_) ctx_.ethernet_bus_registry.UnsubscribeFrame(id);
+  }
+
+  FrameSubscription(const FrameSubscription&)            = delete;
+  FrameSubscription& operator=(const FrameSubscription&) = delete;
+
+ private:
+  GatewayContext& ctx_;
+  std::vector<boat::hil::CanBusRegistry::RxCallbackId>      can_;
+  std::vector<boat::hil::EthernetBusRegistry::RxCallbackId> eth_;
+};
+
+/* Transmit one client-supplied frame. Shared by SendFrame and StreamFrames so
+   both apply identical interface validation and take the same FrameSink path. */
+static grpc::Status PublishFrame(GatewayContext& ctx, const boat::v1::Frame& pf) {
+  auto frame = ProtoToFrame(pf);
+
+  switch (frame.bus_type()) {
+    case boat::core::Frame::BusType::kCan:
+    case boat::core::Frame::BusType::kCanFd:
+      if (frame.iface().empty() || !ctx.can_bus_registry.Has(frame.iface())) {
+        return grpc::Status(grpc::NOT_FOUND, "CAN interface not found");
+      }
+      ctx.frame_sink.Publish(frame);
+      return grpc::Status::OK;
+
+    case boat::core::Frame::BusType::kEthernet:
+      if (frame.iface().empty() || !ctx.ethernet_bus_registry.Has(frame.iface())) {
+        return grpc::Status(grpc::NOT_FOUND, "Ethernet interface not found");
+      }
+      ctx.frame_sink.Publish(frame);
+      return grpc::Status::OK;
+
+    case boat::core::Frame::BusType::kPdu: {
+      // PDU frames are not a wire bus — dispatch to the plugin frame bus so the
+      // pdu_router plugin (if loaded) routes them onto their configured transport.
+      BoatFrame abi{};
+      frame.ToAbi(&abi);
+      ctx.plugin_manager.DispatchFrame(abi);
+      return grpc::Status::OK;
+    }
+
+    case boat::core::Frame::BusType::kTcp:
+      // TCP is a stateful conversation, not a fire-and-forget frame: it is driven
+      // through the TCP plugin's own connection API, not raw frame transmission.
+      return grpc::Status(
+          grpc::StatusCode::UNIMPLEMENTED,
+          "TCP is connection-oriented; use the TCP plugin, not FrameService.SendFrame");
+
+    default:
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unknown bus type");
+  }
+}
+
 }  // namespace
 
 FrameServiceImpl::FrameServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
@@ -134,47 +229,17 @@ FrameServiceImpl::FrameServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
 grpc::Status FrameServiceImpl::SendFrame(grpc::ServerContext*,
                                          const boat::v1::SendFrameRequest* request,
                                          boat::v1::SendFrameResponse* response) {
-  auto frame = ProtoToFrame(request->frame());
+  const grpc::Status status = PublishFrame(ctx_, request->frame());
 
-  switch (frame.bus_type()) {
-    case boat::core::Frame::BusType::kCan:
-    case boat::core::Frame::BusType::kCanFd: {
-      if (frame.iface().empty() || !ctx_.can_bus_registry.Has(frame.iface())) {
-        return grpc::Status(grpc::NOT_FOUND, "CAN interface not found");
-      }
-      ctx_.frame_sink.Publish(frame);
-      response->set_accepted(true);
-      break;
-    }
-    case boat::core::Frame::BusType::kEthernet: {
-      if (frame.iface().empty() || !ctx_.ethernet_bus_registry.Has(frame.iface())) {
-        return grpc::Status(grpc::NOT_FOUND, "Ethernet interface not found");
-      }
-      ctx_.frame_sink.Publish(frame);
-      response->set_accepted(true);
-      break;
-    }
-    case boat::core::Frame::BusType::kPdu: {
-      // PDU frames are not a wire bus — dispatch to the plugin frame bus so the
-      // pdu_router plugin (if loaded) routes them onto their configured transport.
-      BoatFrame abi{};
-      frame.ToAbi(&abi);
-      ctx_.plugin_manager.DispatchFrame(abi);
-      response->set_accepted(true);
-      break;
-    }
-    case boat::core::Frame::BusType::kTcp: {
-      // TCP is a stateful conversation, not a fire-and-forget frame: it is driven
-      // through the TCP plugin's own connection API, not raw FrameService.SendFrame.
-      return grpc::Status(
-          grpc::StatusCode::UNIMPLEMENTED,
-          "TCP is connection-oriented; use the TCP plugin, not FrameService.SendFrame");
-    }
-    default:
-      response->set_accepted(false);
-      break;
+  // An unrecognised bus type has always been reported in-band as accepted=false
+  // rather than as an RPC error; keep that contract for existing callers.
+  if (status.error_code() == grpc::StatusCode::INVALID_ARGUMENT) {
+    response->set_accepted(false);
+    return grpc::Status::OK;
   }
+  if (!status.ok()) return status;
 
+  response->set_accepted(true);
   return grpc::Status::OK;
 }
 
@@ -183,58 +248,66 @@ grpc::Status FrameServiceImpl::SubscribeFrames(
     const boat::v1::SubscribeFramesRequest* request,
     grpc::ServerWriter<boat::v1::Frame>* writer) {
 
-  // Determine which bus types to subscribe to
-  bool subscribe_can = true;
-  bool subscribe_eth = true;
-  if (!request->bus_types().empty()) {
-    subscribe_can  = false;
-    subscribe_eth  = false;
-    for (auto bt : request->bus_types()) {
-      if (bt == boat::v1::Frame::CAN || bt == boat::v1::Frame::CANFD)
-        subscribe_can = true;
-      if (bt == boat::v1::Frame::ETHERNET)
-        subscribe_eth = true;
-    }
-  }
-
   std::mutex write_mutex;
-  using CanRxId  = boat::hil::CanBusRegistry::RxCallbackId;
-  using EthRxId  = boat::hil::EthernetBusRegistry::RxCallbackId;
-  std::vector<CanRxId> can_subs;
-  std::vector<EthRxId> eth_subs;
+  FrameSubscription subscription(
+      ctx_, *request, [&write_mutex, writer](const boat::v1::Frame& proto) {
+        std::lock_guard<std::mutex> lock(write_mutex);
+        writer->Write(proto);
+      });
 
-  // Subscribe to CAN
-  if (subscribe_can) {
-    auto id = ctx_.can_bus_registry.SubscribeFrame(
-        [&write_mutex, writer](const boat::core::Frame& f) {
-          boat::v1::Frame proto;
-          FrameToProto(f, &proto);
-          std::lock_guard<std::mutex> lock(write_mutex);
-          writer->Write(proto);
-        });
-    can_subs.push_back(id);
-  }
-
-  // Subscribe to Ethernet
-  if (subscribe_eth) {
-    auto id = ctx_.ethernet_bus_registry.SubscribeFrame(
-        [&write_mutex, writer](const boat::core::Frame& f) {
-          boat::v1::Frame proto;
-          FrameToProto(f, &proto);
-          std::lock_guard<std::mutex> lock(write_mutex);
-          writer->Write(proto);
-        });
-    eth_subs.push_back(id);
-  }
-
-  // Wait for client disconnect
+  // Wait for client disconnect; the subscription unsubscribes on scope exit.
   while (!context->IsCancelled()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
-  // Cleanup
-  for (auto id : can_subs) ctx_.can_bus_registry.UnsubscribeFrame(id);
-  for (auto id : eth_subs) ctx_.ethernet_bus_registry.UnsubscribeFrame(id);
+  return grpc::Status::OK;
+}
+
+grpc::Status FrameServiceImpl::StreamFrames(
+    grpc::ServerContext* context,
+    grpc::ServerReaderWriter<boat::v1::Frame, boat::v1::StreamFramesRequest>* stream) {
+
+  std::mutex write_mutex;
+  auto emit = [&write_mutex, stream](const boat::v1::Frame& proto) {
+    std::lock_guard<std::mutex> lock(write_mutex);
+    stream->Write(proto);
+  };
+
+  // Created on demand: a client that only pushes frames never subscribes, and
+  // resubscribing replaces the previous registration.
+  std::unique_ptr<FrameSubscription> subscription;
+
+  boat::v1::StreamFramesRequest message;
+  while (stream->Read(&message)) {
+    switch (message.kind_case()) {
+      case boat::v1::StreamFramesRequest::kSubscribe:
+        subscription.reset();
+        subscription =
+            std::make_unique<FrameSubscription>(ctx_, message.subscribe(), emit);
+        break;
+
+      case boat::v1::StreamFramesRequest::kFrame: {
+        const grpc::Status status = PublishFrame(ctx_, message.frame());
+        if (!status.ok()) {
+          // Fail the call rather than dropping: the target interface is fixed
+          // for a bridge session, so this is a misconfiguration, and a silently
+          // discarded frame on a vehicle bus is worse than a broken stream.
+          return status;
+        }
+        break;
+      }
+
+      default:
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "StreamFramesRequest must set subscribe or frame");
+    }
+  }
+
+  // The client half-closed but may still be reading: keep the subscription alive
+  // until the call is actually cancelled.
+  while (!context->IsCancelled()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
 
   return grpc::Status::OK;
 }

@@ -19,6 +19,11 @@ class FrameServiceImpl final : public boat::v1::FrameService::Service {
                                const boat::v1::SubscribeFramesRequest* request,
                                grpc::ServerWriter<boat::v1::Frame>* writer) override;
 
+  grpc::Status StreamFrames(
+      grpc::ServerContext* context,
+      grpc::ServerReaderWriter<boat::v1::Frame, boat::v1::StreamFramesRequest>* stream)
+      override;
+
  private:
   GatewayContext& ctx_;
 };

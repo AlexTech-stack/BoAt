@@ -79,6 +79,71 @@ std::array<std::uint8_t, 6> ReadInterfaceMac(const std::string& iface) {
   return mac;
 }
 
+std::string ReadFileOrEmpty(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f.is_open()) return {};
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
+}
+
+/* Server credentials for the gRPC port.
+ *
+ * TLS is opt-in: set BOAT_TLS_CERT and BOAT_TLS_KEY to PEM paths to enable it.
+ * With neither set the gateway keeps its historical plaintext behaviour, so
+ * existing SDK, CLI and UI clients are unaffected until a deployment opts in.
+ *
+ * This is server-side TLS only — it encrypts the channel but authenticates
+ * nobody. Any client that can reach the port can still transmit frames onto
+ * whatever buses the gateway has open.
+ *
+ * Note gRPC verifies the certificate against the name the client dialled, so a
+ * certificate for a gateway reached by address needs an IP SAN, not just a CN.
+ */
+std::shared_ptr<grpc::ServerCredentials> MakeServerCredentials() {
+  const char* cert_path = std::getenv("BOAT_TLS_CERT");
+  const char* key_path  = std::getenv("BOAT_TLS_KEY");
+
+  if (cert_path == nullptr && key_path == nullptr) {
+    return grpc::InsecureServerCredentials();
+  }
+  if (cert_path == nullptr || key_path == nullptr) {
+    std::fprintf(stderr,
+                 "[tls] BOAT_TLS_CERT and BOAT_TLS_KEY must be set together; "
+                 "refusing to start\n");
+    std::exit(1);
+  }
+
+  const std::string cert = ReadFileOrEmpty(cert_path);
+  const std::string key  = ReadFileOrEmpty(key_path);
+  if (cert.empty() || key.empty()) {
+    std::fprintf(stderr, "[tls] cannot read certificate '%s' or key '%s'\n",
+                 cert_path, key_path);
+    std::exit(1);
+  }
+
+  grpc::SslServerCredentialsOptions options;
+  options.pem_key_cert_pairs.push_back({key, cert});
+
+  // Optional client authentication: with a CA set, clients must present a
+  // certificate it signed.
+  if (const char* client_ca_path = std::getenv("BOAT_TLS_CLIENT_CA")) {
+    const std::string client_ca = ReadFileOrEmpty(client_ca_path);
+    if (client_ca.empty()) {
+      std::fprintf(stderr, "[tls] cannot read client CA '%s'\n", client_ca_path);
+      std::exit(1);
+    }
+    options.pem_root_certs = client_ca;
+    options.client_certificate_request =
+        GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY;
+    std::fprintf(stderr, "[tls] enabled with required client certificates\n");
+  } else {
+    std::fprintf(stderr, "[tls] enabled (server-side only, clients unauthenticated)\n");
+  }
+
+  return grpc::SslServerCredentials(options);
+}
+
 void HandleSignal(int) {
   // Signal handlers may only call async-signal-safe functions.
   // grpc::Server::Shutdown() acquires internal Abseil mutexes and is not
@@ -350,7 +415,7 @@ int main() {
   boat::gateway::FrameServiceImpl frame_impl(ctx);
 
   grpc::ServerBuilder builder;
-  builder.AddListeningPort("0.0.0.0:50051", grpc::InsecureServerCredentials());
+  builder.AddListeningPort("0.0.0.0:50051", MakeServerCredentials());
 
   // Register the audit interceptor — captures every RPC call automatically.
   std::vector<std::unique_ptr<grpc::experimental::ServerInterceptorFactoryInterface>>
