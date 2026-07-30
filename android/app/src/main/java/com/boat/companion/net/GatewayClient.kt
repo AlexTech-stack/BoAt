@@ -2,6 +2,7 @@ package com.boat.companion.net
 
 import com.boat.proto.v1.Frame
 import com.boat.proto.v1.FrameServiceGrpcKt
+import com.boat.proto.v1.StreamFramesRequest
 import com.boat.proto.v1.SubscribeFramesRequest
 import io.grpc.ChannelCredentials
 import io.grpc.Grpc
@@ -58,6 +59,33 @@ class GatewayClient(endpoint: Endpoint) : Closeable {
             .setIfaceFilter(ifaceFilter)
             .build()
         return frameService.subscribeFrames(request)
+    }
+
+    /**
+     * Bidirectional bridge: [outgoing] carries frames into the gateway, the
+     * returned flow carries subscribed frames back, both over one connection.
+     *
+     * Send [subscribeMessage] first to choose what comes back; a client that only
+     * pushes can skip it. Frames the bridge injects return tagged as self-sent, so
+     * filter on that to avoid re-transmitting your own traffic.
+     */
+    fun streamFrames(outgoing: Flow<StreamFramesRequest>): Flow<Frame> =
+        frameService.streamFrames(outgoing)
+
+    companion object {
+        fun subscribeMessage(
+            busTypes: List<Frame.BusType> = emptyList(),
+            ifaceFilter: String = "",
+        ): StreamFramesRequest = StreamFramesRequest.newBuilder()
+            .setSubscribe(
+                SubscribeFramesRequest.newBuilder()
+                    .addAllBusTypes(busTypes)
+                    .setIfaceFilter(ifaceFilter)
+            )
+            .build()
+
+        fun frameMessage(frame: Frame): StreamFramesRequest =
+            StreamFramesRequest.newBuilder().setFrame(frame).build()
     }
 
     override fun close() {
