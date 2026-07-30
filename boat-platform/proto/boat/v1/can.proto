@@ -2,6 +2,11 @@ syntax = "proto3";
 
 package boat.v1;
 
+// Java/Kotlin codegen options (Android client). Ignored by the C++ and
+// Python generators -- protoc applies these only to Java output.
+option java_package = "com.boat.proto.v1";
+option java_multiple_files = true;
+
 message CanFrame {
   uint32 can_id       = 1;
   uint32 dlc          = 2;  // actual byte count (0-8 classic, 0-64 FD)

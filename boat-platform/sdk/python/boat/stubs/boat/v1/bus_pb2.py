@@ -24,13 +24,14 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11\x62oat/v1/bus.proto\x12\x07\x62oat.v1\"\xa8\x01\n\tBusSignal\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x14\n\x0ctimestamp_ns\x18\x02 \x01(\x04\x12\x11\n\tpublisher\x18\x03 \x01(\t\x12\x16\n\x0cnumber_value\x18\x04 \x01(\x01H\x00\x12\x16\n\x0cstring_value\x18\x05 \x01(\tH\x00\x12\x14\n\nbool_value\x18\x06 \x01(\x08H\x00\x12\x15\n\x0b\x62ytes_value\x18\x07 \x01(\x0cH\x00\x42\x07\n\x05value\"7\n\x11\x42usPublishRequest\x12\"\n\x06signal\x18\x01 \x01(\x0b\x32\x12.boat.v1.BusSignal\"&\n\x12\x42usPublishResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\"$\n\x13\x42usSubscribeRequest\x12\r\n\x05names\x18\x01 \x03(\t2\x91\x01\n\nBusService\x12\x42\n\x07Publish\x12\x1a.boat.v1.BusPublishRequest\x1a\x1b.boat.v1.BusPublishResponse\x12?\n\tSubscribe\x12\x1c.boat.v1.BusSubscribeRequest\x1a\x12.boat.v1.BusSignal0\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11\x62oat/v1/bus.proto\x12\x07\x62oat.v1\"\xa8\x01\n\tBusSignal\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x14\n\x0ctimestamp_ns\x18\x02 \x01(\x04\x12\x11\n\tpublisher\x18\x03 \x01(\t\x12\x16\n\x0cnumber_value\x18\x04 \x01(\x01H\x00\x12\x16\n\x0cstring_value\x18\x05 \x01(\tH\x00\x12\x14\n\nbool_value\x18\x06 \x01(\x08H\x00\x12\x15\n\x0b\x62ytes_value\x18\x07 \x01(\x0cH\x00\x42\x07\n\x05value\"7\n\x11\x42usPublishRequest\x12\"\n\x06signal\x18\x01 \x01(\x0b\x32\x12.boat.v1.BusSignal\"&\n\x12\x42usPublishResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\"$\n\x13\x42usSubscribeRequest\x12\r\n\x05names\x18\x01 \x03(\t2\x91\x01\n\nBusService\x12\x42\n\x07Publish\x12\x1a.boat.v1.BusPublishRequest\x1a\x1b.boat.v1.BusPublishResponse\x12?\n\tSubscribe\x12\x1c.boat.v1.BusSubscribeRequest\x1a\x12.boat.v1.BusSignal0\x01\x42\x15\n\x11\x63om.boat.proto.v1P\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boat.v1.bus_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
+  _globals['DESCRIPTOR']._loaded_options = None
+  _globals['DESCRIPTOR']._serialized_options = b'\n\021com.boat.proto.v1P\001'
   _globals['_BUSSIGNAL']._serialized_start=31
   _globals['_BUSSIGNAL']._serialized_end=199
   _globals['_BUSPUBLISHREQUEST']._serialized_start=201

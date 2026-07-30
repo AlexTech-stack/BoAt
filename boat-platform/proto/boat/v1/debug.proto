@@ -2,6 +2,11 @@ syntax = "proto3";
 
 package boat.v1;
 
+// Java/Kotlin codegen options (Android client). Ignored by the C++ and
+// Python generators -- protoc applies these only to Java output.
+option java_package = "com.boat.proto.v1";
+option java_multiple_files = true;
+
 // ── RpcEvent ──────────────────────────────────────────────────────────────────
 
 message RpcEvent {

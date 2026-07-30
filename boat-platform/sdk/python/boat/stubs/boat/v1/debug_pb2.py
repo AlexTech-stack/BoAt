@@ -24,13 +24,14 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13\x62oat/v1/debug.proto\x12\x07\x62oat.v1\"\xcb\x01\n\x08RpcEvent\x12\x14\n\x0ctimestamp_ns\x18\x01 \x01(\x04\x12\x0e\n\x06method\x18\x02 \x01(\t\x12\x0c\n\x04peer\x18\x03 \x01(\t\x12\x12\n\nevent_type\x18\x04 \x01(\t\x12\x11\n\tcall_type\x18\x05 \x01(\t\x12\x11\n\tmsg_bytes\x18\x06 \x01(\r\x12\x13\n\x0b\x64uration_us\x18\x07 \x01(\x03\x12\x13\n\x0bstatus_code\x18\x08 \x01(\x05\x12\x16\n\x0estatus_message\x18\t \x01(\t\x12\x0f\n\x07summary\x18\n \x01(\t\"/\n\x16StreamRpcEventsRequest\x12\x15\n\rmethod_filter\x18\x01 \x01(\t2T\n\x0c\x44\x65\x62ugService\x12\x44\n\x0cStreamEvents\x12\x1f.boat.v1.StreamRpcEventsRequest\x1a\x11.boat.v1.RpcEvent0\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13\x62oat/v1/debug.proto\x12\x07\x62oat.v1\"\xcb\x01\n\x08RpcEvent\x12\x14\n\x0ctimestamp_ns\x18\x01 \x01(\x04\x12\x0e\n\x06method\x18\x02 \x01(\t\x12\x0c\n\x04peer\x18\x03 \x01(\t\x12\x12\n\nevent_type\x18\x04 \x01(\t\x12\x11\n\tcall_type\x18\x05 \x01(\t\x12\x11\n\tmsg_bytes\x18\x06 \x01(\r\x12\x13\n\x0b\x64uration_us\x18\x07 \x01(\x03\x12\x13\n\x0bstatus_code\x18\x08 \x01(\x05\x12\x16\n\x0estatus_message\x18\t \x01(\t\x12\x0f\n\x07summary\x18\n \x01(\t\"/\n\x16StreamRpcEventsRequest\x12\x15\n\rmethod_filter\x18\x01 \x01(\t2T\n\x0c\x44\x65\x62ugService\x12\x44\n\x0cStreamEvents\x12\x1f.boat.v1.StreamRpcEventsRequest\x1a\x11.boat.v1.RpcEvent0\x01\x42\x15\n\x11\x63om.boat.proto.v1P\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boat.v1.debug_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
+  _globals['DESCRIPTOR']._loaded_options = None
+  _globals['DESCRIPTOR']._serialized_options = b'\n\021com.boat.proto.v1P\001'
   _globals['_RPCEVENT']._serialized_start=33
   _globals['_RPCEVENT']._serialized_end=236
   _globals['_STREAMRPCEVENTSREQUEST']._serialized_start=238

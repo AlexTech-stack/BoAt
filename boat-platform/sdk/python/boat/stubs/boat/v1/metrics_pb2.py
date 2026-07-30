@@ -24,13 +24,14 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x15\x62oat/v1/metrics.proto\x12\x07\x62oat.v1\"*\n\x11GetMetricsRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\"-\n\x14StreamMetricsRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\"8\n\x0bMetricPoint\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x01\x12\x0c\n\x04tick\x18\x03 \x01(\x04\"7\n\x0fMetricsResponse\x12$\n\x06points\x18\x01 \x03(\x0b\x32\x14.boat.v1.MetricPoint2\x9c\x01\n\x0eMetricsService\x12\x42\n\nGetMetrics\x12\x1a.boat.v1.GetMetricsRequest\x1a\x18.boat.v1.MetricsResponse\x12\x46\n\rStreamMetrics\x12\x1d.boat.v1.StreamMetricsRequest\x1a\x14.boat.v1.MetricPoint0\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x15\x62oat/v1/metrics.proto\x12\x07\x62oat.v1\"*\n\x11GetMetricsRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\"-\n\x14StreamMetricsRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\"8\n\x0bMetricPoint\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x01\x12\x0c\n\x04tick\x18\x03 \x01(\x04\"7\n\x0fMetricsResponse\x12$\n\x06points\x18\x01 \x03(\x0b\x32\x14.boat.v1.MetricPoint2\x9c\x01\n\x0eMetricsService\x12\x42\n\nGetMetrics\x12\x1a.boat.v1.GetMetricsRequest\x1a\x18.boat.v1.MetricsResponse\x12\x46\n\rStreamMetrics\x12\x1d.boat.v1.StreamMetricsRequest\x1a\x14.boat.v1.MetricPoint0\x01\x42\x15\n\x11\x63om.boat.proto.v1P\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boat.v1.metrics_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
+  _globals['DESCRIPTOR']._loaded_options = None
+  _globals['DESCRIPTOR']._serialized_options = b'\n\021com.boat.proto.v1P\001'
   _globals['_GETMETRICSREQUEST']._serialized_start=34
   _globals['_GETMETRICSREQUEST']._serialized_end=76
   _globals['_STREAMMETRICSREQUEST']._serialized_start=78

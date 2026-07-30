@@ -24,13 +24,14 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11\x62oat/v1/can.proto\x12\x07\x62oat.v1\"i\n\x08\x43\x61nFrame\x12\x0e\n\x06\x63\x61n_id\x18\x01 \x01(\r\x12\x0b\n\x03\x64lc\x18\x02 \x01(\r\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x14\n\x0ctimestamp_ns\x18\x04 \x01(\x04\x12\r\n\x05iface\x18\x05 \x01(\t\x12\r\n\x05\x66lags\x18\x06 \x01(\r\"N\n\x13SendCanFrameRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\x12 \n\x05\x66rame\x18\x02 \x01(\x0b\x32\x11.boat.v1.CanFrame\"(\n\x14SendCanFrameResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\"A\n\x19SubscribeCanFramesRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\x12\r\n\x05iface\x18\x02 \x01(\t\"_\n\nCanBusInfo\x12\r\n\x05iface\x18\x01 \x01(\t\x12\x0e\n\x06\x64river\x18\x02 \x01(\t\x12\r\n\x05state\x18\x03 \x01(\t\x12\x12\n\nfd_support\x18\x04 \x01(\x08\x12\x0f\n\x07\x62itrate\x18\x05 \x01(\r\"\x12\n\x10ListBusesRequest\"7\n\x11ListBusesResponse\x12\"\n\x05\x62uses\x18\x01 \x03(\x0b\x32\x13.boat.v1.CanBusInfo2\xec\x01\n\nCanService\x12K\n\x0cSendCanFrame\x12\x1c.boat.v1.SendCanFrameRequest\x1a\x1d.boat.v1.SendCanFrameResponse\x12M\n\x12SubscribeCanFrames\x12\".boat.v1.SubscribeCanFramesRequest\x1a\x11.boat.v1.CanFrame0\x01\x12\x42\n\tListBuses\x12\x19.boat.v1.ListBusesRequest\x1a\x1a.boat.v1.ListBusesResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11\x62oat/v1/can.proto\x12\x07\x62oat.v1\"i\n\x08\x43\x61nFrame\x12\x0e\n\x06\x63\x61n_id\x18\x01 \x01(\r\x12\x0b\n\x03\x64lc\x18\x02 \x01(\r\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x14\n\x0ctimestamp_ns\x18\x04 \x01(\x04\x12\r\n\x05iface\x18\x05 \x01(\t\x12\r\n\x05\x66lags\x18\x06 \x01(\r\"N\n\x13SendCanFrameRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\x12 \n\x05\x66rame\x18\x02 \x01(\x0b\x32\x11.boat.v1.CanFrame\"(\n\x14SendCanFrameResponse\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x08\"A\n\x19SubscribeCanFramesRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\x12\r\n\x05iface\x18\x02 \x01(\t\"_\n\nCanBusInfo\x12\r\n\x05iface\x18\x01 \x01(\t\x12\x0e\n\x06\x64river\x18\x02 \x01(\t\x12\r\n\x05state\x18\x03 \x01(\t\x12\x12\n\nfd_support\x18\x04 \x01(\x08\x12\x0f\n\x07\x62itrate\x18\x05 \x01(\r\"\x12\n\x10ListBusesRequest\"7\n\x11ListBusesResponse\x12\"\n\x05\x62uses\x18\x01 \x03(\x0b\x32\x13.boat.v1.CanBusInfo2\xec\x01\n\nCanService\x12K\n\x0cSendCanFrame\x12\x1c.boat.v1.SendCanFrameRequest\x1a\x1d.boat.v1.SendCanFrameResponse\x12M\n\x12SubscribeCanFrames\x12\".boat.v1.SubscribeCanFramesRequest\x1a\x11.boat.v1.CanFrame0\x01\x12\x42\n\tListBuses\x12\x19.boat.v1.ListBusesRequest\x1a\x1a.boat.v1.ListBusesResponseB\x15\n\x11\x63om.boat.proto.v1P\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boat.v1.can_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
+  _globals['DESCRIPTOR']._loaded_options = None
+  _globals['DESCRIPTOR']._serialized_options = b'\n\021com.boat.proto.v1P\001'
   _globals['_CANFRAME']._serialized_start=30
   _globals['_CANFRAME']._serialized_end=135
   _globals['_SENDCANFRAMEREQUEST']._serialized_start=137

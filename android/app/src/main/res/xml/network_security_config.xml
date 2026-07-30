@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The gateway listens with InsecureServerCredentials, so gRPC traffic is plaintext
+  and Android blocks that by default from API 28 onwards.
+
+  This permits cleartext to any host because the gateway address is typed in by the
+  user at runtime — there is no fixed domain to scope the exemption to. Once the
+  gateway serves TLS, delete this base-config and pin the gateway CA in the client
+  instead (see Endpoint.caCertificate); the exemption is the weakest part of this
+  setup and should not outlive the plaintext gateway.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
