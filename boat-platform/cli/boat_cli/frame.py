@@ -60,13 +60,16 @@ def send_frame(
     can_id: str = typer.Option("0", "--can-id", help="CAN identifier (decimal or 0x hex)"),
     data: str = typer.Option(..., "--data", "-d", help="Payload hex, e.g. AABBCCDD"),
     ethertype: str = typer.Option("0", "--ethertype", help="Ethernet EtherType (decimal or 0x hex)"),
-    dst_mac: str = typer.Option("", "--dst-mac", help="Destination MAC (xx:xx:xx:xx:xx:xx)"),
-    src_mac: str = typer.Option("", "--src-mac", help="Source MAC"),
-    dst_ip: str = typer.Option("", "--dst-ip", help="Destination IP"),
-    src_ip: str = typer.Option("", "--src-ip", help="Source IP"),
-    dst_port: str = typer.Option("0", "--dst-port", help="TCP/UDP destination port (decimal or 0x hex)"),
-    src_port: str = typer.Option("0", "--src-port", help="TCP/UDP source port (decimal or 0x hex)"),
-    pdu_id: str = typer.Option("0", "--pdu-id", help="PDU identifier (decimal or 0x hex)"),
+    dst_mac: str = typer.Option("", "--dst-mac", help="Destination MAC (xx:xx:xx:xx:xx:xx), --bus-type ETHERNET only"),
+    src_mac: str = typer.Option("", "--src-mac", help="Source MAC, --bus-type ETHERNET only"),
+    dst_ip: str = typer.Option("", "--dst-ip", help="Destination IP, --bus-type ETHERNET only"),
+    src_ip: str = typer.Option("", "--src-ip", help="Currently unused: --bus-type TCP is the only consumer, "
+                               "and TCP is rejected by this command (see --bus-type)"),
+    dst_port: str = typer.Option("0", "--dst-port", help="Currently unused: --bus-type TCP is the only consumer, "
+                                  "and TCP is rejected by this command (see --bus-type)"),
+    src_port: str = typer.Option("0", "--src-port", help="Currently unused: --bus-type TCP is the only consumer, "
+                                  "and TCP is rejected by this command (see --bus-type)"),
+    pdu_id: str = typer.Option("0", "--pdu-id", help="PDU identifier (decimal or 0x hex), --bus-type PDU only"),
 ) -> None:
     """Send a unified Frame via FrameService."""
     client = ctx.obj["client"]
@@ -80,8 +83,6 @@ def send_frame(
     try:
         can_id_int = _parse_int(can_id)
         ethertype_int = _parse_int(ethertype)
-        dst_port_int = _parse_int(dst_port)
-        src_port_int = _parse_int(src_port)
         pdu_id_int = _parse_int(pdu_id)
     except ValueError as e:
         print_error(f"Invalid numeric value: {e}")
@@ -127,20 +128,6 @@ def send_frame(
             parts = dst_ip.split(".")
             frame.eth.dst_ip = bytes(int(p) for p in parts) if len(parts) == 4 else b""
             frame.eth.ip_version = 4
-    elif bt == frame_pb2.Frame.TCP:
-        if dst_ip:
-            parts = dst_ip.split(".")
-            ip_bytes = bytes(int(p) for p in parts)
-            if len(parts) == 4:
-                frame.tcp.dst_ip = ip_bytes
-        if src_ip:
-            parts = src_ip.split(".")
-            ip_bytes = bytes(int(p) for p in parts)
-            if len(parts) == 4:
-                frame.tcp.src_ip = ip_bytes
-        frame.tcp.dst_port = dst_port_int
-        frame.tcp.src_port = src_port_int
-        frame.tcp.ip_version = 4
     elif bt == frame_pb2.Frame.PDU:
         frame.pdu.pdu_id = pdu_id_int
 

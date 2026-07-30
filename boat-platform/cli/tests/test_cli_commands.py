@@ -138,7 +138,7 @@ def test_replay_and_plugin_commands_call_expected_methods() -> None:
     fake_client = _fake_client()
     with patch("boat_cli.main.BoAtClient", return_value=fake_client):
         assert runner.invoke(app, ["replay", "start", "--trace", "trace-1"]).exit_code == 0
-        assert runner.invoke(app, ["replay", "seek", "--tick", "10"]).exit_code == 0
+        assert runner.invoke(app, ["replay", "seek", "--tick", "10", "--replay-id", "r1"]).exit_code == 0
         assert runner.invoke(app, ["replay", "stream", "--trace", "trace-1"]).exit_code == 0
         assert runner.invoke(app, ["plugin", "register", "--path", "libdemo.so"]).exit_code == 0
         assert runner.invoke(app, ["plugin", "list"]).exit_code == 0
@@ -339,9 +339,9 @@ def test_can_tp_send_reports_rpc_error() -> None:
 def test_new_replay_commands_call_expected_methods() -> None:
     fake_client = _fake_client()
     with patch("boat_cli.main.BoAtClient", return_value=fake_client):
-        assert runner.invoke(app, ["replay", "pause"]).exit_code == 0
-        assert runner.invoke(app, ["replay", "resume"]).exit_code == 0
-        assert runner.invoke(app, ["replay", "stop"]).exit_code == 0
+        assert runner.invoke(app, ["replay", "pause", "--replay-id", "r1"]).exit_code == 0
+        assert runner.invoke(app, ["replay", "resume", "--replay-id", "r1"]).exit_code == 0
+        assert runner.invoke(app, ["replay", "stop", "--replay-id", "r1"]).exit_code == 0
         assert runner.invoke(app, [
             "replay", "from-events", "--sim-id", "sim-1",
             "--speed", "accelerated", "--multiplier", "2.0",

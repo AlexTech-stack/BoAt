@@ -9,14 +9,15 @@ from boat.v1 import node_plugin_pb2, plugin_pb2
 
 from .output import print_error, print_table
 
-plugin_app = typer.Typer()
+plugin_app = typer.Typer(help="Plugin management across the sim and node PluginManager scopes "
+                          "(register, list, info, unload).")
 
 _SCOPES = ("sim", "node")
 
 
 @plugin_app.command("register")
 def register_plugin(ctx: typer.Context,
-                    path: str = typer.Option(..., "--path"),
+                    path: str = typer.Option(..., "--path", help="Path to the plugin .so to load."),
                     config: str = typer.Option("", "--config", "-c",
                        help="JSON config string for the plugin")) -> None:
     """Load a plugin into the simulation-scoped PluginManager.
@@ -60,9 +61,11 @@ def list_plugins(ctx: typer.Context) -> None:
 @plugin_app.command("info")
 def plugin_info(
     ctx: typer.Context,
-    name: str,
+    name: Annotated[str, typer.Argument(help="Plugin ID, as shown by `boat plugin list` "
+                     "(the .so path, plus ?config for node plugins).")],
     scope: Annotated[str, typer.Option("--scope", help="Which PluginManager to query: sim or node.")] = "sim",
 ) -> None:
+    """Show one plugin's full info (version, loaded state, config_json)."""
     if scope not in _SCOPES:
         print_error(f"--scope must be one of {_SCOPES}, got '{scope}'")
         sys.exit(1)
@@ -85,12 +88,14 @@ def plugin_info(
 @plugin_app.command("unload")
 def unload_plugin(
     ctx: typer.Context,
-    name: str,
+    name: Annotated[str, typer.Argument(help="Plugin ID to unload, as shown by `boat plugin list` "
+                     "(the .so path, plus ?config for node plugins).")],
     scope: Annotated[str, typer.Option("--scope", help="Which PluginManager to unload from: sim or node.")] = "sim",
     yes: Annotated[bool, typer.Option("--yes", help="Required for --scope node: unloading a node plugin is "
                    "immediate and gateway-wide (not scoped to any simulation), e.g. it can silently drop a "
                    "live CAN-TP session.")] = False,
 ) -> None:
+    """Unload a plugin. --scope node additionally requires --yes (see its help)."""
     if scope not in _SCOPES:
         print_error(f"--scope must be one of {_SCOPES}, got '{scope}'")
         sys.exit(1)

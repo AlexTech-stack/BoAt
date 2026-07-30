@@ -13,7 +13,7 @@ from boat.v1 import replay_pb2
 from .output import print_error, print_table
 from .trace import _resolve_value, _ETHERTYPE_NAMES, _PROTOCOL_NAMES
 
-replay_app = typer.Typer()
+replay_app = typer.Typer(help="Trace replay: import/export trace files, and start/seek/pause/resume/stop live replays.")
 
 _SPEED_MAP = {
     "real-time":   replay_pb2.REPLAY_SPEED_REAL_TIME,
@@ -37,7 +37,7 @@ def _parse_mac_map(mac_map: str | None) -> dict[str, str]:
 @replay_app.command("start")
 def start_replay(
     ctx: typer.Context,
-    trace: str = typer.Option(..., "--trace"),
+    trace: str = typer.Option(..., "--trace", help="Trace ID to replay (from `boat replay import`)."),
     speed: str = typer.Option("real-time", "--speed", "-s",
                               help="Replay speed: real-time, accelerated, step"),
     multiplier: float = typer.Option(1.0, "--multiplier", "-m",
@@ -53,6 +53,12 @@ def start_replay(
                               help="Comma-separated CAN interface names for channel mapping"),
     sim_id: str = typer.Option("", "--sim-id", help="Simulation ID"),
 ) -> None:
+    """Start a replay in the background and return immediately with its replay_id.
+
+    Use `boat replay pause/resume/stop --replay-id ...` to control it afterwards,
+    or use `boat replay stream` instead if you want to start and watch events
+    from this same command.
+    """
     proto_speed = _SPEED_MAP.get(speed, replay_pb2.REPLAY_SPEED_REAL_TIME)
     bus_list = [b.strip() for b in buses.split(",") if b.strip()] if buses else []
     response = ctx.obj["client"].replay.StartReplay(
@@ -71,7 +77,12 @@ def start_replay(
 
 
 @replay_app.command("seek")
-def seek_replay(ctx: typer.Context, tick: int = typer.Option(..., "--tick"), replay_id: str = "") -> None:
+def seek_replay(
+    ctx: typer.Context,
+    tick: int = typer.Option(..., "--tick", help="Tick to seek the replay to."),
+    replay_id: str = typer.Option(..., "--replay-id", help="Replay ID, from `boat replay start`."),
+) -> None:
+    """Seek an active replay to a specific tick."""
     response = ctx.obj["client"].replay.SeekReplay(
         replay_pb2.SeekReplayRequest(replay_id=replay_id, tick=tick)
     )
@@ -171,7 +182,11 @@ def stream_replay(
 
 
 @replay_app.command("pause")
-def pause_replay(ctx: typer.Context, replay_id: str = "") -> None:
+def pause_replay(
+    ctx: typer.Context,
+    replay_id: str = typer.Option(..., "--replay-id", help="Replay ID, from `boat replay start`."),
+) -> None:
+    """Pause an active replay in place (resume later with `boat replay resume`)."""
     response = ctx.obj["client"].replay.PauseReplay(
         replay_pb2.PauseReplayRequest(replay_id=replay_id)
     )
@@ -179,7 +194,11 @@ def pause_replay(ctx: typer.Context, replay_id: str = "") -> None:
 
 
 @replay_app.command("resume")
-def resume_replay(ctx: typer.Context, replay_id: str = "") -> None:
+def resume_replay(
+    ctx: typer.Context,
+    replay_id: str = typer.Option(..., "--replay-id", help="Replay ID, from `boat replay start`."),
+) -> None:
+    """Resume a replay previously paused with `boat replay pause`."""
     response = ctx.obj["client"].replay.ResumeReplay(
         replay_pb2.ResumeReplayRequest(replay_id=replay_id)
     )
@@ -187,7 +206,11 @@ def resume_replay(ctx: typer.Context, replay_id: str = "") -> None:
 
 
 @replay_app.command("stop")
-def stop_replay(ctx: typer.Context, replay_id: str = "") -> None:
+def stop_replay(
+    ctx: typer.Context,
+    replay_id: str = typer.Option(..., "--replay-id", help="Replay ID, from `boat replay start`."),
+) -> None:
+    """Stop and discard an active replay."""
     response = ctx.obj["client"].replay.StopReplay(
         replay_pb2.StopReplayRequest(replay_id=replay_id)
     )
@@ -206,6 +229,7 @@ def start_replay_from_events(
     multiplier: float = typer.Option(1.0, "--multiplier", "-m",
                                      help="Speed multiplier (>0). 2.0 = twice as fast."),
 ) -> None:
+    """Replay a simulation's recorded signal-change events, instead of an imported trace file."""
     proto_speed = _SPEED_MAP.get(speed, replay_pb2.REPLAY_SPEED_REAL_TIME)
     response = ctx.obj["client"].replay.StartReplayFromEvents(
         replay_pb2.StartReplayFromEventsRequest(

@@ -34,7 +34,7 @@ app.add_typer(trace_app,    name="trace")
 @app.callback()
 def main(
     ctx: typer.Context,
-    host: str = typer.Option("localhost:50051", "--host"),
-    json_mode: bool = typer.Option(False, "--json"),
+    host: str = typer.Option("localhost:50051", "--host", help="host:port of the boat_gateway to connect to."),
+    json_mode: bool = typer.Option(False, "--json", help="Print command output as JSON instead of a formatted table."),
 ) -> None:
     ctx.obj = {"host": host, "json_mode": json_mode, "client": BoAtClient(address=host)}

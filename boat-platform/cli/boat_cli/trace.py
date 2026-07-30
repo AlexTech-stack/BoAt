@@ -58,7 +58,7 @@ _DEFAULT_RECORDER = "http://localhost:8083"
 def _client(recorder_url: str):
     """Return a TraceRecorder pointing at *recorder_url*."""
     try:
-        sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "sdk" / "python"))
         from boat.trace_recorder import TraceRecorder
         return TraceRecorder(recorder_url=recorder_url)
     except ImportError as e:
@@ -132,7 +132,7 @@ def cmd_stop(
     ctx:        typer.Context,
     session_id: Optional[str] = typer.Argument(None,
                     help="Session ID to stop (omit to stop all running sessions)"),
-    recorder:   str = typer.Option(_DEFAULT_RECORDER, "--recorder"),
+    recorder:   str = typer.Option(_DEFAULT_RECORDER, "--recorder", help="Recorder daemon URL."),
 ) -> None:
     """Stop a recording session (or all sessions if no ID given)."""
     try:
@@ -159,7 +159,7 @@ def cmd_stop(
 @trace_app.command("status")
 def cmd_status(
     ctx:      typer.Context,
-    recorder: str = typer.Option(_DEFAULT_RECORDER, "--recorder"),
+    recorder: str = typer.Option(_DEFAULT_RECORDER, "--recorder", help="Recorder daemon URL."),
 ) -> None:
     """Show all recording sessions (active and completed)."""
     try:
@@ -229,7 +229,7 @@ def cmd_replay(
     command supports CAN only.
     """
     try:
-        sys.path.insert(0, "/home/testuser/ProjectBoat/boat-platform/sdk/python")
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "sdk" / "python"))
         from boat.trace_replay import TraceReplayer, TraceReplayError
     except ImportError as e:
         print_error(f"Cannot import boat SDK: {e}")
