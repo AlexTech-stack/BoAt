@@ -1,0 +1,79 @@
+package com.boat.companion.net
+
+import com.boat.proto.v1.Frame
+import com.boat.proto.v1.FrameServiceGrpcKt
+import com.boat.proto.v1.SubscribeFramesRequest
+import io.grpc.ChannelCredentials
+import io.grpc.Grpc
+import io.grpc.InsecureChannelCredentials
+import io.grpc.ManagedChannel
+import io.grpc.TlsChannelCredentials
+import kotlinx.coroutines.flow.Flow
+import java.io.Closeable
+import java.io.InputStream
+import java.util.concurrent.TimeUnit
+
+/**
+ * How to reach a boat_gateway.
+ *
+ * The gateway listens on 0.0.0.0:50051 with InsecureServerCredentials, so [useTls]
+ * is false until env-gated SslServerCredentials lands gateway-side. When it does,
+ * supply the CA that signed the gateway certificate via [caCertificate]; gRPC
+ * verifies the hostname, so a gateway reached by IP needs an IP SAN in its cert.
+ */
+data class Endpoint(
+    val host: String,
+    val port: Int = 50051,
+    val useTls: Boolean = false,
+    val caCertificate: (() -> InputStream)? = null,
+)
+
+/**
+ * Owns one gRPC channel to a gateway. Not reusable after [close].
+ */
+class GatewayClient(endpoint: Endpoint) : Closeable {
+
+    private val channel: ManagedChannel =
+        Grpc.newChannelBuilderForAddress(endpoint.host, endpoint.port, endpoint.credentials())
+            // Frames arrive continuously; without a keepalive a silent NAT timeout
+            // looks identical to an idle bus.
+            .keepAliveTime(30, TimeUnit.SECONDS)
+            .keepAliveWithoutCalls(true)
+            .build()
+
+    private val frameService = FrameServiceGrpcKt.FrameServiceCoroutineStub(channel)
+
+    /**
+     * Live frames from the gateway. Empty [busTypes] means all types, empty
+     * [ifaceFilter] means all interfaces — matching SubscribeFramesRequest semantics.
+     *
+     * The stream has no deadline: it is meant to run until cancelled.
+     */
+    fun subscribeFrames(
+        busTypes: List<Frame.BusType> = emptyList(),
+        ifaceFilter: String = "",
+    ): Flow<Frame> {
+        val request = SubscribeFramesRequest.newBuilder()
+            .addAllBusTypes(busTypes)
+            .setIfaceFilter(ifaceFilter)
+            .build()
+        return frameService.subscribeFrames(request)
+    }
+
+    override fun close() {
+        channel.shutdownNow()
+    }
+}
+
+private fun Endpoint.credentials(): ChannelCredentials =
+    if (!useTls) {
+        InsecureChannelCredentials.create()
+    } else {
+        val ca = caCertificate
+        if (ca == null) {
+            // Platform trust store: only correct for a gateway cert from a public CA.
+            TlsChannelCredentials.create()
+        } else {
+            ca().use { TlsChannelCredentials.newBuilder().trustManager(it).build() }
+        }
+    }
