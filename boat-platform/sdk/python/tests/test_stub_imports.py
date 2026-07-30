@@ -75,6 +75,27 @@ def test_can_tp_stub_has_list_sessions_rpc():
     assert session.nsdu_id == 0x7E0
 
 
+def test_can_tp_stub_has_remove_session_and_subscribe_rpcs():
+    from boat.v1 import can_tp_pb2, can_tp_pb2_grpc
+
+    assert hasattr(can_tp_pb2, "RemoveSessionRequest")
+    assert hasattr(can_tp_pb2, "RemoveSessionResponse")
+    assert hasattr(can_tp_pb2, "SubscribeRequest")
+    assert hasattr(can_tp_pb2, "CanTpRxEvent")
+    assert hasattr(can_tp_pb2_grpc.CanTpServiceServicer, "RemoveSession")
+    assert hasattr(can_tp_pb2_grpc.CanTpServiceServicer, "Subscribe")
+
+    event = can_tp_pb2.CanTpRxEvent(iface="vcan0", nsdu_id=0x7E0, data=b"\xAA\xBB")
+    assert event.iface == "vcan0"
+    assert event.data == b"\xAA\xBB"
+
+    # source_addr/target_addr in CanTpConfig no longer fall back to nsdu_id --
+    # both are just required, non-zero fields with no special-cased default.
+    config = can_tp_pb2.CanTpConfig(nsdu_id=0x7E0, source_addr=0x7E0, target_addr=0x7E8)
+    assert config.source_addr == 0x7E0
+    assert config.target_addr == 0x7E8
+
+
 def test_start_replay_request_has_speed_fields():
     from boat.v1 import replay_pb2
 

@@ -1,8 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <span>
+#include <thread>
 #include <vector>
 
 #include <grpcpp/grpcpp.h>
@@ -502,6 +505,183 @@ TEST_CASE("CanTpService.ListSessions aggregates across every loaded instance",
   REQUIRE(scoped_resp.sessions_size() == 1);
   REQUIRE(scoped_resp.sessions(0).iface() == "vcan0");
   REQUIRE(scoped_resp.sessions(0).nsdu_id() == 0x100);
+
+  server->Shutdown();
+  std::filesystem::remove("boat_config.db");
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+}
+
+TEST_CASE("CanTpService RemoveSession and Subscribe round trip",
+          "[integration][gateway][can_tp]") {
+  std::filesystem::remove("boat_config.db");
+  const auto temp_dir = std::filesystem::temp_directory_path();
+  const auto event_db_path = temp_dir / "boat_integration_gateway_cantp2_events.db";
+  const auto trace_db_path = temp_dir / "boat_integration_gateway_cantp2_traces.db";
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+
+  boat::core::SimulationContext sim(780, 2);
+  boat::core::SignalBus signal_bus;
+  boat::core::ScenarioLoader scenario_loader;
+  boat::store::SqliteEventStore event_store(event_db_path.string());
+  boat::store::FlatFileTraceStore trace_store(trace_db_path.string());
+  boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
+  boat::hil::CanBusRegistry can_registry;
+  boat::hil::EthernetBusRegistry eth_registry;
+  boat::core::PluginManager node_manager;
+  boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
+  boat::gateway::RpcAuditLog audit_log;
+
+  boat::gateway::GatewayContext ctx{
+      .sim = sim,
+      .signal_bus = signal_bus,
+      .scenario_loader = scenario_loader,
+      .event_store = event_store,
+      .trace_store = trace_store,
+      .replay_controller = replay_controller,
+      .can_bus_registry = can_registry,
+      .ethernet_bus_registry = eth_registry,
+      .plugin_manager = node_manager,
+      .frame_sink = frame_sink,
+      .audit_log = audit_log,
+  };
+
+  boat::gateway::CanTpServiceImpl can_tp_service(ctx);
+
+  grpc::ServerBuilder builder;
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
+  builder.RegisterService(&can_tp_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  auto channel = server->InProcessChannel({});
+  auto can_tp_stub = boat::v1::CanTpService::NewStub(channel);
+
+  // Send() bails out early if no frame publisher is wired (see
+  // can_tp_send's frame_publish_fn nullptr guard) -- a no-op sink is enough
+  // here since this test only cares about the RPC-level Send()/Subscribe()
+  // contract, not what actually reaches a bus.
+  node_manager.SetFramePublisher([](const BoatFrame&) {});
+  node_manager.Load(CAN_TP_SO, R"({"iface":"vcan0"})");
+
+  auto configure = [&](uint32_t nsdu_id, uint32_t source_addr, uint32_t target_addr) {
+    boat::v1::ConfigureRequest req;
+    req.mutable_config()->set_nsdu_id(nsdu_id);
+    req.mutable_config()->set_source_addr(source_addr);
+    req.mutable_config()->set_target_addr(target_addr);
+    req.mutable_config()->set_can_dlc(8);
+    boat::v1::ConfigureResponse resp;
+    grpc::ClientContext client_ctx;
+    REQUIRE(can_tp_stub->Configure(&client_ctx, req, &resp).ok());
+    REQUIRE(resp.ok());
+  };
+
+  SECTION("Subscribe streams a decoded Single Frame payload") {
+    configure(0x9, 0x700, 0x800);
+
+    std::mutex received_mutex;
+    std::vector<boat::v1::CanTpRxEvent> received;
+    grpc::ClientContext sub_ctx;
+    boat::v1::SubscribeRequest sub_req;  // nsdu_ids empty -> all sessions
+    auto reader = can_tp_stub->Subscribe(&sub_ctx, sub_req);
+
+    std::thread reader_thread([&] {
+      boat::v1::CanTpRxEvent ev;
+      while (reader->Read(&ev)) {
+        std::lock_guard<std::mutex> lock(received_mutex);
+        received.push_back(ev);
+      }
+    });
+    // Cancels the stream and joins the reader thread no matter how this
+    // SECTION exits, including a REQUIRE failure -- Catch2 unwinds via an
+    // exception on failure, and std::thread's destructor calls
+    // std::terminate() if it's still joinable, which would otherwise mask
+    // the real assertion failure behind a SIGABRT.
+    struct ReaderGuard {
+      grpc::ClientContext& ctx;
+      std::thread& t;
+      grpc::ClientReader<boat::v1::CanTpRxEvent>& r;
+      ~ReaderGuard() {
+        ctx.TryCancel();
+        if (t.joinable()) t.join();
+        r.Finish();
+      }
+    } reader_guard{sub_ctx, reader_thread, *reader};
+
+    // Let the subscription establish server-side before injecting a frame --
+    // the server's poll loop wakes every 50ms (see CanTpServiceImpl::Subscribe).
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // Subscribe reports *decoded RX* payloads (what tp_on_frame reassembles
+    // from a peer), not our own outbound Send() traffic -- CanTpService.Send
+    // only ever transmits, it never loops back into on_frame (self-sent
+    // frames are filtered by design; see BOAT_CAN_FLAG_SELF_SENT). So the
+    // trigger here is a synthetic *inbound* Single Frame from the peer,
+    // matching the connection's target_addr (0x800) the same way
+    // find_by_target() does -- mirrors this file's other DispatchFrame-based
+    // tests and can_tp_plugin.cpp's own tp_on_frame doc comments.
+    const std::vector<uint8_t> sf_payload = {0x03, 0xAA, 0xBB, 0xCC};  // PCI 0x03 = SF len 3
+    BoatFrame sf_frame{};
+    sf_frame.bus_type = BOAT_BUS_CAN;
+    sf_frame.iface = "vcan0";
+    sf_frame.meta.can.can_id = 0x800;  // target_addr
+    sf_frame.meta.can.dlc = static_cast<uint8_t>(sf_payload.size());
+    sf_frame.meta.can.flags = 0;
+    sf_frame.payload = const_cast<uint8_t*>(sf_payload.data());
+    sf_frame.payload_len = sf_payload.size();
+    node_manager.DispatchFrame(sf_frame);
+
+    // Poll for the event to arrive rather than a fixed sleep.
+    bool got_event = false;
+    for (int i = 0; i < 50 && !got_event; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      std::lock_guard<std::mutex> lock(received_mutex);
+      got_event = !received.empty();
+    }
+
+    REQUIRE(got_event);
+    std::lock_guard<std::mutex> lock(received_mutex);
+    REQUIRE(received.size() >= 1);
+    REQUIRE(received[0].nsdu_id() == 0x9);
+    REQUIRE(received[0].iface() == "vcan0");
+    REQUIRE(received[0].data() == std::string("\xAA\xBB\xCC", 3));
+  }
+
+  SECTION("RemoveSession deletes a connection; Send then fails") {
+    configure(0xA, 0x701, 0x801);
+
+    boat::v1::RemoveSessionRequest remove_req;
+    remove_req.set_nsdu_id(0xA);
+    boat::v1::RemoveSessionResponse remove_resp;
+    grpc::ClientContext remove_ctx;
+    REQUIRE(can_tp_stub->RemoveSession(&remove_ctx, remove_req, &remove_resp).ok());
+    REQUIRE(remove_resp.ok());
+
+    boat::v1::SendRequest send_req;
+    send_req.set_nsdu_id(0xA);
+    send_req.set_data("\x01", 1);
+    boat::v1::SendResponse send_resp;
+    grpc::ClientContext send_ctx;
+    auto status = can_tp_stub->Send(&send_ctx, send_req, &send_resp);
+    REQUIRE_FALSE(status.ok());
+    REQUIRE(status.error_code() == grpc::StatusCode::FAILED_PRECONDITION);
+
+    boat::v1::ListSessionsRequest list_req;
+    boat::v1::ListSessionsResponse list_resp;
+    grpc::ClientContext list_ctx;
+    REQUIRE(can_tp_stub->ListSessions(&list_ctx, list_req, &list_resp).ok());
+    REQUIRE(list_resp.sessions_size() == 0);
+  }
+
+  SECTION("RemoveSession on an unconfigured nsdu_id fails with NOT_FOUND") {
+    boat::v1::RemoveSessionRequest remove_req;
+    remove_req.set_nsdu_id(0xBEEF);
+    boat::v1::RemoveSessionResponse remove_resp;
+    grpc::ClientContext remove_ctx;
+    auto status = can_tp_stub->RemoveSession(&remove_ctx, remove_req, &remove_resp);
+    REQUIRE_FALSE(status.ok());
+    REQUIRE(status.error_code() == grpc::StatusCode::NOT_FOUND);
+  }
 
   server->Shutdown();
   std::filesystem::remove("boat_config.db");

@@ -3,6 +3,7 @@
 #include <boat/can_tp.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -41,9 +42,9 @@ class ICanTp {
   // (no connection configured for nsdu_id, or connection busy).
   virtual int32_t Send(uint32_t nsdu_id, const uint8_t* data, uint32_t len) = 0;
 
-  // True if a connection has already been Configure()'d for this nsdu_id
-  // (matched either by source_addr key or by the .nsdu_id field), so callers
-  // can distinguish "never configured" from "busy" when Send() returns -1.
+  // True if a connection has already been Configure()'d for this nsdu_id,
+  // so callers can distinguish "never configured" from "busy" when Send()
+  // returns -1.
   virtual bool HasConnection(uint32_t nsdu_id) const = 0;
 
   // The CAN interface this plugin instance is bound to (from its load-time
@@ -53,6 +54,23 @@ class ICanTp {
   // Snapshot of every currently-configured N-SDU connection on this
   // instance, for introspection (`boat can-tp list-sessions`).
   virtual std::vector<CanTpSessionInfo> ListSessions() const = 0;
+
+  // Delete a configured N-SDU connection. Returns 0 on success; -1 if no
+  // connection is configured for nsdu_id; -2 if it's busy with an in-progress
+  // multi-frame transmission (caller must wait/retry, not force it, to avoid
+  // erasing a connection the TX pacing thread is actively working with).
+  virtual int32_t Remove(uint32_t nsdu_id) = 0;
+
+  // Decoded-payload subscription, for `CanTpService.Subscribe` /
+  // `boat can-tp subscribe`. Invoked once per completed RX (Single Frame, or
+  // a fully-reassembled multi-frame payload) on a matching nsdu_id.
+  using RxCallback = std::function<void(uint32_t nsdu_id, const std::vector<uint8_t>& payload)>;
+  using SubId = std::size_t;
+
+  // Subscribe to decoded RX payloads. Empty nsdu_ids means "every session on
+  // this instance". Mirrors PduRouter::Subscribe (src/hil/pdu/pdu_router.h).
+  virtual SubId Subscribe(std::vector<uint32_t> nsdu_ids, RxCallback cb) = 0;
+  virtual void  Unsubscribe(SubId id) = 0;
 };
 
 }  // namespace boat::core

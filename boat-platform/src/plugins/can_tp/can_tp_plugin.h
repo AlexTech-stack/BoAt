@@ -20,10 +20,12 @@
 extern "C" int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
                                const uint8_t* data, uint32_t len);
 extern "C" int32_t can_tp_configure(void* tp_ctx, const CanTpConfig* config);
+extern "C" int32_t can_tp_remove(void* tp_ctx, uint32_t nsdu_id);
 
 /* ISO 15765-2 N-SDU connection state.
-   A connection is keyed by source_addr and handles both TX and RX
-   directions within one session (source_addr ↔ target_addr). */
+   A connection is keyed by nsdu_id (the caller-facing session identifier)
+   and handles both TX and RX directions within one session
+   (source_addr ↔ target_addr). */
 struct NsduConnection {
   uint32_t nsdu_id;
   uint32_t source_addr;
@@ -67,7 +69,7 @@ struct CanTpPlugin : public boat::core::ICanTp {
   void*               frame_publisher_ctx{nullptr};
   BoatPduPublishFn    pdu_publish_fn{nullptr};
   void*               pdu_publisher_ctx{nullptr};
-  std::unordered_map<uint32_t, NsduConnection> connections;  // keyed by source_addr
+  std::unordered_map<uint32_t, NsduConnection> connections;  // keyed by nsdu_id
   std::string         iface;
   // "can_tp:" + iface, computed once in tp_initialize() after iface is
   // resolved. Returned by boat_plugin_service_name() so multiple loaded
@@ -75,11 +77,47 @@ struct CanTpPlugin : public boat::core::ICanTp {
   // instead of colliding on a single fixed "can_tp".
   std::string         service_name;
 
-  // TX pacing thread + synchronization
+  // TX pacing thread + synchronization. Also guards the RX path in
+  // tp_on_frame (SF/FF/CF handling) -- see can_tp_plugin.cpp for why: it's
+  // effectively a general per-plugin connection-state mutex now, not just a
+  // TX-thread lock, so that Remove() erasing a connection can never race a
+  // concurrent on_frame() dereferencing the same NsduConnection*.
   std::thread         tx_thread;
   mutable std::mutex  tx_mutex;
   std::condition_variable tx_cv;
   std::atomic<bool>   tx_stop{false};
+
+  // Decoded-payload subscribers (boat can-tp subscribe), separate from
+  // tx_mutex so invoking callbacks never happens while holding the
+  // connection-state lock -- mirrors PduRouter's subs_mutex_/subscriptions_
+  // split from its own connection-state locks (src/hil/pdu/pdu_router.h).
+  struct Subscription {
+    std::vector<uint32_t> nsdu_ids;  // empty = every session on this instance
+    boat::core::ICanTp::RxCallback cb;
+  };
+  mutable std::mutex  subs_mutex;
+  std::unordered_map<boat::core::ICanTp::SubId, Subscription> subscriptions;
+  boat::core::ICanTp::SubId next_sub_id{0};
+
+  // Called from tp_on_frame on every completed RX (SF, or a fully
+  // reassembled multi-frame payload) to fan out to matching subscribers.
+  void NotifySubscribers(uint32_t nsdu_id, const std::vector<uint8_t>& payload) {
+    std::vector<boat::core::ICanTp::RxCallback> to_call;
+    {
+      std::lock_guard<std::mutex> lock(subs_mutex);
+      for (const auto& [id, sub] : subscriptions) {
+        (void)id;
+        if (sub.nsdu_ids.empty()) {
+          to_call.push_back(sub.cb);
+          continue;
+        }
+        for (uint32_t id_filter : sub.nsdu_ids) {
+          if (id_filter == nsdu_id) { to_call.push_back(sub.cb); break; }
+        }
+      }
+    }
+    for (const auto& cb : to_call) cb(nsdu_id, payload);
+  }
 
   // ── ICanTp ──────────────────────────────────────────────────────────────
   int32_t Configure(const CanTpConfig& config) override {
@@ -88,23 +126,33 @@ struct CanTpPlugin : public boat::core::ICanTp {
   int32_t Send(uint32_t nsdu_id, const uint8_t* data, uint32_t len) override {
     return can_tp_send(this, nsdu_id, data, len);
   }
+  int32_t Remove(uint32_t nsdu_id) override {
+    return can_tp_remove(this, nsdu_id);
+  }
   bool HasConnection(uint32_t nsdu_id) const override {
     std::lock_guard<std::mutex> lock(tx_mutex);
-    if (connections.find(nsdu_id) != connections.end()) return true;
-    for (const auto& [addr, c] : connections) {
-      (void)addr;
-      if (c.nsdu_id == nsdu_id) return true;
-    }
-    return false;
+    return connections.find(nsdu_id) != connections.end();
   }
   std::string GetIface() const override { return iface; }
+
+  boat::core::ICanTp::SubId Subscribe(std::vector<uint32_t> nsdu_ids,
+                                       boat::core::ICanTp::RxCallback cb) override {
+    std::lock_guard<std::mutex> lock(subs_mutex);
+    const auto id = next_sub_id++;
+    subscriptions[id] = Subscription{std::move(nsdu_ids), std::move(cb)};
+    return id;
+  }
+  void Unsubscribe(boat::core::ICanTp::SubId id) override {
+    std::lock_guard<std::mutex> lock(subs_mutex);
+    subscriptions.erase(id);
+  }
 
   std::vector<boat::core::CanTpSessionInfo> ListSessions() const override {
     std::vector<boat::core::CanTpSessionInfo> result;
     std::lock_guard<std::mutex> lock(tx_mutex);
     result.reserve(connections.size());
-    for (const auto& [addr, c] : connections) {
-      (void)addr;
+    for (const auto& [key, c] : connections) {
+      (void)key;
       boat::core::CanTpSessionInfo info{};
       info.nsdu_id             = c.nsdu_id;
       info.source_addr         = c.source_addr;

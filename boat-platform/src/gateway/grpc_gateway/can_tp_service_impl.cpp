@@ -1,7 +1,9 @@
 #include "can_tp_service_impl.h"
 
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
 #include <sstream>
 #include <vector>
 
@@ -90,10 +92,11 @@ grpc::Status CanTpServiceImpl::Configure(
   if (pc.nsdu_id() == 0) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "nsdu_id must be non-zero");
   }
-  if ((pc.source_addr() == 0) != (pc.target_addr() == 0)) {
+  if (pc.source_addr() == 0 || pc.target_addr() == 0) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-                        "source_addr and target_addr must either both be 0 "
-                        "(fall back to nsdu_id) or both be non-zero");
+                        "source_addr and target_addr are both required and must be "
+                        "non-zero -- for a single-ID session, pass the same value "
+                        "for both explicitly");
   }
   if (pc.can_dlc() != 8 && pc.can_dlc() != 64) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "can_dlc must be 8 or 64");
@@ -237,6 +240,153 @@ grpc::Status CanTpServiceImpl::ListSessions(
   for (auto& [iface, can_tp] : GetAllCanTp()) {
     AppendSessions(iface, can_tp, response);
   }
+  return grpc::Status::OK;
+}
+
+grpc::Status CanTpServiceImpl::RemoveSession(
+    grpc::ServerContext* context,
+    const boat::v1::RemoveSessionRequest* request,
+    boat::v1::RemoveSessionResponse* response) {
+  grpc::StatusCode status_code = grpc::StatusCode::OK;
+  std::string status_message;
+  auto* can_tp = GetCanTp(request->iface(), &status_code, &status_message);
+  if (can_tp == nullptr) {
+    return grpc::Status(status_code, status_message);
+  }
+
+  const uint32_t nsdu_id = request->nsdu_id();
+  const int32_t result = can_tp->Remove(nsdu_id);
+  if (result == -1) {
+    std::ostringstream ss;
+    ss << "no N-SDU connection configured for nsdu_id=0x" << std::hex << nsdu_id;
+    return grpc::Status(grpc::StatusCode::NOT_FOUND, ss.str());
+  }
+  if (result == -2) {
+    std::ostringstream ss;
+    ss << "nsdu_id=0x" << std::hex << nsdu_id
+       << " has a multi-frame transfer in progress; wait for it to settle before removing";
+    return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, ss.str());
+  }
+
+  response->set_ok(true);
+
+  {
+    RpcEvent ev;
+    ev.timestamp_ns = NowNsCanTp();
+    ev.method     = "CanTpService/RemoveSession";
+    ev.peer       = context->peer();
+    ev.event_type = "DATA";
+    ev.call_type  = "UNARY";
+    std::ostringstream ss;
+    ss << "nsdu_id=0x" << std::hex << nsdu_id << std::dec << " iface=" << can_tp->GetIface();
+    ev.summary = ss.str();
+    ctx_.audit_log.Push(std::move(ev));
+  }
+
+  return grpc::Status::OK;
+}
+
+grpc::Status CanTpServiceImpl::Subscribe(
+    grpc::ServerContext* context,
+    const boat::v1::SubscribeRequest* request,
+    grpc::ServerWriter<boat::v1::CanTpRxEvent>* writer) {
+  std::vector<uint32_t> nsdu_ids(request->nsdu_ids().begin(), request->nsdu_ids().end());
+  const std::string peer = context->peer();
+
+  // Resolve the target instance(s): a specific iface, or every loaded
+  // instance when none is given -- same "iface empty = all" convention
+  // ListSessions already uses.
+  std::vector<std::pair<std::string, boat::core::ICanTp*>> targets;
+  if (!request->iface().empty()) {
+    grpc::StatusCode status_code = grpc::StatusCode::OK;
+    std::string status_message;
+    auto* can_tp = GetCanTp(request->iface(), &status_code, &status_message);
+    if (can_tp == nullptr) {
+      return grpc::Status(status_code, status_message);
+    }
+    targets.emplace_back(request->iface(), can_tp);
+  } else {
+    targets = GetAllCanTp();
+    if (targets.empty()) {
+      return grpc::Status(grpc::StatusCode::NOT_FOUND, "CanTp plugin not loaded");
+    }
+  }
+
+  {
+    std::ostringstream ss;
+    if (nsdu_ids.empty()) {
+      ss << "nsdu_ids=(all)";
+    } else {
+      ss << "nsdu_ids=[";
+      for (std::size_t i = 0; i < nsdu_ids.size(); ++i) {
+        if (i) ss << ',';
+        ss << "0x" << std::hex << nsdu_ids[i];
+      }
+      ss << ']';
+    }
+    ss << " targets=" << targets.size();
+    RpcEvent ev;
+    ev.timestamp_ns = NowNsCanTp();
+    ev.method     = "CanTpService/Subscribe";
+    ev.peer       = peer;
+    ev.event_type = "SUBSCRIBE_OPEN";
+    ev.call_type  = "SERVER_STREAM";
+    ev.summary    = ss.str();
+    ctx_.audit_log.Push(std::move(ev));
+  }
+
+  std::mutex                          queue_mutex;
+  std::condition_variable             queue_cv;
+  std::vector<boat::v1::CanTpRxEvent> queue;
+
+  std::vector<std::pair<boat::core::ICanTp*, boat::core::ICanTp::SubId>> subs;
+  subs.reserve(targets.size());
+  for (auto& [iface, can_tp] : targets) {
+    const auto sub_id = can_tp->Subscribe(
+        nsdu_ids,
+        [&queue_mutex, &queue_cv, &queue, iface](uint32_t nsdu_id, const std::vector<uint8_t>& payload) {
+          boat::v1::CanTpRxEvent ev;
+          ev.set_iface(iface);
+          ev.set_nsdu_id(nsdu_id);
+          ev.set_data(payload.data(), payload.size());
+          ev.set_timestamp_ns(NowNsCanTp());
+          {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            queue.push_back(std::move(ev));
+          }
+          queue_cv.notify_one();
+        });
+    subs.emplace_back(can_tp, sub_id);
+  }
+
+  while (!context->IsCancelled()) {
+    std::vector<boat::v1::CanTpRxEvent> pending;
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex);
+      queue_cv.wait_for(lock, std::chrono::milliseconds(50),
+                        [&queue] { return !queue.empty(); });
+      pending.swap(queue);
+    }
+    for (const auto& ev : pending) {
+      if (!writer->Write(ev)) {
+        for (auto& [can_tp, sub_id] : subs) can_tp->Unsubscribe(sub_id);
+        return grpc::Status::OK;
+      }
+      RpcEvent audit_ev;
+      audit_ev.timestamp_ns = NowNsCanTp();
+      audit_ev.method     = "CanTpService/Subscribe";
+      audit_ev.peer       = peer;
+      audit_ev.event_type = "DATA";
+      audit_ev.call_type  = "SERVER_STREAM";
+      std::ostringstream ss;
+      ss << "nsdu_id=0x" << std::hex << ev.nsdu_id() << std::dec << " len=" << ev.data().size()
+         << " iface=" << ev.iface();
+      audit_ev.summary = ss.str();
+      ctx_.audit_log.Push(std::move(audit_ev));
+    }
+  }
+
+  for (auto& [can_tp, sub_id] : subs) can_tp->Unsubscribe(sub_id);
   return grpc::Status::OK;
 }
 

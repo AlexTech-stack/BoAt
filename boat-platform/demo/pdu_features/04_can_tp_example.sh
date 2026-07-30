@@ -29,9 +29,8 @@ echo "3. Configure the session (required before send -- no auto-create)"
 echo "   boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --bs 0 --stmin 0"
 
 echo ""
-echo "4. Send a large PDU via CanTp CLI"
-echo "   boat can-tp send --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 \\"
-echo "     --data 0123456789ABCDEF00112233..."
+echo "4. Send a large PDU via CanTp CLI (no addressing here -- it comes from configure, above)"
+echo "   boat can-tp send --nsdu-id 0x7E0 --data 0123456789ABCDEF00112233..."
 
 echo ""
 echo "   This segments the 255-byte payload into:"

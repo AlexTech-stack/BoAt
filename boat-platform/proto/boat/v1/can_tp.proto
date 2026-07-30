@@ -3,13 +3,16 @@ syntax = "proto3";
 package boat.v1;
 
 // Mirrors CanTpConfig from sdk/cpp/include/boat/can_tp.h (ISO 15765-2).
-// A connection represents one session between source_addr (this node)
-// and target_addr (peer node): we send FF/CF and receive FC on
-// source_addr; we receive SF/FF/CF and send FC on target_addr.
+// A connection is identified by nsdu_id and represents one session between
+// source_addr (this node) and target_addr (peer node), both required: we
+// send FF/CF and receive FC on source_addr; we receive SF/FF/CF and send FC
+// on target_addr. A single-ID session (one CAN ID for both directions) is
+// expressed by passing the same value for both -- there is no implicit
+// fallback to nsdu_id.
 message CanTpConfig {
   uint32 nsdu_id             = 1;  // logical session identifier
-  uint32 source_addr         = 2;  // CAN ID of this node (0 = use nsdu_id, only if target_addr is also 0)
-  uint32 target_addr         = 3;  // CAN ID of the peer node (0 = use nsdu_id, only if source_addr is also 0)
+  uint32 source_addr         = 2;  // CAN ID of this node (required, non-zero)
+  uint32 target_addr         = 3;  // CAN ID of the peer node (required, non-zero)
   uint32 rx_buffer_size      = 4;  // max reassembly buffer (default 4095 if 0)
   uint32 block_size          = 5;  // BS to advertise in sent FC (0 = unlimited); truncated to uint8 server-side
   uint32 st_min              = 6;  // STmin to advertise in sent FC; truncated to uint8 server-side
@@ -77,6 +80,36 @@ message ListSessionsResponse {
   repeated CanTpSession sessions = 1;
 }
 
+message RemoveSessionRequest {
+  uint32 nsdu_id = 1;
+  // See ConfigureRequest.iface -- selects which loaded instance to target.
+  string iface   = 2;
+}
+
+message RemoveSessionResponse {
+  bool ok = 1;
+}
+
+message SubscribeRequest {
+  // Which nsdu_ids to stream decoded RX payloads for; empty = every session
+  // on the targeted instance(s).
+  repeated uint32 nsdu_ids = 1;
+  // "" streams across every loaded CanTp instance (each event tagged with
+  // its iface); set to scope to just one instance.
+  string iface = 2;
+}
+
+// One decoded RX payload: a completed Single Frame, or a fully-reassembled
+// multi-frame (FF+CF...) transfer -- CanTpService's counterpart to
+// PduService.SubscribePdus, sourced directly from the plugin rather than
+// the generic PDU bus.
+message CanTpRxEvent {
+  string iface        = 1;
+  uint32 nsdu_id       = 2;
+  bytes  data          = 3;
+  uint64 timestamp_ns  = 4;
+}
+
 // Exposes the CanTp plugin's live gateway-side instance(s) (loaded via
 // BOAT_NODE_PLUGINS, one per CAN interface) to CLI/SDK clients.
 // See PluginManager::FindService("can_tp:" + iface).
@@ -84,4 +117,6 @@ service CanTpService {
   rpc Configure(ConfigureRequest) returns (ConfigureResponse);
   rpc Send(SendRequest) returns (SendResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc RemoveSession(RemoveSessionRequest) returns (RemoveSessionResponse);
+  rpc Subscribe(SubscribeRequest) returns (stream CanTpRxEvent);
 }

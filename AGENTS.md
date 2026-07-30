@@ -27,7 +27,7 @@
   - `sdk/cpp/include/boat/` — C++ SDK headers
     - `plugin.h` — Plugin ABI v8 (unified `on_frame`, `set_frame_publisher`, `declared_buses`)
     - `frame.h` — Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU bus types)
-    - `can_tp.h` — Standalone CanTp C API (can_tp_send, can_tp_configure)
+    - `can_tp.h` — Standalone CanTp C API (can_tp_send, can_tp_configure, can_tp_remove)
     - `someip.h` — SOME/IP protocol constants
   - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|replay|frame|can|eth|pdu|can-tp|plugin|...`)
   - `config/` — PDU database JSON files
@@ -287,11 +287,14 @@ uint32_t crc32 = E2eCrc32(data, len);
 
 ISO 15765-2 segmentation/reassembly for PDUs larger than 8 bytes. Operates as a `BOAT_NODE_PLUGINS` node plugin using the v8 ABI (`on_frame`/`set_frame_publisher`). `boat can-tp configure`/`send` talk to the live plugin instance inside the gateway process via the `CanTpService` gRPC service (`CanTpServiceImpl` looks it up via `PluginManager::FindService("can_tp:" + iface)`) — there is no offline/local mode.
 
-Each connection represents a session between `source_addr` (this node) and
-`target_addr` (peer node).  Both IDs must be configured so that the plugin
-can correctly associate frames and distinguish ISO-TP traffic from regular
-signal frames on the bus. `nsdu_id` must be numeric (`int(x, 0)` — hex or
-decimal, not a symbolic name).
+Each connection is identified by `nsdu_id` and represents a session between
+`source_addr` (this node) and `target_addr` (peer node) — both required,
+non-zero, and set only via `configure`; there is no fallback to `nsdu_id`
+(a single-ID session, one CAN ID for both directions, is expressed by
+passing the same value for both explicitly). `send`/`remove`/`subscribe`
+then only need `--nsdu-id` — addressing lives entirely in the prior
+`configure` call. `nsdu_id` must be numeric (`int(x, 0)` — hex or decimal,
+not a symbolic name).
 
 ```bash
 # Build plugin
@@ -302,12 +305,19 @@ BOAT_NODE_PLUGINS=./build/debug/src/plugins/can_tp/can_tp.so?{"iface":"vcan0"} \
   BOAT_CAN_INTERFACES=vcan0 \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 
-# Configure a session (dual-ID, tester→ECU)
+# Configure a session (dual-ID, tester→ECU) -- also how you edit one:
+# re-running configure for an already-configured nsdu_id overwrites it in place
 boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --bs 0 --stmin 0
 
 # Send large PDU via CanTp CLI -- SF or FF+CF is chosen automatically by
-# payload length (--dlc 8 for classic CAN, --dlc 64 for CAN-FD)
-boat can-tp send --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --dlc 8 --data 0123456789ABCDEF...
+# payload length. No addressing here -- it comes from configure, above.
+boat can-tp send --nsdu-id 0x7E0 --data 0123456789ABCDEF...
+
+# Stream decoded RX payloads (completed SF, or fully reassembled FF+CF...)
+boat can-tp subscribe --nsdu-id 0x7E0
+
+# Delete a configured session (fails while a multi-frame transfer is in flight)
+boat can-tp remove --nsdu-id 0x7E0
 
 # List currently-configured sessions (nsdu_id, addrs, rx/tx state) --
 # across every loaded instance, or scoped to one with --iface
@@ -325,7 +335,7 @@ BOAT_NODE_PLUGINS='./build/debug/src/plugins/can_tp/can_tp.so?{"iface":"vcan0"},
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 
 boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --iface vcan1
-boat can-tp send --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --data 0123 --iface vcan1
+boat can-tp send --nsdu-id 0x7E0 --data 0123 --iface vcan1
 ```
 
 `--iface` is only *required* once more than one instance is loaded — while

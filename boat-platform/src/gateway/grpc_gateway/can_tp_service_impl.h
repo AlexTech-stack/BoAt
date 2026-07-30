@@ -28,6 +28,14 @@ class CanTpServiceImpl final : public boat::v1::CanTpService::Service {
                             const boat::v1::ListSessionsRequest* request,
                             boat::v1::ListSessionsResponse* response) override;
 
+  grpc::Status RemoveSession(grpc::ServerContext* context,
+                             const boat::v1::RemoveSessionRequest* request,
+                             boat::v1::RemoveSessionResponse* response) override;
+
+  grpc::Status Subscribe(grpc::ServerContext* context,
+                        const boat::v1::SubscribeRequest* request,
+                        grpc::ServerWriter<boat::v1::CanTpRxEvent>* writer) override;
+
  private:
   GatewayContext& ctx_;
   // Resolves which loaded CanTp instance to use. iface non-empty ->

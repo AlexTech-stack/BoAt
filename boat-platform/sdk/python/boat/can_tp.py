@@ -9,16 +9,20 @@ there is no local/offline mode.
 This module provides:
 
 - CanTpHandle(client_or_address): connect to a gateway's CanTpService
-- configure(nsdu_id, ...): configure an N-SDU connection
-- send(nsdu_id, data): send a large PDU through CanTp segmentation
+- configure(nsdu_id, source_addr, target_addr, ...): configure (or edit) an
+  N-SDU connection
+- send(nsdu_id, data): send a PDU through CanTp segmentation, by nsdu_id only
+- remove(nsdu_id): delete a configured connection
+- subscribe(nsdu_ids=None): stream decoded RX payloads
 
 For the CLI, use::
+    boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8
     boat can-tp send --nsdu-id 0x7E0 --data 0123456789ABCDEF...
 """
 
 from __future__ import annotations
 
-from typing import Union
+from typing import Iterable, Optional, Union
 
 from boat.client import BoAtClient
 from boat.v1 import can_tp_pb2
@@ -42,27 +46,30 @@ class CanTpHandle:
         else:
             self._client = BoAtClient(address=client_or_address)
 
-    def configure(self, nsdu_id: int, iface: str = "", **kwargs) -> bool:
-        """Configure an N-SDU connection.
+    def configure(self, nsdu_id: int, source_addr: int, target_addr: int,
+                  iface: str = "", **kwargs) -> bool:
+        """Configure (or edit) an N-SDU connection.
+
+        Re-configuring an already-configured nsdu_id overwrites its
+        parameters in place -- this is also how you edit a running session.
 
         Args:
-            nsdu_id: N-SDU identifier.
+            nsdu_id: N-SDU identifier -- the session's identity for send(),
+                remove(), and subscribe().
+            source_addr: CAN ID of this node. Required, non-zero. For a
+                single-ID session (one CAN ID for both directions), pass the
+                same value as target_addr -- there is no implicit fallback.
+            target_addr: CAN ID of the peer node. Required, non-zero.
             iface: which loaded CanTp instance to target (one per CAN
                 interface). Only needed if more than one is loaded --
                 leave empty while there's exactly one; the RPC fails with
                 a clear "ambiguous, specify iface" error otherwise.
-            **kwargs: Override CanTpConfig fields (source_addr, target_addr,
-                      rx_buffer_size, block_size, st_min, can_dlc,
-                      extended_addressing).
+            **kwargs: Override remaining CanTpConfig fields (rx_buffer_size,
+                      block_size, st_min, can_dlc, extended_addressing).
 
         Returns:
             True if configured successfully.
         """
-        source_addr = kwargs.get("source_addr", 0)
-        target_addr = kwargs.get("target_addr", 0)
-        if source_addr == 0 and target_addr == 0:
-            source_addr = nsdu_id
-            target_addr = nsdu_id
         config = can_tp_pb2.CanTpConfig(
             nsdu_id=nsdu_id,
             source_addr=source_addr,
@@ -78,14 +85,16 @@ class CanTpHandle:
         return resp.ok
 
     def send(self, nsdu_id: int, data: bytes, iface: str = "") -> bool:
-        """Send a PDU through CanTp segmentation.
+        """Send a PDU through CanTp segmentation, to an already-configured session.
 
         Small payloads are sent as a single CAN frame directly; larger
         payloads are segmented into First Frame + Consecutive Frames, paced
-        by the gateway plugin's internal TX thread.
+        by the gateway plugin's internal TX thread. No addressing is passed
+        here -- it comes from the connection's configure() call, identified
+        by nsdu_id alone.
 
         Args:
-            nsdu_id: N-SDU identifier.
+            nsdu_id: N-SDU identifier of an already-configured connection.
             data: PDU payload bytes.
             iface: which loaded CanTp instance to target -- see configure().
 
@@ -99,6 +108,39 @@ class CanTpHandle:
             can_tp_pb2.SEND_RESULT_SINGLE_FRAME,
             can_tp_pb2.SEND_RESULT_MULTI_FRAME_INITIATED,
         )
+
+    def remove(self, nsdu_id: int, iface: str = "") -> bool:
+        """Delete a configured N-SDU connection.
+
+        Args:
+            nsdu_id: N-SDU identifier to remove.
+            iface: which loaded CanTp instance to target -- see configure().
+
+        Returns:
+            True if removed. Raises grpc.RpcError (FAILED_PRECONDITION) if
+            a multi-frame transfer is still in progress -- wait for it to
+            settle and retry rather than forcing it.
+        """
+        resp = self._client.can_tp.RemoveSession(
+            can_tp_pb2.RemoveSessionRequest(nsdu_id=nsdu_id, iface=iface))
+        return resp.ok
+
+    def subscribe(self, nsdu_ids: Optional[Iterable[int]] = None, iface: str = ""):
+        """Stream decoded RX payloads (completed Single Frames, or fully
+        reassembled multi-frame transfers).
+
+        Args:
+            nsdu_ids: which sessions to stream; None/empty streams every
+                session on the targeted instance(s).
+            iface: scope to one loaded instance; "" streams across every
+                loaded instance, each event tagged with its iface.
+
+        Returns:
+            A gRPC stream of CanTpRxEvent protobuf messages (iface, nsdu_id,
+            data, timestamp_ns). Iterate it directly; call .cancel() when done.
+        """
+        return self._client.can_tp.Subscribe(can_tp_pb2.SubscribeRequest(
+            nsdu_ids=list(nsdu_ids or []), iface=iface))
 
     def list_sessions(self, iface: str = "") -> list:
         """List currently-configured N-SDU connections.

@@ -57,9 +57,14 @@ def _fake_client() -> SimpleNamespace:
             version="unknown", loaded=True, config_json='{"iface":"vcan0"}'))),
         UnloadNodePlugin=Mock(return_value=SimpleNamespace(unloaded=True)),
     )
+    can_tp_stream = Mock()
+    can_tp_stream.__iter__ = Mock(return_value=iter([]))
+    can_tp_stream.cancel = Mock()
     can_tp = SimpleNamespace(
         Configure=Mock(return_value=SimpleNamespace(ok=True, iface="vcan0")),
         Send=Mock(return_value=SimpleNamespace(result=can_tp_pb2.SEND_RESULT_SINGLE_FRAME)),
+        RemoveSession=Mock(return_value=SimpleNamespace(ok=True)),
+        Subscribe=Mock(return_value=can_tp_stream),
         ListSessions=Mock(return_value=SimpleNamespace(sessions=[
             SimpleNamespace(iface="vcan0", nsdu_id=0x7E0, source_addr=0x7E0, target_addr=0x7E8,
                             block_size=0, st_min=0, can_dlc=8, extended_addressing=False,
@@ -197,17 +202,54 @@ def test_can_tp_commands_call_expected_methods() -> None:
             "--bs", "0", "--stmin", "0",
         ]).exit_code == 0
         assert runner.invoke(app, [
-            "can-tp", "send", "--nsdu-id", "0x7E0",
-            "--source-addr", "0x7E0", "--target-addr", "0x7E8",
-            "--data", "0123",
+            "can-tp", "send", "--nsdu-id", "0x7E0", "--data", "0123",
         ]).exit_code == 0
 
-    assert fake_client.can_tp.Configure.called
+    # send must call Configure() exactly zero times -- this is the actual bug
+    # fix: send used to silently re-Configure with default (0/0 -> nsdu_id)
+    # addresses on every call, creating a second, wrong session.
+    assert fake_client.can_tp.Configure.call_count == 1
     assert fake_client.can_tp.Send.called
 
     # The single-frame gate that used to reject small payloads must stay gone.
     send_request = fake_client.can_tp.Send.call_args[0][0]
     assert send_request.data == bytes.fromhex("0123")
+    assert send_request.nsdu_id == 0x7E0
+
+
+def test_can_tp_configure_requires_source_and_target_addr() -> None:
+    # The single-ID auto-fallback (both addresses default to nsdu_id) is
+    # gone -- both flags are now required CLI options.
+    fake_client = _fake_client()
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, ["can-tp", "configure", "--nsdu-id", "0x7E0"])
+
+    assert result.exit_code != 0
+    assert not fake_client.can_tp.Configure.called
+
+
+def test_can_tp_remove_command() -> None:
+    fake_client = _fake_client()
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, ["can-tp", "remove", "--nsdu-id", "0x7E0"])
+
+    assert result.exit_code == 0
+    assert fake_client.can_tp.RemoveSession.called
+    remove_request = fake_client.can_tp.RemoveSession.call_args[0][0]
+    assert remove_request.nsdu_id == 0x7E0
+
+
+def test_can_tp_subscribe_command() -> None:
+    fake_client = _fake_client()
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, [
+            "can-tp", "subscribe", "--nsdu-id", "0x7E0", "--nsdu-id", "0x100",
+        ])
+
+    assert result.exit_code == 0
+    assert fake_client.can_tp.Subscribe.called
+    sub_request = fake_client.can_tp.Subscribe.call_args[0][0]
+    assert list(sub_request.nsdu_ids) == [0x7E0, 0x100]
 
 
 def test_can_tp_list_sessions() -> None:
@@ -242,7 +284,6 @@ def test_can_tp_iface_flag_is_threaded_into_requests() -> None:
         ]).exit_code == 0
         assert runner.invoke(app, [
             "can-tp", "send", "--nsdu-id", "0x7E0",
-            "--source-addr", "0x7E0", "--target-addr", "0x7E8",
             "--data", "0123", "--iface", "vcan1",
         ]).exit_code == 0
 
@@ -288,9 +329,7 @@ def test_can_tp_send_reports_rpc_error() -> None:
 
     with patch("boat_cli.main.BoAtClient", return_value=fake_client):
         result = runner.invoke(app, [
-            "can-tp", "send", "--nsdu-id", "0x7E0",
-            "--source-addr", "0x7E0", "--target-addr", "0x7E8",
-            "--data", "0123",
+            "can-tp", "send", "--nsdu-id", "0x7E0", "--data", "0123",
         ])
 
     assert result.exit_code != 0

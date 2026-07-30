@@ -52,6 +52,16 @@ class CanTpServiceStub:
                 request_serializer=boat_dot_v1_dot_can__tp__pb2.ListSessionsRequest.SerializeToString,
                 response_deserializer=boat_dot_v1_dot_can__tp__pb2.ListSessionsResponse.FromString,
                 _registered_method=True)
+        self.RemoveSession = channel.unary_unary(
+                '/boat.v1.CanTpService/RemoveSession',
+                request_serializer=boat_dot_v1_dot_can__tp__pb2.RemoveSessionRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_can__tp__pb2.RemoveSessionResponse.FromString,
+                _registered_method=True)
+        self.Subscribe = channel.unary_stream(
+                '/boat.v1.CanTpService/Subscribe',
+                request_serializer=boat_dot_v1_dot_can__tp__pb2.SubscribeRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_can__tp__pb2.CanTpRxEvent.FromString,
+                _registered_method=True)
 
 
 class CanTpServiceServicer:
@@ -78,6 +88,18 @@ class CanTpServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RemoveSession(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Subscribe(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_CanTpServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -95,6 +117,16 @@ def add_CanTpServiceServicer_to_server(servicer, server):
                     servicer.ListSessions,
                     request_deserializer=boat_dot_v1_dot_can__tp__pb2.ListSessionsRequest.FromString,
                     response_serializer=boat_dot_v1_dot_can__tp__pb2.ListSessionsResponse.SerializeToString,
+            ),
+            'RemoveSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.RemoveSession,
+                    request_deserializer=boat_dot_v1_dot_can__tp__pb2.RemoveSessionRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_can__tp__pb2.RemoveSessionResponse.SerializeToString,
+            ),
+            'Subscribe': grpc.unary_stream_rpc_method_handler(
+                    servicer.Subscribe,
+                    request_deserializer=boat_dot_v1_dot_can__tp__pb2.SubscribeRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_can__tp__pb2.CanTpRxEvent.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -181,6 +213,60 @@ class CanTpService:
             '/boat.v1.CanTpService/ListSessions',
             boat_dot_v1_dot_can__tp__pb2.ListSessionsRequest.SerializeToString,
             boat_dot_v1_dot_can__tp__pb2.ListSessionsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RemoveSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.CanTpService/RemoveSession',
+            boat_dot_v1_dot_can__tp__pb2.RemoveSessionRequest.SerializeToString,
+            boat_dot_v1_dot_can__tp__pb2.RemoveSessionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Subscribe(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/boat.v1.CanTpService/Subscribe',
+            boat_dot_v1_dot_can__tp__pb2.SubscribeRequest.SerializeToString,
+            boat_dot_v1_dot_can__tp__pb2.CanTpRxEvent.FromString,
             options,
             channel_credentials,
             insecure,

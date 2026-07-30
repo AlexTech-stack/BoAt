@@ -254,6 +254,20 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
   const uint8_t* data = frame->payload;
   const size_t  dlc  = frame->payload_len;
 
+  // Single critical section covering the connection lookup and every
+  // SF/FF/CF/FC state mutation below. Required so a concurrent Remove()
+  // (which erases the NsduConnection from the map) can never run while this
+  // function is still holding/using the pointer find_by_target() returns --
+  // std::unordered_map only invalidates references/pointers on erase, so
+  // serializing against Remove() via this same mutex is sufficient (insert/
+  // rehash from a concurrent Configure() on a *different* nsdu_id does not
+  // invalidate this connection's pointer). Held across the frame_publish_fn/
+  // pdu_publish_fn calls too -- both can synchronously re-enter this same
+  // on_frame() via self-echo (CAN self-sent tagging / the PDU-bus loopback
+  // guard above), and both of those re-entry paths return before ever
+  // touching tx_mutex, so this can't self-deadlock.
+  std::lock_guard<std::mutex> lock(plugin->tx_mutex);
+
   // ── Find connection by target_addr ───────────────────────────────────────
   // Only frames from the peer (on target_addr) are processed.
   NsduConnection* conn = find_by_target(plugin, frame->meta.can.can_id);
@@ -266,30 +280,27 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     // Data[0] = PCI (0x30 | flags)
     // Data[1] = BS (Block Size)
     // Data[2] = STmin (Separation Time)
-    {
-      std::lock_guard<std::mutex> lock(plugin->tx_mutex);
-      if (conn->tx_state != NsduConnection::TX_WAIT_FC) return;
+    if (conn->tx_state != NsduConnection::TX_WAIT_FC) return;
 
-      const uint8_t fc_flags = pci_byte & 0x0F;
-      if (fc_flags == kFcOverflow) {
-        conn->tx_state = NsduConnection::TX_IDLE;
-        conn->tx_buffer.clear();
-        conn->tx_offset = 0;
-        return;
-      }
-      if (fc_flags == kFcWait) {
-        // Wait — stay in TX_WAIT_FC, will be retried
-        return;
-      }
-      // Continue
-      const uint8_t bs    = (conn->config.extended_addressing) ? data[2] : data[1];
-      const uint8_t stmin = (conn->config.extended_addressing) ? data[3] : data[2];
-      conn->tx_bs_remaining = bs;
-      conn->tx_bs_original  = bs;
-      conn->tx_stmin_us     = stmin_to_us(stmin);
-      conn->tx_state        = NsduConnection::TX_SEND_CF;
-      conn->tx_next_send_time = std::chrono::steady_clock::now();
+    const uint8_t fc_flags = pci_byte & 0x0F;
+    if (fc_flags == kFcOverflow) {
+      conn->tx_state = NsduConnection::TX_IDLE;
+      conn->tx_buffer.clear();
+      conn->tx_offset = 0;
+      return;
     }
+    if (fc_flags == kFcWait) {
+      // Wait — stay in TX_WAIT_FC, will be retried
+      return;
+    }
+    // Continue
+    const uint8_t bs    = (conn->config.extended_addressing) ? data[2] : data[1];
+    const uint8_t stmin = (conn->config.extended_addressing) ? data[3] : data[2];
+    conn->tx_bs_remaining = bs;
+    conn->tx_bs_original  = bs;
+    conn->tx_stmin_us     = stmin_to_us(stmin);
+    conn->tx_state        = NsduConnection::TX_SEND_CF;
+    conn->tx_next_send_time = std::chrono::steady_clock::now();
     plugin->tx_cv.notify_one();
     return;
   }
@@ -302,10 +313,13 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     const size_t offset = conn->config.extended_addressing ? 2 : 1;
     const size_t payload_len = dlc > offset ? dlc - offset : 0;
     const size_t actual_len = std::min(static_cast<size_t>(sf_len), payload_len);
+    const uint32_t nsdu_id = conn->nsdu_id;
+
+    plugin->NotifySubscribers(nsdu_id, std::vector<uint8_t>(data + offset, data + offset + actual_len));
 
     if (plugin->pdu_publish_fn == nullptr) return;
     BoatPduFrame pf{};
-    pf.pdu_id      = conn->nsdu_id;
+    pf.pdu_id      = nsdu_id;
     pf.payload     = const_cast<uint8_t*>(data + offset);
     pf.payload_len = actual_len;
     pf.iface       = plugin->iface.c_str();
@@ -394,6 +408,7 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
 
     if (conn->rx_buffer.size() >= conn->rx_expected_len) {
       conn->rx_buffer.resize(conn->rx_expected_len);
+      plugin->NotifySubscribers(conn->nsdu_id, conn->rx_buffer);
       if (plugin->pdu_publish_fn == nullptr) return;
       BoatPduFrame pf{};
       pf.pdu_id      = conn->nsdu_id;
@@ -444,28 +459,52 @@ int32_t can_tp_configure(void* tp_ctx, const CanTpConfig* config) {
   auto* plugin = static_cast<CanTpPlugin*>(tp_ctx);
   if (plugin == nullptr || config == nullptr) return -1;
 
+  // source_addr/target_addr must both be explicit and non-zero -- no
+  // implicit "0 = use nsdu_id" fallback. A single-ID session (one CAN ID
+  // used for both directions) is still supported, just by passing that same
+  // address for both explicitly, so the addressing is always visible in the
+  // config rather than inferred.
+  if (config->source_addr == 0 || config->target_addr == 0) return -1;
+
   NsduConnection conn;
-  conn.nsdu_id    = config->nsdu_id;
-  conn.config     = *config;
-  conn.rx_state   = NsduConnection::RX_IDLE;
-  conn.tx_state   = NsduConnection::TX_IDLE;
-
-  // Backward compat: if source_addr and target_addr are both 0,
-  // use nsdu_id as a single CAN ID for both.
-  if (config->source_addr == 0 && config->target_addr == 0) {
-    conn.source_addr = config->nsdu_id;
-    conn.target_addr = config->nsdu_id;
-  } else {
-    conn.source_addr = config->source_addr;
-    conn.target_addr = config->target_addr;
-  }
-
-  if (conn.source_addr == 0 || conn.target_addr == 0) return -1;
+  conn.nsdu_id     = config->nsdu_id;
+  conn.config      = *config;
+  conn.rx_state    = NsduConnection::RX_IDLE;
+  conn.tx_state    = NsduConnection::TX_IDLE;
+  conn.source_addr = config->source_addr;
+  conn.target_addr = config->target_addr;
 
   {
     std::lock_guard<std::mutex> lock(plugin->tx_mutex);
-    plugin->connections[conn.source_addr] = conn;
+    // Keyed by nsdu_id -- the caller-facing session identifier -- not
+    // source_addr, so send/remove/subscribe by nsdu_id are unambiguous.
+    // Re-configuring an already-configured nsdu_id overwrites it in place
+    // (doubles as "edit"); this also resets rx/tx state, which is fine even
+    // mid-transfer since tp_on_frame's RX path and the TX pacing thread both
+    // hold this same lock before touching a connection.
+    plugin->connections[conn.nsdu_id] = conn;
   }
+  return 0;
+}
+
+int32_t can_tp_remove(void* tp_ctx, uint32_t nsdu_id) {
+  auto* plugin = static_cast<CanTpPlugin*>(tp_ctx);
+  if (plugin == nullptr) return -1;
+
+  std::lock_guard<std::mutex> lock(plugin->tx_mutex);
+  auto it = plugin->connections.find(nsdu_id);
+  if (it == plugin->connections.end()) return -1;  // not configured
+
+  // Refuse to erase a connection the TX pacing thread may still be actively
+  // working with (holds a raw NsduConnection* obtained under this same lock,
+  // used across several re-locks while streaming CFs -- see
+  // can_tp_tx_thread_func). Only IDLE/COMPLETE are safe to erase.
+  if (it->second.tx_state != NsduConnection::TX_IDLE &&
+      it->second.tx_state != NsduConnection::TX_COMPLETE) {
+    return -2;  // busy
+  }
+
+  plugin->connections.erase(it);
   return 0;
 }
 
@@ -477,7 +516,7 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
 
   if (len == 0) return -1;
 
-  // Find connection by nsdu_id (fallback) or source_addr. Copy the fields
+  // connections is keyed by nsdu_id, so lookup is direct. Copy the fields
   // this function needs into locals while still holding tx_mutex -- a
   // concurrent can_tp_configure() targeting the same connection overwrites
   // NsduConnection::config in place (same map slot, same pointer), so
@@ -490,18 +529,8 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
   {
     std::lock_guard<std::mutex> lock(plugin->tx_mutex);
     auto it = plugin->connections.find(nsdu_id);
-    if (it == plugin->connections.end()) {
-      // Try nsdu_id as source_addr
-      for (auto& [addr, c] : plugin->connections) {
-        if (c.nsdu_id == nsdu_id) {
-          conn = &c;
-          break;
-        }
-      }
-      if (conn == nullptr) return -1;
-    } else {
-      conn = &it->second;
-    }
+    if (it == plugin->connections.end()) return -1;
+    conn = &it->second;
 
     if (conn->tx_state != NsduConnection::TX_IDLE) return -1;  // busy
 

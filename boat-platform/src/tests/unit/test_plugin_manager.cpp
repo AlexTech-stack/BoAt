@@ -269,4 +269,132 @@ TEST_CASE("CanTp ListSessions reports configured connections and their state",
   REQUIRE(can_tp->Configure(cfg2) == 0);
   REQUIRE(can_tp->ListSessions().size() == 2);
 }
+
+TEST_CASE("CanTp Configure rejects zero source_addr or target_addr",
+          "[unit][plugin_manager][can_tp]") {
+  // The single-ID auto-fallback (both 0 -> use nsdu_id) was removed --
+  // both addresses are now required and explicit.
+  boat::core::PluginManager manager;
+  manager.Load(CAN_TP_SO, R"({"iface":"vcan0"})");
+  auto* can_tp = static_cast<boat::core::ICanTp*>(manager.FindService("can_tp:vcan0"));
+  REQUIRE(can_tp != nullptr);
+
+  SECTION("both zero") {
+    CanTpConfig cfg{};
+    cfg.nsdu_id = 0x1;
+    cfg.can_dlc = 8;
+    REQUIRE(can_tp->Configure(cfg) != 0);
+  }
+  SECTION("source_addr zero only") {
+    CanTpConfig cfg{};
+    cfg.nsdu_id = 0x1;
+    cfg.target_addr = 0x7E8;
+    cfg.can_dlc = 8;
+    REQUIRE(can_tp->Configure(cfg) != 0);
+  }
+  SECTION("target_addr zero only") {
+    CanTpConfig cfg{};
+    cfg.nsdu_id = 0x1;
+    cfg.source_addr = 0x7E0;
+    cfg.can_dlc = 8;
+    REQUIRE(can_tp->Configure(cfg) != 0);
+  }
+  REQUIRE(can_tp->ListSessions().empty());
+}
+
+TEST_CASE("CanTp Send is keyed by nsdu_id even when it collides with another "
+          "connection's source_addr",
+          "[unit][plugin_manager][can_tp]") {
+  // Regression test for the exact bug this session fixed: the connection
+  // map used to be keyed by source_addr while Send() looked up by nsdu_id,
+  // so a second connection whose nsdu_id happened to equal another
+  // connection's source_addr would silently hijack the lookup and transmit
+  // on the wrong CAN ID. Now that the map is keyed by nsdu_id throughout,
+  // this exact collision shape must resolve correctly.
+  boat::core::PluginManager manager;
+
+  std::vector<uint32_t> published_can_ids;
+  manager.SetFramePublisher([&](const BoatFrame& f) {
+    published_can_ids.push_back(f.meta.can.can_id);
+  });
+
+  manager.Load(CAN_TP_SO, R"({"iface":"vcan0"})");
+  auto* can_tp = static_cast<boat::core::ICanTp*>(manager.FindService("can_tp:vcan0"));
+  REQUIRE(can_tp != nullptr);
+
+  // Connection A: nsdu_id=0x1, source_addr=0x7E0.
+  CanTpConfig cfg_a{};
+  cfg_a.nsdu_id = 0x1;
+  cfg_a.source_addr = 0x7E0;
+  cfg_a.target_addr = 0x7E8;
+  cfg_a.can_dlc = 8;
+  REQUIRE(can_tp->Configure(cfg_a) == 0);
+
+  // Connection B: nsdu_id deliberately equals connection A's source_addr.
+  CanTpConfig cfg_b{};
+  cfg_b.nsdu_id = 0x7E0;
+  cfg_b.source_addr = 0x111;
+  cfg_b.target_addr = 0x222;
+  cfg_b.can_dlc = 8;
+  REQUIRE(can_tp->Configure(cfg_b) == 0);
+
+  const std::vector<uint8_t> payload = {0x01, 0x02, 0x03, 0x04, 0x05};
+
+  REQUIRE(can_tp->Send(0x1, payload.data(), payload.size()) == 1);  // single frame
+  REQUIRE(published_can_ids.size() == 1);
+  REQUIRE(published_can_ids[0] == 0x7E0);  // connection A's source_addr, not B's
+
+  REQUIRE(can_tp->Send(0x7E0, payload.data(), payload.size()) == 1);
+  REQUIRE(published_can_ids.size() == 2);
+  REQUIRE(published_can_ids[1] == 0x111);  // connection B's source_addr
+}
+
+TEST_CASE("CanTp Remove deletes an idle connection but refuses a busy one",
+          "[unit][plugin_manager][can_tp]") {
+  boat::core::PluginManager manager;
+  manager.SetFramePublisher([](const BoatFrame&) {});
+
+  manager.Load(CAN_TP_SO, R"({"iface":"vcan0"})");
+  auto* can_tp = static_cast<boat::core::ICanTp*>(manager.FindService("can_tp:vcan0"));
+  REQUIRE(can_tp != nullptr);
+
+  SECTION("removing an unconfigured nsdu_id fails") {
+    REQUIRE(can_tp->Remove(0xDEAD) != 0);
+  }
+
+  SECTION("idle connection removes cleanly") {
+    CanTpConfig cfg{};
+    cfg.nsdu_id = 0x1;
+    cfg.source_addr = 0x7E0;
+    cfg.target_addr = 0x7E8;
+    cfg.can_dlc = 8;
+    REQUIRE(can_tp->Configure(cfg) == 0);
+
+    REQUIRE(can_tp->Remove(0x1) == 0);
+    REQUIRE(can_tp->ListSessions().empty());
+
+    // No longer configured -- Send() must now fail.
+    const std::vector<uint8_t> payload = {0x01};
+    REQUIRE(can_tp->Send(0x1, payload.data(), payload.size()) == -1);
+  }
+
+  SECTION("a connection with a multi-frame transfer in progress refuses removal") {
+    CanTpConfig cfg{};
+    cfg.nsdu_id = 0x2;
+    cfg.source_addr = 0x500;
+    cfg.target_addr = 0x600;
+    cfg.can_dlc = 8;
+    REQUIRE(can_tp->Configure(cfg) == 0);
+
+    // 10 bytes > 7 (max Single Frame payload at dlc=8) forces a First
+    // Frame + TX_WAIT_FC, which -- with no peer replying -- deterministically
+    // stays busy for the rest of this test (no background thread transitions
+    // a connection out of TX_WAIT_FC without an incoming Flow Control frame).
+    const std::vector<uint8_t> big_payload(10, 0xAB);
+    REQUIRE(can_tp->Send(0x2, big_payload.data(), big_payload.size()) == 0);  // multi-frame initiated
+
+    REQUIRE(can_tp->Remove(0x2) == -2);
+    REQUIRE(can_tp->ListSessions().size() == 1);  // still there
+  }
+}
 #endif

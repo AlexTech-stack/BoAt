@@ -50,7 +50,7 @@ boat sim          Simulation lifecycle (create, start, pause, step, stop, state,
 boat scenario     Scenario management (create, get, list, delete, validate)
 boat replay       Trace replay (start, seek, stream, pause, resume, stop, from-events)
 boat frame        Unified frame send/subscribe, list-ifaces (CAN, CANFD, Ethernet, TCP, PDU)
-boat can-tp       CAN Transport Protocol (configure, send) — ISO 15765-2
+boat can-tp       CAN Transport Protocol (configure, send, remove, subscribe, list-sessions) — ISO 15765-2
 boat pdu          PDU routing (send, route, remove-route, container, group, list-routes, subscribe)
 boat plugin       Plugin management across sim+node scopes (register, list, info, unload)
 boat db           PDU database inspection (list, show, signal-routes)
@@ -128,14 +128,31 @@ boat pdu list-groups
 
 ### 5. CAN Transport Protocol (ISO 15765-2)
 
+A session is identified by `--nsdu-id` alone. `configure` sets the addressing
+up front (`--source-addr`/`--target-addr` are both required, no fallback to
+`--nsdu-id`); `send`/`remove`/`subscribe` then only take `--nsdu-id` -- no
+addresses. Re-running `configure` for an already-configured `--nsdu-id`
+edits it in place.
+
 ```bash
 # Configure a CanTp session (nsdu_id must be numeric, hex or decimal)
 boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8
 
 # Send a PDU -- small payloads go as a Single Frame automatically,
 # larger ones are segmented into First Frame + Consecutive Frames
-boat can-tp send --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --data 0123456789ABCDEF...
+boat can-tp send --nsdu-id 0x7E0 --data 0123456789ABCDEF...
+
+# Stream decoded RX payloads (completed Single Frames, or fully
+# reassembled First Frame + Consecutive Frame transfers)
+boat can-tp subscribe --nsdu-id 0x7E0
+
+# Delete a configured session (fails while a multi-frame transfer is in flight)
+boat can-tp remove --nsdu-id 0x7E0
 ```
+
+A single-ID session (one CAN ID used for both directions) is expressed by
+passing that same value for both `--source-addr` and `--target-addr`
+explicitly -- there is no shortcut that infers it from `--nsdu-id`.
 
 If more than one CanTp instance is loaded (one per CAN interface, e.g. a
 gateway started with `BOAT_NODE_PLUGINS` pointing at `can_tp.so` twice with
@@ -143,7 +160,7 @@ different `iface` configs), pick one with `--iface`:
 
 ```bash
 boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --iface vcan1
-boat can-tp send --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --data 0123 --iface vcan1
+boat can-tp send --nsdu-id 0x7E0 --data 0123 --iface vcan1
 ```
 
 List currently-configured sessions -- across every loaded instance by
