@@ -2,8 +2,10 @@ package com.boat.companion.monitor
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.boat.companion.net.Endpoint
 import com.boat.companion.net.GatewayClient
+import com.boat.companion.net.GatewayConnection
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,8 +15,6 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.CancellationException
 
 /** Frames retained for display. A busy bus would otherwise grow without bound. */
 private const val HISTORY_LIMIT = 500
@@ -22,16 +22,13 @@ private const val HISTORY_LIMIT = 500
 /** UI refresh period. Frames arrive far faster than a list can usefully repaint. */
 private const val PUBLISH_INTERVAL_MS = 100L
 
-sealed interface ConnectionState {
-    data object Disconnected : ConnectionState
-    data object Connecting : ConnectionState
-    data object Streaming : ConnectionState
-    data class Failed(val message: String) : ConnectionState
+sealed interface StreamState {
+    data object Idle : StreamState
+    data object Streaming : StreamState
+    data class Failed(val message: String) : StreamState
 }
 
-data class MonitorSettings(
-    val host: String = "10.0.2.2",
-    val port: String = "50051",
+data class MonitorFilters(
     val ifaceFilter: String = "",
     val hideSelfSent: Boolean = true,
 )
@@ -43,11 +40,11 @@ data class MonitorStats(
 
 class MonitorViewModel : ViewModel() {
 
-    private val _settings = MutableStateFlow(MonitorSettings())
-    val settings: StateFlow<MonitorSettings> = _settings.asStateFlow()
+    private val _filters = MutableStateFlow(MonitorFilters())
+    val filters: StateFlow<MonitorFilters> = _filters.asStateFlow()
 
-    private val _connection = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
-    val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
+    private val _stream = MutableStateFlow<StreamState>(StreamState.Idle)
+    val stream: StateFlow<StreamState> = _stream.asStateFlow()
 
     private val _frames = MutableStateFlow<List<FrameRow>>(emptyList())
     val frames: StateFlow<List<FrameRow>> = _frames.asStateFlow()
@@ -59,7 +56,6 @@ class MonitorViewModel : ViewModel() {
     private val history = ArrayDeque<FrameRow>(HISTORY_LIMIT)
     private val historyLock = Any()
 
-    private var client: GatewayClient? = null
     private var streamJob: Job? = null
     private var publishJob: Job? = null
 
@@ -68,12 +64,28 @@ class MonitorViewModel : ViewModel() {
     private var windowCount = 0
     private var windowStartedAt = 0L
 
-    fun updateSettings(transform: (MonitorSettings) -> MonitorSettings) {
-        _settings.value = transform(_settings.value)
+    init {
+        // The connection is owned elsewhere; follow it rather than duplicating it.
+        viewModelScope.launch {
+            GatewayConnection.client.collect { client ->
+                stopStreaming()
+                if (client != null) startStreaming(client)
+            }
+        }
     }
 
-    fun toggle() {
-        if (streamJob?.isActive == true) disconnect() else connect()
+    fun updateFilters(transform: (MonitorFilters) -> MonitorFilters) {
+        val previous = _filters.value
+        val updated = transform(previous)
+        _filters.value = updated
+        // The interface filter is applied server-side, so changing it means
+        // renegotiating the subscription.
+        if (updated.ifaceFilter != previous.ifaceFilter) {
+            GatewayConnection.client.value?.let { client ->
+                stopStreaming()
+                startStreaming(client)
+            }
+        }
     }
 
     fun clear() {
@@ -83,25 +95,9 @@ class MonitorViewModel : ViewModel() {
         _stats.value = MonitorStats()
     }
 
-    private fun connect() {
-        val current = _settings.value
-        val port = current.port.toIntOrNull()
-        if (port == null || port !in 1..65535) {
-            _connection.value = ConnectionState.Failed("Port must be 1–65535")
-            return
-        }
-        if (current.host.isBlank()) {
-            _connection.value = ConnectionState.Failed("Host is required")
-            return
-        }
-
-        disconnect()
-        _connection.value = ConnectionState.Connecting
+    private fun startStreaming(client: GatewayClient) {
         windowStartedAt = System.currentTimeMillis()
         windowCount = 0
-
-        val gateway = GatewayClient(Endpoint(host = current.host.trim(), port = port))
-        client = gateway
 
         publishJob = viewModelScope.launch { publishLoop() }
         streamJob = viewModelScope.launch {
@@ -109,37 +105,31 @@ class MonitorViewModel : ViewModel() {
                 // Frames are decoded off the main thread; the flow is buffered so a
                 // slow consumer cannot exert backpressure on the gateway's stream.
                 withContext(Dispatchers.Default) {
-                    gateway.subscribeFrames(ifaceFilter = current.ifaceFilter.trim())
+                    client.subscribeFrames(ifaceFilter = _filters.value.ifaceFilter.trim())
                         .buffer()
                         .collect { frame ->
-                            if (_connection.value !is ConnectionState.Streaming) {
-                                _connection.value = ConnectionState.Streaming
+                            if (_stream.value !is StreamState.Streaming) {
+                                _stream.value = StreamState.Streaming
                             }
                             record(frame.toRow(sequence++))
                         }
                 }
-                _connection.value = ConnectionState.Disconnected
+                _stream.value = StreamState.Idle
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Exception) {
-                _connection.value =
-                    ConnectionState.Failed(error.message ?: error::class.java.simpleName)
+                _stream.value =
+                    StreamState.Failed(error.message ?: error::class.java.simpleName)
             }
         }
     }
 
-    private fun disconnect() {
+    private fun stopStreaming() {
         streamJob?.cancel()
         streamJob = null
         publishJob?.cancel()
         publishJob = null
-        client?.close()
-        client = null
-        if (_connection.value is ConnectionState.Streaming ||
-            _connection.value is ConnectionState.Connecting
-        ) {
-            _connection.value = ConnectionState.Disconnected
-        }
+        if (_stream.value is StreamState.Streaming) _stream.value = StreamState.Idle
     }
 
     private fun record(row: FrameRow) {
@@ -170,7 +160,7 @@ class MonitorViewModel : ViewModel() {
     }
 
     override fun onCleared() {
-        disconnect()
+        stopStreaming()
         super.onCleared()
     }
 }

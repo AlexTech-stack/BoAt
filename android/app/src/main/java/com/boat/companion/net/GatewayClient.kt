@@ -1,7 +1,17 @@
 package com.boat.companion.net
 
+import com.boat.proto.v1.CreateSimulationRequest
 import com.boat.proto.v1.Frame
 import com.boat.proto.v1.FrameServiceGrpcKt
+import com.boat.proto.v1.GetSimulationStateRequest
+import com.boat.proto.v1.ListSimulationsRequest
+import com.boat.proto.v1.PauseSimulationRequest
+import com.boat.proto.v1.ResetSimulationRequest
+import com.boat.proto.v1.Simulation
+import com.boat.proto.v1.SimulationServiceGrpcKt
+import com.boat.proto.v1.StartSimulationRequest
+import com.boat.proto.v1.StepSimulationRequest
+import com.boat.proto.v1.StopSimulationRequest
 import com.boat.proto.v1.StreamFramesRequest
 import com.boat.proto.v1.SubscribeFramesRequest
 import io.grpc.ChannelCredentials
@@ -10,6 +20,7 @@ import io.grpc.InsecureChannelCredentials
 import io.grpc.ManagedChannel
 import io.grpc.TlsChannelCredentials
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import java.io.Closeable
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
@@ -43,6 +54,8 @@ class GatewayClient(endpoint: Endpoint) : Closeable {
             .build()
 
     private val frameService = FrameServiceGrpcKt.FrameServiceCoroutineStub(channel)
+    private val simulationService =
+        SimulationServiceGrpcKt.SimulationServiceCoroutineStub(channel)
 
     /**
      * Live frames from the gateway. Empty [busTypes] means all types, empty
@@ -71,6 +84,61 @@ class GatewayClient(endpoint: Endpoint) : Closeable {
      */
     fun streamFrames(outgoing: Flow<StreamFramesRequest>): Flow<Frame> =
         frameService.streamFrames(outgoing)
+
+    /* ── SimulationService ──────────────────────────────────────────────── */
+
+    /**
+     * Simulations the gateway knows about. Doubles as a connection probe: a gRPC
+     * channel connects lazily, so nothing proves the gateway is reachable until
+     * an actual RPC completes.
+     */
+    suspend fun listSimulations(): List<Simulation> =
+        simulationService
+            .listSimulations(ListSimulationsRequest.getDefaultInstance())
+            .simulationsList
+
+    /** Requires a scenario already stored on the gateway; the id is server-assigned. */
+    suspend fun createSimulation(scenarioId: String): Simulation =
+        simulationService
+            .createSimulation(
+                CreateSimulationRequest.newBuilder().setScenarioId(scenarioId).build()
+            )
+            .simulation
+
+    suspend fun startSimulation(id: String): Simulation =
+        simulationService
+            .startSimulation(StartSimulationRequest.newBuilder().setSimulationId(id).build())
+            .simulation
+
+    suspend fun pauseSimulation(id: String): Simulation =
+        simulationService
+            .pauseSimulation(PauseSimulationRequest.newBuilder().setSimulationId(id).build())
+            .simulation
+
+    suspend fun stepSimulation(id: String, ticks: Int): Simulation =
+        simulationService
+            .stepSimulation(
+                StepSimulationRequest.newBuilder().setSimulationId(id).setTicks(ticks).build()
+            )
+            .simulation
+
+    suspend fun resetSimulation(id: String): Simulation =
+        simulationService
+            .resetSimulation(ResetSimulationRequest.newBuilder().setSimulationId(id).build())
+            .simulation
+
+    suspend fun stopSimulation(id: String): Simulation =
+        simulationService
+            .stopSimulation(StopSimulationRequest.newBuilder().setSimulationId(id).build())
+            .simulation
+
+    /** Live simulation state; runs until cancelled. */
+    fun watchSimulation(id: String): Flow<Simulation> =
+        simulationService
+            .watchSimulation(
+                GetSimulationStateRequest.newBuilder().setSimulationId(id).build()
+            )
+            .map { it.simulation }
 
     companion object {
         fun subscribeMessage(

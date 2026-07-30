@@ -8,8 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -21,9 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -33,21 +29,18 @@ fun MonitorScreen(
     modifier: Modifier = Modifier,
     viewModel: MonitorViewModel = viewModel(),
 ) {
-    val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val connection by viewModel.connection.collectAsStateWithLifecycle()
+    val filters by viewModel.filters.collectAsStateWithLifecycle()
+    val stream by viewModel.stream.collectAsStateWithLifecycle()
     val stats by viewModel.stats.collectAsStateWithLifecycle()
     val frames by viewModel.frames.collectAsStateWithLifecycle()
 
-    val streaming = connection is ConnectionState.Streaming ||
-        connection is ConnectionState.Connecting
-
     Column(modifier = modifier.fillMaxSize().padding(12.dp)) {
-        ConnectionCard(
-            settings = settings,
-            connection = connection,
-            streaming = streaming,
-            onSettingsChange = viewModel::updateSettings,
-            onToggle = viewModel::toggle,
+        OutlinedTextField(
+            value = filters.ifaceFilter,
+            onValueChange = { f -> viewModel.updateFilters { it.copy(ifaceFilter = f) } },
+            label = { Text("Interface filter (blank = all)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
         )
 
         Row(
@@ -62,86 +55,39 @@ fun MonitorScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Hide echo", style = MaterialTheme.typography.labelMedium)
                 Switch(
-                    checked = settings.hideSelfSent,
+                    checked = filters.hideSelfSent,
                     onCheckedChange = { hide ->
-                        viewModel.updateSettings { it.copy(hideSelfSent = hide) }
+                        viewModel.updateFilters { it.copy(hideSelfSent = hide) }
                     },
                 )
                 TextButton(onClick = viewModel::clear) { Text("Clear") }
             }
         }
 
+        (stream as? StreamState.Failed)?.let { failure ->
+            Text(
+                text = "Stream failed: ${failure.message}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
+
         HorizontalDivider()
 
-        val visible = if (settings.hideSelfSent) frames.filterNot { it.selfSent } else frames
+        val visible = if (filters.hideSelfSent) frames.filterNot { it.selfSent } else frames
         if (visible.isEmpty()) {
             Text(
-                text = if (streaming) "Waiting for frames…" else "Not connected",
+                text = when (stream) {
+                    StreamState.Streaming -> "Waiting for frames…"
+                    else -> "Connect to a gateway to see traffic"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 24.dp),
             )
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(visible, key = { it.seq }) { FrameEntry(it) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ConnectionCard(
-    settings: MonitorSettings,
-    connection: ConnectionState,
-    streaming: Boolean,
-    onSettingsChange: ((MonitorSettings) -> MonitorSettings) -> Unit,
-    onToggle: () -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = settings.host,
-                    onValueChange = { host -> onSettingsChange { it.copy(host = host) } },
-                    label = { Text("Gateway host") },
-                    singleLine = true,
-                    enabled = !streaming,
-                    modifier = Modifier.weight(2f),
-                )
-                OutlinedTextField(
-                    value = settings.port,
-                    onValueChange = { port -> onSettingsChange { it.copy(port = port) } },
-                    label = { Text("Port") },
-                    singleLine = true,
-                    enabled = !streaming,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            OutlinedTextField(
-                value = settings.ifaceFilter,
-                onValueChange = { f -> onSettingsChange { it.copy(ifaceFilter = f) } },
-                label = { Text("Interface filter (blank = all)") },
-                singleLine = true,
-                enabled = !streaming,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = connection.label(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = when (connection) {
-                        is ConnectionState.Failed -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-                Button(onClick = onToggle) {
-                    Text(if (streaming) "Disconnect" else "Connect")
-                }
             }
         }
     }
@@ -182,11 +128,4 @@ private fun FrameEntry(row: FrameRow) {
             overflow = TextOverflow.Ellipsis,
         )
     }
-}
-
-private fun ConnectionState.label(): String = when (this) {
-    ConnectionState.Disconnected -> "Disconnected"
-    ConnectionState.Connecting -> "Connecting…"
-    ConnectionState.Streaming -> "Streaming"
-    is ConnectionState.Failed -> "Failed: $message"
 }
