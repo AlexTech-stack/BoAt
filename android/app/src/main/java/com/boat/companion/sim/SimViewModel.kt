@@ -8,10 +8,15 @@ import com.boat.proto.v1.Simulation
 import com.boat.proto.v1.SimulationState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+/** How often the tick is polled while a simulation is RUNNING. */
+private const val TICK_POLL_INTERVAL_MS = 500L
 
 data class SimUiState(
     val simulations: List<Simulation> = emptyList(),
@@ -72,7 +77,13 @@ class SimViewModel : ViewModel() {
         val scenario = _state.value.scenarioId.trim()
         if (scenario.isEmpty()) throw IllegalArgumentException("Scenario id is required")
         val created = client.createSimulation(scenario)
-        _state.value = _state.value.copy(selectedId = created.simulationId)
+        // Select it outright: having just created a simulation, being told "No
+        // simulation selected" and having to tap it in the list is nonsense.
+        _state.value = _state.value.copy(
+            selectedId = created.simulationId,
+            current = created,
+        )
+        watch(created.simulationId)
         refreshInline(client)
     }
 
@@ -93,21 +104,40 @@ class SimViewModel : ViewModel() {
     }
 
     /**
-     * Live state for [id]. WatchSimulation streams updates, which keeps the tick
-     * counter moving without the app polling.
+     * Live state for [id], from two sources.
+     *
+     * WatchSimulation only writes when the state machine transitions, so it alone
+     * leaves the tick counter frozen for the whole time a simulation is running —
+     * which is exactly when it is worth watching. The tick is therefore polled,
+     * but only while RUNNING, so an idle or paused simulation costs nothing.
      */
     private fun watch(id: String) {
         watchJob?.cancel()
         val client = GatewayConnection.client.value ?: return
         watchJob = viewModelScope.launch {
-            try {
-                client.watchSimulation(id).collect { simulation ->
-                    _state.value = _state.value.copy(current = simulation)
+            launch {
+                try {
+                    client.watchSimulation(id).collect { simulation ->
+                        _state.value = _state.value.copy(current = simulation)
+                    }
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (error: Exception) {
+                    _state.value = _state.value.copy(error = describe(error))
                 }
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (error: Exception) {
-                _state.value = _state.value.copy(error = describe(error))
+            }
+            launch {
+                while (isActive) {
+                    delay(TICK_POLL_INTERVAL_MS)
+                    if (_state.value.current?.state != SimulationState.SIMULATION_STATE_RUNNING) {
+                        continue
+                    }
+                    // A dropped poll is not worth surfacing: the next one is 500ms
+                    // away and the watch stream still reports real state changes.
+                    runCatching { client.getSimulationState(id) }.getOrNull()?.let { latest ->
+                        _state.value = _state.value.copy(current = latest)
+                    }
+                }
             }
         }
     }

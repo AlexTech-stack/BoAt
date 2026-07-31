@@ -132,7 +132,19 @@ class GatewayClient(endpoint: Endpoint) : Closeable {
             .stopSimulation(StopSimulationRequest.newBuilder().setSimulationId(id).build())
             .simulation
 
-    /** Live simulation state; runs until cancelled. */
+    suspend fun getSimulationState(id: String): Simulation =
+        simulationService
+            .getSimulationState(
+                GetSimulationStateRequest.newBuilder().setSimulationId(id).build()
+            )
+            .simulation
+
+    /**
+     * Simulation state changes; runs until cancelled.
+     *
+     * The gateway writes only on state-machine transitions, so this does NOT
+     * report tick progress while a simulation runs — the tick has to be polled.
+     */
     fun watchSimulation(id: String): Flow<Simulation> =
         simulationService
             .watchSimulation(
