@@ -22,6 +22,9 @@ private const val HISTORY_LIMIT = 500
 /** UI refresh period. Frames arrive far faster than a list can usefully repaint. */
 private const val PUBLISH_INTERVAL_MS = 100L
 
+private const val INITIAL_RETRY_MS = 1_000L
+private const val MAX_RETRY_MS = 15_000L
+
 sealed interface StreamState {
     data object Idle : StreamState
     data object Streaming : StreamState
@@ -101,25 +104,36 @@ class MonitorViewModel : ViewModel() {
 
         publishJob = viewModelScope.launch { publishLoop() }
         streamJob = viewModelScope.launch {
-            try {
-                // Frames are decoded off the main thread; the flow is buffered so a
-                // slow consumer cannot exert backpressure on the gateway's stream.
-                withContext(Dispatchers.Default) {
-                    client.subscribeFrames(ifaceFilter = _filters.value.ifaceFilter.trim())
-                        .buffer()
-                        .collect { frame ->
-                            if (_stream.value !is StreamState.Streaming) {
-                                _stream.value = StreamState.Streaming
+            var backoffMs = INITIAL_RETRY_MS
+            // A bench tool on Wi-Fi will lose its stream to roaming, sleep and
+            // transient gateway restarts. Surfacing the error and giving up would
+            // mean noticing the monitor is dead long after it stopped updating.
+            while (true) {
+                try {
+                    // Frames are decoded off the main thread; the flow is buffered so
+                    // a slow consumer cannot exert backpressure on the gateway.
+                    withContext(Dispatchers.Default) {
+                        client.subscribeFrames(ifaceFilter = _filters.value.ifaceFilter.trim())
+                            .buffer()
+                            .collect { frame ->
+                                if (_stream.value !is StreamState.Streaming) {
+                                    _stream.value = StreamState.Streaming
+                                    backoffMs = INITIAL_RETRY_MS
+                                }
+                                record(frame.toRow(sequence++))
                             }
-                            record(frame.toRow(sequence++))
-                        }
+                    }
+                    // The gateway ended the stream cleanly; nothing to retry.
+                    _stream.value = StreamState.Idle
+                    return@launch
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (error: Exception) {
+                    val reason = error.message ?: error::class.java.simpleName
+                    _stream.value = StreamState.Failed("$reason — retrying")
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(MAX_RETRY_MS)
                 }
-                _stream.value = StreamState.Idle
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (error: Exception) {
-                _stream.value =
-                    StreamState.Failed(error.message ?: error::class.java.simpleName)
             }
         }
     }
