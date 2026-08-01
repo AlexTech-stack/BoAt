@@ -1,0 +1,9 @@
+# Revisions to skip when running git blame, because they touch every line of a
+# file without changing its meaning.
+#
+# Use locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Forges that support it (GitHub, GitLab) pick this file up automatically.
+
+# chore: normalise line endings and add .gitattributes
+3c506eac014dbe3c16d45db666a10e0d25e8584e
