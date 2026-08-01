@@ -80,6 +80,40 @@ class SlcanCodecTest {
     }
 
     @Test
+    fun `b and B carry CAN FD frames with bitrate switching`() {
+        // Treating these as unknown silently dropped every BRS frame, which is
+        // most real FD traffic — the failure that FD testing on hardware exposed.
+        val standard = SlcanCodec.decode("b1234DEADBEEF".toByteArray())!!
+        assertEquals(0x123, standard.id)
+        assertTrue(standard.fd)
+        assertTrue(standard.brs)
+        assertEquals(false, standard.extended)
+
+        val extended = SlcanCodec.decode("B18DAF1104AABBCCDD".toByteArray())!!
+        assertEquals(0x18DAF110, extended.id)
+        assertTrue(extended.fd)
+        assertTrue(extended.brs)
+        assertTrue(extended.extended)
+    }
+
+    @Test
+    fun `d stays FD without bitrate switching`() {
+        val frame = SlcanCodec.decode("d4563AABBCC".toByteArray())!!
+        assertTrue(frame.fd)
+        assertEquals(false, frame.brs)
+    }
+
+    @Test
+    fun `BRS survives an encode decode round trip`() {
+        val original = SlcanFrame(
+            id = 0x7AB, data = ByteArray(16) { 0xAB.toByte() }, fd = true, brs = true,
+        )
+        val encoded = SlcanCodec.encode(original)
+        assertEquals('b', encoded[0].toInt().toChar())
+        assertEquals(original, SlcanCodec.decode(encoded.dropLast(1).toByteArray()))
+    }
+
+    @Test
     fun `non-frame records are ignored rather than failing`() {
         assertNull("bare ACK", SlcanCodec.decode(byteArrayOf()))
         assertNull("BEL error byte", SlcanCodec.decode(byteArrayOf(0x07)))

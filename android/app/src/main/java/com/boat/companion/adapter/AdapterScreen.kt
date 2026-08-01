@@ -47,12 +47,25 @@ fun AdapterScreen(
                     text = state.deviceName ?: "No adapter attached",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                Text(
-                    text = "${state.bitrate.bitsPerSecond / 1000} kbit" +
-                        if (state.silent) " · listen-only" else " · normal",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${state.bitrate.bitsPerSecond / 1000} kbit" +
+                            if (state.silent) " · listen-only" else " · normal",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(
+                        onClick = viewModel::cycleDataBitrate,
+                        enabled = !state.streaming,
+                    ) {
+                        Text(
+                            text = state.dataBitrate
+                                ?.let { "FD ${it.bitsPerSecond / 1_000_000}M" }
+                                ?: "classic",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
