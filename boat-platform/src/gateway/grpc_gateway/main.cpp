@@ -14,6 +14,7 @@
 
 #include <arpa/inet.h>
 
+#include <grpc/impl/channel_arg_names.h>
 #include <grpcpp/grpcpp.h>
 
 #include "bus_service_impl.h"
@@ -416,6 +417,19 @@ int main() {
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort("0.0.0.0:50051", MakeServerCredentials());
+
+  // Keepalive policy for long-lived streams from mobile/remote clients.
+  //
+  // SubscribeFrames and StreamFrames stay open across quiet periods, and a
+  // client on Wi-Fi or cellular needs frequent pings to keep NAT state alive.
+  // The gRPC defaults are hostile to that: pings sent while no data flows must
+  // be 5 minutes apart, and after 2 "strikes" the server sends GOAWAY. On an
+  // idle bus that terminates the stream with UNAVAILABLE "too_many_pings",
+  // which looks like a network fault but is self-inflicted.
+  builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);
+  builder.AddChannelArgument(GRPC_ARG_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS,
+                             10000);
+  builder.AddChannelArgument(GRPC_ARG_HTTP2_MAX_PING_STRIKES, 0);
 
   // Register the audit interceptor — captures every RPC call automatically.
   std::vector<std::unique_ptr<grpc::experimental::ServerInterceptorFactoryInterface>>
