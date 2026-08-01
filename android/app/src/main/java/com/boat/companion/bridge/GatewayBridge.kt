@@ -9,6 +9,7 @@ import com.boat.proto.v1.StreamFramesRequest
 import com.google.protobuf.ByteString
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import java.util.concurrent.atomic.AtomicLong
 
@@ -51,7 +52,16 @@ class GatewayBridge(
     private val ifaceName: String,
 ) {
 
-    private val outgoing = Channel<StreamFramesRequest>(
+    /**
+     * Carries raw frames, not protobuf messages.
+     *
+     * Encoding happens on the sending coroutine instead of in [publish], because
+     * [publish] runs on the USB read thread: any work done there is work not
+     * spent draining the adapter, and the adapter drops frames long before the
+     * app notices it is behind. Building four protobuf objects and copying the
+     * payload per frame was enough to lose most of a saturated bus.
+     */
+    private val outgoing = Channel<SlcanFrame>(
         capacity = OUTGOING_CAPACITY,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
@@ -71,8 +81,13 @@ class GatewayBridge(
      * message the gateway sees, which is what configures the return direction.
      */
     suspend fun run() {
-        outgoing.trySend(GatewayClient.subscribeMessage(ifaceFilter = ifaceName))
-        client.streamFrames(outgoing.receiveAsFlow()).collect { frame ->
+        val requests = flow {
+            // The subscription must be the first message: it configures what the
+            // gateway sends back on this call.
+            emit(GatewayClient.subscribeMessage(ifaceFilter = ifaceName))
+            outgoing.receiveAsFlow().collect { emit(GatewayClient.frameMessage(it.toProto(ifaceName))) }
+        }
+        client.streamFrames(requests).collect { frame ->
             if (!frame.hasCan()) return@collect
             val slcan = frame.toSlcan()
             // SELF_SENT is not enough on its own: the gateway tags everything it
@@ -87,10 +102,14 @@ class GatewayBridge(
         }
     }
 
-    /** Queues a frame read from the adapter. Non-blocking by design. */
+    /**
+     * Queues a frame read from the adapter.
+     *
+     * Runs on the USB read thread, so it does the minimum: enqueue and record a
+     * fingerprint. Non-blocking by design.
+     */
     fun publish(frame: SlcanFrame) {
-        val message = GatewayClient.frameMessage(frame.toProto(ifaceName))
-        if (outgoing.trySend(message).isSuccess) {
+        if (outgoing.trySend(frame).isSuccess) {
             echoes.remember(frame)
             _toGateway.incrementAndGet()
         } else {
@@ -126,42 +145,55 @@ internal class EchoSuppressor(
     private val windowNanos: Long = 1_000_000_000L,
     private val capacity: Int = 8192,
 ) {
-    private val pending = HashMap<Long, ArrayDeque<Long>>()
-    private var count = 0
+    private class Entry(val fingerprint: Long, val stamp: Long) {
+        var live = true
+    }
+
+    /**
+     * Insertion order, which is also timestamp order, so expiry only ever has to
+     * look at the front. Scanning every entry on each frame — as a per-key map
+     * alone would force — costs on the order of a million comparisons a second
+     * on a loaded bus, on the same thread that drains USB, and shows up as
+     * dropped frames rather than as slowness.
+     */
+    private val order = ArrayDeque<Entry>()
+    private val byFingerprint = HashMap<Long, ArrayDeque<Entry>>()
 
     @Synchronized
     fun remember(frame: SlcanFrame) {
         val now = System.nanoTime()
-        prune(now)
-        if (count >= capacity) return
-        pending.getOrPut(frame.fingerprint()) { ArrayDeque() }.addLast(now)
-        count++
+        expire(now)
+        if (order.size >= capacity) return
+        val entry = Entry(frame.fingerprint(), now)
+        order.addLast(entry)
+        byFingerprint.getOrPut(entry.fingerprint) { ArrayDeque() }.addLast(entry)
     }
 
     /** True when [frame] matches an outstanding publication, which it consumes. */
     @Synchronized
     fun consume(frame: SlcanFrame): Boolean {
         val now = System.nanoTime()
-        prune(now)
-        val queue = pending[frame.fingerprint()] ?: return false
-        val stamp = queue.removeFirstOrNull() ?: return false
-        count--
-        if (queue.isEmpty()) pending.remove(frame.fingerprint())
-        return now - stamp <= windowNanos
+        expire(now)
+        val fingerprint = frame.fingerprint()
+        val queue = byFingerprint[fingerprint] ?: return false
+        val entry = queue.removeFirstOrNull() ?: return false
+        if (queue.isEmpty()) byFingerprint.remove(fingerprint)
+        // Left in `order` to expire naturally; `live` stops it being unlinked twice.
+        entry.live = false
+        return true
     }
 
-    private fun prune(now: Long) {
-        if (count == 0) return
-        val iterator = pending.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            while (true) {
-                val head = entry.value.firstOrNull() ?: break
-                if (now - head <= windowNanos) break
-                entry.value.removeFirst()
-                count--
-            }
-            if (entry.value.isEmpty()) iterator.remove()
+    /** Amortised O(1): only entries that have actually aged out are touched. */
+    private fun expire(now: Long) {
+        while (true) {
+            val head = order.firstOrNull() ?: return
+            if (now - head.stamp <= windowNanos) return
+            order.removeFirst()
+            if (!head.live) continue
+            head.live = false
+            val queue = byFingerprint[head.fingerprint] ?: continue
+            queue.remove(head)
+            if (queue.isEmpty()) byFingerprint.remove(head.fingerprint)
         }
     }
 }
