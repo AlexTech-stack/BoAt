@@ -1,10 +1,13 @@
 package com.boat.companion.net
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeout
+
+private const val CONNECT_TIMEOUT_MS = 5_000L
 
 sealed interface ConnectionState {
     data object Disconnected : ConnectionState
@@ -66,11 +69,20 @@ object GatewayConnection {
         _state.value = ConnectionState.Connecting
         val candidate = GatewayClient(Endpoint(host = current.host.trim(), port = port))
         try {
-            withTimeout(5_000) { candidate.listSimulations() }
+            withTimeout(CONNECT_TIMEOUT_MS) { candidate.listSimulations() }
             _client.value = candidate
             _state.value = ConnectionState.Connected
+        } catch (timeout: TimeoutCancellationException) {
+            // Must precede the CancellationException branch: TimeoutCancellationException
+            // extends it, so rethrowing here would leave the UI stuck in Connecting
+            // forever with its own controls disabled and no way to retry.
+            candidate.close()
+            _state.value = ConnectionState.Failed(
+                "No response from ${current.host.trim()}:$port"
+            )
         } catch (cancellation: CancellationException) {
             candidate.close()
+            _state.value = ConnectionState.Disconnected
             throw cancellation
         } catch (error: Exception) {
             candidate.close()

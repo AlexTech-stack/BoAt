@@ -36,6 +36,11 @@ class TraceRecorder private constructor(
             data = frame.data,
             extended = frame.extended,
             fd = frame.fd,
+            // FDF marks the frame as CAN FD for readers; BRS records that the
+            // data phase actually switched rate, which Wireshark displays.
+            fdFlags = if (frame.fd) {
+                CANFD_FDF or (if (frame.brs) CANFD_BRS else 0)
+            } else 0,
         )
         frameCount++
         if (frameCount % FLUSH_EVERY_FRAMES == 0L) writer.flush()

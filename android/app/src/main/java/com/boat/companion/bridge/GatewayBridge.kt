@@ -15,7 +15,8 @@ import java.util.concurrent.atomic.AtomicLong
 /** BOAT_CAN_FLAG_SELF_SENT — sdk/cpp/include/boat/plugin.h. */
 private const val CAN_FLAG_SELF_SENT = 0x08
 
-/** CANFD_FDF — marks a frame for the gateway's CAN FD transmit path. */
+/** CANFD_BRS / CANFD_FDF — the gateway's CAN FD flag bits. */
+private const val CANFD_BRS = 0x01
 private const val CANFD_FDF = 0x04
 
 /**
@@ -188,7 +189,7 @@ private fun SlcanFrame.toProto(iface: String): Frame {
     val metadata = CanMetadata.newBuilder()
         .setCanId(id)
         .setDlc(data.size)
-        .setFlags(if (fd) CANFD_FDF else 0)
+        .setFlags(if (fd) CANFD_FDF or (if (brs) CANFD_BRS else 0) else 0)
 
     return Frame.newBuilder()
         .setBusType(if (fd) Frame.BusType.CANFD else Frame.BusType.CAN)
@@ -205,4 +206,5 @@ private fun Frame.toSlcan(): SlcanFrame = SlcanFrame(
     // Mirrors the gateway's own convention, so a frame survives the round trip.
     extended = can.canId > 0x7FF,
     fd = busType == Frame.BusType.CANFD,
+    brs = can.flags and CANFD_BRS != 0,
 )

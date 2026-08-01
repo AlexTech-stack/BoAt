@@ -39,13 +39,20 @@ class SlcanAdapter(private val connection: CdcAcmConnection) : Closeable {
     fun open(
         bitrate: SlcanCodec.Bitrate = SlcanCodec.Bitrate.B500K,
         silent: Boolean = false,
+        /**
+         * Data-phase bitrate. Null leaves the adapter in classic CAN. It must
+         * match the bus: a mismatched data rate does not degrade gracefully, it
+         * turns every FD frame into a form error.
+         */
+        dataBitrate: SlcanCodec.DataBitrate? = null,
     ): Result<Unit> {
-        val steps = listOf(
-            "close" to SlcanCodec.close(),
-            "bitrate" to SlcanCodec.bitrate(bitrate),
-            "mode" to SlcanCodec.mode(silent),
-            "open" to SlcanCodec.open(),
-        )
+        val steps = buildList {
+            add("close" to SlcanCodec.close())
+            add("bitrate" to SlcanCodec.bitrate(bitrate))
+            dataBitrate?.let { add("data bitrate" to SlcanCodec.dataBitrate(it)) }
+            add("mode" to SlcanCodec.mode(silent))
+            add("open" to SlcanCodec.open())
+        }
         for ((name, command) in steps) {
             val written = connection.write(command)
             if (written < 0) {

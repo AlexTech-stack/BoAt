@@ -34,6 +34,7 @@ data class AdapterUiState(
     val streaming: Boolean = false,
     val bitrate: SlcanCodec.Bitrate = SlcanCodec.Bitrate.B500K,
     val silent: Boolean = false,
+    val dataBitrate: SlcanCodec.DataBitrate? = null,
     val received: Long = 0,
     val framesPerSecond: Int = 0,
     val error: String? = null,
@@ -214,6 +215,17 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
         _state.value = _state.value.copy(silent = silent)
     }
 
+    /**
+     * Cycles classic -> 1M -> 2M -> 5M. Null means classic CAN; a data rate that
+     * does not match the bus turns every FD frame into a form error, so this is
+     * deliberately explicit rather than auto-detected.
+     */
+    fun cycleDataBitrate() {
+        val order = listOf(null) + SlcanCodec.DataBitrate.entries
+        val next = order[(order.indexOf(_state.value.dataBitrate) + 1) % order.size]
+        _state.value = _state.value.copy(dataBitrate = next)
+    }
+
     fun dismissError() {
         _state.value = _state.value.copy(error = null)
     }
@@ -245,7 +257,11 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
 
             val opened = UsbAdapterHost.connect(context, device)
                 .mapCatching { slcan ->
-                    slcan.open(_state.value.bitrate, _state.value.silent).getOrThrow()
+                    slcan.open(
+                        _state.value.bitrate,
+                        _state.value.silent,
+                        _state.value.dataBitrate,
+                    ).getOrThrow()
                     slcan
                 }
 

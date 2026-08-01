@@ -70,12 +70,18 @@ object SlcanCodec {
     /**
      * Encodes a frame for transmission.
      *
-     * Classic frames use `t`/`T`; FD frames use `d`/`D`, with lowercase for
-     * 11-bit identifiers and uppercase for 29-bit.
+     * Lowercase is an 11-bit identifier, uppercase 29-bit: `t`/`T` classic,
+     * `d`/`D` CAN FD at the arbitration rate, `b`/`B` CAN FD with bitrate
+     * switching. Treating `b`/`B` as unknown silently drops every BRS frame,
+     * which is most FD traffic in practice.
      */
     fun encode(frame: SlcanFrame): ByteArray {
         val builder = StringBuilder()
+        // Bitrate switching gets its own letter pair: d/D carry FD frames that
+        // stay at the arbitration rate, b/B carry those that switch.
         val letter = when {
+            frame.fd && frame.brs && frame.extended -> 'B'
+            frame.fd && frame.brs -> 'b'
             frame.fd && frame.extended -> 'D'
             frame.fd -> 'd'
             frame.extended -> 'T'
@@ -104,9 +110,10 @@ object SlcanCodec {
         val text = String(record, Charsets.US_ASCII)
         val letter = text[0]
 
-        val extended = letter == 'T' || letter == 'D'
-        val fd = letter == 'd' || letter == 'D'
-        if (letter !in "tTdD") return null
+        val extended = letter == 'T' || letter == 'D' || letter == 'B'
+        val fd = letter in "dDbB"
+        val brs = letter == 'b' || letter == 'B'
+        if (letter !in "tTdDbB") return null
 
         val idDigits = if (extended) 8 else 3
         // letter + id + one length nibble
@@ -125,7 +132,7 @@ object SlcanCodec {
             val byte = payloadText.substring(i * 2, i * 2 + 2).toIntOrNull(16) ?: return null
             data[i] = byte.toByte()
         }
-        return SlcanFrame(id = id, data = data, extended = extended, fd = fd)
+        return SlcanFrame(id = id, data = data, extended = extended, fd = fd, brs = brs)
     }
 
     /**
@@ -167,6 +174,8 @@ data class SlcanFrame(
     val data: ByteArray,
     val extended: Boolean = false,
     val fd: Boolean = false,
+    /** Bitrate switch: the data phase ran at the FD data rate. */
+    val brs: Boolean = false,
     /**
      * Host-side capture time. The firmware supplies no timestamps, so this is
      * assigned when the bytes are read and carries USB and scheduler jitter.
@@ -178,7 +187,7 @@ data class SlcanFrame(
         if (this === other) return true
         if (other !is SlcanFrame) return false
         return id == other.id && extended == other.extended && fd == other.fd &&
-            data.contentEquals(other.data)
+            brs == other.brs && data.contentEquals(other.data)
     }
 
     override fun hashCode(): Int {
@@ -186,6 +195,7 @@ data class SlcanFrame(
         result = 31 * result + data.contentHashCode()
         result = 31 * result + extended.hashCode()
         result = 31 * result + fd.hashCode()
+        result = 31 * result + brs.hashCode()
         return result
     }
 }
