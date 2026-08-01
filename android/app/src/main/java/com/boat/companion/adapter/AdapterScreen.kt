@@ -12,6 +12,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -121,6 +122,36 @@ fun AdapterScreen(
                 style = MaterialTheme.typography.labelSmall,
                 color = if (state.recording) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = state.bridgeIface,
+                onValueChange = viewModel::setBridgeIface,
+                label = { Text("Bridge to gateway iface") },
+                singleLine = true,
+                enabled = !state.bridging,
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = viewModel::toggleBridge, enabled = state.streaming) {
+                Text(if (state.bridging) "Unbridge" else "Bridge")
+            }
+        }
+
+        if (state.bridging || state.bridgedToGateway > 0) {
+            Text(
+                text = "↑ ${state.bridgedToGateway} to gateway · " +
+                    "↓ ${state.bridgedToBus} to bus" +
+                    if (state.bridgeDropped > 0) " · ${state.bridgeDropped} dropped" else "",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (state.bridgeDropped > 0) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(bottom = 4.dp),
             )
         }
