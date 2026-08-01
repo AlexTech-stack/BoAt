@@ -173,7 +173,12 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
         bridge = started
         _state.value = _state.value.copy(bridging = true, error = null)
 
-        bridgeJob = viewModelScope.launch {
+        // Must not run on the main dispatcher, which is what viewModelScope
+        // defaults to: this loop decodes every frame the gateway reflects back
+        // and calls adapter.send(), a blocking USB bulk transfer. On Main it
+        // stalls the UI and starves the reader, which shows up as lost frames
+        // rather than as jank.
+        bridgeJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 started.run()
                 _state.value = _state.value.copy(bridging = false)
