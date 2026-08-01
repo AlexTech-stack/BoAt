@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.boat.companion.monitor.FrameRow
+import com.boat.companion.trace.TraceRecorder
 import com.boat.companion.usb.SlcanAdapter
 import com.boat.companion.usb.SlcanCodec
 import com.boat.companion.usb.SlcanFrame
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 private const val HISTORY_LIMIT = 500
 private const val PUBLISH_INTERVAL_MS = 100L
@@ -33,6 +35,11 @@ data class AdapterUiState(
     val received: Long = 0,
     val framesPerSecond: Int = 0,
     val error: String? = null,
+    val recording: Boolean = false,
+    val recordedFrames: Long = 0,
+    val recordedBytes: Long = 0,
+    val recordingName: String? = null,
+    val traces: List<File> = emptyList(),
 )
 
 /**
@@ -54,6 +61,10 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
     private var readJob: Job? = null
     private var publishJob: Job? = null
 
+    /** Guarded by [recorderLock]: written from the USB read thread, closed from the UI. */
+    private var recorder: TraceRecorder? = null
+    private val recorderLock = Any()
+
     private var sequence = 0L
     private var received = 0L
     private var windowCount = 0
@@ -61,6 +72,57 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         refreshAttachment()
+        refreshTraces()
+    }
+
+    fun refreshTraces() {
+        _state.value = _state.value.copy(traces = TraceRecorder.list(getApplication()))
+    }
+
+    /**
+     * Recording is independent of the on-screen list: the UI keeps a bounded
+     * history, the file keeps everything.
+     */
+    fun toggleRecording() {
+        if (_state.value.recording) stopRecording() else startRecording()
+    }
+
+    private fun startRecording() {
+        TraceRecorder.start(getApplication(), _state.value.bitrate.bitsPerSecond)
+            .onSuccess { started ->
+                synchronized(recorderLock) { recorder = started }
+                _state.value = _state.value.copy(
+                    recording = true,
+                    recordedFrames = 0,
+                    recordedBytes = 0,
+                    recordingName = started.file.name,
+                    error = null,
+                )
+            }
+            .onFailure { error ->
+                _state.value = _state.value.copy(
+                    error = "Could not start recording: ${error.message ?: error::class.java.simpleName}"
+                )
+            }
+    }
+
+    private fun stopRecording() {
+        val finished = synchronized(recorderLock) {
+            val current = recorder
+            recorder = null
+            current
+        }
+        runCatching { finished?.close() }
+        _state.value = _state.value.copy(
+            recording = false,
+            recordedBytes = finished?.sizeBytes ?: 0,
+        )
+        refreshTraces()
+    }
+
+    fun delete(file: File) {
+        runCatching { file.delete() }
+        refreshTraces()
     }
 
     fun refreshAttachment() {
@@ -153,6 +215,22 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun record(frame: SlcanFrame) {
+        // Write to the trace before touching UI state: at bus saturation the
+        // file is the artefact that matters, and it must not be starved by
+        // display bookkeeping.
+        synchronized(recorderLock) {
+            recorder?.let { active ->
+                runCatching { active.write(frame) }.onFailure {
+                    _state.value = _state.value.copy(
+                        error = "Recording stopped: ${it.message ?: "write failed"}",
+                        recording = false,
+                    )
+                    runCatching { active.close() }
+                    recorder = null
+                }
+            }
+        }
+
         val row = FrameRow(
             seq = sequence++,
             timestampNs = frame.timestampNanos,
@@ -179,22 +257,34 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
             delay(PUBLISH_INTERVAL_MS)
             _frames.value = synchronized(historyLock) { history.toList() }
 
+            val active = synchronized(recorderLock) { recorder }
+            val recordedFrames = active?.frameCount ?: _state.value.recordedFrames
+            val recordedBytes = active?.sizeBytes ?: _state.value.recordedBytes
+
             val now = System.currentTimeMillis()
             val elapsed = now - windowStartedAt
             if (elapsed >= 1000) {
                 _state.value = _state.value.copy(
                     received = received,
                     framesPerSecond = (windowCount * 1000L / elapsed).toInt(),
+                    recordedFrames = recordedFrames,
+                    recordedBytes = recordedBytes,
                 )
                 windowCount = 0
                 windowStartedAt = now
             } else {
-                _state.value = _state.value.copy(received = received)
+                _state.value = _state.value.copy(
+                    received = received,
+                    recordedFrames = recordedFrames,
+                    recordedBytes = recordedBytes,
+                )
             }
         }
     }
 
     override fun onCleared() {
+        // Close the file first so a partially written trace is still valid.
+        if (_state.value.recording) stopRecording()
         stop()
         super.onCleared()
     }

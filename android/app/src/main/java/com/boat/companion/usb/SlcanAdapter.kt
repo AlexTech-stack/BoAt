@@ -77,11 +77,27 @@ class SlcanAdapter(private val connection: CdcAcmConnection) : Closeable {
         val buffer = ByteArray(CdcAcmConnection.READ_BUFFER_SIZE)
         val count = connection.read(buffer)
         if (count <= 0) return emptyList()
-        val now = System.currentTimeMillis() * 1_000_000L
+        val now = captureTimeNanos()
         return assembler.append(buffer, count).mapNotNull { record ->
             SlcanCodec.decode(record)?.copy(timestampNanos = now)
         }
     }
+
+    /**
+     * Wall-clock nanoseconds, but stepped by a monotonic clock.
+     *
+     * currentTimeMillis alone quantises every timestamp to 1ms, which at typical
+     * bus rates is coarser than the gaps being measured — and it would be a
+     * self-inflicted loss, since the file declares nanosecond resolution. The
+     * epoch anchor is taken once and advanced by nanoTime, so relative timing
+     * keeps full resolution and is immune to the wall clock being stepped
+     * mid-capture. Absolute accuracy is still only as good as the initial
+     * anchor, and USB jitter still dominates either way.
+     */
+    private fun captureTimeNanos(): Long = epochAnchorNanos + (System.nanoTime() - monotonicAnchor)
+
+    private val epochAnchorNanos: Long = System.currentTimeMillis() * 1_000_000L
+    private val monotonicAnchor: Long = System.nanoTime()
 
     override fun close() {
         runCatching { connection.write(SlcanCodec.close()) }
