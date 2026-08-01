@@ -1,0 +1,42 @@
+# Line-ending policy.
+#
+# The tree was historically mixed: 138 files CRLF, 359 LF, with no rule to say
+# which was intended. That is not just untidy — any tool that round-trips a file
+# through text mode (Python's open() being the obvious one) silently rewrites
+# every line, turning a three-line edit into a whole-file diff and burying the
+# real change. It happened twice while working on this repo.
+#
+# Everything text is normalised to LF in the repository. Git converts on
+# checkout for platforms that need it, so Windows working copies are unaffected.
+
+* text=auto
+
+# Endings that are not a matter of taste.
+*.sh        text eol=lf
+gradlew     text eol=lf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Never convert, never diff as text.
+*.webp      binary
+*.jar       binary
+*.png       binary
+*.jpg       binary
+*.zip       binary
+*.so        binary
+*.a         binary
+*.o         binary
+*.db        binary
+*.apk       binary
+*.pdf       binary
+*.xlsx      binary
+
+# Trace and capture fixtures are byte-exact artefacts.
+*.blf       binary
+*.pcap      binary
+*.pcapng    binary
+*.trace     binary
+
+# Generated protobuf stubs: diff them, but they are not hand-edited.
+*_pb2.py    linguist-generated=true
+*_pb2_grpc.py linguist-generated=true
