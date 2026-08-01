@@ -66,6 +66,13 @@ the error surfaces as an internal failure rather than anything a client can act
 on. It also means any automated test that drives `SimulationService` is
 order-dependent and cannot run twice against the same gateway.
 
+**Concrete consequence for tests.** A test that creates and starts a simulation
+passes against a fresh gateway and fails against one that has already run any,
+with `INTERNAL: tick must be monotonically increasing`. It reads as flakiness
+and is not — the gateway is stateful across runs. Until the clock is
+per-simulation, such tests need a gateway restart between runs, or an explicit
+skip once the clock has advanced.
+
 ---
 
 ## 🟡 `ResetSimulation` does not rewind the tick
