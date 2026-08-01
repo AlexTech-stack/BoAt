@@ -3,7 +3,9 @@ package com.boat.companion.adapter
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.boat.companion.bridge.GatewayBridge
 import com.boat.companion.monitor.FrameRow
+import com.boat.companion.net.GatewayConnection
 import com.boat.companion.trace.TraceRecorder
 import com.boat.companion.usb.SlcanAdapter
 import com.boat.companion.usb.SlcanCodec
@@ -40,6 +42,11 @@ data class AdapterUiState(
     val recordedBytes: Long = 0,
     val recordingName: String? = null,
     val traces: List<File> = emptyList(),
+    val bridgeIface: String = "vcan0",
+    val bridging: Boolean = false,
+    val bridgedToGateway: Long = 0,
+    val bridgedToBus: Long = 0,
+    val bridgeDropped: Long = 0,
 )
 
 /**
@@ -64,6 +71,10 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
     /** Guarded by [recorderLock]: written from the USB read thread, closed from the UI. */
     private var recorder: TraceRecorder? = null
     private val recorderLock = Any()
+
+    @Volatile
+    private var bridge: GatewayBridge? = null
+    private var bridgeJob: Job? = null
 
     private var sequence = 0L
     private var received = 0L
@@ -123,6 +134,68 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
     fun delete(file: File) {
         runCatching { file.delete() }
         refreshTraces()
+    }
+
+    fun setBridgeIface(value: String) {
+        _state.value = _state.value.copy(bridgeIface = value)
+    }
+
+    fun toggleBridge() {
+        if (_state.value.bridging) stopBridge() else startBridge()
+    }
+
+    /**
+     * Publishes the adapter's bus onto a gateway interface and transmits what
+     * the gateway sends back.
+     *
+     * The target must be a vcan on the gateway. Pointing it at a physical
+     * interface that shares this bus would feed every frame back to its source.
+     */
+    private fun startBridge() {
+        val adapter = this.adapter
+        if (adapter == null) {
+            _state.value = _state.value.copy(error = "Start the adapter before bridging")
+            return
+        }
+        val client = GatewayConnection.client.value
+        if (client == null) {
+            _state.value = _state.value.copy(error = "Not connected to a gateway")
+            return
+        }
+        val iface = _state.value.bridgeIface.trim()
+        if (iface.isEmpty()) {
+            _state.value = _state.value.copy(error = "Bridge interface is required")
+            return
+        }
+
+        val started = GatewayBridge(adapter, client, iface)
+        bridge = started
+        _state.value = _state.value.copy(bridging = true, error = null)
+
+        bridgeJob = viewModelScope.launch {
+            try {
+                started.run()
+                _state.value = _state.value.copy(bridging = false)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
+                _state.value = _state.value.copy(
+                    bridging = false,
+                    // An unknown interface fails the whole call by design, so this
+                    // is the likeliest message and worth showing verbatim.
+                    error = "Bridge stopped: ${error.message ?: error::class.java.simpleName}",
+                )
+            } finally {
+                bridge = null
+            }
+        }
+    }
+
+    private fun stopBridge() {
+        bridgeJob?.cancel(); bridgeJob = null
+        bridge?.close()
+        bridge = null
+        _state.value = _state.value.copy(bridging = false)
     }
 
     fun refreshAttachment() {
@@ -207,6 +280,7 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun stop() {
+        stopBridge()
         readJob?.cancel(); readJob = null
         publishJob?.cancel(); publishJob = null
         runCatching { adapter?.close() }
@@ -230,6 +304,9 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
         }
+
+        // Non-blocking: a stalled network must never back up the USB reader.
+        bridge?.publish(frame)
 
         val row = FrameRow(
             seq = sequence++,
@@ -260,6 +337,13 @@ class AdapterViewModel(application: Application) : AndroidViewModel(application)
             val active = synchronized(recorderLock) { recorder }
             val recordedFrames = active?.frameCount ?: _state.value.recordedFrames
             val recordedBytes = active?.sizeBytes ?: _state.value.recordedBytes
+            bridge?.let {
+                _state.value = _state.value.copy(
+                    bridgedToGateway = it.framesToGateway,
+                    bridgedToBus = it.framesToBus,
+                    bridgeDropped = it.framesDropped,
+                )
+            }
 
             val now = System.currentTimeMillis()
             val elapsed = now - windowStartedAt
