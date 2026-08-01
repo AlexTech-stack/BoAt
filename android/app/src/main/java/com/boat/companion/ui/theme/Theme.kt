@@ -1,58 +1,56 @@
 package com.boat.companion.ui.theme
 
-import android.app.Activity
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
-)
+/**
+ * One fixed dark scheme, matching the BoAt web UIs.
+ *
+ * Deliberately not `isSystemInDarkTheme()` and not dynamic colour: this is an
+ * instrument that shows CAN traffic on a bench, and the meaning of green,
+ * amber and red here is the same as on the dashboards. Letting the wallpaper
+ * recolour it, or flipping to a light scheme, would break that correspondence.
+ */
+private val BoatColorScheme = darkColorScheme(
+    primary = BoatBlue,
+    onPrimary = BoatBg,
+    primaryContainer = BoatBlueTint,
+    onPrimaryContainer = BoatBlue,
 
-private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
+    secondary = BoatGreen,
+    onSecondary = BoatBg,
+    secondaryContainer = BoatGreenTint,
+    onSecondaryContainer = BoatGreen,
 
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    tertiary = BoatPurple,
+    onTertiary = BoatBg,
+
+    background = BoatBg,
+    onBackground = BoatText,
+
+    surface = BoatPanel,
+    onSurface = BoatText,
+    surfaceVariant = BoatElevated,
+    onSurfaceVariant = BoatMuted,
+    surfaceContainerHighest = BoatElevated,
+
+    error = BoatRed,
+    onError = BoatText,
+    errorContainer = BoatRedTint,
+    onErrorContainer = BoatRed,
+
+    outline = BoatBorder,
+    outlineVariant = BoatBorder,
+    scrim = Color(0xCC000000),
 )
 
 @Composable
-fun BoAtTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
-    content: @Composable () -> Unit
-) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
-
+fun BoAtTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
+        colorScheme = BoatColorScheme,
+        typography = BoatTypography,
+        content = content,
     )
 }

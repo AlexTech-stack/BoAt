@@ -1,5 +1,6 @@
 package com.boat.companion.sim
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -11,25 +12,36 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.boat.proto.v1.SimulationState
+import com.boat.companion.ui.BoatButton
+import com.boat.companion.ui.EmptyHint
+import com.boat.companion.ui.ErrorStrip
+import com.boat.companion.ui.Metric
+import com.boat.companion.ui.PaneHeader
+import com.boat.companion.ui.theme.BoatBlue
+import com.boat.companion.ui.theme.BoatBorder
+import com.boat.companion.ui.theme.BoatGreen
+import com.boat.companion.ui.theme.BoatMono
+import com.boat.companion.ui.theme.BoatMuted
+import com.boat.companion.ui.theme.BoatRed
+import com.boat.companion.ui.theme.BoatYellow
+import com.boat.companion.ui.theme.PaneTitle
 
 @Composable
 fun SimScreen(
@@ -38,141 +50,169 @@ fun SimScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    Column(modifier = modifier.fillMaxSize().padding(12.dp)) {
+    Column(modifier = modifier.fillMaxSize()) {
         if (state.busy) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                color = BoatBlue,
+                trackColor = BoatBorder,
+            )
         }
 
         state.error?.let { message ->
-            Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = message,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = viewModel::dismissError) { Text("Dismiss") }
-                }
-            }
+            ErrorStrip(
+                message = message,
+                onDismiss = viewModel::dismissError,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
         }
 
         CurrentSimulation(state)
 
         FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Button(onClick = viewModel::start, enabled = !state.busy) { Text("Start") }
-            Button(onClick = viewModel::pause, enabled = !state.busy) { Text("Pause") }
-            Button(onClick = viewModel::step, enabled = !state.busy) { Text("Step") }
-            OutlinedButton(onClick = viewModel::reset, enabled = !state.busy) { Text("Reset") }
-            OutlinedButton(onClick = viewModel::stop, enabled = !state.busy) { Text("Stop") }
+            BoatButton("Start", viewModel::start, enabled = !state.busy, tint = BoatGreen)
+            BoatButton("Pause", viewModel::pause, enabled = !state.busy, tint = BoatYellow)
+            BoatButton("Step", viewModel::step, enabled = !state.busy)
+            BoatButton("Reset", viewModel::reset, enabled = !state.busy, tint = BoatMuted)
+            BoatButton("Stop", viewModel::stop, enabled = !state.busy, tint = BoatRed)
         }
 
-        OutlinedTextField(
-            value = state.stepTicks,
-            onValueChange = viewModel::setStepTicks,
-            label = { Text("Ticks per step") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth(),
-        )
-
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedTextField(
-                value = state.scenarioId,
-                onValueChange = viewModel::setScenarioId,
-                label = { Text("Scenario id") },
+                value = state.stepTicks,
+                onValueChange = viewModel::setStepTicks,
+                label = { Text("Ticks / step", style = MaterialTheme.typography.labelSmall) },
                 singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                colors = simFieldColors(),
                 modifier = Modifier.weight(1f),
             )
-            Button(onClick = viewModel::create, enabled = !state.busy) { Text("Create") }
+            OutlinedTextField(
+                value = state.scenarioId,
+                onValueChange = viewModel::setScenarioId,
+                label = { Text("Scenario id", style = MaterialTheme.typography.labelSmall) },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium,
+                colors = simFieldColors(),
+                modifier = Modifier.weight(2f),
+            )
+            BoatButton("Create", viewModel::create, enabled = !state.busy)
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Simulations", style = MaterialTheme.typography.titleSmall)
-            TextButton(onClick = viewModel::refresh) { Text("Refresh") }
+        PaneHeader(title = "Simulations", modifier = Modifier.padding(top = 12.dp)) {
+            TextButton(onClick = viewModel::refresh) {
+                Text("Refresh", style = MaterialTheme.typography.labelMedium, color = BoatMuted)
+            }
         }
-        HorizontalDivider()
 
         if (state.simulations.isEmpty()) {
-            Text(
-                text = "None. Create one from a scenario stored on the gateway.",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 12.dp),
-            )
+            EmptyHint("None. Create one from a scenario stored on the gateway.")
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(state.simulations, key = { it.simulationId }) { simulation ->
-                    Row(
+                    val selected = simulation.simulationId == state.selectedId
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .selectable(
-                                selected = simulation.simulationId == state.selectedId,
+                                selected = selected,
                                 onClick = { viewModel.select(simulation.simulationId) },
                             )
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .background(
+                                if (selected) BoatBlue.copy(alpha = 0.08f)
+                                else androidx.compose.ui.graphics.Color.Transparent
+                            )
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
                     ) {
-                        RadioButton(
-                            selected = simulation.simulationId == state.selectedId,
-                            onClick = { viewModel.select(simulation.simulationId) },
+                        Text(
+                            text = simulation.simulationId,
+                            fontFamily = BoatMono,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (selected) BoatBlue else MaterialTheme.colorScheme.onBackground,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        Column {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                text = simulation.simulationId,
-                                fontFamily = FontFamily.Monospace,
-                                style = MaterialTheme.typography.bodySmall,
+                                text = simulation.scenarioId,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = BoatMuted,
                             )
                             Text(
-                                text = "${simulation.scenarioId} · ${simulation.state.label()}",
+                                text = simulation.state.label(),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = simulation.state.colour(),
                             )
                         }
                     }
+                    HorizontalDivider(color = BoatBorder.copy(alpha = 0.4f))
                 }
             }
         }
     }
 }
 
+/** The selected simulation's live state — the one thing worth watching while it runs. */
 @Composable
 private fun CurrentSimulation(state: SimUiState) {
     val simulation = state.current
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            if (simulation == null) {
-                Text("No simulation selected", style = MaterialTheme.typography.bodyMedium)
-            } else {
-                Text(
-                    text = simulation.state.label(),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    text = "tick ${simulation.tick}",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    text = simulation.simulationId,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        if (simulation == null) {
+            Text(
+                text = "No simulation selected",
+                style = MaterialTheme.typography.bodyMedium,
+                color = BoatMuted,
+            )
+            return@Column
         }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = simulation.state.label().uppercase(),
+                style = PaneTitle,
+                color = simulation.state.colour(),
+            )
+            Metric("${simulation.tick}", "tick")
+        }
+        Text(
+            text = simulation.simulationId,
+            fontFamily = BoatMono,
+            style = MaterialTheme.typography.labelSmall,
+            color = BoatMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
+    HorizontalDivider(color = BoatBorder)
 }
+
+private fun SimulationState.colour() = when (this) {
+    SimulationState.SIMULATION_STATE_RUNNING -> BoatGreen
+    SimulationState.SIMULATION_STATE_PAUSED -> BoatYellow
+    SimulationState.SIMULATION_STATE_ERROR -> BoatRed
+    else -> BoatMuted
+}
+
+@Composable
+private fun simFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = BoatBlue,
+    unfocusedBorderColor = BoatBorder,
+    focusedLabelColor = BoatBlue,
+    unfocusedLabelColor = BoatMuted,
+)
