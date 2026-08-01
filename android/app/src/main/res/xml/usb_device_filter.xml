@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WeAct Studio USB2CANFDV2 in SLCAN mode: 0x0483 / 0x5740, enumerating as
+  "USB2CANV2 ComPort". Declared so Android offers to launch the app when the
+  adapter is attached, which also grants access without a separate dialog.
+
+  The second entry matches any USB CDC (class 2) device, so a re-flashed or
+  cloned board reporting different ids still triggers attachment.
+-->
+<resources>
+    <usb-device vendor-id="1155" product-id="22336" />
+    <usb-device class="2" />
+</resources>

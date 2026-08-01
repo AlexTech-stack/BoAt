@@ -18,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.boat.companion.adapter.AdapterScreen
 import com.boat.companion.monitor.MonitorScreen
 import com.boat.companion.sim.SimScreen
 import com.boat.companion.ui.ConnectionCard
@@ -37,7 +38,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val TABS = listOf("Monitor", "Simulation")
+private val TABS = listOf("Monitor", "Simulation", "Adapter")
 
 @Composable
 private fun CompanionApp(modifier: Modifier = Modifier) {
@@ -60,7 +61,10 @@ private fun CompanionApp(modifier: Modifier = Modifier) {
 
         when (selectedTab) {
             0 -> MonitorScreen()
-            else -> SimScreen()
+            1 -> SimScreen()
+            // The adapter reads CAN directly over USB and needs no gateway, so
+            // it stays usable while the connection above is down.
+            else -> AdapterScreen()
         }
     }
 }
