@@ -43,6 +43,29 @@ companion app's list, both reporting the state of whichever was last acted on.
 
 **Effort:** Small (document) to Large (per-instance state).
 
+### The sharper consequence: a gateway can stop accepting simulations
+
+`DeterminismEngine` is gateway-scoped and remembers the last tick it saw
+(`src/core/determinism/determinism_engine.cpp:11`):
+
+```cpp
+void DeterminismEngine::BeforeTick(std::uint64_t tick) {
+  if (last_tick_ != std::numeric_limits<std::uint64_t>::max() && tick <= last_tick_) {
+    throw std::logic_error("tick must be monotonically increasing");
+```
+
+Because both the clock and the engine outlive any individual simulation, a
+gateway that has already run some can refuse to run another. Observed after a
+session with four simulations: `StartSimulation` on a freshly created one
+returned `INTERNAL: tick must be monotonically increasing`. The only recovery is
+restarting the gateway.
+
+This makes the global-state item more than a cosmetic reporting problem — a
+long-lived gateway degrades into one that cannot start simulations at all, and
+the error surfaces as an internal failure rather than anything a client can act
+on. It also means any automated test that drives `SimulationService` is
+order-dependent and cannot run twice against the same gateway.
+
 ---
 
 ## 🟡 `ResetSimulation` does not rewind the tick
