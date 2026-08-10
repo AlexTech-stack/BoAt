@@ -179,9 +179,10 @@ TEST_CASE("CanTp triggers a segmented send from a matching PDU-bus frame",
   manager.DispatchFrame(pdu_frame);
 
   REQUIRE(published_payloads.size() == 1);
-  // PCI 0x02 (Single Frame, len 2) + payload, padded to can_dlc=8 with 0x55.
+  // PCI 0x02 (Single Frame, len 2) + payload, padded to can_dlc=8 with the
+  // ISO/AUTOSAR default pad byte 0xCC (CanTpConfig::pad_byte, 0 = default).
   REQUIRE(published_payloads[0] ==
-          std::vector<uint8_t>{0x02, 0xAA, 0xBB, 0x55, 0x55, 0x55, 0x55, 0x55});
+          std::vector<uint8_t>{0x02, 0xAA, 0xBB, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC});
 }
 
 TEST_CASE("CanTp ignores PDU-bus frames with no iface or a mismatched iface",
