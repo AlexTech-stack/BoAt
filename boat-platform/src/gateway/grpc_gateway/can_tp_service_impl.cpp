@@ -117,6 +117,8 @@ grpc::Status CanTpServiceImpl::Configure(
   cfg.st_min               = static_cast<uint8_t>(pc.st_min());
   cfg.can_dlc              = static_cast<uint8_t>(pc.can_dlc());
   cfg.extended_addressing  = pc.extended_addressing();
+  cfg.n_bs_ms              = pc.n_bs_ms();  // 0 = ISO default; resolved in can_tp_configure()
+  cfg.n_cr_ms              = pc.n_cr_ms();  // 0 = ISO default; resolved in can_tp_configure()
 
   if (can_tp->Configure(cfg) != 0) {
     return grpc::Status(grpc::StatusCode::INTERNAL, "CanTp Configure() failed");
@@ -218,6 +220,8 @@ void AppendSessions(const std::string& iface, boat::core::ICanTp* can_tp,
     session->set_extended_addressing(s.extended_addressing);
     session->set_rx_state(s.rx_state);
     session->set_tx_state(s.tx_state);
+    session->set_n_bs_ms(s.n_bs_ms);
+    session->set_n_cr_ms(s.n_cr_ms);
   }
 }
 }  // namespace

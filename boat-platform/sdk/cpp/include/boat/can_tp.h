@@ -14,7 +14,15 @@ extern "C" {
    expressed by passing the same value for both, not by omitting them. The
    same session handles both TX and RX:
      - We send data (FF/CF) and receive FC on source_addr.
-     - We receive data (SF/FF/CF) and send FC on target_addr. */
+     - We receive data (SF/FF/CF) and send FC on target_addr.
+
+   Of ISO 15765-2's six timing parameters (§9.8 Table 21), only N_Bs and
+   N_Cr are enforced here -- they're the two whose expiry actually leaves a
+   session stuck forever (a peer that dies mid-transfer). N_As/N_Ar are
+   local transmit-confirmation timeouts with no analogue in this software
+   transport (frame_publish_fn is synchronous -- there is nothing to time
+   out waiting for), and N_Br/N_Cs are soft performance targets, not
+   correctness bugs. See backlog/can_tp_plugin_backlog.md item #1. */
 typedef struct CanTpConfig {
   uint32_t nsdu_id;            /* Logical session identifier (map key) */
   uint32_t source_addr;        /* CAN ID of this node (required, non-zero) */
@@ -24,6 +32,13 @@ typedef struct CanTpConfig {
   uint8_t  st_min;             /* STmin to advertise in sent FC (0..127 ms) */
   uint8_t  can_dlc;            /* max CAN DLC for this connection (8 or 64) */
   bool     extended_addressing;/* use first data byte as target address */
+  uint32_t n_bs_ms;            /* ISO 15765-2 N_Bs: max time TX waits for FC
+                                   after FF/last CF of a block, before
+                                   aborting the transfer (0 = ISO default,
+                                   1000ms) */
+  uint32_t n_cr_ms;            /* ISO 15765-2 N_Cr: max time RX waits for the
+                                   next CF before aborting reassembly
+                                   (0 = ISO default, 1000ms) */
 } CanTpConfig;
 
 /* Send a PDU through CanTp segmentation to an already-configured nsdu_id.

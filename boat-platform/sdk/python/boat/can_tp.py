@@ -65,7 +65,8 @@ class CanTpHandle:
                 leave empty while there's exactly one; the RPC fails with
                 a clear "ambiguous, specify iface" error otherwise.
             **kwargs: Override remaining CanTpConfig fields (rx_buffer_size,
-                      block_size, st_min, can_dlc, extended_addressing).
+                      block_size, st_min, can_dlc, extended_addressing,
+                      n_bs_ms, n_cr_ms).
 
         Returns:
             True if configured successfully.
@@ -79,6 +80,8 @@ class CanTpHandle:
             st_min=kwargs.get("st_min", 0),
             can_dlc=kwargs.get("can_dlc", 8),
             extended_addressing=kwargs.get("extended_addressing", False),
+            n_bs_ms=kwargs.get("n_bs_ms", 1000),
+            n_cr_ms=kwargs.get("n_cr_ms", 1000),
         )
         resp = self._client.can_tp.Configure(
             can_tp_pb2.ConfigureRequest(config=config, iface=iface))

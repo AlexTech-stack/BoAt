@@ -21,6 +21,8 @@ struct CanTpSessionInfo {
   uint8_t  st_min;
   uint8_t  can_dlc;
   bool     extended_addressing;
+  uint32_t n_bs_ms;       // effective N_Bs (already resolved from the 0-sentinel)
+  uint32_t n_cr_ms;       // effective N_Cr (already resolved from the 0-sentinel)
   std::string rx_state;  // "IDLE" | "WAIT_CF"
   std::string tx_state;  // "IDLE" | "WAIT_FC" | "SEND_CF" | "COMPLETE"
 };

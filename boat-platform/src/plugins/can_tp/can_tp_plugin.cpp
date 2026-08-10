@@ -18,6 +18,15 @@ constexpr uint8_t kFcOverflow   = 0x02;  // FC flags: Overflow / abort
 
 constexpr uint8_t kPadByte = 0x55;  // fill byte for unused trailing data bytes
 
+// ISO 15765-2 default for both N_Bs (TX waiting for FC) and N_Cr (RX waiting
+// for the next CF) -- see CanTpConfig::n_bs_ms/n_cr_ms in boat/can_tp.h.
+constexpr uint32_t kDefaultTimeoutMs = 1000;
+
+// Resolve a 0-sentinel (== "use the ISO default") to an actual timeout.
+uint32_t resolve_timeout_ms(uint32_t configured) {
+  return configured != 0 ? configured : kDefaultTimeoutMs;
+}
+
 // Every CanTp-emitted frame (SF/FF/CF/FC) is sent at the connection's fixed
 // can_dlc, not the length actually in use -- unused trailing bytes are
 // filled with kPadByte. `used` is the number of meaningful bytes already
@@ -77,6 +86,28 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
             to_send_cf.push_back({&conn, addr});
           }
         }
+
+        // ── N_Bs watchdog: TX gave up waiting for FC ──────────────────────
+        // Fires whether we're waiting for the *first* FC after FF, or the
+        // next FC at a block boundary (both go through TX_WAIT_FC) -- ISO
+        // 15765-2 §9.8 uses N_Bs for both cases. Reset directly here rather
+        // than deferring like to_send_cf: it's just clearing local state,
+        // nothing to publish, so there's no reason to release the lock
+        // first.
+        if (conn.tx_state == NsduConnection::TX_WAIT_FC &&
+            now >= conn.tx_fc_deadline) {
+          conn.tx_state = NsduConnection::TX_IDLE;
+          conn.tx_buffer.clear();
+          conn.tx_offset = 0;
+          conn.tx_seq = 0;
+        }
+
+        // ── N_Cr watchdog: RX gave up waiting for the next CF ─────────────
+        if (conn.rx_state == NsduConnection::RX_WAIT_CF &&
+            now >= conn.rx_cf_deadline) {
+          conn.rx_state = NsduConnection::RX_IDLE;
+          conn.rx_buffer.clear();
+        }
       }
     }
 
@@ -131,6 +162,8 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
           if (conn->tx_bs_original > 0 && conn->tx_bs_remaining == 0) {
             // Block size reached — wait for next FC
             conn->tx_state = NsduConnection::TX_WAIT_FC;
+            conn->tx_fc_deadline = steady_clock::now() +
+                                   milliseconds(conn->config.n_bs_ms);
           }
           // else: BS=0 (unlimited) — keep sending CFs without waiting
         } else {
@@ -290,7 +323,13 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
       return;
     }
     if (fc_flags == kFcWait) {
-      // Wait — stay in TX_WAIT_FC, will be retried
+      // Wait — stay in TX_WAIT_FC, will be retried. Per ISO 15765-2 §9.6.5.3,
+      // an FC(WT) restarts the N_Bs timer -- an unresponsive-but-alive peer
+      // that keeps sending WT before N_Bs expires can hold the session open
+      // indefinitely, which is correct behavior (it's still telling us it's
+      // there); a peer that goes silent still gets caught by the deadline.
+      conn->tx_fc_deadline = std::chrono::steady_clock::now() +
+                             std::chrono::milliseconds(conn->config.n_bs_ms);
       return;
     }
     // Continue
@@ -369,6 +408,8 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     conn->rx_next_seq = 1;
     conn->rx_cf_count = 0;
     conn->rx_state = NsduConnection::RX_WAIT_CF;
+    conn->rx_cf_deadline = std::chrono::steady_clock::now() +
+                           std::chrono::milliseconds(conn->config.n_cr_ms);
 
     // Send Flow Control (Continue) with configured BS and STmin
     if (plugin->frame_publish_fn == nullptr) return;
@@ -419,6 +460,10 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
       conn->rx_state = NsduConnection::RX_IDLE;
     } else {
       conn->rx_next_seq = (seq + 1) & 0x0F;
+      // Each accepted CF restarts N_Cr -- it's the deadline for the *next*
+      // CF, not a one-shot timer for the whole reassembly.
+      conn->rx_cf_deadline = std::chrono::steady_clock::now() +
+                             std::chrono::milliseconds(conn->config.n_cr_ms);
       // Re-FC: if BS > 0 and we've received a full block, send another FC
       ++conn->rx_cf_count;
       if (conn->config.block_size > 0 &&
@@ -469,6 +514,12 @@ int32_t can_tp_configure(void* tp_ctx, const CanTpConfig* config) {
   NsduConnection conn;
   conn.nsdu_id     = config->nsdu_id;
   conn.config      = *config;
+  // Resolve the 0-sentinel to the ISO default once here, so every later
+  // read of conn.config.n_bs_ms/n_cr_ms (deadline-setting in can_tp_send()
+  // and tp_on_frame(), the watchdog check in can_tp_tx_thread_func()) can
+  // use the value directly without re-checking for 0.
+  conn.config.n_bs_ms = resolve_timeout_ms(config->n_bs_ms);
+  conn.config.n_cr_ms = resolve_timeout_ms(config->n_cr_ms);
   conn.rx_state    = NsduConnection::RX_IDLE;
   conn.tx_state    = NsduConnection::TX_IDLE;
   conn.source_addr = config->source_addr;
@@ -599,6 +650,8 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
     conn->tx_stmin_us = 0;
     conn->tx_state = NsduConnection::TX_WAIT_FC;
     conn->tx_next_send_time = std::chrono::steady_clock::now();
+    conn->tx_fc_deadline = std::chrono::steady_clock::now() +
+                           std::chrono::milliseconds(conn->config.n_bs_ms);
   }
   plugin->tx_cv.notify_one();
 

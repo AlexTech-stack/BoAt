@@ -56,6 +56,15 @@ struct NsduConnection {
 
   // RX CF tracking for re-FC (BS > 0)
   uint32_t rx_cf_count{0};
+
+  // ISO 15765-2 N_Bs/N_Cr watchdog deadlines. Set on entry to TX_WAIT_FC /
+  // RX_WAIT_CF (and refreshed on every accepted CF for N_Cr); checked by the
+  // TX pacing thread's poll loop, which already scans every connection on a
+  // tight interval regardless of tick configuration -- see
+  // can_tp_tx_thread_func in can_tp_plugin.cpp. Only meaningful while the
+  // corresponding state is WAIT_FC / WAIT_CF.
+  std::chrono::steady_clock::time_point tx_fc_deadline;
+  std::chrono::steady_clock::time_point rx_cf_deadline;
 };
 
 /* CanTp plugin state.
@@ -162,6 +171,8 @@ struct CanTpPlugin : public boat::core::ICanTp {
       info.st_min              = c.config.st_min;
       info.can_dlc             = c.config.can_dlc;
       info.extended_addressing = c.config.extended_addressing;
+      info.n_bs_ms             = c.config.n_bs_ms;
+      info.n_cr_ms             = c.config.n_cr_ms;
       info.rx_state = (c.rx_state == NsduConnection::RX_WAIT_CF) ? "WAIT_CF" : "IDLE";
       switch (c.tx_state) {
         case NsduConnection::TX_IDLE:     info.tx_state = "IDLE";     break;

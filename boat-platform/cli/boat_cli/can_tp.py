@@ -35,6 +35,12 @@ def can_tp_configure(
     st_min: Annotated[int, typer.Option("--stmin", help="Separation Time in ms to advertise in FC.")] = 0,
     rx_buffer_size: Annotated[int, typer.Option("--rx-buffer", help="RX reassembly buffer size.")] = 4095,
     can_dlc: Annotated[int, typer.Option("--dlc", help="CAN DLC (8 or 64 for CAN-FD).")] = 8,
+    n_bs_ms: Annotated[int, typer.Option("--n-bs-ms", help="ISO 15765-2 N_Bs: max ms to wait for "
+                     "Flow Control before aborting an in-progress send (ISO default 1000; "
+                     "OBD-II/ISO 15765-4 uses 75).")] = 1000,
+    n_cr_ms: Annotated[int, typer.Option("--n-cr-ms", help="ISO 15765-2 N_Cr: max ms to wait for "
+                     "the next Consecutive Frame before aborting reassembly (ISO default 1000; "
+                     "OBD-II/ISO 15765-4 uses 150).")] = 1000,
     iface: Annotated[str, typer.Option("--iface", help="Which loaded CanTp instance to target "
                      "(one per CAN interface). Only needed if more than one is loaded -- "
                      "omit it while there's exactly one.")] = "",
@@ -74,6 +80,8 @@ def can_tp_configure(
         block_size=block_size,
         st_min=st_min,
         can_dlc=can_dlc,
+        n_bs_ms=n_bs_ms,
+        n_cr_ms=n_cr_ms,
     )
 
     try:
@@ -84,9 +92,9 @@ def can_tp_configure(
         return
 
     print_table(
-        ["nsdu_id", "source_addr", "target_addr", "bs", "stmin", "dlc", "iface"],
+        ["nsdu_id", "source_addr", "target_addr", "bs", "stmin", "dlc", "n_bs_ms", "n_cr_ms", "iface"],
         [[f"0x{resolved_id:X}", f"0x{resolved_source:X}", f"0x{resolved_target:X}",
-          block_size, st_min, can_dlc, resp.iface]],
+          block_size, st_min, can_dlc, n_bs_ms, n_cr_ms, resp.iface]],
         ctx.obj.get("json_mode", False),
     )
 
@@ -224,12 +232,13 @@ def can_tp_list_sessions(
 
     rows = [
         [s.iface, f"0x{s.nsdu_id:X}", f"0x{s.source_addr:X}", f"0x{s.target_addr:X}",
-         s.block_size, s.st_min, s.can_dlc, s.extended_addressing, s.rx_state, s.tx_state]
+         s.block_size, s.st_min, s.can_dlc, s.extended_addressing, s.n_bs_ms, s.n_cr_ms,
+         s.rx_state, s.tx_state]
         for s in resp.sessions
     ]
     print_table(
         ["iface", "nsdu_id", "source_addr", "target_addr", "bs", "stmin", "dlc",
-         "ext_addr", "rx_state", "tx_state"],
+         "ext_addr", "n_bs_ms", "n_cr_ms", "rx_state", "tx_state"],
         rows,
         ctx.obj.get("json_mode", False),
     )

@@ -18,6 +18,8 @@ message CanTpConfig {
   uint32 st_min              = 6;  // STmin to advertise in sent FC; truncated to uint8 server-side
   uint32 can_dlc             = 7;  // max CAN DLC for this connection — must be 8 or 64
   bool   extended_addressing = 8;  // use first data byte as target address
+  uint32 n_bs_ms              = 9;   // ISO 15765-2 N_Bs: max time TX waits for FC before aborting (0 = ISO default, 1000ms)
+  uint32 n_cr_ms              = 10;  // ISO 15765-2 N_Cr: max time RX waits for the next CF before aborting (0 = ISO default, 1000ms)
 }
 
 message ConfigureRequest {
@@ -68,6 +70,8 @@ message CanTpSession {
   bool   extended_addressing  = 9;
   string rx_state             = 10;  // "IDLE" | "WAIT_CF"
   string tx_state             = 11;  // "IDLE" | "WAIT_FC" | "SEND_CF" | "COMPLETE"
+  uint32 n_bs_ms               = 12;  // effective N_Bs (already resolved from the 0-sentinel)
+  uint32 n_cr_ms               = 13;  // effective N_Cr (already resolved from the 0-sentinel)
 }
 
 message ListSessionsRequest {
