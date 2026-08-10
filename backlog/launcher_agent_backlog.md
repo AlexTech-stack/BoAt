@@ -6,7 +6,8 @@ eventually driven by a **PySide6 admin app** that talks to one or more agents
 over the network. See `AGENTS.md`'s "Launcher Agent" section for the API and
 the federated architecture rationale.
 
-Status: agent v1 exists and is hardware-verified. No client yet.
+Status: agent v1 and a PySide6 admin client both exist, hardware-verified
+headlessly. Not yet visually verified with a real display.
 
 ---
 
@@ -50,9 +51,9 @@ Status: agent v1 exists and is hardware-verified. No client yet.
   gateway instances on that host. Fine for a trusted lab network (matches
   every other `ui/*.py` service today); would need real auth before being
   reachable from anything less trusted.
-- **No admin client yet.** The agent is only exercised via `curl` so far.
-  The planned PySide6 app (host list → aggregated instance table → per-host
-  REST calls) doesn't exist yet.
+- **Admin client exists but is headless-tested only** (see "PySide6 admin
+  client" below) — real layout/rendering not yet checked on an actual
+  screen.
 - **Not wired into `start_ui.sh`/`stop_ui.sh`.** New/still-evolving; start
   manually (`python3 ui/launcher_agent.py`) until the API and client have
   settled. Add to the standard scripts once it has.
@@ -64,9 +65,48 @@ Status: agent v1 exists and is hardware-verified. No client yet.
   succeeded. Cosmetic; matches existing precedent rather than introducing a
   new pattern, not worth fixing in isolation.
 
+## Done (2026-08-10, continued) — PySide6 admin client
+
+`admin_gui/` (`main.py`, `agent_client.py`, `host_store.py`) — a desktop
+client for one or more agents. Host list (persisted to
+`~/.boat/admin_hosts.json`) → aggregated instance table, polled every 2s via
+a background `QThread` → New Instance dialog, Start/Stop/Delete on the
+selected row, and a log viewer that follows the selection. `agent_client.py`
+and `host_store.py` are plain Python (no Qt import), so they're usable/
+testable headlessly.
+
+Verified headlessly on real hardware (`agn-testcomputer`, `QT_QPA_PLATFORM=
+offscreen`, no real display): `MainWindow` constructs and its background
+`PollWorker` pulls a real snapshot from a live agent; created + started an
+instance via `AgentClient` the same way the New Instance dialog does,
+confirmed it showed `status: running` with a real PID; drove the actual
+`MainWindow.stop_selected()` UI method against the selected row and confirmed
+the real subprocess stopped with `exit_code: 0`; two agents (stand-in for two
+hosts) aggregated correctly into one table with distinct Host-column values;
+`delete_selected()` on a running instance correctly surfaced the agent's 409
+in a second dialog and left the instance running.
+
+That last check caught a real bug in the *test*, not the app: the first
+attempt dismissed the confirmation dialog via `.accept()`, which sets the
+dialog's result code but not `clickedButton()` — `QMessageBox.question()`
+then reads back `NoButton`, not `Yes`, so `delete_selected()` silently took
+its early-return path without ever calling `delete_instance()`. That gave a
+false "PASS" (instance still running) for the wrong reason. Fixed by
+clicking the dialog's actual `Yes` button object; re-verified with a
+repeating watchdog that caught both the confirmation dialog and the
+subsequent "Delete failed" 409 dialog in one call. Worth remembering for any
+future headless Qt dialog test in this codebase.
+
+Not yet visually verified with a real display/window manager — only the
+logic paths (construction, polling, and every button-triggered action
+method, including the ones gated behind a modal confirmation) were
+exercised.
+
 ## Next steps (not started)
 
-- PySide6 admin app: host list, aggregated instance table, create/start/stop
-  forms driving the REST API above.
+- Visual verification with a real display (the offscreen smoke test above
+  proves the logic paths work, not that the layout looks right).
+- Interface-creation UI / agent endpoints (still deliberately deferred, see
+  above).
 - Decide instance persistence approach once the "agent restart loses
   everything" gap actually costs someone time.

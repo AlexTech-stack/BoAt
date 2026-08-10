@@ -192,9 +192,27 @@ curl -X DELETE localhost:8090/api/instances/<id>    # refused (409) while runnin
 curl localhost:8090/api/host/info                   # interfaces, gateway binaries, plugins found on this host
 ```
 
-Not yet built: the admin client itself (planned PySide6 app driving this API
-across one or more hosts) and instance persistence across an agent restart
-(v1 is in-memory only).
+Not yet built: instance persistence across an agent restart (v1 is
+in-memory only).
+
+## Admin GUI (PySide6 client)
+
+`admin_gui/` is the desktop client for one or more launcher agents above —
+host list (persisted to `~/.boat/admin_hosts.json`) → aggregated instance
+table, polled every 2s on a background `QThread` → create/start/stop/delete,
+plus a log viewer for the selected instance. `agent_client.py`/`host_store.py`
+have no Qt import, so they're usable/testable headlessly.
+
+```bash
+pip install -r admin_gui/requirements.txt
+python3 admin_gui/main.py
+```
+
+See `admin_gui/README.md` for usage and `test/AdminGui.md` for what's
+verified. Headless verification uses `QT_QPA_PLATFORM=offscreen` — good
+enough to exercise every code path (construction, polling, and every
+button's action method, including ones gated behind a modal confirmation),
+not a substitute for checking the actual layout on a real screen.
 
 ## Quirks & gotchas
 
