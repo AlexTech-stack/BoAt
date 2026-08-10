@@ -65,25 +65,40 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
   using namespace std::chrono;
 
   while (!plugin->tx_stop.load()) {
-    // Collect connections that need TX processing
+    // Collect connections that need TX processing. Each entry captures
+    // everything the send-CF phase below needs in one locked pass, instead
+    // of that phase re-locking three separate times per CF to read tx_seq/
+    // tx_buffer, then again to update state -- keeping the scan and the
+    // "do we owe this connection a CF" decision in the single section below
+    // means the data can't change out from under the unlocked send.
     struct TxWork {
       NsduConnection* conn;
       uint32_t source_addr;
+      uint8_t seq;
+      uint32_t chunk;
     };
     std::vector<TxWork> to_send_cf;
+    // Earliest of: next CF's STmin pacing time, any TX_WAIT_FC's N_Bs
+    // deadline, any RX_WAIT_CF's N_Cr deadline. Drives how long to sleep
+    // below -- steady_clock::time_point::max() means "nothing pending,
+    // sleep until notified".
+    steady_clock::time_point next_wake = steady_clock::time_point::max();
 
     {
-      std::unique_lock<std::mutex> lock(plugin->tx_mutex);
-      plugin->tx_cv.wait_for(lock, std::chrono::microseconds(500), [&] {
-        return plugin->tx_stop.load();
-      });
-      if (plugin->tx_stop.load()) break;
-
+      std::lock_guard<std::mutex> lock(plugin->tx_mutex);
       auto now = steady_clock::now();
       for (auto& [addr, conn] : plugin->connections) {
         if (conn.tx_state == NsduConnection::TX_SEND_CF) {
           if (now >= conn.tx_next_send_time) {
-            to_send_cf.push_back({&conn, addr});
+            const uint32_t max_payload = conn.config.can_dlc;
+            const uint32_t cf_overhead = conn.config.extended_addressing ? 2 : 1;
+            to_send_cf.push_back({
+                &conn, addr, conn.tx_seq,
+                static_cast<uint32_t>(std::min(
+                    conn.tx_buffer.size() - conn.tx_offset,
+                    static_cast<size_t>(max_payload - cf_overhead)))});
+          } else {
+            next_wake = std::min(next_wake, conn.tx_next_send_time);
           }
         }
 
@@ -94,19 +109,25 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
         // than deferring like to_send_cf: it's just clearing local state,
         // nothing to publish, so there's no reason to release the lock
         // first.
-        if (conn.tx_state == NsduConnection::TX_WAIT_FC &&
-            now >= conn.tx_fc_deadline) {
-          conn.tx_state = NsduConnection::TX_IDLE;
-          conn.tx_buffer.clear();
-          conn.tx_offset = 0;
-          conn.tx_seq = 0;
+        if (conn.tx_state == NsduConnection::TX_WAIT_FC) {
+          if (now >= conn.tx_fc_deadline) {
+            conn.tx_state = NsduConnection::TX_IDLE;
+            conn.tx_buffer.clear();
+            conn.tx_offset = 0;
+            conn.tx_seq = 0;
+          } else {
+            next_wake = std::min(next_wake, conn.tx_fc_deadline);
+          }
         }
 
         // ── N_Cr watchdog: RX gave up waiting for the next CF ─────────────
-        if (conn.rx_state == NsduConnection::RX_WAIT_CF &&
-            now >= conn.rx_cf_deadline) {
-          conn.rx_state = NsduConnection::RX_IDLE;
-          conn.rx_buffer.clear();
+        if (conn.rx_state == NsduConnection::RX_WAIT_CF) {
+          if (now >= conn.rx_cf_deadline) {
+            conn.rx_state = NsduConnection::RX_IDLE;
+            conn.rx_buffer.clear();
+          } else {
+            next_wake = std::min(next_wake, conn.rx_cf_deadline);
+          }
         }
       }
     }
@@ -118,31 +139,23 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
       if (conn->tx_state != NsduConnection::TX_SEND_CF) continue;
 
       const uint8_t dlc = conn->config.can_dlc;
-      const uint32_t max_payload = dlc;
       const bool is_fd = (conn->config.can_dlc > 8);
 
-      // Build and send one CF
+      // Build and send one CF, using the seq/chunk captured under the lock
+      // above -- both are read-only snapshots of state that's about to be
+      // advanced (below) once this CF actually goes out.
       uint8_t cf_buf[64];
       uint8_t idx = 0;
       if (conn->config.extended_addressing) {
         cf_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
       }
-      uint8_t seq;
-      uint32_t chunk;
-      {
-        std::lock_guard<std::mutex> lock(plugin->tx_mutex);
-        seq = conn->tx_seq;
-        chunk = static_cast<uint32_t>(
-            std::min(conn->tx_buffer.size() - conn->tx_offset,
-                     static_cast<size_t>(max_payload - 1)));
-      }
-      cf_buf[idx++] = kPciCf | (seq & 0x0F);
+      cf_buf[idx++] = kPciCf | (work.seq & 0x0F);
       {
         std::lock_guard<std::mutex> lock(plugin->tx_mutex);
         std::memcpy(cf_buf + idx, conn->tx_buffer.data() + conn->tx_offset,
-                    chunk);
+                    work.chunk);
       }
-      const uint8_t cf_dlc = pad_frame(cf_buf, static_cast<uint8_t>(idx + chunk), dlc);
+      const uint8_t cf_dlc = pad_frame(cf_buf, static_cast<uint8_t>(idx + work.chunk), dlc);
 
       auto cf = BoatFrameOwner::Can(
           plugin->iface, conn->source_addr,
@@ -152,7 +165,7 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
 
       {
         std::lock_guard<std::mutex> lock(plugin->tx_mutex);
-        conn->tx_offset += chunk;
+        conn->tx_offset += work.chunk;
         conn->tx_seq = (conn->tx_seq + 1) & 0x0F;
         if (conn->tx_bs_remaining > 0) conn->tx_bs_remaining--;
         conn->tx_next_send_time = steady_clock::now() +
@@ -174,6 +187,22 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
           conn->tx_seq = 0;
         }
       }
+    }
+
+    // Sleep until the earliest pending deadline (STmin pacing, N_Bs, N_Cr),
+    // or indefinitely if nothing is pending. No predicate on either wait:
+    // can_tp_send() and tp_on_frame() call tx_cv.notify_one() whenever they
+    // create or move up a deadline (new TX_WAIT_FC, an FC unblocking one, a
+    // new/refreshed RX_WAIT_CF) -- any wake, spurious or real, just loops
+    // back around to rescan, which is always safe and cheap. This replaces
+    // the old fixed 500µs poll, which woke and rescanned every connection
+    // ~2000×/sec even when nothing was pending.
+    std::unique_lock<std::mutex> wait_lock(plugin->tx_mutex);
+    if (plugin->tx_stop.load()) break;
+    if (next_wake == steady_clock::time_point::max()) {
+      plugin->tx_cv.wait(wait_lock);
+    } else {
+      plugin->tx_cv.wait_until(wait_lock, next_wake);
     }
   }
 }
@@ -330,6 +359,10 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
       // there); a peer that goes silent still gets caught by the deadline.
       conn->tx_fc_deadline = std::chrono::steady_clock::now() +
                              std::chrono::milliseconds(conn->config.n_bs_ms);
+      // Not strictly required (this only pushes the deadline later, never
+      // earlier), but notifying here too keeps "every deadline mutation
+      // notifies" simple to reason about rather than case-by-case.
+      plugin->tx_cv.notify_one();
       return;
     }
     // Continue
@@ -347,11 +380,19 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
   // ── RX path: SF / FF / CF on target_addr ────────────────────────────────
 
   if (pci_type == kPciSf) {
-    // Single Frame
-    const uint8_t sf_len = pci_byte & 0x0F;
-    const size_t offset = conn->config.extended_addressing ? 2 : 1;
+    // Single Frame. CAN FD (is_fd) peers may use the 2-PCI-byte escape
+    // format (low nibble 0, SF_DL in the next byte) for SF_DL > 7 -- see
+    // the TX-side comment in can_tp_send() for the full format. A nibble of
+    // 0 only means "escape" when is_fd; on classic CAN it's SF_DL==0 (an
+    // empty SF), which existing behavior already handles via actual_len==0
+    // below, so this doesn't change classic-CAN decoding at all.
+    const uint8_t addr_off = conn->config.extended_addressing ? 1 : 0;
+    const uint8_t sf_len_nibble = pci_byte & 0x0F;
+    const bool escaped = is_fd && sf_len_nibble == 0 && dlc > addr_off + 1u;
+    const size_t offset = addr_off + (escaped ? 2 : 1);
+    const size_t sf_len = escaped ? data[addr_off + 1] : sf_len_nibble;
     const size_t payload_len = dlc > offset ? dlc - offset : 0;
-    const size_t actual_len = std::min(static_cast<size_t>(sf_len), payload_len);
+    const size_t actual_len = std::min(sf_len, payload_len);
     const uint32_t nsdu_id = conn->nsdu_id;
 
     plugin->NotifySubscribers(nsdu_id, std::vector<uint8_t>(data + offset, data + offset + actual_len));
@@ -370,6 +411,13 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     // First Frame
     const uint32_t ff_len = ((static_cast<uint32_t>(pci_byte & 0x0F)) << 8) |
                              static_cast<uint32_t>(data[1]);
+
+    // ISO 15765-2:2016 §9.6.3.2 Table 14: FF_DL < 8 is invalid -- a
+    // compliant sender uses SF for payloads that small. Drop rather than
+    // reject with an error frame, matching this function's existing
+    // precedent for other malformed input (unknown connection, sequence
+    // error).
+    if (ff_len < 8) return;
 
     const size_t offset = conn->config.extended_addressing ? 3 : 2;
     const size_t first_chunk = dlc > offset ? dlc - offset : 0;
@@ -410,6 +458,12 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     conn->rx_state = NsduConnection::RX_WAIT_CF;
     conn->rx_cf_deadline = std::chrono::steady_clock::now() +
                            std::chrono::milliseconds(conn->config.n_cr_ms);
+    // Required, not just for consistency: this is a *new* deadline where
+    // none existed before, possibly earlier than whatever the TX thread is
+    // currently sleeping until (or it may be sleeping indefinitely, with
+    // nothing else pending) -- without this it wouldn't wake to notice
+    // N_Cr until some unrelated event happened to notify it.
+    plugin->tx_cv.notify_one();
 
     // Send Flow Control (Continue) with configured BS and STmin
     if (plugin->frame_publish_fn == nullptr) return;
@@ -461,9 +515,13 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     } else {
       conn->rx_next_seq = (seq + 1) & 0x0F;
       // Each accepted CF restarts N_Cr -- it's the deadline for the *next*
-      // CF, not a one-shot timer for the whole reassembly.
+      // CF, not a one-shot timer for the whole reassembly. Only pushes the
+      // deadline later (never earlier), so notifying isn't strictly
+      // required, but see the FC(WT) comment above for why it's done
+      // anyway.
       conn->rx_cf_deadline = std::chrono::steady_clock::now() +
                              std::chrono::milliseconds(conn->config.n_cr_ms);
+      plugin->tx_cv.notify_one();
       // Re-FC: if BS > 0 and we've received a full block, send another FC
       ++conn->rx_cf_count;
       if (conn->config.block_size > 0 &&
@@ -593,9 +651,16 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
   const uint32_t max_payload = dlc;
   const bool is_fd = (dlc > 8);
 
-  // Extended addressing reserves 1 data byte for the target-address byte,
-  // shrinking the max Single Frame payload from 7 to 6.
-  const uint32_t sf_max_len = extended_addressing ? 6 : 7;
+  // SF PCI format per ISO 15765-2:2016 §9.6.2 Table 11:
+  //   - Classic CAN (dlc == 8): 1 PCI byte, SF_DL encoded in the low nibble
+  //     (0x0X), so SF_DL is capped at 7 (6 with extended addressing's extra
+  //     address byte).
+  //   - CAN FD (dlc > 8): 2 PCI bytes -- byte0 = 0x00 (escape, low nibble
+  //     zero), byte1 = SF_DL as a full byte, allowing SF_DL up to dlc-2
+  //     (dlc-3 with extended addressing).
+  const uint32_t sf_pci_overhead = is_fd ? 2 : 1;
+  const uint32_t addr_overhead = extended_addressing ? 1 : 0;
+  const uint32_t sf_max_len = max_payload - sf_pci_overhead - addr_overhead;
 
   if (len <= sf_max_len) {
     // Single Frame — send directly, no state machine needed
@@ -604,7 +669,12 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
     if (extended_addressing) {
       sf_buf[idx++] = static_cast<uint8_t>(target_addr & 0xFF);
     }
-    sf_buf[idx++] = kPciSf | static_cast<uint8_t>(len);
+    if (is_fd) {
+      sf_buf[idx++] = kPciSf;                    // escape: low nibble 0
+      sf_buf[idx++] = static_cast<uint8_t>(len);  // SF_DL as a full byte
+    } else {
+      sf_buf[idx++] = kPciSf | static_cast<uint8_t>(len);
+    }
     std::memcpy(sf_buf + idx, data, len);
     const uint8_t sf_dlc = pad_frame(sf_buf, static_cast<uint8_t>(idx + len), dlc);
 
@@ -628,7 +698,11 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
   }
   ff_buf[idx++] = kPciFf | static_cast<uint8_t>((len >> 8) & 0x0F);
   ff_buf[idx++] = static_cast<uint8_t>(len & 0xFF);
-  const uint32_t ff_payload = std::min(len, max_payload - 2);
+  // FF overhead is 2 PCI bytes, plus 1 more for the target-address byte
+  // under extended addressing -- matches `idx` above exactly (1 addr byte
+  // if extended, then always 2 PCI bytes).
+  const uint32_t ff_overhead = extended_addressing ? 3 : 2;
+  const uint32_t ff_payload = std::min(len, max_payload - ff_overhead);
   std::memcpy(ff_buf + idx, data, ff_payload);
   const uint8_t ff_dlc = pad_frame(ff_buf, static_cast<uint8_t>(idx + ff_payload), dlc);
 
