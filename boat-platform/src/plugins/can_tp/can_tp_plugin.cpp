@@ -72,11 +72,38 @@ uint32_t stmin_to_us(uint8_t stmin) {
 
 // ── Connection lookup helpers ─────────────────────────────────────────────
 
-NsduConnection* find_by_target(CanTpPlugin* plugin, uint32_t can_id) {
+// Finds the connection this incoming frame belongs to. Usually a single
+// target_addr match is unambiguous -- but can_tp_configure() allows more
+// than one connection to share a target_addr when every sharer has an
+// address byte (N_TA/N_AE, EXTENDED/MIXED addressing) with a distinct
+// value, exactly so multiple logical peers can be multiplexed onto one
+// physical CAN ID. When that happens, disambiguate by reading the address
+// byte (always payload[0] when present, regardless of 11- vs 29-bit ID --
+// the addressing mode only affects the CAN ID field, never the payload
+// layout).
+NsduConnection* find_by_target(CanTpPlugin* plugin, uint32_t can_id,
+                               const uint8_t* payload, size_t payload_len) {
+  NsduConnection* match = nullptr;
+  bool ambiguous = false;
   for (auto& [id, conn] : plugin->connections) {
-    if (conn.target_addr == can_id) return &conn;
+    if (conn.target_addr != can_id) continue;
+    if (match == nullptr) {
+      match = &conn;
+    } else {
+      ambiguous = true;
+      break;
+    }
   }
-  return nullptr;
+  if (!ambiguous) return match;  // 0 or 1 candidates either way
+
+  if (payload_len < 1) return nullptr;
+  const uint8_t addr_byte = payload[0];
+  for (auto& [id, conn] : plugin->connections) {
+    if (conn.target_addr == can_id && conn.config.address_byte == addr_byte) {
+      return &conn;
+    }
+  }
+  return nullptr;  // no candidate claims this address byte
 }
 
 // ── TX thread ──────────────────────────────────────────────────────────────
@@ -187,7 +214,7 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
       uint8_t cf_buf[64];
       uint8_t idx = 0;
       if (conn->config.extended_addressing) {
-        cf_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
+        cf_buf[idx++] = conn->config.address_byte;
       }
       cf_buf[idx++] = kPciCf | (work.seq & 0x0F);
       {
@@ -362,7 +389,7 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
 
   // ── Find connection by target_addr ───────────────────────────────────────
   // Only frames from the peer (on target_addr) are processed.
-  NsduConnection* conn = find_by_target(plugin, frame->meta.can.can_id);
+  NsduConnection* conn = find_by_target(plugin, frame->meta.can.can_id, data, dlc);
   if (conn == nullptr) return;  // unknown — silently drop
 
   const bool is_fd = (conn->config.can_dlc > 8);
@@ -474,11 +501,10 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
       uint8_t fc_buf[64];
       uint8_t idx = 0;
       if (conn->config.extended_addressing) {
-        // Extended addressing: the byte is the address of the frame's
-        // intended recipient, i.e. the peer -- matches the pattern already
-        // used for outgoing SF/FF/CF in can_tp_send() (target_addr & 0xFF),
-        // not a placeholder.
-        fc_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
+        // Extended/mixed addressing: the byte is the address of the
+        // frame's intended recipient, i.e. the peer's N_TA/N_AE -- matches
+        // the pattern used for outgoing SF/FF/CF in can_tp_send().
+        fc_buf[idx++] = conn->config.address_byte;
       }
       fc_buf[idx++] = kPciFc | kFcOverflow;
       fc_buf[idx++] = 0;  // BS (don't care for overflow)
@@ -519,7 +545,7 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     uint8_t fc_buf[64];
     uint8_t idx = 0;
     if (conn->config.extended_addressing) {
-      fc_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
+      fc_buf[idx++] = conn->config.address_byte;
     }
     fc_buf[idx++] = kPciFc | kFcContinue;
     fc_buf[idx++] = conn->config.block_size;  // BS (0 = unlimited)
@@ -579,7 +605,7 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
         uint8_t fc_buf[64];
         uint8_t fcidx = 0;
         if (conn->config.extended_addressing) {
-          fc_buf[fcidx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
+          fc_buf[fcidx++] = conn->config.address_byte;
         }
         fc_buf[fcidx++] = kPciFc | kFcContinue;
         fc_buf[fcidx++] = conn->config.block_size;
@@ -627,6 +653,23 @@ int32_t can_tp_configure(void* tp_ctx, const CanTpConfig* config) {
   conn.config.n_bs_ms = resolve_timeout_ms(config->n_bs_ms);
   conn.config.n_cr_ms = resolve_timeout_ms(config->n_cr_ms);
   conn.config.pad_byte = resolve_pad_byte(config->pad_byte);
+  // addressing_mode is the authoritative field; the legacy extended_addressing
+  // bool only takes effect when addressing_mode was left at NORMAL (0), for
+  // configs written before addressing_mode existed. Either way, normalize
+  // extended_addressing itself down to "does this connection have an
+  // address byte" (true for EXTENDED *and* MIXED, which are wire-identical)
+  // so every existing `conn->config.extended_addressing ? ... : ...` call
+  // site in this file keeps doing the right thing without having to touch
+  // each one individually.
+  auto resolved_mode = static_cast<CanTpAddressingMode>(config->addressing_mode);
+  if (resolved_mode == CANTP_ADDR_NORMAL && config->extended_addressing) {
+    resolved_mode = CANTP_ADDR_EXTENDED;
+  }
+  conn.config.addressing_mode = resolved_mode;
+  conn.config.extended_addressing = (resolved_mode != CANTP_ADDR_NORMAL);
+  conn.config.address_byte = config->address_byte != 0
+      ? config->address_byte
+      : static_cast<uint8_t>(config->target_addr & 0xFF);
   conn.rx_state    = NsduConnection::RX_IDLE;
   conn.tx_state    = NsduConnection::TX_IDLE;
   conn.source_addr = config->source_addr;
@@ -651,17 +694,21 @@ int32_t can_tp_configure(void* tp_ctx, const CanTpConfig* config) {
     if (tx_busy || rx_busy) return -2;  // busy
   }
 
-  // find_by_target() routes every incoming frame purely by target_addr,
-  // with no other disambiguation (see its own comment) -- two connections
-  // sharing a target_addr on this instance is a genuine protocol-level
-  // ambiguity, not just an implementation gap: the second one would never
-  // receive anything, violating AUTOSAR CanTp096 (multiple simultaneous
-  // connections). Reject rather than silently accept it. A connection
-  // re-configuring itself with the target_addr it already owns is not a
-  // conflict with itself.
+  // find_by_target() can disambiguate two connections sharing a target_addr
+  // *only* when both have an address byte (EXTENDED/MIXED) and those bytes
+  // are distinct -- that's the whole point of those addressing modes
+  // (multiplexing several logical peers onto one physical CAN ID). Any
+  // other kind of sharing (either side NORMAL, or matching address bytes)
+  // is a genuine, unresolvable routing ambiguity: reject it rather than
+  // silently leaving one connection unreachable (AUTOSAR CanTp096). A
+  // connection re-configuring itself with the target_addr it already owns
+  // is not a conflict with itself.
   for (const auto& [id, existing] : plugin->connections) {
-    if (id != conn.nsdu_id && existing.target_addr == conn.target_addr) {
-      return -3;  // target_addr already in use by another nsdu_id
+    if (id == conn.nsdu_id || existing.target_addr != conn.target_addr) continue;
+    const bool both_addressed = existing.config.extended_addressing &&
+                                conn.config.extended_addressing;
+    if (!both_addressed || existing.config.address_byte == conn.config.address_byte) {
+      return -3;  // ambiguous target_addr -- see can_tp_configure()'s doc comment
     }
   }
 
@@ -709,7 +756,7 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
   bool extended_addressing;
   bool brs;
   uint8_t pad_byte;
-  uint32_t target_addr;
+  uint8_t address_byte;
   {
     std::lock_guard<std::mutex> lock(plugin->tx_mutex);
     auto it = plugin->connections.find(nsdu_id);
@@ -722,7 +769,7 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
     extended_addressing = conn->config.extended_addressing;
     brs = conn->config.brs;
     pad_byte = conn->config.pad_byte;
-    target_addr = conn->target_addr;
+    address_byte = conn->config.address_byte;
   }
 
   const uint32_t max_payload = dlc;
@@ -744,7 +791,7 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
     uint8_t sf_buf[64];
     uint8_t idx = 0;
     if (extended_addressing) {
-      sf_buf[idx++] = static_cast<uint8_t>(target_addr & 0xFF);
+      sf_buf[idx++] = address_byte;
     }
     if (is_fd) {
       sf_buf[idx++] = kPciSf;                    // escape: low nibble 0
@@ -771,7 +818,7 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
   uint8_t ff_buf[64];
   uint8_t idx = 0;
   if (extended_addressing) {
-    ff_buf[idx++] = static_cast<uint8_t>(target_addr & 0xFF);
+    ff_buf[idx++] = address_byte;
   }
   ff_buf[idx++] = kPciFf | static_cast<uint8_t>((len >> 8) & 0x0F);
   ff_buf[idx++] = static_cast<uint8_t>(len & 0xFF);

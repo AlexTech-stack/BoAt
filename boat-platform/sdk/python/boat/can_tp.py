@@ -65,8 +65,17 @@ class CanTpHandle:
                 leave empty while there's exactly one; the RPC fails with
                 a clear "ambiguous, specify iface" error otherwise.
             **kwargs: Override remaining CanTpConfig fields (rx_buffer_size,
-                      block_size, st_min, can_dlc, extended_addressing,
-                      n_bs_ms, n_cr_ms, brs, pad_byte).
+                      block_size, st_min, can_dlc, n_bs_ms, n_cr_ms, brs,
+                      pad_byte, addressing_mode, address_byte).
+                      addressing_mode is a can_tp_pb2.CanTpAddressingMode
+                      value (CANTP_ADDR_NORMAL/_EXTENDED/_MIXED); the older
+                      extended_addressing=True/False is still accepted as a
+                      shorthand for CANTP_ADDR_NORMAL/_EXTENDED but only
+                      takes effect when addressing_mode is left unset.
+                      address_byte is this connection's N_TA/N_AE (0 =
+                      derive from target_addr's low byte); set it
+                      explicitly to let multiple connections share one
+                      target_addr, disambiguated by this byte.
 
         Returns:
             True if configured successfully.
@@ -75,9 +84,10 @@ class CanTpHandle:
             grpc.RpcError: FAILED_PRECONDITION if nsdu_id already exists and
                 has an active transfer in progress (retry once it settles,
                 or remove() first), or if target_addr is already used by a
-                different nsdu_id on this instance (every connection's
-                target_addr must be unique so incoming frames route
-                unambiguously).
+                different nsdu_id on this instance in a way that can't be
+                told apart on RX -- sharing a target_addr is only allowed
+                when every connection using it has addressing_mode
+                EXTENDED/MIXED with a distinct address_byte.
         """
         config = can_tp_pb2.CanTpConfig(
             nsdu_id=nsdu_id,
@@ -92,6 +102,8 @@ class CanTpHandle:
             n_cr_ms=kwargs.get("n_cr_ms", 1000),
             brs=kwargs.get("brs", False),
             pad_byte=kwargs.get("pad_byte", 0xCC),
+            addressing_mode=kwargs.get("addressing_mode", can_tp_pb2.CANTP_ADDR_NORMAL),
+            address_byte=kwargs.get("address_byte", 0),
         )
         resp = self._client.can_tp.Configure(
             can_tp_pb2.ConfigureRequest(config=config, iface=iface))

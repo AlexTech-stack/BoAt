@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from enum import Enum
 from typing import Annotated, List, Optional
 
 import grpc
@@ -11,6 +12,26 @@ from boat.v1 import can_tp_pb2
 from .output import print_error, print_table
 
 can_tp_app = typer.Typer(help="CAN Transport Protocol (ISO 15765-2) commands.")
+
+
+class AddressingMode(str, Enum):
+    """ISO 15765-2 §10.3 addressing formats. 11-bit vs. 29-bit CAN ID isn't
+    a separate mode here -- it's just a property of the numeric value you
+    pass as --source-addr/--target-addr (values > 0x7FF get the CAN
+    extended-frame flag automatically). Conventional 29-bit "Normal Fixed"
+    (0x18DA<TA><SA>/0x18DB<TA><SA>) and "Mixed 29-bit" (0x18CE<TA><SA>/
+    0x18CD<TA><SA>) IDs are yours to construct and pass as --source-addr/
+    --target-addr like any other CAN ID."""
+    normal = "normal"      # no address byte; source/target-addr are the literal CAN IDs
+    extended = "extended"  # first payload byte = N_TA (target address)
+    mixed = "mixed"        # first payload byte = N_AE (address extension) -- wire-identical to extended
+
+
+_ADDRESSING_MODE_PROTO = {
+    AddressingMode.normal: can_tp_pb2.CANTP_ADDR_NORMAL,
+    AddressingMode.extended: can_tp_pb2.CANTP_ADDR_EXTENDED,
+    AddressingMode.mixed: can_tp_pb2.CANTP_ADDR_MIXED,
+}
 
 
 def _rpc_error(ex: grpc.RpcError) -> None:
@@ -41,9 +62,16 @@ def can_tp_configure(
     n_cr_ms: Annotated[int, typer.Option("--n-cr-ms", help="ISO 15765-2 N_Cr: max ms to wait for "
                      "the next Consecutive Frame before aborting reassembly (ISO default 1000; "
                      "OBD-II/ISO 15765-4 uses 150).")] = 1000,
-    extended_addressing: Annotated[bool, typer.Option("--extended-addressing", help="Use the first "
-                     "data byte as a target-address-extension byte (ISO 15765-2 extended "
-                     "addressing) instead of normal addressing.")] = False,
+    addressing_mode: Annotated[AddressingMode, typer.Option("--addressing-mode", help="ISO "
+                     "15765-2 addressing format. 'extended' and 'mixed' both use a first-"
+                     "payload-byte address (N_TA / N_AE respectively -- same wire format, "
+                     "different semantic label) and, combined with --address-byte, let "
+                     "multiple connections share one --target-addr.")] = AddressingMode.normal,
+    address_byte: Annotated[int, typer.Option("--address-byte", help="N_TA/N_AE byte for this "
+                     "connection (only meaningful with --addressing-mode extended/mixed). "
+                     "0 = derive from --target-addr's low byte (default, matches historical "
+                     "behavior); set explicitly to let multiple connections share one "
+                     "--target-addr, disambiguated by this byte.")] = 0,
     brs: Annotated[bool, typer.Option("--brs", help="CAN FD Bit Rate Switch for this connection's "
                      "frames -- only meaningful with --dlc 64; not on by default, since not "
                      "every CAN FD bus has a distinct data-phase bit rate configured.")] = False,
@@ -76,7 +104,14 @@ def can_tp_configure(
       boat can-tp configure --nsdu-id 0x123 --source-addr 0x123 --target-addr 0x123
 
       # Extended addressing
-      boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --extended-addressing
+      boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --addressing-mode extended
+
+      # Two connections sharing one target_addr, disambiguated by address byte
+      boat can-tp configure --nsdu-id 1 --source-addr 0x7E0 --target-addr 0x7E8 --addressing-mode mixed --address-byte 0x01
+      boat can-tp configure --nsdu-id 2 --source-addr 0x7E0 --target-addr 0x7E8 --addressing-mode mixed --address-byte 0x02
+
+      # 29-bit "Normal Fixed" addressing -- construct the 0x18DAxxyy ID yourself
+      boat can-tp configure --nsdu-id 1 --source-addr 0x18DAF110 --target-addr 0x18DA10F1
 
       # With two CanTp instances loaded (vcan0 + vcan1), pick one:
       boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --iface vcan1
@@ -95,7 +130,8 @@ def can_tp_configure(
         can_dlc=can_dlc,
         n_bs_ms=n_bs_ms,
         n_cr_ms=n_cr_ms,
-        extended_addressing=extended_addressing,
+        addressing_mode=_ADDRESSING_MODE_PROTO[addressing_mode],
+        address_byte=address_byte,
         brs=brs,
         pad_byte=pad_byte,
     )
@@ -109,9 +145,10 @@ def can_tp_configure(
 
     print_table(
         ["nsdu_id", "source_addr", "target_addr", "bs", "stmin", "dlc", "n_bs_ms", "n_cr_ms",
-         "ext_addr", "brs", "pad_byte", "iface"],
+         "addr_mode", "address_byte", "brs", "pad_byte", "iface"],
         [[f"0x{resolved_id:X}", f"0x{resolved_source:X}", f"0x{resolved_target:X}",
-          block_size, st_min, can_dlc, n_bs_ms, n_cr_ms, extended_addressing, brs,
+          block_size, st_min, can_dlc, n_bs_ms, n_cr_ms, addressing_mode.value,
+          f"0x{address_byte:02X}" if address_byte else "(derived)", brs,
           f"0x{pad_byte:02X}", resp.iface]],
         ctx.obj.get("json_mode", False),
     )
@@ -249,20 +286,20 @@ def can_tp_list_sessions(
         return
 
     json_mode = ctx.obj.get("json_mode", False)
-    columns = ["iface", "nsdu_id", "source_addr", "target_addr", "bs", "stmin", "dlc", "ext_addr"]
+    columns = ["iface", "nsdu_id", "source_addr", "target_addr", "bs", "stmin", "dlc", "addr_mode"]
     rows = [
         [s.iface, f"0x{s.nsdu_id:X}", f"0x{s.source_addr:X}", f"0x{s.target_addr:X}",
-         s.block_size, s.st_min, s.can_dlc, s.extended_addressing]
+         s.block_size, s.st_min, s.can_dlc, can_tp_pb2.CanTpAddressingMode.Name(s.addressing_mode)[len("CANTP_ADDR_"):].lower()]
         for s in resp.sessions
     ]
-    # n_bs_ms/n_cr_ms/brs/pad_byte ride along in --json (no width limit
-    # there) but are left out of the plain table -- this table already sits
-    # at the edge of Rich's default 80-col non-tty fallback, and more
-    # columns push existing ones into "…"-truncation.
+    # n_bs_ms/n_cr_ms/brs/pad_byte/address_byte ride along in --json (no
+    # width limit there) but are left out of the plain table -- this table
+    # already sits at the edge of Rich's default 80-col non-tty fallback,
+    # and more columns push existing ones into "…"-truncation.
     if json_mode:
-        columns += ["n_bs_ms", "n_cr_ms", "brs", "pad_byte"]
+        columns += ["n_bs_ms", "n_cr_ms", "brs", "pad_byte", "address_byte"]
         for row, s in zip(rows, resp.sessions):
-            row += [s.n_bs_ms, s.n_cr_ms, s.brs, f"0x{s.pad_byte:02X}"]
+            row += [s.n_bs_ms, s.n_cr_ms, s.brs, f"0x{s.pad_byte:02X}", f"0x{s.address_byte:02X}"]
     columns += ["rx_state", "tx_state"]
     for row, s in zip(rows, resp.sessions):
         row += [s.rx_state, s.tx_state]

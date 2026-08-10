@@ -25,6 +25,8 @@ struct CanTpSessionInfo {
   uint32_t n_cr_ms;       // effective N_Cr (already resolved from the 0-sentinel)
   bool     brs;
   uint8_t  pad_byte;      // effective pad byte (already resolved from the 0-sentinel)
+  uint32_t addressing_mode;     // CanTpAddressingMode (0=NORMAL, 1=EXTENDED, 2=MIXED)
+  uint8_t  address_byte;        // effective N_TA/N_AE (already resolved from the 0-sentinel); meaningless for NORMAL
   std::string rx_state;  // "IDLE" | "WAIT_CF"
   std::string tx_state;  // "IDLE" | "WAIT_FC" | "SEND_CF" | "COMPLETE"
 };

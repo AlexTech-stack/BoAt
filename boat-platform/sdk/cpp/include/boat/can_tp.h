@@ -7,6 +7,29 @@
 extern "C" {
 #endif
 
+/* ISO 15765-2 §10.3 addressing formats this plugin supports. 11-bit vs.
+   29-bit CAN ID is *not* a separate mode here -- it's just a property of
+   the numeric value passed as source_addr/target_addr (the driver already
+   picks CAN_EFF_FLAG for any value > 0x7FF, see socket_can_driver.cpp), so
+   "Normal Fixed" (29-bit ID, no address byte) is just CANTP_ADDR_NORMAL
+   with a 29-bit-valued target_addr/source_addr (e.g. 0x18DA<TA><SA> for
+   physical / 0x18DB<TA><SA> for functional -- caller forms the ID), and
+   "Mixed 29-bit" is CANTP_ADDR_MIXED the same way (0x18CE.../0x18CD...).
+   Callers wanting those conventional 0x18Dx/0x18Cx IDs must construct them
+   themselves; this plugin treats source_addr/target_addr as opaque CAN IDs
+   throughout, same as it always has. */
+typedef enum CanTpAddressingMode {
+  CANTP_ADDR_NORMAL   = 0,  /* no address byte; source_addr/target_addr are
+                                the literal CAN IDs, full stop */
+  CANTP_ADDR_EXTENDED = 1,  /* first payload byte = N_TA (target address) */
+  CANTP_ADDR_MIXED    = 2,  /* first payload byte = N_AE (address
+                                extension). Wire-identical to EXTENDED --
+                                the AUTOSAR/ISO distinction is semantic
+                                (which addresses map to which connections
+                                at the ECU-configuration level), not a
+                                different byte layout. */
+} CanTpAddressingMode;
+
 /* CanTp N-SDU connection configuration (ISO 15765-2).
    A connection is identified by nsdu_id and represents one session between
    source_addr (this node) and target_addr (peer node), both required and
@@ -31,7 +54,30 @@ typedef struct CanTpConfig {
   uint8_t  block_size;         /* BS to advertise in sent FC (0 = unlimited) */
   uint8_t  st_min;             /* STmin to advertise in sent FC (0..127 ms) */
   uint8_t  can_dlc;            /* max CAN DLC for this connection (8 or 64) */
-  bool     extended_addressing;/* use first data byte as target address */
+  bool     extended_addressing;/* DEPRECATED alias for
+                                   addressing_mode = CANTP_ADDR_EXTENDED,
+                                   kept for source/wire compatibility with
+                                   configs written before addressing_mode
+                                   existed. Only takes effect when
+                                   addressing_mode is left at
+                                   CANTP_ADDR_NORMAL (0) -- an explicit
+                                   addressing_mode always wins. New callers
+                                   should set addressing_mode directly. */
+  uint32_t addressing_mode;    /* CanTpAddressingMode -- see above */
+  uint8_t  address_byte;       /* This connection's N_TA/N_AE byte (only
+                                   meaningful when addressing_mode is
+                                   EXTENDED or MIXED). 0 = derive it from
+                                   target_addr & 0xFF (today's historical
+                                   behavior, and the common case where the
+                                   address byte and CAN ID happen to
+                                   correspond) -- same 0-sentinel caveat as
+                                   pad_byte: literal 0x00 isn't
+                                   independently selectable. Setting this
+                                   explicitly is what actually lets
+                                   multiple connections share one
+                                   target_addr, disambiguated by this byte
+                                   -- see can_tp_configure()'s -3 return and
+                                   find_by_target() in can_tp_plugin.cpp. */
   uint32_t n_bs_ms;            /* ISO 15765-2 N_Bs: max time TX waits for FC
                                    after FF/last CF of a block, before
                                    aborting the transfer (0 = ISO default,
@@ -73,8 +119,12 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
         progress -- edit-in-place is refused rather than silently
         discarding it (retry once it settles, or remove it first)
     -3  target_addr is already used by a *different* nsdu_id on this
-        instance -- every connection's target_addr must be unique so
-        incoming frames route unambiguously (see find_by_target()) */
+        instance, and the two can't be told apart on RX: either one of
+        them has no address byte (addressing_mode NORMAL) to disambiguate
+        with, or both have one but it resolves to the same value. Sharing
+        a target_addr is allowed when every sharer uses an address byte
+        (EXTENDED/MIXED) and those bytes are all distinct -- that's what
+        find_by_target() then disambiguates by on RX. */
 int32_t can_tp_configure(void* tp_ctx, const CanTpConfig* config);
 
 /* Remove a configured N-SDU connection. Returns 0 on success, -1 if nsdu_id

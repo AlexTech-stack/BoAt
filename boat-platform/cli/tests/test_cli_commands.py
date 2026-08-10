@@ -69,6 +69,7 @@ def _fake_client() -> SimpleNamespace:
             SimpleNamespace(iface="vcan0", nsdu_id=0x7E0, source_addr=0x7E0, target_addr=0x7E8,
                             block_size=0, st_min=0, can_dlc=8, extended_addressing=False,
                             n_bs_ms=1000, n_cr_ms=1000, brs=False, pad_byte=0xCC,
+                            addressing_mode=can_tp_pb2.CANTP_ADDR_NORMAL, address_byte=0,
                             rx_state="IDLE", tx_state="IDLE"),
         ])),
     )

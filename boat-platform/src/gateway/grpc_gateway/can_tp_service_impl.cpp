@@ -110,6 +110,9 @@ grpc::Status CanTpServiceImpl::Configure(
   if (pc.pad_byte() > 0xFF) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "pad_byte must fit in a uint8 (0-255)");
   }
+  if (pc.address_byte() > 0xFF) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "address_byte must fit in a uint8 (0-255)");
+  }
 
   CanTpConfig cfg{};
   cfg.nsdu_id              = pc.nsdu_id();
@@ -122,6 +125,8 @@ grpc::Status CanTpServiceImpl::Configure(
   cfg.extended_addressing  = pc.extended_addressing();
   cfg.n_bs_ms              = pc.n_bs_ms();  // 0 = ISO default; resolved in can_tp_configure()
   cfg.n_cr_ms              = pc.n_cr_ms();  // 0 = ISO default; resolved in can_tp_configure()
+  cfg.addressing_mode      = static_cast<uint32_t>(pc.addressing_mode());
+  cfg.address_byte         = static_cast<uint8_t>(pc.address_byte());  // 0 = derive from target_addr; resolved in can_tp_configure()
   cfg.brs                  = pc.brs();
   cfg.pad_byte             = static_cast<uint8_t>(pc.pad_byte());  // 0 = ISO/AUTOSAR default; resolved in can_tp_configure()
 
@@ -136,9 +141,10 @@ grpc::Status CanTpServiceImpl::Configure(
   if (configure_result == -3) {
     std::ostringstream ss;
     ss << "target_addr=0x" << std::hex << pc.target_addr()
-       << " is already used by another nsdu_id on this instance -- each "
-          "connection's target_addr must be unique so incoming frames route "
-          "unambiguously";
+       << " is already used by another nsdu_id on this instance and the two "
+          "can't be told apart on RX -- sharing a target_addr is only allowed "
+          "when every connection using it has addressing_mode EXTENDED or "
+          "MIXED with a distinct address_byte";
     return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, ss.str());
   }
   if (configure_result != 0) {
@@ -245,6 +251,8 @@ void AppendSessions(const std::string& iface, boat::core::ICanTp* can_tp,
     session->set_n_cr_ms(s.n_cr_ms);
     session->set_brs(s.brs);
     session->set_pad_byte(s.pad_byte);
+    session->set_addressing_mode(static_cast<boat::v1::CanTpAddressingMode>(s.addressing_mode));
+    session->set_address_byte(s.address_byte);
   }
 }
 }  // namespace
