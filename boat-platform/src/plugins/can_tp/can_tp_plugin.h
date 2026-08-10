@@ -173,6 +173,8 @@ struct CanTpPlugin : public boat::core::ICanTp {
       info.extended_addressing = c.config.extended_addressing;
       info.n_bs_ms             = c.config.n_bs_ms;
       info.n_cr_ms             = c.config.n_cr_ms;
+      info.brs                 = c.config.brs;
+      info.pad_byte             = c.config.pad_byte;
       info.rx_state = (c.rx_state == NsduConnection::RX_WAIT_CF) ? "WAIT_CF" : "IDLE";
       switch (c.tx_state) {
         case NsduConnection::TX_IDLE:     info.tx_state = "IDLE";     break;

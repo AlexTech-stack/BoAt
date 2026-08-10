@@ -20,6 +20,8 @@ message CanTpConfig {
   bool   extended_addressing = 8;  // use first data byte as target address
   uint32 n_bs_ms              = 9;   // ISO 15765-2 N_Bs: max time TX waits for FC before aborting (0 = ISO default, 1000ms)
   uint32 n_cr_ms              = 10;  // ISO 15765-2 N_Cr: max time RX waits for the next CF before aborting (0 = ISO default, 1000ms)
+  bool   brs                  = 11;  // CAN FD Bit Rate Switch for this connection's frames; only meaningful when can_dlc > 8, not forced on automatically
+  uint32 pad_byte             = 12;  // fill byte for unused trailing data bytes (0 = ISO/AUTOSAR default, 0xCC); truncated to uint8 server-side. Note: 0 is the "use default" sentinel, so literal 0x00 padding isn't independently selectable through this field.
 }
 
 message ConfigureRequest {
@@ -72,6 +74,8 @@ message CanTpSession {
   string tx_state             = 11;  // "IDLE" | "WAIT_FC" | "SEND_CF" | "COMPLETE"
   uint32 n_bs_ms               = 12;  // effective N_Bs (already resolved from the 0-sentinel)
   uint32 n_cr_ms               = 13;  // effective N_Cr (already resolved from the 0-sentinel)
+  bool   brs                   = 14;
+  uint32 pad_byte              = 15;
 }
 
 message ListSessionsRequest {

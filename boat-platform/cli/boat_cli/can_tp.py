@@ -41,6 +41,14 @@ def can_tp_configure(
     n_cr_ms: Annotated[int, typer.Option("--n-cr-ms", help="ISO 15765-2 N_Cr: max ms to wait for "
                      "the next Consecutive Frame before aborting reassembly (ISO default 1000; "
                      "OBD-II/ISO 15765-4 uses 150).")] = 1000,
+    extended_addressing: Annotated[bool, typer.Option("--extended-addressing", help="Use the first "
+                     "data byte as a target-address-extension byte (ISO 15765-2 extended "
+                     "addressing) instead of normal addressing.")] = False,
+    brs: Annotated[bool, typer.Option("--brs", help="CAN FD Bit Rate Switch for this connection's "
+                     "frames -- only meaningful with --dlc 64; not on by default, since not "
+                     "every CAN FD bus has a distinct data-phase bit rate configured.")] = False,
+    pad_byte: Annotated[int, typer.Option("--pad-byte", help="Fill byte for unused trailing data "
+                     "bytes on every emitted frame (ISO/AUTOSAR default 0xCC).")] = 0xCC,
     iface: Annotated[str, typer.Option("--iface", help="Which loaded CanTp instance to target "
                      "(one per CAN interface). Only needed if more than one is loaded -- "
                      "omit it while there's exactly one.")] = "",
@@ -51,7 +59,9 @@ def can_tp_configure(
     implicit fallback to --nsdu-id. For a single-ID session (one CAN ID
     used for both directions), pass the same value for both explicitly.
     Re-running this for an already-configured --nsdu-id overwrites its
-    parameters in place; this is also how you edit a running session.
+    parameters in place; this is also how you edit a running session --
+    refused with an error if a transfer is currently in flight (retry once
+    it settles, or `boat can-tp remove` first).
 
     Talks to the live CanTp plugin instance running inside the gateway
     (loaded via BOAT_NODE_PLUGINS). Afterwards, use `boat can-tp send`
@@ -64,6 +74,9 @@ def can_tp_configure(
 
       # Single-ID session (same CAN ID both directions) -- pass it explicitly for both
       boat can-tp configure --nsdu-id 0x123 --source-addr 0x123 --target-addr 0x123
+
+      # Extended addressing
+      boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --extended-addressing
 
       # With two CanTp instances loaded (vcan0 + vcan1), pick one:
       boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 --iface vcan1
@@ -82,6 +95,9 @@ def can_tp_configure(
         can_dlc=can_dlc,
         n_bs_ms=n_bs_ms,
         n_cr_ms=n_cr_ms,
+        extended_addressing=extended_addressing,
+        brs=brs,
+        pad_byte=pad_byte,
     )
 
     try:
@@ -92,9 +108,11 @@ def can_tp_configure(
         return
 
     print_table(
-        ["nsdu_id", "source_addr", "target_addr", "bs", "stmin", "dlc", "n_bs_ms", "n_cr_ms", "iface"],
+        ["nsdu_id", "source_addr", "target_addr", "bs", "stmin", "dlc", "n_bs_ms", "n_cr_ms",
+         "ext_addr", "brs", "pad_byte", "iface"],
         [[f"0x{resolved_id:X}", f"0x{resolved_source:X}", f"0x{resolved_target:X}",
-          block_size, st_min, can_dlc, n_bs_ms, n_cr_ms, resp.iface]],
+          block_size, st_min, can_dlc, n_bs_ms, n_cr_ms, extended_addressing, brs,
+          f"0x{pad_byte:02X}", resp.iface]],
         ctx.obj.get("json_mode", False),
     )
 
@@ -237,14 +255,14 @@ def can_tp_list_sessions(
          s.block_size, s.st_min, s.can_dlc, s.extended_addressing]
         for s in resp.sessions
     ]
-    # n_bs_ms/n_cr_ms ride along in --json (no width limit there) but are
-    # left out of the plain table -- this table already sits at the edge of
-    # Rich's default 80-col non-tty fallback, and two more columns push
-    # existing ones into "…"-truncation.
+    # n_bs_ms/n_cr_ms/brs/pad_byte ride along in --json (no width limit
+    # there) but are left out of the plain table -- this table already sits
+    # at the edge of Rich's default 80-col non-tty fallback, and more
+    # columns push existing ones into "…"-truncation.
     if json_mode:
-        columns += ["n_bs_ms", "n_cr_ms"]
+        columns += ["n_bs_ms", "n_cr_ms", "brs", "pad_byte"]
         for row, s in zip(rows, resp.sessions):
-            row += [s.n_bs_ms, s.n_cr_ms]
+            row += [s.n_bs_ms, s.n_cr_ms, s.brs, f"0x{s.pad_byte:02X}"]
     columns += ["rx_state", "tx_state"]
     for row, s in zip(rows, resp.sessions):
         row += [s.rx_state, s.tx_state]

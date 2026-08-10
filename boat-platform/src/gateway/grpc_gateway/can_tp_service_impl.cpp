@@ -107,6 +107,9 @@ grpc::Status CanTpServiceImpl::Configure(
   if (pc.st_min() > 0xFF) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "st_min must fit in a uint8 (0-255)");
   }
+  if (pc.pad_byte() > 0xFF) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "pad_byte must fit in a uint8 (0-255)");
+  }
 
   CanTpConfig cfg{};
   cfg.nsdu_id              = pc.nsdu_id();
@@ -119,8 +122,26 @@ grpc::Status CanTpServiceImpl::Configure(
   cfg.extended_addressing  = pc.extended_addressing();
   cfg.n_bs_ms              = pc.n_bs_ms();  // 0 = ISO default; resolved in can_tp_configure()
   cfg.n_cr_ms              = pc.n_cr_ms();  // 0 = ISO default; resolved in can_tp_configure()
+  cfg.brs                  = pc.brs();
+  cfg.pad_byte             = static_cast<uint8_t>(pc.pad_byte());  // 0 = ISO/AUTOSAR default; resolved in can_tp_configure()
 
-  if (can_tp->Configure(cfg) != 0) {
+  const int32_t configure_result = can_tp->Configure(cfg);
+  if (configure_result == -2) {
+    std::ostringstream ss;
+    ss << "nsdu_id=0x" << std::hex << pc.nsdu_id()
+       << " has an active transfer in progress; wait for it to settle before "
+          "re-configuring, or remove it first";
+    return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, ss.str());
+  }
+  if (configure_result == -3) {
+    std::ostringstream ss;
+    ss << "target_addr=0x" << std::hex << pc.target_addr()
+       << " is already used by another nsdu_id on this instance -- each "
+          "connection's target_addr must be unique so incoming frames route "
+          "unambiguously";
+    return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, ss.str());
+  }
+  if (configure_result != 0) {
     return grpc::Status(grpc::StatusCode::INTERNAL, "CanTp Configure() failed");
   }
 
@@ -222,6 +243,8 @@ void AppendSessions(const std::string& iface, boat::core::ICanTp* can_tp,
     session->set_tx_state(s.tx_state);
     session->set_n_bs_ms(s.n_bs_ms);
     session->set_n_cr_ms(s.n_cr_ms);
+    session->set_brs(s.brs);
+    session->set_pad_byte(s.pad_byte);
   }
 }
 }  // namespace

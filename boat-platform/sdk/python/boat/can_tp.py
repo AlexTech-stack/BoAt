@@ -66,10 +66,18 @@ class CanTpHandle:
                 a clear "ambiguous, specify iface" error otherwise.
             **kwargs: Override remaining CanTpConfig fields (rx_buffer_size,
                       block_size, st_min, can_dlc, extended_addressing,
-                      n_bs_ms, n_cr_ms).
+                      n_bs_ms, n_cr_ms, brs, pad_byte).
 
         Returns:
             True if configured successfully.
+
+        Raises:
+            grpc.RpcError: FAILED_PRECONDITION if nsdu_id already exists and
+                has an active transfer in progress (retry once it settles,
+                or remove() first), or if target_addr is already used by a
+                different nsdu_id on this instance (every connection's
+                target_addr must be unique so incoming frames route
+                unambiguously).
         """
         config = can_tp_pb2.CanTpConfig(
             nsdu_id=nsdu_id,
@@ -82,6 +90,8 @@ class CanTpHandle:
             extended_addressing=kwargs.get("extended_addressing", False),
             n_bs_ms=kwargs.get("n_bs_ms", 1000),
             n_cr_ms=kwargs.get("n_cr_ms", 1000),
+            brs=kwargs.get("brs", False),
+            pad_byte=kwargs.get("pad_byte", 0xCC),
         )
         resp = self._client.can_tp.Configure(
             can_tp_pb2.ConfigureRequest(config=config, iface=iface))

@@ -39,6 +39,22 @@ typedef struct CanTpConfig {
   uint32_t n_cr_ms;            /* ISO 15765-2 N_Cr: max time RX waits for the
                                    next CF before aborting reassembly
                                    (0 = ISO default, 1000ms) */
+  bool     brs;                /* CAN FD Bit Rate Switch -- use a faster data-
+                                   phase bit rate for this connection's
+                                   frames. Only meaningful when can_dlc > 8;
+                                   ignored for classic CAN. Not forced on
+                                   automatically, since not every CAN FD bus
+                                   is configured with a distinct data-phase
+                                   bit rate to switch to. */
+  uint8_t  pad_byte;           /* Fill byte for unused trailing data bytes on
+                                   every emitted SF/FF/CF/FC (0 = ISO/AUTOSAR
+                                   default, 0xCC). Note: because 0 is the
+                                   "use default" sentinel here (same
+                                   convention as n_bs_ms/n_cr_ms), literal
+                                   0x00 padding isn't independently
+                                   selectable through this field -- pick a
+                                   value your peer won't confuse with real
+                                   data if 0xCC doesn't work for your case. */
 } CanTpConfig;
 
 /* Send a PDU through CanTp segmentation to an already-configured nsdu_id.
@@ -48,9 +64,17 @@ typedef struct CanTpConfig {
 int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
                     const uint8_t* data, uint32_t len);
 
-/* Configure an N-SDU connection. Returns 0 on success, -1 on invalid config.
-   Also doubles as "edit": calling this again for an already-configured
-   nsdu_id overwrites its parameters in place. */
+/* Configure an N-SDU connection. Also doubles as "edit": calling this again
+   for an already-configured nsdu_id edits its parameters in place.
+   Returns:
+     0  success
+    -1  invalid config (source_addr/target_addr zero, etc.)
+    -2  nsdu_id already exists and has an active TX or RX transfer in
+        progress -- edit-in-place is refused rather than silently
+        discarding it (retry once it settles, or remove it first)
+    -3  target_addr is already used by a *different* nsdu_id on this
+        instance -- every connection's target_addr must be unique so
+        incoming frames route unambiguously (see find_by_target()) */
 int32_t can_tp_configure(void* tp_ctx, const CanTpConfig* config);
 
 /* Remove a configured N-SDU connection. Returns 0 on success, -1 if nsdu_id
