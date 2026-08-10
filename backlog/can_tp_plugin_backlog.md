@@ -11,6 +11,19 @@ Analysis based on the following source documents:
 
 ---
 
+## 🔄 Status Update (2026-08-10)
+
+Re-verified against current `can_tp_plugin.cpp`/`.h` after two commits landed post-analysis: `c35034e` (wire CanTp to a live gRPC service, add multi-instance + node-plugin support) and `a247557` (key CanTp sessions by `nsdu_id`, add remove/subscribe).
+
+- **Resolved: #2 (dangling pointer race), #16 (CLI loads a separate `.so`).**
+- **Partially resolved: #6 (padding)** — frames are now sent at fixed `can_dlc` with padding; pad-byte value and RX-side validation still don't match spec.
+- **Reframed, not fixed: #3** (still a real bug, but narrower now that the map keys changed), **#10** (byte-length framing was a misread — BRS flag gap is the real remainder), **#14** (now a documented tradeoff, not an oversight).
+- **Everything else (#1, #4, #5, #7, #8, #9, #11, #12, #13, #15) — confirmed still open**, code unchanged since the original analysis.
+
+Note: most `:line` citations below predate the `nsdu_id`-keying refactor and no longer point at the right lines — treat them as historical, not current.
+
+---
+
 ## ✅ What IS Implemented Correctly
 
 | Feature | ISO Ref | Plugin Lines |
@@ -51,23 +64,26 @@ ISO 15765-2 §9.8 Table 21 defines six mandatory timing parameters. The plugin i
 
 ---
 
-### 2. TX Thread Dangling Pointer Race
+### 2. TX Thread Dangling Pointer Race — ✅ RESOLVED (2026-08-10)
 
-`can_tp_plugin.cpp:52-65`: The TX thread collects raw `NsduConnection*` pointers into a `to_send_cf` vector under `tx_mutex`, then releases the lock.
+Original finding: the TX thread collects raw `NsduConnection*` pointers under `tx_mutex`, then releases the lock; `can_tp_configure()` overwrote `plugin->connections[source_addr]` via `operator[]`, destroying the old `NsduConnection` and leaving the TX thread with a dangling pointer.
 
-`can_tp_plugin.cpp:393`: `can_tp_configure()` overwrites `plugin->connections[source_addr]` via `operator[]`, which destroys the old `NsduConnection`.
+**Fixed by the `nsdu_id`-keying refactor (`a247557`)**, apparently as a side effect rather than a targeted fix:
+- Connections are now keyed by `nsdu_id`. Re-configuring an existing `nsdu_id` is an in-place `operator=` on the same map slot, not a destroy+recreate — the object's address is stable.
+- `can_tp_remove()` now explicitly refuses to erase a connection unless `tx_state` is `IDLE`/`COMPLETE` (`can_tp_plugin.cpp:502-505`), so the one operation that *does* erase a map entry can't run while the TX thread might still be using it.
+- `std::unordered_map` only invalidates references/pointers on erase (not on insert/rehash), which the code now leans on explicitly (see the `tp_on_frame` locking comment).
 
-If `can_tp_configure()` runs between the pointer collection and the TX thread's subsequent use (`:73-127`), the TX thread holds a dangling pointer. The connection object may be freed or reused, leading to use-after-free.
-
-**Fix needed**: Reference counting, shared ownership (`std::shared_ptr`), or per-connection locking.
+Residual, smaller issue: the TX thread still reads `conn->tx_state`/`conn->config.*` outside `tx_mutex` in a couple of spots per CF (`can_tp_plugin.cpp:87-97`) — a data race in the strict sense, just not the dangling-pointer/UAF scenario originally described. Not urgent enough to reopen as Critical; folded into #13 (triple-lock) as a locking-hygiene cleanup.
 
 ---
 
-### 3. `find_by_target` Returns First Match Only
+### 3. `find_by_target` Returns First Match Only — still open, downgraded to 🟡 Important
 
-`can_tp_plugin.cpp:34-39`: Linear scan over `connections` map returns the first connection whose `target_addr` matches. The map is keyed by `source_addr`, so multiple connections can share the same `target_addr` (e.g., two testers talking to one ECU with different source CAN IDs).
+`can_tp_plugin.cpp:46-51`: Linear scan over `connections` still returns the first connection whose `target_addr` matches — this function is byte-for-byte unchanged since the original analysis.
 
-If two connections use the same target_addr, incoming frames on that CAN ID are always routed to the first one found. The second connection never receives any frames.
+**What changed**: the map is now keyed by `nsdu_id` instead of `source_addr` (`a247557`), so this is no longer entangled with the connection-overwrite bug (#9) — configuring two connections that happen to share a `target_addr` no longer clobbers one of them, they just both silently exist with only one reachable on RX. The underlying ambiguity is narrower than before (it now takes two *distinct, deliberately-configured* `nsdu_id`s pointing at the same peer CAN ID, rather than any accidental `source_addr` reuse) but the bug itself is untouched.
+
+If two connections use the same target_addr, incoming frames on that CAN ID are always routed to the first one found (unordered_map iteration order). The second connection never receives any frames.
 
 Violates AUTOSAR CanTp096 (multiple simultaneous connections).
 
@@ -108,13 +124,18 @@ For extended addressing, CF has 2 overhead bytes (1 address + 1 PCI), so `max_pa
 
 ---
 
-### 6. No Padding Byte Handling
+### 6. No Padding Byte Handling — 🟡 Partially resolved (2026-08-10)
 
 ISO 15765-2 §10.4: Unused CAN data bytes shall be padded (`0xCC` by default, or `0x00` for extended addressing). AUTOSAR CanTp320-325 define configurable padding per N-SDU.
 
-- Outgoing frames (`:440, :458, :102`): DLC is set to actual payload size, not `can_dlc`. Most CAN controllers pad to valid DLC — trailing bytes may contain stale data.
-- No RX padding validation: padding errors from non-compliant peers go undetected.
-- OBD (`ISO15765-4 §6.4.1`): Requires DLC always 8 (padding mandatory).
+**Fixed**: every emitted SF/FF/CF/FC now goes through a `pad_frame()` helper (`can_tp_plugin.cpp:19-29`) and is sent at the connection's fixed `can_dlc`, not actual payload length — the "DLC set to actual payload size" complaint below no longer applies.
+
+**Still open**:
+- Pad byte is hardcoded to `0x55`, not the AUTOSAR default `0xCC` (nor `0x00` for extended addressing), and isn't configurable per N-SDU (CanTp320-325).
+- No RX padding validation: padding errors from non-compliant peers still go undetected (CanTp321/322).
+- OBD (`ISO15765-4 §6.4.1`): Requires DLC always 8 (padding mandatory) — satisfied by default `can_dlc=8`, but not enforced.
+
+~~Outgoing frames (`:440, :458, :102`): DLC is set to actual payload size, not `can_dlc`. Most CAN controllers pad to valid DLC — trailing bytes may contain stale data.~~ (fixed, see above)
 
 **AUTOSAR specifics**:
 - CanTp320: Rx padding ON → only accept SF/last CF with length = 8 bytes
@@ -150,34 +171,31 @@ ISO 15765-2 handles this via N_Cr timeout — if a CF is not received within N_C
 
 ---
 
-### 9. Connection Overwrite Silently Discards Active Session
+### 9. Connection Overwrite Silently Discards Active Session — still open
 
-`can_tp_plugin.cpp:393`:
+`can_tp_plugin.cpp:485`:
 ```cpp
-plugin->connections[conn.source_addr] = conn;
+plugin->connections[conn.nsdu_id] = conn;
 ```
 
-- If a connection with the same `source_addr` exists and has an active TX (TX_WAIT_FC, TX_SEND_CF), the old session is silently destroyed. In-flight data is lost.
+Now keyed by `nsdu_id` rather than `source_addr`, but the behavior is unchanged — and now explicitly *intentional*, per the comment directly above it: "Re-configuring an already-configured nsdu_id overwrites it in place (doubles as 'edit'); this also resets rx/tx state, which is fine even mid-transfer since tp_on_frame's RX path and the TX pacing thread both hold this same lock before touching a connection." That comment addresses the *memory-safety* half (safe to overwrite without crashing, ties into #2's fix) but not the *protocol-compliance* half below:
+
+- If a connection with the same `nsdu_id` exists and has an active TX (TX_WAIT_FC, TX_SEND_CF), the old session is still silently destroyed. In-flight data is lost.
 - No error is returned to the caller.
 - AUTOSAR CanTp123: TX channel in CANTP_TX_PROCESSING shall reject new TX requests with E_NOT_OK.
 
 ---
 
-### 10. CAN FD DLC Encoding Uses Raw Bytes
+### 10. CAN FD DLC Encoding — reframed (2026-08-10), BRS flag gap still real
 
-`can_tp_plugin.cpp:78, 428`:
+`can_tp_plugin.cpp:90, 542`:
 ```cpp
 const uint32_t max_payload = dlc;
 ```
 
-CAN FD uses DLC-to-byte-length mapping (ISO 15765-2 §6.3 Table 3):
-| DLC | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
-|-----|---|---|---|---|---|---|---|
-| Bytes | 12 | 16 | 20 | 24 | 32 | 48 | 64 |
+**Reframe**: `CanTpConfig::can_dlc` is documented in the public ABI (`sdk/cpp/include/boat/can_tp.h:25`) as "max CAN DLC for this connection (**8 or 64**)" — i.e. it's specified as a byte-length value by design, not the raw ISO 11898-1 4-bit DLC *code* (0-15). Given that, treating it as a byte count directly is correct, not a bug — the original framing (comparing against the DLC-code→byte-length table) doesn't apply to this field as designed. Worth double-checking there's no config path that ever hands this a code in the 9-15 range instead of a byte count, but no evidence of that in the current CLI/SDK.
 
-The plugin treats `dlc` as a raw byte count. A `can_dlc=64` happens to work if the driver accepts raw byte counts, but ISO-compliant DLC values 9-15 produce incorrect payload sizes.
-
-Additionally, no BRS (Bit Rate Switch) flag is set for CAN FD frames.
+**Still a real gap**: no BRS (Bit Rate Switch) flag is set for CAN FD frames — every `BoatFrameOwner::Can(...)` call passes `is_fd ? 0x04 : 0` (FDF only; `CANFD_BRS` is `0x01`, never set). CAN FD frames are always sent at the base data rate.
 
 ---
 
@@ -207,9 +225,11 @@ TX thread acquires `tx_mutex` 3× per single CF send:
 
 Between acquisitions 1 and 2, another thread could modify tx_buffer. Combine all three into one locked section.
 
-### 14. Single Mutex for All State
+### 14. Single Mutex for All State — reframed (2026-08-10) as an intentional tradeoff
 
-`can_tp_plugin.h:62`: A single `tx_mutex` protects the entire connection map. RX path (`tp_on_can_frame`), TX path (`can_tp_send`), and TX thread all contend on the same lock. Per-connection locking would eliminate contention.
+`can_tp_plugin.h:86`: A single `tx_mutex` protects the entire connection map. RX path (`tp_on_frame`), TX path (`can_tp_send`), and TX thread all contend on the same lock. Per-connection locking would eliminate contention.
+
+No longer an unexamined oversight: the header now carries an explicit comment (`can_tp_plugin.h:80-84`) explaining this mutex is deliberately doing double duty as the RX-vs-`Remove()` serialization point (the fix for #2) — "it's effectively a general per-plugin connection-state mutex now, not just a TX-thread lock, so that Remove() erasing a connection can never race a concurrent on_frame() dereferencing the same NsduConnection*." Per-connection locking is still the right long-term fix if contention becomes a real problem, but the current single-mutex design is a considered choice, not neglect.
 
 ### 15. No 29-Bit / Mixed Addressing
 
@@ -220,23 +240,27 @@ ISO 15765-2 §10.3.5 defines mixed addressing where:
 
 Plugin only supports 11-bit normal + 1-byte extended.
 
-### 16. CLI / Python SDK Loads Separate .so
+### 16. CLI / Python SDK Loads Separate .so — ✅ RESOLVED (2026-08-10)
 
-`sdk/python/boat/can_tp.py:101`:
-```python
-result = self._lib.can_tp_configure(None, ctypes.byref(config))
-```
+Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin context (`sdk/python/boat/can_tp.py:101`, old), spinning up a second, disconnected copy of the plugin `.so` with no CAN publisher wired and no shared state with the gateway-loaded instance — `boat can-tp send` could never actually transmit.
 
-Both `CanTpHandle.configure()` and `send()` pass `None` as the plugin context. This creates a completely separate instance of the CanTp plugin (second copy of the .so) with:
-- No CAN publisher wired (`can_publish_fn == nullptr`)
-- No connection to the gateway's CAN bus
-- No shared state with the gateway-loaded plugin
-
-**Impact**: `boat can-tp send` CLI command loads its own unconnected plugin instance and can never actually transmit frames. The only way to use CanTp is through `BOAT_NODE_PLUGINS` at gateway startup.
+**Fixed by `c35034e`** ("wire CanTp to a live gRPC service, add multi-instance + node-plugin support"): `sdk/python/boat/can_tp.py` no longer touches ctypes/ the raw C ABI at all. `CanTpHandle` is now a thin wrapper around the `CanTpService` gRPC API — `configure()`/`send()`/`remove()`/`subscribe()`/`list_sessions()` all go through `self._client.can_tp.*` RPCs. Server-side, `can_tp_service_impl.cpp` resolves the request to the *live* plugin instance via `plugin_manager.FindService("can_tp:" + iface)` (each gateway-loaded instance registers itself under an iface-scoped service name — see `boat_plugin_service_name()` in `can_tp_plugin.cpp:649-652`). There is no longer any path that creates a second, unconnected plugin instance.
 
 ---
 
 ## Summary
+
+**As of 2026-08-10** — after `c35034e` and `a247557`:
+
+| Priority | Items | Count |
+|----------|-------|-------|
+| 🔴 Critical | #1 No timeouts | **1** |
+| 🟡 Important | #3 find_by_target single match (downgraded from Critical), #4 SF threshold hardcoded, #5 FF payload calc, #6 No padding (partial), #7 FF min length, #8 CF wrap desync, #9 Connection overwrite, #10 CAN FD BRS flag (reframed) | **8** |
+| 🔵 Minor/Arch | #11 No error reporting, #12 Busy-poll, #13 Triple-lock, #14 Single mutex (reframed as intentional), #15 No 29-bit/mixed | **5** |
+| ✅ Resolved | #2 Dangling pointer race, #16 CLI separate .so | **2** |
+| **Total** | | **16** |
+
+**Original analysis (pre-2026-08-10), for reference:**
 
 | Priority | Items | Count |
 |----------|-------|-------|
@@ -245,4 +269,4 @@ Both `CanTpHandle.configure()` and `send()` pass `None` as the plugin context. T
 | 🔵 Minor/Arch | #11 No error reporting, #12 Busy-poll, #13 Triple-lock, #14 Single mutex, #15 No 29-bit/mixed, #16 CLI separate .so | **6** |
 | **Total** | | **16** |
 
-The single largest gap is the **complete absence of ISO 15765-2 timing infrastructure** — without N_As/N_Bs/N_Cr timeouts, the plugin cannot detect dead peers and will hang sessions indefinitely. The second most impactful issue is the **TX thread dangling pointer race** under concurrent configure/send activity.
+The single largest remaining gap is the **complete absence of ISO 15765-2 timing infrastructure** — without N_As/N_Bs/N_Cr timeouts, the plugin cannot detect dead peers and will hang sessions indefinitely (#1). The dangling-pointer race that was previously the #2 concern is resolved; the next most impactful open items are the **`find_by_target` single-match bug** (#3) and the **silent connection-overwrite mid-session** (#9), both of which are session-integrity issues rather than crashes.
