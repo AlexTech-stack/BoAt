@@ -17,13 +17,13 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [Replay] | [Replay.md](Replay.md) | 22 | Direct + server-side replay, all formats, filters, IP/MAC rewriting, pcapng export, from-events |
 | [Recording] | [Recording.md](Recording.md) | 9 | CLI + Recorder UI recording in ASC/BLF/PCAP/PCAPNG, signal sidecar, record→replay round trip |
 | [PDU] | [PDU.md](PDU.md) | 10 | Routes, cyclic schedules, I-PDU groups, signal packing, E2E, db inspection, plugin delegation |
-| [CanTp] | [CanTp.md](CanTp.md) | 5 | ISO 15765-2 sessions, single/multi-frame, flow control, always-on reception |
+| [CanTp] | [CanTp.md](CanTp.md) | 15 | ISO 15765-2 sessions, single/multi-frame, flow control, N_Bs/N_Cr timeouts, extended/mixed/29-bit addressing, CAN FD BRS, padding, error/event reporting, always-on reception |
 | [Plugins] | [Plugins.md](Plugins.md) | 7 | Register/list/info/unload, JSON config, bus-type filtering, dual managers, replay delivery |
 | [WebUIs] | [WebUIs.md](WebUIs.md) | 10 | Launcher, Dashboard, Nodes, Commander, Recorder UI, Debug inspector, nav, gateway-down behavior |
 | [Tools] | [Tools.md](Tools.md) | 18 | PDU Editor, Trace Analyzer, Trace Editor, Eth Analyzer, dbc2boatjson, offline operation |
 | [CLI] | [CLI.md](CLI.md) | 7 | Global flags, JSON mode, help accuracy, failure behavior, test runner, AI assistants |
 
-**Total: 126 TestCases.**
+**Total: 136 TestCases.**
 
 ## Cross-cutting TestSets (no own file)
 
@@ -37,6 +37,7 @@ These sets exist only as `[tags]` on TestCases defined in the files above:
 | [Frame] | Unified FrameService semantics | TC_Ethernet_006, TC_PDU_009 |
 | [Hardware] | Requires physical CAN/Ethernet hardware | TC_Gateway_003, TC_Ethernet_004 |
 | [Performance] | Load/throughput behavior | TC_CAN_010 |
+| [Timeout] | N_Bs/N_Cr watchdog behavior | TC_CanTp_006/007 |
 | [AI] | LLM-assistant features | TC_Scenario_005, TC_CLI_007 |
 | [TraceAnalysis] | Analyzer functionality | TC_Tools_005–009, TC_Tools_014–016 |
 | [TraceEditor] | Trace Editor functionality | TC_Tools_010–013 |
