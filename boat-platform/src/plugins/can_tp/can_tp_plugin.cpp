@@ -322,8 +322,6 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
   // they are our own sends looped back via DispatchRx, not peer frames.
   if (frame->meta.can.flags & BOAT_CAN_FLAG_SELF_SENT) return;
 
-  const uint8_t pci_byte = frame->payload[0];
-  const uint8_t pci_type = pci_byte & kPciMask;
   const uint8_t* data = frame->payload;
   const size_t  dlc  = frame->payload_len;
 
@@ -347,6 +345,18 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
   if (conn == nullptr) return;  // unknown — silently drop
 
   const bool is_fd = (conn->config.can_dlc > 8);
+
+  // The PCI byte's position depends on this connection's addressing mode --
+  // under extended addressing, data[0] is the target-address-extension
+  // byte, not the PCI byte (which then falls at data[1]). This has to wait
+  // until conn is known: addressing is per-connection config, not
+  // derivable from the frame alone. Bounds-check first -- a malformed/
+  // truncated frame under extended addressing could be too short to even
+  // contain a PCI byte at data[1].
+  const size_t pci_idx = conn->config.extended_addressing ? 1 : 0;
+  if (dlc <= pci_idx) return;
+  const uint8_t pci_byte = data[pci_idx];
+  const uint8_t pci_type = pci_byte & kPciMask;
 
   if (pci_type == kPciFc) {
     // ── Flow Control from peer ─────────────────────────────────────────────
@@ -397,11 +407,10 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     // 0 only means "escape" when is_fd; on classic CAN it's SF_DL==0 (an
     // empty SF), which existing behavior already handles via actual_len==0
     // below, so this doesn't change classic-CAN decoding at all.
-    const uint8_t addr_off = conn->config.extended_addressing ? 1 : 0;
     const uint8_t sf_len_nibble = pci_byte & 0x0F;
-    const bool escaped = is_fd && sf_len_nibble == 0 && dlc > addr_off + 1u;
-    const size_t offset = addr_off + (escaped ? 2 : 1);
-    const size_t sf_len = escaped ? data[addr_off + 1] : sf_len_nibble;
+    const bool escaped = is_fd && sf_len_nibble == 0 && dlc > pci_idx + 1u;
+    const size_t offset = pci_idx + (escaped ? 2 : 1);
+    const size_t sf_len = escaped ? data[pci_idx + 1] : sf_len_nibble;
     const size_t payload_len = dlc > offset ? dlc - offset : 0;
     const size_t actual_len = std::min(sf_len, payload_len);
     const uint32_t nsdu_id = conn->nsdu_id;
@@ -419,9 +428,12 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
   }
 
   if (pci_type == kPciFf) {
-    // First Frame
+    // First Frame. FF_DL's low byte is the byte right after the PCI byte
+    // (data[pci_idx + 1]), not a hardcoded data[1] -- under extended
+    // addressing pci_idx is 1, so this is data[2].
+    if (dlc <= pci_idx + 1) return;  // too short to hold FF_DL's low byte
     const uint32_t ff_len = ((static_cast<uint32_t>(pci_byte & 0x0F)) << 8) |
-                             static_cast<uint32_t>(data[1]);
+                             static_cast<uint32_t>(data[pci_idx + 1]);
 
     // ISO 15765-2:2016 §9.6.3.2 Table 14: FF_DL < 8 is invalid -- a
     // compliant sender uses SF for payloads that small. Drop rather than
@@ -441,7 +453,11 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
       uint8_t fc_buf[64];
       uint8_t idx = 0;
       if (conn->config.extended_addressing) {
-        fc_buf[idx++] = 0x00;
+        // Extended addressing: the byte is the address of the frame's
+        // intended recipient, i.e. the peer -- matches the pattern already
+        // used for outgoing SF/FF/CF in can_tp_send() (target_addr & 0xFF),
+        // not a placeholder.
+        fc_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
       }
       fc_buf[idx++] = kPciFc | kFcOverflow;
       fc_buf[idx++] = 0;  // BS (don't care for overflow)
@@ -482,7 +498,7 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     uint8_t fc_buf[64];
     uint8_t idx = 0;
     if (conn->config.extended_addressing) {
-      fc_buf[idx++] = 0x00;
+      fc_buf[idx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
     }
     fc_buf[idx++] = kPciFc | kFcContinue;
     fc_buf[idx++] = conn->config.block_size;  // BS (0 = unlimited)
@@ -542,7 +558,7 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
         uint8_t fc_buf[64];
         uint8_t fcidx = 0;
         if (conn->config.extended_addressing) {
-          fc_buf[fcidx++] = 0x00;
+          fc_buf[fcidx++] = static_cast<uint8_t>(conn->target_addr & 0xFF);
         }
         fc_buf[fcidx++] = kPciFc | kFcContinue;
         fc_buf[fcidx++] = conn->config.block_size;
