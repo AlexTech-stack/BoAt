@@ -108,7 +108,15 @@ bool SocketCanDriver::ReadFrame(CanFrame& out_frame) {
   const bool is_fd = (bytes == static_cast<ssize_t>(sizeof(struct canfd_frame)));
   const std::uint8_t data_len = (raw.len <= CANFD_MAX_DLEN) ? raw.len : CANFD_MAX_DLEN;
 
-  out_frame.can_id = raw.can_id;
+  // raw.can_id carries CAN_EFF_FLAG/CAN_RTR_FLAG/CAN_ERR_FLAG in its top
+  // bits per SocketCAN convention -- mask them off so out_frame.can_id is a
+  // plain numeric ID, matching WriteFrame's assumption (`can_id > 0x7FF`
+  // implies extended) and every comparison against a plain configured ID
+  // elsewhere in the system (e.g. CanTp's source_addr/target_addr). Without
+  // this, every received 29-bit-ID frame's can_id silently carried
+  // CAN_EFF_FLAG (0x80000000) and could never match a plain-valued
+  // target_addr.
+  out_frame.can_id = raw.can_id & ((raw.can_id & CAN_EFF_FLAG) ? CAN_EFF_MASK : CAN_SFF_MASK);
   out_frame.dlc    = data_len;
   out_frame.flags  = is_fd ? raw.flags : 0;
   std::memset(out_frame.data, 0, sizeof(out_frame.data));
