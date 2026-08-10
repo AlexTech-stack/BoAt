@@ -322,7 +322,41 @@ boat can-tp remove --nsdu-id 0x7E0
 # List currently-configured sessions (nsdu_id, addrs, rx/tx state) --
 # across every loaded instance, or scoped to one with --iface
 boat can-tp list-sessions
+
+# Stream N_Result error/abort events (N_Bs/N_Cr timeout, wrong CF sequence
+# number, buffer overflow) -- fires instead of a subscribe() event for an
+# attempt that didn't complete
+boat can-tp subscribe-errors --nsdu-id 0x7E0
 ```
+
+**N_Bs/N_Cr watchdogs.** Of ISO 15765-2's six timing parameters, only N_Bs
+(TX waiting for FC) and N_Cr (RX waiting for the next CF) are enforced — the
+two whose expiry actually leaves a session stuck forever. `--n-bs-ms`/
+`--n-cr-ms` on `configure` (default 1000ms each, ISO default; OBD-II/ISO
+15765-4 uses 75/150). N_As/N_Ar have no analogue in this software transport
+(`frame_publish_fn` is synchronous — nothing to time out waiting for);
+N_Br/N_Cs are soft performance targets, not correctness bugs, and aren't
+enforced.
+
+**Addressing modes** (`--addressing-mode {normal,extended,mixed}`, ISO
+15765-2 §10.3). `normal` (default) has no address byte — `source_addr`/
+`target_addr` are the literal CAN IDs. `extended`/`mixed` prepend an address
+byte (N_TA/N_AE respectively — wire-identical, only the AUTOSAR/ISO semantic
+label differs) and, combined with `--address-byte` (independently settable,
+not derived from `target_addr`), let multiple connections share one
+`target_addr`, disambiguated by that byte — the actual point of those modes.
+11-bit vs. 29-bit CAN ID isn't a separate mode — any `source_addr`/
+`target_addr` value > `0x7FF` gets the CAN extended-frame flag automatically,
+so conventional 29-bit "Normal Fixed" (`0x18DA<TA><SA>`/`0x18DB<TA><SA>`) and
+"Mixed 29-bit" (`0x18CE<TA><SA>`/`0x18CD<TA><SA>`) IDs are just constructed by
+the caller and passed like any other CAN ID.
+
+**CAN FD and padding.** `--dlc 64` for CAN FD (SF/FF gain a 2-byte PCI escape
+format per ISO 15765-2:2016 Table 11, since a 1-byte nibble-encoded length
+caps out at 7); `--brs` sets the Bit Rate Switch flag (not forced on, since
+not every CAN FD bus has a distinct data-phase bit rate configured). Every
+emitted frame is padded to the connection's `can_dlc` with `--pad-byte`
+(default `0xCC`, ISO/AUTOSAR default).
 
 **Multiple instances (one per CAN interface).** Each loaded CanTp instance is
 bound to exactly one interface at load time and registers itself under an
