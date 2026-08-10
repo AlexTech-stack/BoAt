@@ -16,11 +16,13 @@ Analysis based on the following source documents:
 Re-verified against current `can_tp_plugin.cpp`/`.h` after two commits landed post-analysis: `c35034e` (wire CanTp to a live gRPC service, add multi-instance + node-plugin support) and `a247557` (key CanTp sessions by `nsdu_id`, add remove/subscribe).
 
 - **Resolved: #2 (dangling pointer race), #16 (CLI loads a separate `.so`).**
-- **Partially resolved: #6 (padding)** — frames are now sent at fixed `can_dlc` with padding; pad-byte value and RX-side validation still don't match spec.
+- **Partially resolved: #1 (timeouts — N_Bs/N_Cr implemented and verified on real PCAN hardware, see below), #6 (padding)** — frames are now sent at fixed `can_dlc` with padding; pad-byte value and RX-side validation still don't match spec.
 - **Reframed, not fixed: #3** (still a real bug, but narrower now that the map keys changed), **#10** (byte-length framing was a misread — BRS flag gap is the real remainder), **#14** (now a documented tradeoff, not an oversight).
-- **Everything else (#1, #4, #5, #7, #8, #9, #11, #12, #13, #15) — confirmed still open**, code unchanged since the original analysis.
+- **Everything else (#4, #5, #7, #8, #9, #11, #12, #13, #15) — confirmed still open**, code unchanged since the original analysis.
 
 Note: most `:line` citations below predate the `nsdu_id`-keying refactor and no longer point at the right lines — treat them as historical, not current.
+
+**2026-08-10, later the same day** — #1 (N_Bs/N_Cr) implemented on `feat/can-tp-nbs-ncr-timeouts` and verified against real PCAN USB Pro FD hardware (can0/can1 on one physical bus, agn-testcomputer): both watchdogs fire at their configured deadline (confirmed via bus capture that no frame explains the reset any other way), and a happy-path multi-frame transfer over the same dual-instance setup still round-trips byte-exact — no regression. Critical count drops to 0.
 
 ---
 
@@ -45,22 +47,23 @@ Note: most `:line` citations below predate the `nsdu_id`-keying refactor and no 
 
 ## 🔴 Critical Gaps
 
-### 1. No Timeouts — N_As, N_Bs, N_Cr, N_Ar, N_Br, N_Cs
+### 1. No Timeouts — N_As, N_Bs, N_Cr, N_Ar, N_Br, N_Cs — 🟡 Partially resolved (2026-08-10)
 
-ISO 15765-2 §9.8 Table 21 defines six mandatory timing parameters. The plugin implements **none** of them.
+ISO 15765-2 §9.8 Table 21 defines six mandatory timing parameters. The plugin implemented **none** of them.
 
-| Parameter | Description | Typical Value | Plugin |
-|-----------|-------------|---------------|--------|
-| N_As | Max time sender waits for FC after FF | 1000ms (ISO), **25ms (OBD)** | **MISSING** — TX_WAIT_FC blocks forever |
-| N_Bs | Max time sender waits between FC and first CF | 1000ms (ISO), **75ms (OBD)** | **MISSING** |
-| N_Cr | Max time receiver waits for next CF | 1000ms (ISO), **150ms (OBD)** | **MISSING** |
-| N_Ar | Max time receiver takes to send FC | 1000ms (ISO) | **MISSING** — sent immediately |
-| N_Br | Performance: time from FC to first CF | < 0.9×N_Bs | **MISSING** |
-| N_Cs | Performance: time from CF to next CF | < 0.9×N_Cr | **MISSING** — only STmin enforced |
+**Fixed**: N_Bs and N_Cr are now real watchdogs, checked by the existing TX pacing thread's poll loop (`can_tp_tx_thread_func`). `CanTpConfig` gets `n_bs_ms`/`n_cr_ms` (0 = ISO default 1000ms), threaded through the C ABI, proto, gRPC service, Python SDK, and CLI (`--n-bs-ms`/`--n-cr-ms` on `can-tp configure`). An FC(WT) restarts N_Bs; each accepted CF restarts N_Cr. Verified against real PCAN hardware (can0/can1 on the same physical bus): a withheld FC correctly aborts TX back to `TX_IDLE` at the configured deadline, and a withheld CF correctly aborts RX back to `RX_IDLE` — in both cases confirmed via bus capture that no frame arrived to explain the reset any other way, and a full happy-path multi-frame transfer over the same setup still round-trips byte-exact.
 
-**Impact**: A peer that crashes after sending FF leaves the connection stuck in TX_WAIT_FC permanently. The session is blocked (`can_tp_send()` returns -1 for busy on `:424`). No cleanup mechanism.
+**Deliberately deferred, not implemented**:
+| Parameter | Description | Status |
+|-----------|-------------|--------|
+| N_As | Max time sender waits for FC after FF | **N/A for this transport** — `frame_publish_fn` is synchronous, there is no local transmit-confirmation step to time out on |
+| N_Ar | Max time receiver takes to send FC | **N/A** — same reason; FC is sent synchronously in `tp_on_frame` |
+| N_Br | Performance: time from FC to first CF | Soft performance target, not a hang-forever bug — deferred |
+| N_Cs | Performance: time from CF to next CF | Soft performance target, not a hang-forever bug — deferred |
 
-**OBD note** (`ISO15765-4 §6.4.1`): Significantly tighter timing — N_As=25ms, N_Bs=75ms, N_Cr=150ms.
+**Impact of the original gap**: a peer that crashed after sending FF left the connection stuck in `TX_WAIT_FC` permanently. Resolved for the case that actually causes indefinite hangs (N_Bs/N_Cr); the four deferred parameters don't have that failure mode in this codebase.
+
+**OBD note** (`ISO15765-4 §6.4.1`): tighter timing — N_As=25ms, N_Bs=75ms, N_Cr=150ms. OBD callers should pass `--n-bs-ms 75 --n-cr-ms 150` explicitly; there's no built-in OBD profile shortcut (kept the config surface to raw values only, by design).
 
 ---
 
@@ -254,10 +257,10 @@ Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin
 
 | Priority | Items | Count |
 |----------|-------|-------|
-| 🔴 Critical | #1 No timeouts | **1** |
+| 🔴 Critical | — | **0** |
 | 🟡 Important | #3 find_by_target single match (downgraded from Critical), #4 SF threshold hardcoded, #5 FF payload calc, #6 No padding (partial), #7 FF min length, #8 CF wrap desync, #9 Connection overwrite, #10 CAN FD BRS flag (reframed) | **8** |
 | 🔵 Minor/Arch | #11 No error reporting, #12 Busy-poll, #13 Triple-lock, #14 Single mutex (reframed as intentional), #15 No 29-bit/mixed | **5** |
-| ✅ Resolved | #2 Dangling pointer race, #16 CLI separate .so | **2** |
+| ✅ Resolved | #1 N_Bs/N_Cr timeouts (N_As/N_Ar/N_Br/N_Cs deliberately deferred, see #1), #2 Dangling pointer race, #16 CLI separate .so | **3** |
 | **Total** | | **16** |
 
 **Original analysis (pre-2026-08-10), for reference:**
@@ -269,4 +272,4 @@ Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin
 | 🔵 Minor/Arch | #11 No error reporting, #12 Busy-poll, #13 Triple-lock, #14 Single mutex, #15 No 29-bit/mixed, #16 CLI separate .so | **6** |
 | **Total** | | **16** |
 
-The single largest remaining gap is the **complete absence of ISO 15765-2 timing infrastructure** — without N_As/N_Bs/N_Cr timeouts, the plugin cannot detect dead peers and will hang sessions indefinitely (#1). The dangling-pointer race that was previously the #2 concern is resolved; the next most impactful open items are the **`find_by_target` single-match bug** (#3) and the **silent connection-overwrite mid-session** (#9), both of which are session-integrity issues rather than crashes.
+No Critical items remain. The most impactful open items are now the **`find_by_target` single-match bug** (#3) and the **silent connection-overwrite mid-session** (#9) — both session-integrity issues rather than crashes or hangs.
