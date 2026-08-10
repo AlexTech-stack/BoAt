@@ -486,6 +486,39 @@ def test_replay_stream_verbose_shows_per_frame_detail() -> None:
     assert "Streaming..." not in result.output  # progress counter is non-verbose-only
 
 
+def test_frame_send_brs_flag() -> None:
+    fake_client = _fake_client()
+    fake_client.frame = SimpleNamespace(SendFrame=Mock(return_value=SimpleNamespace(accepted=True)))
+    fake_client.can = SimpleNamespace(ListBuses=Mock(return_value=SimpleNamespace(buses=[])))
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, [
+            "frame", "send", "--bus-type", "canfd", "--iface", "can0",
+            "--can-id", "0x123", "--data", "AABB", "--brs",
+        ])
+
+    assert result.exit_code == 0
+    sent_frame = fake_client.frame.SendFrame.call_args[0][0].frame
+    assert sent_frame.can.flags == 0x05  # FDF (0x04) | BRS (0x01)
+
+
+def test_frame_send_brs_ignored_for_classic_can() -> None:
+    fake_client = _fake_client()
+    fake_client.frame = SimpleNamespace(SendFrame=Mock(return_value=SimpleNamespace(accepted=True)))
+    fake_client.can = SimpleNamespace(ListBuses=Mock(return_value=SimpleNamespace(buses=[])))
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, [
+            "frame", "send", "--bus-type", "can", "--iface", "can0",
+            "--can-id", "0x123", "--data", "AABB", "--brs",
+        ])
+
+    assert result.exit_code == 0
+    sent_frame = fake_client.frame.SendFrame.call_args[0][0].frame
+    assert sent_frame.can.flags == 0  # --brs has no effect without CANFD
+    assert "only applies to" in result.output
+
+
 def test_frame_send_rejects_tcp_client_side() -> None:
     fake_client = _fake_client()
     fake_client.frame = SimpleNamespace(SendFrame=Mock())

@@ -58,6 +58,8 @@ def send_frame(
              "it's connection-oriented; use the TCP plugin instead)"),
     iface: str = typer.Option("", "--iface", "-i", help="Interface name (auto-selected if omitted)"),
     can_id: str = typer.Option("0", "--can-id", help="CAN identifier (decimal or 0x hex)"),
+    brs: bool = typer.Option(False, "--brs", help="CAN FD Bit Rate Switch, --bus-type CANFD only "
+                              "-- only meaningful if the bus has a data-phase bit rate configured"),
     data: str = typer.Option(..., "--data", "-d", help="Payload hex, e.g. AABBCCDD"),
     ethertype: str = typer.Option("0", "--ethertype", help="Ethernet EtherType (decimal or 0x hex)"),
     dst_mac: str = typer.Option("", "--dst-mac", help="Destination MAC (xx:xx:xx:xx:xx:xx), --bus-type ETHERNET only"),
@@ -119,7 +121,13 @@ def send_frame(
     if bt in (frame_pb2.Frame.CAN, frame_pb2.Frame.CANFD):
         frame.can.can_id = can_id_int
         frame.can.dlc = len(payload)
-        frame.can.flags = 0x04 if bt == frame_pb2.Frame.CANFD else 0  # FDF flag for FD frames
+        is_fd = bt == frame_pb2.Frame.CANFD
+        flags = 0x04 if is_fd else 0  # FDF flag for FD frames
+        if is_fd and brs:
+            flags |= 0x01  # Bit Rate Switch
+        elif brs:
+            print_error("--brs only applies to --bus-type CANFD; ignoring for CAN")
+        frame.can.flags = flags
     elif bt == frame_pb2.Frame.ETHERNET:
         frame.eth.dst_mac = _parse_hex(dst_mac) if dst_mac else b"\x00" * 6
         frame.eth.src_mac = _parse_hex(src_mac) if src_mac else b"\x00" * 6

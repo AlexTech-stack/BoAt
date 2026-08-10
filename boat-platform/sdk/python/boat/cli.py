@@ -48,12 +48,16 @@ from boat.v1 import can_pb2, can_pb2_grpc, pdu_pb2, pdu_pb2_grpc
 def _send_can(client: BoAtClient, msg: Message) -> str:
     db   = msg.db
     data = msg.pack()
+    is_fd = db["BusType"] == "CANFD"
+    flags = 0x04 if is_fd else 0  # 0x04 = CANFD (FDF) flag
+    if is_fd and db.get("BRS"):
+        flags |= 0x01  # Bit Rate Switch -- only meaningful alongside FDF
     frame = can_pb2.CanFrame(
         can_id=db["Identifier"],
         dlc=len(data),
         data=bytes(data),
         iface=db["Bus"],
-        flags=0x04 if db["BusType"] == "CANFD" else 0,  # 0x04 = CANFD flag
+        flags=flags,
     )
     req  = can_pb2.SendCanFrameRequest(frame=frame)
     resp = client.can.SendCanFrame(req)

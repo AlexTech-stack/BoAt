@@ -90,7 +90,10 @@ def _handle_can_send(args, db, client) -> int:
 
     iface  = args.bus or entry["Bus"]
     can_id = args.id  if args.id is not None else entry["Identifier"]
-    flags  = 0x04 if entry["BusType"] == "CANFD" else 0
+    is_fd  = entry["BusType"] == "CANFD"
+    flags  = 0x04 if is_fd else 0  # 0x04 = CANFD (FDF) flag
+    if is_fd and entry.get("BRS"):
+        flags |= 0x01  # Bit Rate Switch -- only meaningful alongside FDF
 
     frame = can_pb2.CanFrame(
         can_id=can_id,
