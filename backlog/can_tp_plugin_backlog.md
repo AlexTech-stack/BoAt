@@ -24,6 +24,8 @@ Note: most `:line` citations below predate the `nsdu_id`-keying refactor and no 
 
 **2026-08-10, later the same day** — #1 (N_Bs/N_Cr) implemented on `feat/can-tp-nbs-ncr-timeouts` and verified against real PCAN USB Pro FD hardware (can0/can1 on one physical bus, agn-testcomputer): both watchdogs fire at their configured deadline (confirmed via bus capture that no frame explains the reset any other way), and a happy-path multi-frame transfer over the same dual-instance setup still round-trips byte-exact — no regression. Critical count drops to 0.
 
+**2026-08-10, quick-fix bundle** (`feat/can-tp-hardening-quickfixes`, stacked on the above) — #4, #5, #7, #12, #13 all resolved; see each item below for what actually shipped (#4 and #12 turned out to need more than the "quick" framing suggested). Also found and fixed, via hardware testing rather than review, a bug not in the original 16: **extended-addressing RX was fundamentally broken** — the PCI byte was read from the wrong position for every incoming extended-addressing frame, so it never worked at all (folded into #5's writeup, since it surfaced while verifying that fix). Full non-HIL/non-determinism test suite (133 tests) + Python suite (213 tests) green throughout; real round trips verified for classic, extended-addressing, and both timeout paths.
+
 ---
 
 ## ✅ What IS Implemented Correctly
@@ -94,36 +96,19 @@ Violates AUTOSAR CanTp096 (multiple simultaneous connections).
 
 ## 🟡 Important Gaps
 
-### 4. SF Threshold Hardcoded to 7
+### 4. SF Threshold Hardcoded to 7 — ✅ RESOLVED (2026-08-10)
 
-`can_tp_plugin.cpp:430`:
-```cpp
-if (len <= 7)  // Single Frame
-```
+`can_tp_plugin.cpp:430` (old): `if (len <= 7)` regardless of CAN FD.
 
-Should be `if (len <= max_payload - offset)` where `offset` is 1 (normal) or 2 (extended). For CAN FD with `can_dlc=64`, a 60-byte PDU fits in a single FD frame but gets unnecessarily segmented into FF+CF.
-
-ISO 15765-2:2016 §9.2 Table 11 defines SF payload up to 7 (TX_DL=8) and up to 62 (TX_DL=64).
+Turned out to be more than a threshold tweak: ISO 15765-2:2016 Table 11 defines a *different* SF PCI format for CAN FD (`dlc > 8`) — a 2-byte escape (`0x00` + full-byte `SF_DL`) instead of the classic 1-byte nibble-encoded form, extending `SF_DL` up to `dlc-2` (`dlc-3` extended) instead of always capping at 7/6. Implemented both the TX-side escape encoding (`can_tp_send()`) and the RX-side decode (classic CAN's nibble-0 case, an empty SF, is untouched — the escape interpretation only kicks in for FD connections). Verified the classic-CAN threshold (7/6) is unchanged by the new formula, and the FD threshold now matches Table 11 (62/61 for `dlc=64`).
 
 ---
 
-### 5. FF / CF Payload Miscalculation for Extended Addressing
+### 5. FF / CF Payload Miscalculation for Extended Addressing — ✅ RESOLVED (2026-08-10)
 
-`can_tp_plugin.cpp:456`:
-```cpp
-const uint32_t ff_payload = std::min(len, max_payload - 2);
-```
+`can_tp_plugin.cpp:456` (old): `const uint32_t ff_payload = std::min(len, max_payload - 2);` — hardcoded overhead of 2 regardless of addressing mode, silently truncating 1 byte of payload per FF (and per CF, same bug in the TX thread's chunk calc) whenever extended addressing was used. Now computed as `extended_addressing ? 3 : 2` (FF) / `extended_addressing ? 2 : 1` (CF), matching the actual header size.
 
-For extended addressing, FF has 3 overhead bytes (1 address + 2 PCI) before payload starts. The code subtracts 2, producing frames 1 byte too long.
-
-Similarly, `can_tp_plugin.cpp:94`:
-```cpp
-chunk = static_cast<uint32_t>(std::min(
-    conn->tx_buffer.size() - conn->tx_offset,
-    static_cast<size_t>(max_payload - 1)));
-```
-
-For extended addressing, CF has 2 overhead bytes (1 address + 1 PCI), so `max_payload - 2` would be correct. Currently subtracts 1.
+**Found via hardware testing while verifying this fix**: extended-addressing RX was separately, fundamentally broken — `pci_byte` was read unconditionally from `payload[0]`, but under extended addressing that's the target-address-extension byte, not the PCI byte (at `payload[1]`), so every incoming extended-addressing frame was misclassified and silently dropped by every SF/FF/CF/FC branch, regardless of this payload-size bug. Also fixed as part of the same pass: `pci_byte`'s position now depends on the connection's `extended_addressing` (deferred until `find_by_target()` resolves `conn`, since addressing is per-connection config); FF_DL's low byte was hardcoded to `data[1]` instead of the byte after the (now-correctly-located) PCI byte; and outgoing FC frames hardcoded the extended-addressing byte to `0x00` instead of the peer's address (`conn->target_addr`), unlike every other outgoing frame type. Verified end-to-end on real PCAN hardware: a 30-byte extended-addressing multi-frame transfer round-trips byte-exact between two independent CanTp instances.
 
 ---
 
@@ -150,11 +135,11 @@ ISO 15765-2 §10.4: Unused CAN data bytes shall be padded (`0xCC` by default, or
 
 ---
 
-### 7. FF Minimum Length Not Validated
+### 7. FF Minimum Length Not Validated — ✅ RESOLVED (2026-08-10)
 
 ISO 15765-2 §9.6.3.2 Table 14: FF must carry at least 8 bytes (values 0-7 are invalid, sender should use SF instead).
 
-`can_tp_plugin.cpp:270-276`: Only checks `ff_len > rx_buffer_size`. Accepts `ff_len` values 0-7 without complaint.
+`tp_on_frame()`'s FF handling now rejects `ff_len < 8` (dropped, matching this function's existing silent-drop precedent for other malformed input — no new error-reporting infra needed for this, that's #11's job).
 
 ---
 
@@ -213,20 +198,17 @@ All error conditions are silently handled:
 
 AUTOSAR defines N_Result values (`N_TIMEOUT_A`, `N_WRONG_SN`, `N_INVALID_FS`, `N_UNEXP_PDU`, `N_WFT_OVRN`, `N_BUFFER_OVFLW`, `N_ERROR`) that should be reported to the upper layer. No callback or event mechanism exists.
 
-### 12. TX Thread Busy-Poll
+### 12. TX Thread Busy-Poll — ✅ RESOLVED (2026-08-10)
 
-`can_tp_plugin.cpp:56-58`: TX thread uses `wait_for(500µs)` with a predicate that only checks `tx_stop`. It wakes ~2000×/sec even when idle, scanning all connections O(n).
+`can_tp_plugin.cpp:56-58` (old): TX thread used `wait_for(500µs)` with a predicate that only checked `tx_stop`, waking ~2000×/sec even when idle.
 
-Should use `wait()` (no timeout) and notify on work arrival + stop.
+Replaced with a scan that tracks the earliest upcoming deadline across all connections (CF pacing, N_Bs, N_Cr) and sleeps until exactly that point via `wait_until`, or indefinitely via `wait()` if nothing is pending — woken early by `tx_cv.notify_one()` at every call site that creates or moves a deadline earlier (existing sites plus new ones added at the RX-side deadline mutations, which previously had no reason to wake the TX thread).
 
-### 13. TX Thread Triple-Lock Per CF
+**A genuine bug surfaced building this**, caught by hardware testing rather than review: the naive version computed the sleep deadline from a scan pass *before* the send-CF phase updated `tx_next_send_time`/`tx_fc_deadline` for the very connections just serviced, so a still-streaming `BS=0`/`STmin=0` connection could go to sleep indefinitely right after sending only its first CF (confirmed on hardware: a 20-byte transfer stalled after CF1, only resuming when an unrelated `notify_one()` from a second session's `send()` happened to wake the thread). Fixed by skipping the sleep and looping back to rescan immediately whenever an iteration sent anything — only sleeping when a scan finds nothing due, at which point the computed deadline is guaranteed fresh.
 
-TX thread acquires `tx_mutex` 3× per single CF send:
-- `:90-94`: Read tx_seq + chunk
-- `:98-101`: Copy from tx_buffer
-- `:107-127`: Update state
+### 13. TX Thread Triple-Lock Per CF — ✅ RESOLVED (2026-08-10)
 
-Between acquisitions 1 and 2, another thread could modify tx_buffer. Combine all three into one locked section.
+TX thread used to acquire `tx_mutex` 3× per single CF send (read tx_seq/chunk, copy from tx_buffer, update state). The scan pass now captures seq/chunk in the same locked section that decides a CF is due (as part of the `TxWork` entry), so the per-CF send phase only re-locks for the buffer copy and the post-send state update — down from 3 acquisitions to 2, and the data race #2's writeup flagged (reading `tx_state`/`config.*` outside the lock) is gone along with it.
 
 ### 14. Single Mutex for All State — reframed (2026-08-10) as an intentional tradeoff
 
@@ -253,14 +235,14 @@ Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin
 
 ## Summary
 
-**As of 2026-08-10** — after `c35034e` and `a247557`:
+**As of 2026-08-10, end of day** — after `c35034e`, `a247557`, and the `feat/can-tp-nbs-ncr-timeouts` + `feat/can-tp-hardening-quickfixes` branches (not yet merged to master):
 
 | Priority | Items | Count |
 |----------|-------|-------|
 | 🔴 Critical | — | **0** |
-| 🟡 Important | #3 find_by_target single match (downgraded from Critical), #4 SF threshold hardcoded, #5 FF payload calc, #6 No padding (partial), #7 FF min length, #8 CF wrap desync, #9 Connection overwrite, #10 CAN FD BRS flag (reframed) | **8** |
-| 🔵 Minor/Arch | #11 No error reporting, #12 Busy-poll, #13 Triple-lock, #14 Single mutex (reframed as intentional), #15 No 29-bit/mixed | **5** |
-| ✅ Resolved | #1 N_Bs/N_Cr timeouts (N_As/N_Ar/N_Br/N_Cs deliberately deferred, see #1), #2 Dangling pointer race, #16 CLI separate .so | **3** |
+| 🟡 Important | #3 find_by_target single match (downgraded from Critical), #6 No padding (partial), #8 CF wrap desync, #9 Connection overwrite, #10 CAN FD BRS flag (reframed) | **5** |
+| 🔵 Minor/Arch | #11 No error reporting, #14 Single mutex (reframed as intentional), #15 No 29-bit/mixed | **3** |
+| ✅ Resolved | #1 N_Bs/N_Cr timeouts (N_As/N_Ar/N_Br/N_Cs deliberately deferred, see #1), #2 Dangling pointer race, #4 SF threshold/FD escape format, #5 FF/CF payload calc (+ the extended-addressing RX bug found alongside it), #7 FF min length, #12 Busy-poll, #13 Triple-lock, #16 CLI separate .so | **8** |
 | **Total** | | **16** |
 
 **Original analysis (pre-2026-08-10), for reference:**
@@ -272,4 +254,4 @@ Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin
 | 🔵 Minor/Arch | #11 No error reporting, #12 Busy-poll, #13 Triple-lock, #14 Single mutex, #15 No 29-bit/mixed, #16 CLI separate .so | **6** |
 | **Total** | | **16** |
 
-No Critical items remain. The most impactful open items are now the **`find_by_target` single-match bug** (#3) and the **silent connection-overwrite mid-session** (#9) — both session-integrity issues rather than crashes or hangs.
+No Critical items remain, and half the original 16 are now resolved. The most impactful open items are the **`find_by_target` single-match bug** (#3) and the **silent connection-overwrite mid-session** (#9) — both session-integrity issues rather than crashes or hangs — followed by **#11 (no error/event reporting)**, which is the natural next milestone now that timeouts and other silent-drop scenarios exist to report on.
