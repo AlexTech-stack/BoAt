@@ -53,6 +53,15 @@ run more than one gateway instance on one host (each on its own port) — the
 gateway refuses to start if the port is already taken, rather than silently
 sharing it via gRPC's `SO_REUSEPORT` (see `backlog/gateway_backlog.md`).
 
+On the client side, `boat --host`, `BoAtClient`, and every SDK `*Node` class
+(`FrameNode`, `CanNode`, `EthernetNode`, `PduNode`, `BusNode`,
+`PduMessageNode`) resolve which gateway to talk to as: explicit
+address/`--host` argument > `BOAT_HOST` env var (`host:port`) >
+`localhost:50051`. A node script/CLI invocation written with no address
+hardcoded is therefore portable across any gateway on any device — point it
+elsewhere with `BOAT_HOST=<ip>:<port>` in the environment it runs in, without
+touching the script.
+
 ## CAN Hardware
 
 Physical CAN interfaces (e.g. PEAK, Kvaser, gs_usb) are supported via `PhysicalCanDriver` which reads hardware metadata from sysfs. The gateway auto-selects the driver: `vcan*` interfaces use `VirtualCanDriver`, all others use `PhysicalCanDriver`.

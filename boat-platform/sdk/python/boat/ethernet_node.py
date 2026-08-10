@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import threading
 import warnings
-from typing import Any
+from typing import Any, Optional
 
 import grpc
 
@@ -43,14 +43,16 @@ class EthernetNode:
     """Abstract base for Python Ethernet processing nodes.
 
     Args:
-        address:          Gateway gRPC address (host:port).
+        address:          Gateway gRPC address (host:port). Defaults to the
+                          BOAT_HOST env var, then "localhost:50051" -- leave
+                          unset to keep the node portable across gateways/devices.
         iface_filter:     Interface to subscribe to.  Empty = all interfaces.
         ethertype_filter: EtherType filter (0 = all).
     """
 
     def __init__(
         self,
-        address: str = "localhost:50051",
+        address: Optional[str] = None,
         iface_filter: str = "",
         ethertype_filter: int = 0,
     ) -> None:

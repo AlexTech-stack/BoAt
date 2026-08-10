@@ -43,6 +43,23 @@ BOAT_GRPC_PORT=50052 ./boat_gateway &   # a second instance, its own port
 boat --host localhost:50052 sim status  # talk to that instance specifically
 ```
 
+`--host`'s resolution order is: explicit flag > `BOAT_HOST` env var >
+`localhost:50051`. Set `BOAT_HOST` once in a shell/CI job/systemd unit
+targeting a specific gateway and every `boat ...` invocation there picks it
+up without repeating `--host` on each command:
+
+```bash
+export BOAT_HOST=192.168.1.100:50052
+boat sim status      # talks to 192.168.1.100:50052
+boat frame list-ifaces
+```
+
+The Python SDK's `BoAtClient` and every `*Node` class (`FrameNode`, `CanNode`,
+`EthernetNode`, `PduNode`, `BusNode`, `PduMessageNode`) follow the same
+resolution order, so a node script written with no address hardcoded is
+portable across any gateway on any device -- point it elsewhere by setting
+`BOAT_HOST` in the environment it runs in, not by editing the script.
+
 ## Global Flags
 
 | Flag | Description |

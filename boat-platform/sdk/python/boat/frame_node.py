@@ -30,7 +30,7 @@ from boat.v1 import frame_pb2_grpc
 class FrameNode:
     """Unified frame node using the v8 FrameService gRPC endpoint."""
 
-    def __init__(self, address: str = "localhost:50051",
+    def __init__(self, address: Optional[str] = None,
                  bus_types: Optional[List[str]] = None) -> None:
         self._client = BoAtClient(address)
         self._bus_types = bus_types or []

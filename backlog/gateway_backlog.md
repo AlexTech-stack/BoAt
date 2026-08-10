@@ -56,6 +56,22 @@ correctly.
 
 **Effort:** Small. The value is in the error message, not the mechanism.
 
+**Related, client-side (2026-08-10):** `BOAT_GRPC_PORT`/`RefuseIfPortInUse()`
+above solve the server side of multi-instance operation, but every client
+(`boat` CLI, `BoAtClient`, every SDK `*Node` class) still hardcoded
+`localhost:50051` as a literal default, so a node script or CLI invocation
+had to be edited or given `--host`/`address=` every single time to reach a
+non-default gateway. Added a `BOAT_HOST` env var, resolved in the same order
+everywhere (explicit arg/flag > `BOAT_HOST` > `localhost:50051`), so a node
+script/CLI command written with **no address hardcoded** is portable across
+any gateway on any device — point it elsewhere by setting `BOAT_HOST` in the
+environment it runs in. This is the piece a future admin tool needs to
+launch node processes against the gateway instance it manages, without those
+node scripts needing any awareness of which gateway they're talking to.
+Verified on real hardware (`agn-testcomputer`): `BoAtClient()`/`FrameNode()`
+pick up `BOAT_HOST` when set, an explicit `address=`/`--host` still wins over
+it, and `boat --help` shows the resolved value in `[default: ...]`.
+
 ---
 
 ## 🟡 No bus health or error visibility from SLCAN capture

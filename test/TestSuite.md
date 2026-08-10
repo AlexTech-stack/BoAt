@@ -21,9 +21,9 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [Plugins] | [Plugins.md](Plugins.md) | 7 | Register/list/info/unload, JSON config, bus-type filtering, dual managers, replay delivery |
 | [WebUIs] | [WebUIs.md](WebUIs.md) | 10 | Launcher, Dashboard, Nodes, Commander, Recorder UI, Debug inspector, nav, gateway-down behavior |
 | [Tools] | [Tools.md](Tools.md) | 18 | PDU Editor, Trace Analyzer, Trace Editor, Eth Analyzer, dbc2boatjson, offline operation |
-| [CLI] | [CLI.md](CLI.md) | 7 | Global flags, JSON mode, help accuracy, failure behavior, test runner, AI assistants |
+| [CLI] | [CLI.md](CLI.md) | 8 | Global flags, JSON mode, help accuracy, failure behavior, test runner, AI assistants, BOAT_HOST env var |
 
-**Total: 138 TestCases.**
+**Total: 139 TestCases.**
 
 ## Cross-cutting TestSets (no own file)
 

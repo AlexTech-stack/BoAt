@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-from typing import Any
+import os
+from typing import Any, Optional
 
 import grpc
 
+DEFAULT_ADDRESS = "localhost:50051"
+
 
 class BoAtClient:
-    def __init__(self, address: str = "localhost:50051") -> None:
-        self.address = address
-        self.channel = grpc.insecure_channel(address)
+    def __init__(self, address: Optional[str] = None) -> None:
+        # Resolution order: explicit `address` arg > BOAT_HOST env var > hardcoded
+        # default. This is what makes a node script/binary portable across
+        # gateways/devices without editing code -- point it at a different
+        # gateway by setting BOAT_HOST in its environment, not by hardcoding
+        # a host:port into the script itself.
+        self.address = address or os.environ.get("BOAT_HOST", DEFAULT_ADDRESS)
+        self.channel = grpc.insecure_channel(self.address)
         self._stubs_loaded = False
 
     def _load_stubs(self) -> None:

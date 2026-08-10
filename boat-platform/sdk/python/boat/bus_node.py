@@ -24,7 +24,7 @@ Publishing from anywhere::
 from __future__ import annotations
 
 import threading
-from typing import Any
+from typing import Any, Optional
 
 import grpc
 
@@ -36,13 +36,15 @@ class BusNode:
     """Publish to and subscribe from the BoAt always-on signal bus.
 
     Args:
-        address: Gateway gRPC address (host:port).
+        address: Gateway gRPC address (host:port). Defaults to the BOAT_HOST
+                 env var, then "localhost:50051" -- leave unset to keep the
+                 node portable across gateways/devices.
         node_id: Optional identifier stamped on every published signal.
     """
 
     def __init__(
         self,
-        address: str = "localhost:50051",
+        address: Optional[str] = None,
         node_id: str = "",
     ) -> None:
         self._client = BoAtClient(address)

@@ -156,3 +156,37 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 **Verdict:** NOT_TESTED
 
 **Result:**
+
+---
+
+### TC_CLI_008_boat_host_env_var
+
+**TestSets:** [CLI]
+
+**Preconditions:**
+- Common preconditions of this TestSet (see top of file)
+
+**TestSteps:**
+1. `BOAT_HOST=192.168.9.9:50052 boat --help` and inspect the `--host` option's
+   shown default
+2. `BOAT_HOST=192.168.9.9:50052 boat --host explicit:1234 ...` against a
+   reachable gateway at `explicit:1234`
+3. In Python: `BoAtClient()`, `FrameNode()` with `BOAT_HOST` set and unset;
+   inspect `.client.address` / `.address`
+
+**Expected:**
+- Resolution order everywhere is: explicit `--host`/`address=` argument >
+  `BOAT_HOST` env var > `localhost:50051`
+- Step 1's `--help` shows `[default: 192.168.9.9:50052]`
+- Step 2 talks to `explicit:1234`, not the `BOAT_HOST` value — explicit wins
+- Step 3: `BoAtClient()`/`FrameNode()` resolve to `BOAT_HOST` when set, and to
+  `localhost:50051` when unset
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware (`agn-testcomputer`): all three steps matched
+expected resolution order. `boat --help` displayed `[default:
+192.168.9.9:50052]` with the env var set and `[default: localhost:50051]`
+without it; `BoAtClient()`/`FrameNode()` in a Python REPL picked up
+`BOAT_HOST` the same way, with an explicit constructor argument overriding it.

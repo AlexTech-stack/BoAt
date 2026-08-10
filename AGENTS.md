@@ -138,13 +138,22 @@ boat sim init|start|pause|step|stop
 boat frame send|subscribe|list-ifaces
 boat scenario create|validate|get|list
 
-# SDK (programmatic)
+# SDK (programmatic) -- omit the address to resolve BOAT_HOST env var,
+# then "localhost:50051"; pass one explicitly to pin a specific gateway
 from boat.client import BoAtClient
 from boat.frame_node import FrameNode
-client = BoAtClient("localhost:50051")
-node = FrameNode("localhost:50051")
+client = BoAtClient()          # or BoAtClient("192.168.1.50:50052")
+node = FrameNode()              # or FrameNode("192.168.1.50:50052")
 node.send_can("vcan0", 0x123, b"hello")
 ```
+
+All `*Node` classes (`FrameNode`, `BusNode`, `CanNode`, `EthernetNode`, `PduNode`,
+`PduMessageNode`) and `BoAtClient` resolve their gateway address the same way:
+explicit `address=` argument > `BOAT_HOST` env var > `localhost:50051`. This is
+what keeps a node script portable across gateways/devices -- write it once with
+no address hardcoded, then `BOAT_HOST=192.168.1.50:50052 python my_node.py`
+points the same script at a different gateway without touching its code. The
+`boat` CLI's `--host` flag follows the identical resolution order.
 
 ## UI services
 

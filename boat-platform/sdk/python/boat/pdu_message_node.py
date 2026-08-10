@@ -37,14 +37,16 @@ class PduMessageNode:
                       {"Motor_CAN": "vcan0", "Body_CANFD": "vcan1"}
 
                   If a bus name is not in the map it is passed through as-is.
-        address:  Gateway gRPC address (host:port).
+        address:  Gateway gRPC address (host:port). Defaults to the BOAT_HOST
+                  env var, then "localhost:50051" -- leave unset to keep the
+                  node portable across gateways/devices.
     """
 
     def __init__(
         self,
         db_path: str | Path,
         bus_map: Dict[str, str] | None = None,
-        address: str = "localhost:50051",
+        address: Optional[str] = None,
     ) -> None:
         self._db = PduDatabase(db_path)
         self._bus_map: Dict[str, str] = bus_map or {}

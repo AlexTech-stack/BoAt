@@ -12,7 +12,7 @@ On the Ethernet transport the gateway frames PDUs as:
 from __future__ import annotations
 
 import threading
-from typing import Any, List
+from typing import Any, List, Optional
 
 import grpc
 
@@ -24,13 +24,15 @@ class PduNode:
     """Abstract base for Python PDU processing nodes.
 
     Args:
-        address:  Gateway gRPC address (host:port).
+        address:  Gateway gRPC address (host:port). Defaults to the BOAT_HOST
+                  env var, then "localhost:50051" -- leave unset to keep the
+                  node portable across gateways/devices.
         pdu_ids:  PDU IDs to subscribe to.  Empty list = subscribe to all PDUs.
     """
 
     def __init__(
         self,
-        address: str = "localhost:50051",
+        address: Optional[str] = None,
         pdu_ids: List[int] | None = None,
     ) -> None:
         self._client = BoAtClient(address)

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import threading
 import warnings
-from typing import Any
+from typing import Any, Optional
 
 import grpc
 
@@ -34,7 +34,9 @@ class CanNode:
     """Abstract base for Python CAN processing nodes.
 
     Args:
-        address:      Gateway gRPC address (host:port).
+        address:      Gateway gRPC address (host:port). Defaults to the
+                      BOAT_HOST env var, then "localhost:50051" -- leave
+                      unset to keep the node portable across gateways/devices.
         iface_filter: CAN interface to subscribe to.  Empty string means all
                       registered interfaces.
         sim_id:       Simulation ID forwarded in subscribe/send requests.
@@ -42,7 +44,7 @@ class CanNode:
 
     def __init__(
         self,
-        address: str = "localhost:50051",
+        address: Optional[str] = None,
         iface_filter: str = "",
         sim_id: str = "",
     ) -> None:
