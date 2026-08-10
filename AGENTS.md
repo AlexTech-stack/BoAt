@@ -4,7 +4,7 @@
 
 - **`boat-platform/`** — Main platform (C++20, CMake+Ninja, gRPC)
   - `src/core/` — Simulation engine (scheduler, signal router, determinism, plugin mgr, `core::Frame`)
-  - `src/gateway/grpc_gateway/` — gRPC server → `boat_gateway` binary, listens on `0.0.0.0:50051`
+  - `src/gateway/grpc_gateway/` — gRPC server → `boat_gateway` binary, listens on `0.0.0.0:50051` by default (`BOAT_GRPC_PORT` overrides — needed to run more than one instance on one host; the gateway refuses to start rather than silently sharing a port via gRPC's `SO_REUSEPORT`, see `backlog/gateway_backlog.md`)
   - `src/hil/` — HIL bridge (CAN/Ethernet drivers, bus registries, tick timer)
     - `can/` — `SocketCanDriver` (raw AF_CAN/SOCK_RAW), `PhysicalCanDriver` (sysfs-probing physical HW)
     - `virtual/` — `VirtualCanDriver` (SocketCan wrapper for vcan*)

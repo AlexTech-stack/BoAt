@@ -81,7 +81,7 @@ BOAT_CAN_INTERFACES=vcan0 \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
-Key env vars: `BOAT_CAN_INTERFACES` / `BOAT_ETH_INTERFACES`, `BOAT_NODE_PLUGINS`, `BOAT_NODE_TICK_MS` / `BOAT_NODE_TICK_US` (tick = minimum cycle time), `BOAT_HIL_ENABLED=1` (HIL tests).
+Key env vars: `BOAT_CAN_INTERFACES` / `BOAT_ETH_INTERFACES`, `BOAT_NODE_PLUGINS`, `BOAT_NODE_TICK_MS` / `BOAT_NODE_TICK_US` (tick = minimum cycle time), `BOAT_HIL_ENABLED=1` (HIL tests), `BOAT_GRPC_PORT` (default 50051 — set to run more than one gateway instance on one host; the gateway refuses to start if the port is already taken, rather than silently sharing it via gRPC's `SO_REUSEPORT`).
 
 ## Python CLI / SDK (v8 surface)
 

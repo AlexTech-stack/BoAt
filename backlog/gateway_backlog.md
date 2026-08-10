@@ -6,7 +6,7 @@ produce *misleading* behaviour, which is why they cost debugging time.
 
 ---
 
-## 🔴 A second gateway binds the same port silently and steals half the traffic
+## ✅ RESOLVED (2026-08-10) — A second gateway binds the same port silently and steals half the traffic
 
 gRPC's server sets `SO_REUSEPORT`, so starting a second `boat_gateway` while one
 is already running does **not** fail with "address already in use". Both bind
@@ -31,13 +31,28 @@ answers on consecutive calls, and plugins load twice.
 This is easy to hit unintentionally — a gateway left running in another terminal,
 a stale process from an earlier session, or two people on one bench.
 
-**Options.**
-- Refuse to start when the port is already served: probe it before
-  `BuildAndStart()`, or take an abstract-namespace/lock file as a singleton
-  guard, and exit with a clear message naming the existing PID.
-- Or keep `SO_REUSEPORT` deliberately (it does allow intentional load balancing)
-  and log a prominent warning at startup when another listener is detected, so
-  the situation is at least visible.
+**Fixed**: both improvements from the original "Options" list, implemented
+together rather than as alternatives —
+- `BOAT_GRPC_PORT` env var (default 50051, matching the historical hardcoded
+  value) lets a second instance choose a genuinely different port, so
+  intentional multi-instance use (the actual motivation for this work — see
+  the "administration tool to start/stop several gateways" discussion) has
+  somewhere safe to go.
+- `RefuseIfPortInUse()` probes the target port with a plain `bind()` (no
+  `SO_REUSEPORT`) before `grpc::ServerBuilder` ever touches it, exactly the
+  first option above. A plain bind fails with `EADDRINUSE` against *any*
+  existing listener on the port regardless of whether it set `SO_REUSEPORT`,
+  so this reliably catches the accidental case (leftover process, stale
+  session, two people on one bench) that motivated this item, and exits with
+  a clear message instead of starting into a silently-corrupted dual-gateway
+  state.
+
+Verified on real hardware: two instances on distinct ports (`BOAT_GRPC_PORT`
+unset + `BOAT_GRPC_PORT=50052`) both start and both remain independently
+reachable; a second instance targeting an already-bound port exits 1 with
+the new error message, and the first instance is unaffected. A CLI client
+connecting via `--host localhost:50052` reaches the second instance
+correctly.
 
 **Effort:** Small. The value is in the error message, not the mechanism.
 
