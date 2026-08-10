@@ -13,6 +13,9 @@
 #include <vector>
 
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include <grpc/impl/channel_arg_names.h>
 #include <grpcpp/grpcpp.h>
@@ -143,6 +146,67 @@ std::shared_ptr<grpc::ServerCredentials> MakeServerCredentials() {
   }
 
   return grpc::SslServerCredentials(options);
+}
+
+/* gRPC listen port. BOAT_GRPC_PORT overrides the historical fixed 50051, so
+ * multiple gateway instances can coexist on one host (each on its own port) --
+ * see backlog/gateway_backlog.md's "duplicate gateway on one port" item.
+ * Invalid/out-of-range values fall back to the default rather than starting
+ * on an unintended port silently. */
+int ResolveGrpcPort() {
+  constexpr int kDefaultPort = 50051;
+  const char* env = std::getenv("BOAT_GRPC_PORT");
+  if (env == nullptr || env[0] == '\0') return kDefaultPort;
+
+  char* end = nullptr;
+  const long parsed = std::strtol(env, &end, 10);
+  if (end == env || *end != '\0' || parsed <= 0 || parsed > 65535) {
+    std::fprintf(stderr,
+                 "[Gateway] BOAT_GRPC_PORT='%s' is not a valid port (1-65535); "
+                 "using default %d\n",
+                 env, kDefaultPort);
+    return kDefaultPort;
+  }
+  return static_cast<int>(parsed);
+}
+
+/* Refuses to start if something is already listening on `port`.
+ *
+ * gRPC's server sets SO_REUSEPORT, so AddListeningPort() alone would succeed
+ * even with another gateway already bound to the same port -- both would
+ * silently share it, and the kernel load-balances client connections between
+ * two processes with entirely separate bus registries, plugin instances, and
+ * simulation state (see backlog/gateway_backlog.md; this was an observed,
+ * hard-to-diagnose bug, not a hypothetical). A plain bind() without
+ * SO_REUSEPORT here fails with EADDRINUSE against *any* existing listener on
+ * the port, REUSEPORT or not, so this reliably detects the conflict before
+ * grpc::ServerBuilder ever gets a chance to silently succeed. There is an
+ * unavoidable small TOCTOU race between this probe's close() and the real
+ * AddListeningPort() below -- acceptable for the "leftover process from an
+ * earlier session" case this guards against, not a security boundary. */
+void RefuseIfPortInUse(int port) {
+  const int probe_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (probe_fd < 0) return;  // can't probe; let AddListeningPort() be the judge
+
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = INADDR_ANY;
+  addr.sin_port = htons(static_cast<std::uint16_t>(port));
+
+  const bool bind_ok =
+      bind(probe_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
+  close(probe_fd);
+
+  if (!bind_ok) {
+    std::fprintf(stderr,
+                 "[Gateway] ERROR: port %d is already in use by another "
+                 "process (possibly another boat_gateway) -- refusing to "
+                 "start a second instance on the same port. Set "
+                 "BOAT_GRPC_PORT to run a second instance alongside it, or "
+                 "stop the existing process first.\n",
+                 port);
+    std::exit(1);
+  }
 }
 
 void HandleSignal(int) {
@@ -415,8 +479,11 @@ int main() {
   boat::gateway::DebugServiceImpl debug_impl(audit_log);
   boat::gateway::FrameServiceImpl frame_impl(ctx);
 
+  const int grpc_port = ResolveGrpcPort();
+  RefuseIfPortInUse(grpc_port);
+
   grpc::ServerBuilder builder;
-  builder.AddListeningPort("0.0.0.0:50051", MakeServerCredentials());
+  builder.AddListeningPort("0.0.0.0:" + std::to_string(grpc_port), MakeServerCredentials());
 
   // Keepalive policy for long-lived streams from mobile/remote clients.
   //
@@ -455,6 +522,7 @@ int main() {
   builder.RegisterService(&frame_impl);
 
   g_server = builder.BuildAndStart();
+  std::fprintf(stderr, "[Gateway] gRPC server listening on 0.0.0.0:%d\n", grpc_port);
   g_scheduler = &sim.scheduler();
   std::signal(SIGINT, HandleSignal);
   std::signal(SIGTERM, HandleSignal);
