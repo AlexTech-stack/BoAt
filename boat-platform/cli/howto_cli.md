@@ -34,6 +34,15 @@ By default the CLI connects to `localhost:50051`. Override with `--host`:
 boat --host 192.168.1.100:50051 sim status
 ```
 
+If the gateway was started with `BOAT_GRPC_PORT` set to something other than
+`50051` (needed to run more than one instance on one host), point `--host` at
+that port instead:
+
+```bash
+BOAT_GRPC_PORT=50052 ./boat_gateway &   # a second instance, its own port
+boat --host localhost:50052 sim status  # talk to that instance specifically
+```
+
 ## Global Flags
 
 | Flag | Description |

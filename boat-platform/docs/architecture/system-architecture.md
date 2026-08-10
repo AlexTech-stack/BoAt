@@ -8,7 +8,7 @@
 │   CLI Tool (boat-cli)  │  Web Dashboard  │  External Tools        │
 │   Python SDK           │  CI/CD Runners  │  IDE Plugins           │
 └────────────────────────┬─────────────────────────────────────────┘
-                         │ gRPC (port 50051)
+                         │ gRPC (port 50051 default, BOAT_GRPC_PORT)
 ┌────────────────────────▼─────────────────────────────────────────┐
 │                      GATEWAY LAYER (boat_gateway)                 │
 │   BoAt gRPC Server (all 14 services)                             │

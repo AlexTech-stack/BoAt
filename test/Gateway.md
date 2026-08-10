@@ -194,3 +194,61 @@ driver selection, plugin loading, tick configuration, and shutdown.
 **Verdict:** NOT_TESTED
 
 **Result:**
+
+---
+
+### TC_Gateway_010_configurable_grpc_port
+
+**TestSets:** [Gateway]
+
+**Preconditions:**
+- Gateway built
+
+**TestSteps:**
+1. Start one instance with no `BOAT_GRPC_PORT` set
+2. Start a second instance with `BOAT_GRPC_PORT=50052`
+3. `boat --host localhost:50051 frame list-ifaces` and
+   `boat --host localhost:50052 frame list-ifaces`
+
+**Expected:**
+- Both instances start and log the port they bound (`gRPC server listening on
+  0.0.0.0:<port>`)
+- Both remain independently reachable at their respective ports; neither
+  affects the other
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware: both instances started, both logged their correct
+port, both stayed alive, and a CLI client reached each one specifically via
+`--host localhost:<port>`.
+
+---
+
+### TC_Gateway_011_refuses_duplicate_port_binding
+
+**TestSets:** [Gateway], [Error]
+
+**Preconditions:**
+- A gateway instance already running on the default port (or any port)
+
+**TestSteps:**
+1. Start a second instance targeting the *same* port (no `BOAT_GRPC_PORT`
+   override, or the same explicit value as the first instance)
+
+**Expected:**
+- The second instance refuses to start, exits non-zero, and prints a clear
+  error naming the port and suggesting `BOAT_GRPC_PORT` for an intentional
+  second instance
+- The first instance is completely unaffected
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware: second instance printed `[Gateway] ERROR: port
+50051 is already in use by another process...` and exited with code 1; the
+first instance remained alive throughout. Before this fix, gRPC's
+`SO_REUSEPORT` meant the second instance would have started "successfully"
+and silently split traffic with the first (see
+`backlog/gateway_backlog.md`'s now-resolved item) -- this test specifically
+guards against that regression.

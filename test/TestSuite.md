@@ -9,7 +9,7 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 
 | TestSet | File | Cases | Covers |
 |---|---|---:|---|
-| [Gateway] | [Gateway.md](Gateway.md) | 9 | Startup, interface registration, driver selection, plugin loading, tick config, shutdown |
+| [Gateway] | [Gateway.md](Gateway.md) | 11 | Startup, interface registration, driver selection, plugin loading, tick config, shutdown, configurable/duplicate gRPC port |
 | [CAN] | [CAN.md](CAN.md) | 10 | CAN / CAN FD / extended-ID send+receive, loopback flag, bus isolation, deprecated wrappers, burst |
 | [Ethernet] | [Ethernet.md](Ethernet.md) | 6 | Ethernet send/subscribe, veth + raw: physical NICs, capabilities, TCP-send rejection |
 | [Simulation] | [Simulation.md](Simulation.md) | 8 | Lifecycle (create/start/pause/step/stop/list/watch), determinism (seed reproducibility) |
@@ -23,7 +23,7 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [Tools] | [Tools.md](Tools.md) | 18 | PDU Editor, Trace Analyzer, Trace Editor, Eth Analyzer, dbc2boatjson, offline operation |
 | [CLI] | [CLI.md](CLI.md) | 7 | Global flags, JSON mode, help accuracy, failure behavior, test runner, AI assistants |
 
-**Total: 136 TestCases.**
+**Total: 138 TestCases.**
 
 ## Cross-cutting TestSets (no own file)
 

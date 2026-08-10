@@ -48,7 +48,10 @@ BOAT_CAN_INTERFACES=can0,can1,vcan0 \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
-The gRPC server listens on `0.0.0.0:50051`.
+The gRPC server listens on `0.0.0.0:50051` by default. Set `BOAT_GRPC_PORT` to
+run more than one gateway instance on one host (each on its own port) — the
+gateway refuses to start if the port is already taken, rather than silently
+sharing it via gRPC's `SO_REUSEPORT` (see `backlog/gateway_backlog.md`).
 
 ## CAN Hardware
 
