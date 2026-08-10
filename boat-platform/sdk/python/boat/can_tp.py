@@ -14,6 +14,7 @@ This module provides:
 - send(nsdu_id, data): send a PDU through CanTp segmentation, by nsdu_id only
 - remove(nsdu_id): delete a configured connection
 - subscribe(nsdu_ids=None): stream decoded RX payloads
+- subscribe_errors(nsdu_ids=None): stream N_Result error/abort events
 
 For the CLI, use::
     boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8
@@ -165,6 +166,26 @@ class CanTpHandle:
             data, timestamp_ns). Iterate it directly; call .cancel() when done.
         """
         return self._client.can_tp.Subscribe(can_tp_pb2.SubscribeRequest(
+            nsdu_ids=list(nsdu_ids or []), iface=iface))
+
+    def subscribe_errors(self, nsdu_ids: Optional[Iterable[int]] = None, iface: str = ""):
+        """Stream N_Result error/abort events (ISO 15765-2's detectable
+        subset: N_Bs/N_Cr timeout, wrong CF sequence number, buffer
+        overflow). Fires instead of (not in addition to) subscribe()'s
+        RX-payload event for an attempt that didn't complete.
+
+        Args:
+            nsdu_ids: which sessions to stream; None/empty streams every
+                session on the targeted instance(s).
+            iface: scope to one loaded instance; "" streams across every
+                loaded instance, each event tagged with its iface.
+
+        Returns:
+            A gRPC stream of CanTpErrorEvent protobuf messages (iface,
+            nsdu_id, result, message, timestamp_ns). Iterate it directly;
+            call .cancel() when done.
+        """
+        return self._client.can_tp.SubscribeErrors(can_tp_pb2.SubscribeRequest(
             nsdu_ids=list(nsdu_ids or []), iface=iface))
 
     def list_sessions(self, iface: str = "") -> list:

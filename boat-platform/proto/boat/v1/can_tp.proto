@@ -135,6 +135,28 @@ message CanTpRxEvent {
   uint64 timestamp_ns  = 4;
 }
 
+// Mirrors CanTpResult in boat/can_tp.h -- the subset of ISO 15765-2's
+// N_Result values this plugin can detect and attribute to a specific
+// nsdu_id. See CanTpErrorEvent / CanTpService.SubscribeErrors.
+enum CanTpResult {
+  CANTP_N_UNSPECIFIED   = 0;
+  CANTP_N_TIMEOUT_BS    = 1;  // N_Bs expired: peer never sent (or stopped sending) FC
+  CANTP_N_TIMEOUT_CR    = 2;  // N_Cr expired: peer never sent (or stopped sending) the next CF
+  CANTP_N_WRONG_SN      = 3;  // CF sequence number didn't match the expected one
+  CANTP_N_BUFFER_OVFLW  = 4;  // FF_DL exceeded rx_buffer_size (local), or peer sent FC(Overflow) (remote)
+}
+
+// One asynchronous error/abort event on a connection -- fired instead of
+// (not in addition to) CanTpRxEvent for that attempt, since the transfer
+// didn't complete. See CanTpResult for what's detectable.
+message CanTpErrorEvent {
+  string      iface        = 1;
+  uint32      nsdu_id       = 2;
+  CanTpResult result        = 3;
+  string      message       = 4;  // human-readable detail, e.g. "N_Bs expired after 1000ms"
+  uint64      timestamp_ns  = 5;
+}
+
 // Exposes the CanTp plugin's live gateway-side instance(s) (loaded via
 // BOAT_NODE_PLUGINS, one per CAN interface) to CLI/SDK clients.
 // See PluginManager::FindService("can_tp:" + iface).
@@ -144,4 +166,7 @@ service CanTpService {
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc RemoveSession(RemoveSessionRequest) returns (RemoveSessionResponse);
   rpc Subscribe(SubscribeRequest) returns (stream CanTpRxEvent);
+  // Same nsdu_ids/iface scoping convention as Subscribe (SubscribeRequest
+  // is shared between the two).
+  rpc SubscribeErrors(SubscribeRequest) returns (stream CanTpErrorEvent);
 }

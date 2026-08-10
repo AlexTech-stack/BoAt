@@ -62,6 +62,11 @@ class CanTpServiceStub:
                 request_serializer=boat_dot_v1_dot_can__tp__pb2.SubscribeRequest.SerializeToString,
                 response_deserializer=boat_dot_v1_dot_can__tp__pb2.CanTpRxEvent.FromString,
                 _registered_method=True)
+        self.SubscribeErrors = channel.unary_stream(
+                '/boat.v1.CanTpService/SubscribeErrors',
+                request_serializer=boat_dot_v1_dot_can__tp__pb2.SubscribeRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_can__tp__pb2.CanTpErrorEvent.FromString,
+                _registered_method=True)
 
 
 class CanTpServiceServicer:
@@ -100,6 +105,14 @@ class CanTpServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SubscribeErrors(self, request, context):
+        """Same nsdu_ids/iface scoping convention as Subscribe (SubscribeRequest
+        is shared between the two).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_CanTpServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -127,6 +140,11 @@ def add_CanTpServiceServicer_to_server(servicer, server):
                     servicer.Subscribe,
                     request_deserializer=boat_dot_v1_dot_can__tp__pb2.SubscribeRequest.FromString,
                     response_serializer=boat_dot_v1_dot_can__tp__pb2.CanTpRxEvent.SerializeToString,
+            ),
+            'SubscribeErrors': grpc.unary_stream_rpc_method_handler(
+                    servicer.SubscribeErrors,
+                    request_deserializer=boat_dot_v1_dot_can__tp__pb2.SubscribeRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_can__tp__pb2.CanTpErrorEvent.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -267,6 +285,33 @@ class CanTpService:
             '/boat.v1.CanTpService/Subscribe',
             boat_dot_v1_dot_can__tp__pb2.SubscribeRequest.SerializeToString,
             boat_dot_v1_dot_can__tp__pb2.CanTpRxEvent.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SubscribeErrors(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/boat.v1.CanTpService/SubscribeErrors',
+            boat_dot_v1_dot_can__tp__pb2.SubscribeRequest.SerializeToString,
+            boat_dot_v1_dot_can__tp__pb2.CanTpErrorEvent.FromString,
             options,
             channel_credentials,
             insecure,

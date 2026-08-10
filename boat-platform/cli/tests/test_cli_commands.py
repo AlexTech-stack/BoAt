@@ -65,6 +65,7 @@ def _fake_client() -> SimpleNamespace:
         Send=Mock(return_value=SimpleNamespace(result=can_tp_pb2.SEND_RESULT_SINGLE_FRAME)),
         RemoveSession=Mock(return_value=SimpleNamespace(ok=True)),
         Subscribe=Mock(return_value=can_tp_stream),
+        SubscribeErrors=Mock(return_value=can_tp_stream),
         ListSessions=Mock(return_value=SimpleNamespace(sessions=[
             SimpleNamespace(iface="vcan0", nsdu_id=0x7E0, source_addr=0x7E0, target_addr=0x7E8,
                             block_size=0, st_min=0, can_dlc=8, extended_addressing=False,
@@ -251,6 +252,19 @@ def test_can_tp_subscribe_command() -> None:
     assert result.exit_code == 0
     assert fake_client.can_tp.Subscribe.called
     sub_request = fake_client.can_tp.Subscribe.call_args[0][0]
+    assert list(sub_request.nsdu_ids) == [0x7E0, 0x100]
+
+
+def test_can_tp_subscribe_errors_command() -> None:
+    fake_client = _fake_client()
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, [
+            "can-tp", "subscribe-errors", "--nsdu-id", "0x7E0", "--nsdu-id", "0x100",
+        ])
+
+    assert result.exit_code == 0
+    assert fake_client.can_tp.SubscribeErrors.called
+    sub_request = fake_client.can_tp.SubscribeErrors.call_args[0][0]
     assert list(sub_request.nsdu_ids) == [0x7E0, 0x100]
 
 

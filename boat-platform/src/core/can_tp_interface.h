@@ -31,6 +31,18 @@ struct CanTpSessionInfo {
   std::string tx_state;  // "IDLE" | "WAIT_FC" | "SEND_CF" | "COMPLETE"
 };
 
+/* One asynchronous error/abort event on a connection -- ISO 15765-2's
+   N_Result values, the subset this plugin can actually detect and
+   attribute to a specific nsdu_id. Not every failure mode gets one (e.g.
+   Send() returning -1 for "busy" is already a synchronous, directly-
+   visible return value; an unrecognized incoming CAN ID has no connection
+   to attribute the drop to). See CanTpResult in boat/can_tp.h. */
+struct CanTpErrorEvent {
+  uint32_t    nsdu_id;
+  uint32_t    result;   // CanTpResult
+  std::string message;  // human-readable detail, e.g. "N_Bs expired after 1000ms"
+};
+
 /* Interface that the CanTp plugin exposes to gRPC CanTpService.
    The plugin registers itself via PluginManager::RegisterService("can_tp", this)
    during Load() (see boat_plugin_service_name()/boat_plugin_service_ptr()).
@@ -77,6 +89,16 @@ class ICanTp {
   // this instance". Mirrors PduRouter::Subscribe (src/hil/pdu/pdu_router.h).
   virtual SubId Subscribe(std::vector<uint32_t> nsdu_ids, RxCallback cb) = 0;
   virtual void  Unsubscribe(SubId id) = 0;
+
+  // Error/abort event subscription, for `CanTpService.SubscribeErrors` /
+  // `boat can-tp subscribe-errors`. Invoked on N_Bs/N_Cr timeout, a wrong
+  // CF sequence number, or an RX/peer-signaled buffer overflow -- the
+  // detectable subset of ISO 15765-2's N_Result values (see
+  // CanTpErrorEvent). Same empty-nsdu_ids-means-"every session" convention
+  // as Subscribe().
+  using ErrorCallback = std::function<void(const CanTpErrorEvent&)>;
+  virtual SubId SubscribeErrors(std::vector<uint32_t> nsdu_ids, ErrorCallback cb) = 0;
+  virtual void  UnsubscribeErrors(SubId id) = 0;
 };
 
 }  // namespace boat::core

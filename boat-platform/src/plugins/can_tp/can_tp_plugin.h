@@ -128,6 +128,38 @@ struct CanTpPlugin : public boat::core::ICanTp {
     for (const auto& cb : to_call) cb(nsdu_id, payload);
   }
 
+  // Error-event subscribers (boat can-tp subscribe-errors), same split-
+  // from-tx_mutex rationale as subs_mutex/subscriptions above.
+  struct ErrorSubscription {
+    std::vector<uint32_t> nsdu_ids;
+    boat::core::ICanTp::ErrorCallback cb;
+  };
+  mutable std::mutex  error_subs_mutex;
+  std::unordered_map<boat::core::ICanTp::SubId, ErrorSubscription> error_subscriptions;
+  boat::core::ICanTp::SubId next_error_sub_id{0};
+
+  // Called from tp_on_frame/can_tp_tx_thread_func at each detectable
+  // N_Result condition (see CanTpResult) to fan out to matching
+  // error-event subscribers.
+  void NotifyError(uint32_t nsdu_id, uint32_t result, std::string message) {
+    std::vector<boat::core::ICanTp::ErrorCallback> to_call;
+    {
+      std::lock_guard<std::mutex> lock(error_subs_mutex);
+      for (const auto& [id, sub] : error_subscriptions) {
+        (void)id;
+        if (sub.nsdu_ids.empty()) {
+          to_call.push_back(sub.cb);
+          continue;
+        }
+        for (uint32_t id_filter : sub.nsdu_ids) {
+          if (id_filter == nsdu_id) { to_call.push_back(sub.cb); break; }
+        }
+      }
+    }
+    boat::core::CanTpErrorEvent ev{nsdu_id, result, std::move(message)};
+    for (const auto& cb : to_call) cb(ev);
+  }
+
   // ── ICanTp ──────────────────────────────────────────────────────────────
   int32_t Configure(const CanTpConfig& config) override {
     return can_tp_configure(this, &config);
@@ -154,6 +186,18 @@ struct CanTpPlugin : public boat::core::ICanTp {
   void Unsubscribe(boat::core::ICanTp::SubId id) override {
     std::lock_guard<std::mutex> lock(subs_mutex);
     subscriptions.erase(id);
+  }
+
+  boat::core::ICanTp::SubId SubscribeErrors(std::vector<uint32_t> nsdu_ids,
+                                             boat::core::ICanTp::ErrorCallback cb) override {
+    std::lock_guard<std::mutex> lock(error_subs_mutex);
+    const auto id = next_error_sub_id++;
+    error_subscriptions[id] = ErrorSubscription{std::move(nsdu_ids), std::move(cb)};
+    return id;
+  }
+  void UnsubscribeErrors(boat::core::ICanTp::SubId id) override {
+    std::lock_guard<std::mutex> lock(error_subs_mutex);
+    error_subscriptions.erase(id);
   }
 
   std::vector<boat::core::CanTpSessionInfo> ListSessions() const override {

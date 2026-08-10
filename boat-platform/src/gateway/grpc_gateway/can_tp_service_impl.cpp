@@ -425,4 +425,107 @@ grpc::Status CanTpServiceImpl::Subscribe(
   return grpc::Status::OK;
 }
 
+grpc::Status CanTpServiceImpl::SubscribeErrors(
+    grpc::ServerContext* context,
+    const boat::v1::SubscribeRequest* request,
+    grpc::ServerWriter<boat::v1::CanTpErrorEvent>* writer) {
+  std::vector<uint32_t> nsdu_ids(request->nsdu_ids().begin(), request->nsdu_ids().end());
+  const std::string peer = context->peer();
+
+  // Same target resolution as Subscribe().
+  std::vector<std::pair<std::string, boat::core::ICanTp*>> targets;
+  if (!request->iface().empty()) {
+    grpc::StatusCode status_code = grpc::StatusCode::OK;
+    std::string status_message;
+    auto* can_tp = GetCanTp(request->iface(), &status_code, &status_message);
+    if (can_tp == nullptr) {
+      return grpc::Status(status_code, status_message);
+    }
+    targets.emplace_back(request->iface(), can_tp);
+  } else {
+    targets = GetAllCanTp();
+    if (targets.empty()) {
+      return grpc::Status(grpc::StatusCode::NOT_FOUND, "CanTp plugin not loaded");
+    }
+  }
+
+  {
+    std::ostringstream ss;
+    if (nsdu_ids.empty()) {
+      ss << "nsdu_ids=(all)";
+    } else {
+      ss << "nsdu_ids=[";
+      for (std::size_t i = 0; i < nsdu_ids.size(); ++i) {
+        if (i) ss << ',';
+        ss << "0x" << std::hex << nsdu_ids[i];
+      }
+      ss << ']';
+    }
+    ss << " targets=" << targets.size();
+    RpcEvent ev;
+    ev.timestamp_ns = NowNsCanTp();
+    ev.method     = "CanTpService/SubscribeErrors";
+    ev.peer       = peer;
+    ev.event_type = "SUBSCRIBE_OPEN";
+    ev.call_type  = "SERVER_STREAM";
+    ev.summary    = ss.str();
+    ctx_.audit_log.Push(std::move(ev));
+  }
+
+  std::mutex                             queue_mutex;
+  std::condition_variable                queue_cv;
+  std::vector<boat::v1::CanTpErrorEvent> queue;
+
+  std::vector<std::pair<boat::core::ICanTp*, boat::core::ICanTp::SubId>> subs;
+  subs.reserve(targets.size());
+  for (auto& [iface, can_tp] : targets) {
+    const auto sub_id = can_tp->SubscribeErrors(
+        nsdu_ids,
+        [&queue_mutex, &queue_cv, &queue, iface](const boat::core::CanTpErrorEvent& err) {
+          boat::v1::CanTpErrorEvent ev;
+          ev.set_iface(iface);
+          ev.set_nsdu_id(err.nsdu_id);
+          ev.set_result(static_cast<boat::v1::CanTpResult>(err.result));
+          ev.set_message(err.message);
+          ev.set_timestamp_ns(NowNsCanTp());
+          {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            queue.push_back(std::move(ev));
+          }
+          queue_cv.notify_one();
+        });
+    subs.emplace_back(can_tp, sub_id);
+  }
+
+  while (!context->IsCancelled()) {
+    std::vector<boat::v1::CanTpErrorEvent> pending;
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex);
+      queue_cv.wait_for(lock, std::chrono::milliseconds(50),
+                        [&queue] { return !queue.empty(); });
+      pending.swap(queue);
+    }
+    for (const auto& ev : pending) {
+      if (!writer->Write(ev)) {
+        for (auto& [can_tp, sub_id] : subs) can_tp->UnsubscribeErrors(sub_id);
+        return grpc::Status::OK;
+      }
+      RpcEvent audit_ev;
+      audit_ev.timestamp_ns = NowNsCanTp();
+      audit_ev.method     = "CanTpService/SubscribeErrors";
+      audit_ev.peer       = peer;
+      audit_ev.event_type = "DATA";
+      audit_ev.call_type  = "SERVER_STREAM";
+      std::ostringstream ss;
+      ss << "nsdu_id=0x" << std::hex << ev.nsdu_id() << std::dec
+         << " result=" << boat::v1::CanTpResult_Name(ev.result()) << " iface=" << ev.iface();
+      audit_ev.summary = ss.str();
+      ctx_.audit_log.Push(std::move(audit_ev));
+    }
+  }
+
+  for (auto& [can_tp, sub_id] : subs) can_tp->UnsubscribeErrors(sub_id);
+  return grpc::Status::OK;
+}
+
 }  // namespace boat::gateway

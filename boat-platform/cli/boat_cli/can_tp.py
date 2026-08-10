@@ -265,6 +265,50 @@ def can_tp_subscribe(
         stream.cancel()
 
 
+@can_tp_app.command("subscribe-errors")
+def can_tp_subscribe_errors(
+    ctx: typer.Context,
+    nsdu_ids: Annotated[Optional[List[str]], typer.Option("--nsdu-id", help="N-SDU ID to subscribe "
+                     "(repeatable, default: all sessions on the targeted instance(s)).")] = None,
+    iface: Annotated[str, typer.Option("--iface", help="Scope to one loaded CanTp instance. "
+                     "Omit to stream across every loaded instance.")] = "",
+    count: Annotated[int, typer.Option("--count", help="Stop after N events (0 = unlimited).")] = 0,
+) -> None:
+    """Stream N_Result error/abort events (ISO 15765-2's detectable subset:
+    N_Bs/N_Cr timeout, wrong CF sequence number, buffer overflow) from
+    configured CanTp sessions.
+
+    Fires instead of (not in addition to) `subscribe`'s RX-payload event for
+    an attempt that didn't complete -- e.g. a peer that stops sending CFs
+    produces one N_TIMEOUT_CR event here, not a payload event over there.
+
+    \b
+    Examples:
+      boat can-tp subscribe-errors                # every session, every instance
+      boat can-tp subscribe-errors --nsdu-id 0x7E0 # just one session
+    """
+    resolved_ids = [int(i, 0) for i in (nsdu_ids or [])]
+    stream = ctx.obj["client"].can_tp.SubscribeErrors(
+        can_tp_pb2.SubscribeRequest(nsdu_ids=resolved_ids, iface=iface))
+
+    received = 0
+    try:
+        for event in stream:
+            print_table(
+                ["nsdu_id", "result", "message", "iface", "timestamp_ns"],
+                [[f"0x{event.nsdu_id:X}", can_tp_pb2.CanTpResult.Name(event.result)[len("CANTP_N_"):],
+                  event.message, event.iface, event.timestamp_ns]],
+                ctx.obj.get("json_mode", False),
+            )
+            received += 1
+            if count > 0 and received >= count:
+                break
+    except grpc.RpcError as ex:
+        _rpc_error(ex)
+    finally:
+        stream.cancel()
+
+
 @can_tp_app.command("list-sessions")
 def can_tp_list_sessions(
     ctx: typer.Context,

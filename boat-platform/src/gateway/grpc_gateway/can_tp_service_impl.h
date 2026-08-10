@@ -36,6 +36,10 @@ class CanTpServiceImpl final : public boat::v1::CanTpService::Service {
                         const boat::v1::SubscribeRequest* request,
                         grpc::ServerWriter<boat::v1::CanTpRxEvent>* writer) override;
 
+  grpc::Status SubscribeErrors(grpc::ServerContext* context,
+                        const boat::v1::SubscribeRequest* request,
+                        grpc::ServerWriter<boat::v1::CanTpErrorEvent>* writer) override;
+
  private:
   GatewayContext& ctx_;
   // Resolves which loaded CanTp instance to use. iface non-empty ->

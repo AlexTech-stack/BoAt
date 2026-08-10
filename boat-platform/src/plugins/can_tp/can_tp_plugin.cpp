@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <sstream>
+#include <string>
 
 namespace {
 
@@ -162,6 +163,9 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
             conn.tx_buffer.clear();
             conn.tx_offset = 0;
             conn.tx_seq = 0;
+            plugin->NotifyError(conn.nsdu_id, CANTP_N_TIMEOUT_BS,
+                "N_Bs expired after " + std::to_string(conn.config.n_bs_ms) +
+                "ms waiting for Flow Control");
           } else {
             next_wake = std::min(next_wake, conn.tx_fc_deadline);
           }
@@ -172,6 +176,9 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
           if (now >= conn.rx_cf_deadline) {
             conn.rx_state = NsduConnection::RX_IDLE;
             conn.rx_buffer.clear();
+            plugin->NotifyError(conn.nsdu_id, CANTP_N_TIMEOUT_CR,
+                "N_Cr expired after " + std::to_string(conn.config.n_cr_ms) +
+                "ms waiting for the next Consecutive Frame");
           } else {
             next_wake = std::min(next_wake, conn.rx_cf_deadline);
           }
@@ -418,6 +425,8 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
       conn->tx_state = NsduConnection::TX_IDLE;
       conn->tx_buffer.clear();
       conn->tx_offset = 0;
+      plugin->NotifyError(conn->nsdu_id, CANTP_N_BUFFER_OVFLW,
+          "peer sent FC(Overflow) -- aborting transfer");
       return;
     }
     if (fc_flags == kFcWait) {
@@ -496,6 +505,9 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     if (ff_len > conn->config.rx_buffer_size) {
       // ── Overflow: send FC with Overflow status ──────────────────────────
       conn->rx_state = NsduConnection::RX_IDLE;
+      plugin->NotifyError(conn->nsdu_id, CANTP_N_BUFFER_OVFLW,
+          "FF_DL (" + std::to_string(ff_len) + ") exceeds rx_buffer_size (" +
+          std::to_string(conn->config.rx_buffer_size) + ")");
       if (plugin->frame_publish_fn == nullptr) return;
 
       uint8_t fc_buf[64];
@@ -569,6 +581,9 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     const uint8_t seq = pci_byte & 0x0F;
     if (seq != conn->rx_next_seq) {
       conn->rx_state = NsduConnection::RX_IDLE;
+      plugin->NotifyError(conn->nsdu_id, CANTP_N_WRONG_SN,
+          "expected CF seq " + std::to_string(conn->rx_next_seq) + ", got " +
+          std::to_string(seq));
       return;  // sequence error
     }
     const size_t offset = conn->config.extended_addressing ? 2 : 1;

@@ -30,6 +30,19 @@ typedef enum CanTpAddressingMode {
                                 different byte layout. */
 } CanTpAddressingMode;
 
+/* ISO 15765-2 N_Result values this plugin can actually detect and
+   attribute to a specific nsdu_id -- a subset of the full AUTOSAR list
+   (N_TIMEOUT_A/N_TIMEOUT_AR/N_UNEXP_PDU/N_INVALID_FS/N_WFT_OVRN don't apply:
+   no local TX-confirmation concept exists, FC is always sent synchronously
+   so it can't itself time out, and a frame with no matching connection has
+   nothing to attribute it to). See ICanTp::SubscribeErrors. */
+typedef enum CanTpResult {
+  CANTP_N_TIMEOUT_BS   = 1,  /* N_Bs expired: peer never sent (or stopped sending) FC */
+  CANTP_N_TIMEOUT_CR   = 2,  /* N_Cr expired: peer never sent (or stopped sending) the next CF */
+  CANTP_N_WRONG_SN     = 3,  /* CF sequence number didn't match rx_next_seq */
+  CANTP_N_BUFFER_OVFLW = 4,  /* FF_DL exceeded rx_buffer_size (local), or peer sent FC(Overflow) (remote) */
+} CanTpResult;
+
 /* CanTp N-SDU connection configuration (ISO 15765-2).
    A connection is identified by nsdu_id and represents one session between
    source_addr (this node) and target_addr (peer node), both required and
