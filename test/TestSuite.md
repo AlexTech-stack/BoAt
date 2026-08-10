@@ -22,8 +22,9 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [WebUIs] | [WebUIs.md](WebUIs.md) | 10 | Launcher, Dashboard, Nodes, Commander, Recorder UI, Debug inspector, nav, gateway-down behavior |
 | [Tools] | [Tools.md](Tools.md) | 18 | PDU Editor, Trace Analyzer, Trace Editor, Eth Analyzer, dbc2boatjson, offline operation |
 | [CLI] | [CLI.md](CLI.md) | 8 | Global flags, JSON mode, help accuracy, failure behavior, test runner, AI assistants, BOAT_HOST env var |
+| [LauncherAgent] | [LauncherAgent.md](LauncherAgent.md) | 5 | Multi-instance gateway lifecycle REST API: port auto-allocation, independent instances, duplicate-port rejection, delete-while-running rejection, host info |
 
-**Total: 139 TestCases.**
+**Total: 144 TestCases.**
 
 ## Cross-cutting TestSets (no own file)
 

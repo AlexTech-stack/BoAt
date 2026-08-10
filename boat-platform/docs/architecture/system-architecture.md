@@ -7,6 +7,7 @@
 │                         CLIENT LAYER                              │
 │   CLI Tool (boat-cli)  │  Web Dashboard  │  External Tools        │
 │   Python SDK           │  CI/CD Runners  │  IDE Plugins           │
+│   Launcher Agent (per host, multi-instance gateway lifecycle)     │
 └────────────────────────┬─────────────────────────────────────────┘
                          │ gRPC (port 50051 default, server: BOAT_GRPC_PORT,
                          │       client: BOAT_HOST)

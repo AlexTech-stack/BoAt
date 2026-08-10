@@ -164,6 +164,38 @@ bash stop_ui.sh    # kills them all
 
 Each service is a standalone `python3 ui/<name>.py` FastAPI/uvicorn app with embedded HTML. SDK path is resolved via `sys.path.insert(0, ...)` relative to the script location.
 
+## Launcher Agent (gateway administration, in progress)
+
+`ui/launcher_agent.py` is a **separate** service from `ui/launcher.py` (which
+stays as-is, single-instance, browser-facing). It's a per-host, headless REST
+API for running **multiple** `boat_gateway` instances on one machine, each
+with its own `BOAT_GRPC_PORT` (explicit or auto-allocated), CAN/Eth
+interfaces, and `BOAT_NODE_PLUGINS` set. It's the foundation of a **federated
+admin-tool architecture**: one small agent per host (no SSH, agents only ever
+touch their own machine), with a single client aggregating several agents
+over the network into one view. See `backlog/launcher_agent_backlog.md` for
+status/known gaps and `test/LauncherAgent.md` for verified behavior.
+
+```bash
+BOAT_AGENT_PORT=8090 python3 ui/launcher_agent.py   # default port 8090
+
+# Define + start an instance (grpc_port auto-allocated if omitted)
+curl -X POST localhost:8090/api/instances -H 'Content-Type: application/json' \
+  -d '{"name": "main", "can_ifaces": ["vcan0"], "node_plugins": [{"path": ".../pdu_router.so"}]}'
+curl -X POST localhost:8090/api/instances/<id>/start
+
+# Inspect / control
+curl localhost:8090/api/instances                  # list all, with status/pid/port
+curl localhost:8090/api/instances/<id>/log          # tail stdout/stderr
+curl -X POST localhost:8090/api/instances/<id>/stop
+curl -X DELETE localhost:8090/api/instances/<id>    # refused (409) while running
+curl localhost:8090/api/host/info                   # interfaces, gateway binaries, plugins found on this host
+```
+
+Not yet built: the admin client itself (planned PySide6 app driving this API
+across one or more hosts) and instance persistence across an agent restart
+(v1 is in-memory only).
+
 ## Quirks & gotchas
 
 - **Plugin ABI v8** (current, on `ABI_v8_frame_unification_and_major-refactor`):
