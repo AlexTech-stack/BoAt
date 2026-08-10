@@ -132,6 +132,26 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
       }
     }
 
+    if (to_send_cf.empty()) {
+      // Nothing was immediately due -- next_wake (computed above) reflects
+      // the true state and it's safe to sleep on it. No predicate on either
+      // wait: can_tp_send() and tp_on_frame() call tx_cv.notify_one()
+      // whenever they create or move up a deadline (new TX_WAIT_FC, an FC
+      // unblocking one, a new/refreshed RX_WAIT_CF) -- any wake, spurious
+      // or real, just loops back around to rescan, which is always safe
+      // and cheap. This replaces the old fixed 500µs poll, which woke and
+      // rescanned every connection ~2000×/sec even when nothing was
+      // pending.
+      std::unique_lock<std::mutex> wait_lock(plugin->tx_mutex);
+      if (plugin->tx_stop.load()) break;
+      if (next_wake == steady_clock::time_point::max()) {
+        plugin->tx_cv.wait(wait_lock);
+      } else {
+        plugin->tx_cv.wait_until(wait_lock, next_wake);
+      }
+      continue;
+    }
+
     // Send CFs without holding the lock
     for (auto& work : to_send_cf) {
       auto* conn = work.conn;
@@ -188,22 +208,13 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
         }
       }
     }
-
-    // Sleep until the earliest pending deadline (STmin pacing, N_Bs, N_Cr),
-    // or indefinitely if nothing is pending. No predicate on either wait:
-    // can_tp_send() and tp_on_frame() call tx_cv.notify_one() whenever they
-    // create or move up a deadline (new TX_WAIT_FC, an FC unblocking one, a
-    // new/refreshed RX_WAIT_CF) -- any wake, spurious or real, just loops
-    // back around to rescan, which is always safe and cheap. This replaces
-    // the old fixed 500µs poll, which woke and rescanned every connection
-    // ~2000×/sec even when nothing was pending.
-    std::unique_lock<std::mutex> wait_lock(plugin->tx_mutex);
-    if (plugin->tx_stop.load()) break;
-    if (next_wake == steady_clock::time_point::max()) {
-      plugin->tx_cv.wait(wait_lock);
-    } else {
-      plugin->tx_cv.wait_until(wait_lock, next_wake);
-    }
+    // Loop back around immediately (no sleep) rather than trusting
+    // next_wake here -- it was computed *before* the sends above updated
+    // tx_next_send_time (STmin pacing) or tx_fc_deadline (block-boundary
+    // N_Bs) for the connections just serviced, so it can't be trusted for
+    // them. The next iteration's scan reads the fresh values instead. For
+    // STmin=0 (unlimited) streaming this means back-to-back scan+send with
+    // no sleep, which is correct -- that's what STmin=0 means.
   }
 }
 
