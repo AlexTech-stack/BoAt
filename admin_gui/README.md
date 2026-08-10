@@ -12,12 +12,29 @@ for the architecture rationale and current scope/gaps.
 ## Install & run
 
 ```bash
-pip install -r admin_gui/requirements.txt
+pip install -r admin_gui/requirements.txt      # Debian/Ubuntu with PEP 668
+                                                 # ("externally-managed-environment"):
+                                                 # add --break-system-packages, or use a venv
 python3 admin_gui/main.py
 ```
 
 Runs on any platform PySide6 supports (Windows, Linux, macOS) — it's a plain
 HTTP client, so it doesn't need to run on the same machine as any gateway.
+
+**Linux only:** Qt6's `xcb` platform plugin additionally needs a *system*
+library that `pip install pyside6` does not provide:
+
+```bash
+sudo apt install libxcb-cursor0
+```
+
+Without it you'll see `qt.qpa.plugin: Could not load the Qt platform plugin
+"xcb"` and the app aborts immediately on launch. This is a one-time,
+per-machine system dependency, unrelated to the Python packages above (and
+unrelated to whether you're on a real desktop or connecting via RDP/VNC —
+either way it's the same `xcb` plugin doing the rendering).
+
+![admin_gui main window, showing a host with a running instance](docs/screenshot.png)
 
 ## Usage
 

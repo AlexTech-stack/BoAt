@@ -7,7 +7,7 @@ over the network. See `AGENTS.md`'s "Launcher Agent" section for the API and
 the federated architecture rationale.
 
 Status: agent v1 and a PySide6 admin client both exist, hardware-verified
-headlessly. Not yet visually verified with a real display.
+both headlessly and with a real render pass (screenshot) on a real machine.
 
 ---
 
@@ -51,9 +51,11 @@ headlessly. Not yet visually verified with a real display.
   gateway instances on that host. Fine for a trusted lab network (matches
   every other `ui/*.py` service today); would need real auth before being
   reachable from anything less trusted.
-- **Admin client exists but is headless-tested only** (see "PySide6 admin
-  client" below) — real layout/rendering not yet checked on an actual
-  screen.
+- **`admin_gui/requirements.txt` doesn't (can't) capture the `libxcb-cursor0`
+  system dependency** Qt6's `xcb` platform plugin needs on Linux —
+  documented as a manual `apt install` step instead (see "visual
+  verification" below). Not a gap in the app; just not something `pip`
+  can express.
 - **Not wired into `start_ui.sh`/`stop_ui.sh`.** New/still-evolving; start
   manually (`python3 ui/launcher_agent.py`) until the API and client have
   settled. Add to the standard scripts once it has.
@@ -97,15 +99,39 @@ repeating watchdog that caught both the confirmation dialog and the
 subsequent "Delete failed" 409 dialog in one call. Worth remembering for any
 future headless Qt dialog test in this codebase.
 
-Not yet visually verified with a real display/window manager — only the
-logic paths (construction, polling, and every button-triggered action
-method, including the ones gated behind a modal confirmation) were
-exercised.
+## Done (2026-08-10, continued) — visual verification + a real missing dependency
+
+The user tried running `admin_gui/main.py` over RDP on `agn-testcomputer`
+and hit an immediate crash:
+
+```
+qt.qpa.plugin: From 6.5.0, xcb-cursor0 or libxcb-cursor0 is needed to load
+the Qt xcb platform plugin.
+qt.qpa.plugin: Could not load the Qt platform plugin "xcb" in "" even
+though it was found.
+Aborted (core dumped)
+```
+
+`libxcb-cursor0` is a *system* library Qt6's `xcb` platform plugin needs at
+runtime — `pip install pyside6` never installs it (it's not a Python
+package). The earlier `QT_QPA_PLATFORM=offscreen` headless verification
+never exercised the real `xcb` plugin at all, so this gap wasn't visible
+until a real display (RDP, in this case) was actually tried. Fixed with
+`sudo apt install libxcb-cursor0`; documented in `admin_gui/README.md` and
+`AGENTS.md` as a one-time per-machine Linux prerequisite. Also hit and noted
+the same PEP 668 "externally-managed-environment" `pip install` friction
+already documented elsewhere in this repo (`--break-system-packages`).
+
+With the library installed, verified for real (not headless): ran the app
+under `Xvfb` (a virtual X server, standing in for "some display exists") on
+`agn-testcomputer`, added a host, created+started a real instance, and took
+an actual screenshot (`QWidget.grab()`) confirming the layout renders
+correctly — host list with a filled health dot, instance table showing the
+real running PID/uptime, action buttons, log panel all positioned and
+readable as designed.
 
 ## Next steps (not started)
 
-- Visual verification with a real display (the offscreen smoke test above
-  proves the logic paths work, not that the layout looks right).
 - Interface-creation UI / agent endpoints (still deliberately deferred, see
   above).
 - Decide instance persistence approach once the "agent restart loses

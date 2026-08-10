@@ -204,15 +204,18 @@ plus a log viewer for the selected instance. `agent_client.py`/`host_store.py`
 have no Qt import, so they're usable/testable headlessly.
 
 ```bash
-pip install -r admin_gui/requirements.txt
+pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages
+sudo apt install libxcb-cursor0             # Linux only -- system dep Qt6's xcb plugin needs
 python3 admin_gui/main.py
 ```
 
 See `admin_gui/README.md` for usage and `test/AdminGui.md` for what's
-verified. Headless verification uses `QT_QPA_PLATFORM=offscreen` — good
-enough to exercise every code path (construction, polling, and every
-button's action method, including ones gated behind a modal confirmation),
-not a substitute for checking the actual layout on a real screen.
+verified. Headless verification uses `QT_QPA_PLATFORM=offscreen` — exercises
+every code path (construction, polling, every button's action method,
+including ones gated behind a modal confirmation) without a display. A real
+`xcb` render pass (Xvfb + a real screenshot) has also confirmed the layout
+looks right, and specifically caught the missing `libxcb-cursor0` system
+dependency above.
 
 ## Quirks & gotchas
 
