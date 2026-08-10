@@ -28,7 +28,9 @@ Note: most `:line` citations below predate the `nsdu_id`-keying refactor and no 
 
 **2026-08-10, continued on the same branch** — #3, #9, #10, and #6's remainder all resolved; see each item below. All verified on real PCAN hardware, including CAN FD with a data-phase bit rate configured (`dbitrate 2000000 fd on`) specifically to observe the BRS flag on the wire. One pre-existing unit test hardcoded the old pad-byte value (0x55) in its expected output and needed updating for the new default (0xCC) — a real, expected consequence of the fix, not a regression.
 
-**2026-08-10, #15 (mixed/29-bit addressing)** — implemented and verified on real hardware; see its writeup below. Also found and fixed a second bug outside the CanTp plugin entirely: `SocketCanDriver::ReadFrame()` didn't mask `CAN_EFF_FLAG` off received CAN IDs, silently breaking any 29-bit-ID comparison system-wide. Only three items remain open: #6's deliberately-deferred RX padding validation, and #11/#14 (#14 closed as an intentional tradeoff, not a real gap).
+**2026-08-10, #15 (mixed/29-bit addressing)** — implemented and verified on real hardware; see its writeup below. Also found and fixed a second bug outside the CanTp plugin entirely: `SocketCanDriver::ReadFrame()` didn't mask `CAN_EFF_FLAG` off received CAN IDs, silently breaking any 29-bit-ID comparison system-wide.
+
+**2026-08-10, #11 (error/event reporting) — last item, session complete.** Implemented and verified on real hardware (all 5 triggering scenarios: N_Bs timeout, N_Cr timeout, wrong sequence number, local overflow, peer-signaled overflow). Every item in the original 16-item analysis is now either resolved or explicitly, deliberately deferred with a documented reason (#6's RX padding validation) or reframed as an intentional tradeoff rather than a gap (#8, #14). Nothing left open without a stated reason.
 
 ---
 
@@ -174,14 +176,24 @@ const uint32_t max_payload = dlc;
 
 ## 🔵 Architectural / Minor Issues
 
-### 11. No Error Reporting / Events
+### 11. No Error Reporting / Events — ✅ RESOLVED (2026-08-10)
 
-All error conditions are silently handled:
-- Overflow (`:278`): Sets `rx_state = RX_IDLE`, sends FC Overflow, but application never notified
-- Sequence error (`:324`): Silently resets to RX_IDLE
-- Busy (`:424`): Returns -1 with no way to wait/poll
+All error conditions used to be silently handled:
+- Overflow: Sets `rx_state = RX_IDLE`, sends FC Overflow, but application never notified
+- Sequence error: Silently resets to RX_IDLE
+- Busy: Returns -1 with no way to wait/poll
 
-AUTOSAR defines N_Result values (`N_TIMEOUT_A`, `N_WRONG_SN`, `N_INVALID_FS`, `N_UNEXP_PDU`, `N_WFT_OVRN`, `N_BUFFER_OVFLW`, `N_ERROR`) that should be reported to the upper layer. No callback or event mechanism exists.
+AUTOSAR defines N_Result values that should be reported to the upper layer. No callback or event mechanism existed.
+
+**Fixed**: `CanTpResult` (`N_TIMEOUT_BS`, `N_TIMEOUT_CR`, `N_WRONG_SN`, `N_BUFFER_OVFLW`) — the subset this plugin can actually detect *and attribute to a specific nsdu_id*. Deliberately not the full AUTOSAR list:
+- `N_TIMEOUT_A`/`N_TIMEOUT_AR` don't apply — no local TX-confirmation concept exists in this software transport (`frame_publish_fn` is synchronous, same reasoning as #1's N_As/N_Ar deferral).
+- `N_UNEXP_PDU`/`N_INVALID_FS`/`N_WFT_OVRN` don't apply — FC is always sent synchronously in `tp_on_frame`, so there's no "waiting for FC to be sent" state that could need a retry/timeout result.
+- "Busy" (`can_tp_send()` returning -1) stays a synchronous return value / gRPC status, not an event — it's already directly visible to the caller that triggered it, unlike the four above which fire asynchronously, sometimes long after the triggering call returned (a timeout) or on a frame the caller never sent (peer-signaled overflow).
+- An unrecognized incoming CAN ID has no connection to attribute a drop to — stays a silent drop.
+
+`ICanTp::SubscribeErrors()`/`UnsubscribeErrors()` mirrors the existing RX-payload `Subscribe()`/`Unsubscribe()` pattern exactly (same `error_subs_mutex` split from `tx_mutex`, same empty-`nsdu_ids`-means-all convention). Wired into all four detectable sites: N_Bs/N_Cr timeout in the TX thread's watchdog, wrong CF sequence number, local RX overflow (`FF_DL > rx_buffer_size`), and peer-signaled overflow (`FC(Overflow)` received). New `CanTpService.SubscribeErrors` RPC, `boat can-tp subscribe-errors` CLI command, `CanTpHandle.subscribe_errors()` in the Python SDK.
+
+**Verified on real hardware**, all five triggering scenarios (`N_BUFFER_OVFLW` has two distinct triggers): each produces exactly the expected `CanTpResult` with a correct, specific human-readable message, both via the Python SDK and the CLI's `subscribe-errors` command.
 
 ### 12. TX Thread Busy-Poll — ✅ RESOLVED (2026-08-10)
 
@@ -229,15 +241,17 @@ Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin
 
 ## Summary
 
-**As of 2026-08-10, end of day** — after `c35034e`, `a247557`, and the `feat/can-tp-nbs-ncr-timeouts` + `feat/can-tp-hardening-quickfixes` branches (not yet merged to master):
+**As of 2026-08-10, session complete** — after `c35034e`, `a247557`, and the `feat/can-tp-nbs-ncr-timeouts` + `feat/can-tp-hardening-quickfixes` branches (not yet merged to master):
 
 | Priority | Items | Count |
 |----------|-------|-------|
 | 🔴 Critical | — | **0** |
-| 🟡 Important | #6 No padding (RX validation deliberately deferred, see #6) | **1** |
-| 🔵 Minor/Arch | #8 CF wrap desync (downgraded, mitigated by #1), #11 No error reporting, #14 Single mutex (reframed as intentional) | **3** |
-| ✅ Resolved | #1 N_Bs/N_Cr timeouts (N_As/N_Ar/N_Br/N_Cs deliberately deferred), #2 Dangling pointer race, #3 find_by_target ambiguity (properly fixed via address-byte disambiguation, see #15), #4 SF threshold/FD escape format, #5 FF/CF payload calc (+ extended-addressing RX bug found alongside it), #7 FF min length, #9 Connection overwrite, #10 CAN FD BRS flag, #12 Busy-poll, #13 Triple-lock, #15 29-bit/mixed addressing (+ a SocketCAN driver bug found alongside it), #16 CLI separate .so | **12** |
+| 🟡 Important | — | **0** |
+| 🔵 Minor/Arch, deferred with reason | #6 RX padding validation (needs a "padding mode" concept this plugin doesn't have), #8 CF wrap desync (downgraded, mitigated by #1), #14 Single mutex (reframed as an intentional tradeoff, not a gap) | **3** |
+| ✅ Resolved | #1 N_Bs/N_Cr timeouts (N_As/N_Ar/N_Br/N_Cs deliberately deferred), #2 Dangling pointer race, #3 find_by_target ambiguity (properly fixed via address-byte disambiguation, see #15), #4 SF threshold/FD escape format, #5 FF/CF payload calc (+ extended-addressing RX bug found alongside it), #7 FF min length, #9 Connection overwrite, #10 CAN FD BRS flag, #11 Error/event reporting, #12 Busy-poll, #13 Triple-lock, #15 29-bit/mixed addressing (+ a SocketCAN driver bug found alongside it), #16 CLI separate .so | **13** |
 | **Total** | | **16** |
+
+No item is silently unaddressed: every one of the original 16 is either fixed, or deliberately deferred/reframed with a stated engineering reason recorded in its own section above.
 
 **Original analysis (pre-2026-08-10), for reference:**
 
@@ -248,4 +262,4 @@ Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin
 | 🔵 Minor/Arch | #11 No error reporting, #12 Busy-poll, #13 Triple-lock, #14 Single mutex, #15 No 29-bit/mixed, #16 CLI separate .so | **6** |
 | **Total** | | **16** |
 
-No Critical items remain, and 12 of the original 16 are now resolved. Two genuinely open items remain: **#6's RX padding validation** (deliberately deferred, see its writeup for why) and **#11 (no error/event reporting)** — the last real milestone, now more valuable since there are several silent-drop/timeout scenarios worth surfacing. #8 is downgraded/mitigated rather than fixed outright. #14 is closed as an intentional tradeoff, not a gap.
+13 of the original 16 are now resolved. The remaining 3 are deliberate, documented decisions rather than open work: **#6's RX padding validation** (would need a "padding mode" config concept this plugin doesn't have, and would otherwise break interop with peers legitimately sending variable-length classic CAN frames), **#8** (downgraded — the specific desync scenario is now mitigated by #1's N_Cr backstop), and **#14** (single mutex is an intentional tradeoff supporting #2's fix, not neglect). This gap analysis is, as of this session, closed.
