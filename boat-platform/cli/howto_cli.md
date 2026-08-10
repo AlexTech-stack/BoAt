@@ -50,7 +50,7 @@ boat sim          Simulation lifecycle (create, start, pause, step, stop, state,
 boat scenario     Scenario management (create, get, list, delete, validate)
 boat replay       Trace replay (start, seek, stream, pause, resume, stop, from-events)
 boat frame        Unified frame send/subscribe, list-ifaces (CAN, CANFD, Ethernet, TCP, PDU)
-boat can-tp       CAN Transport Protocol (configure, send, remove, subscribe, list-sessions) — ISO 15765-2
+boat can-tp       CAN Transport Protocol (configure, send, remove, subscribe, subscribe-errors, list-sessions) — ISO 15765-2
 boat pdu          PDU routing (send, route, remove-route, container, group, list-routes, subscribe)
 boat plugin       Plugin management across sim+node scopes (register, list, info, unload)
 boat db           PDU database inspection (list, show, signal-routes)
@@ -130,9 +130,10 @@ boat pdu list-groups
 
 A session is identified by `--nsdu-id` alone. `configure` sets the addressing
 up front (`--source-addr`/`--target-addr` are both required, no fallback to
-`--nsdu-id`); `send`/`remove`/`subscribe` then only take `--nsdu-id` -- no
-addresses. Re-running `configure` for an already-configured `--nsdu-id`
-edits it in place.
+`--nsdu-id`); `send`/`remove`/`subscribe`/`subscribe-errors` then only take
+`--nsdu-id` -- no addresses. Re-running `configure` for an already-configured
+`--nsdu-id` edits it in place -- refused with an error if a transfer is
+currently in flight (retry once it settles, or `remove` first).
 
 ```bash
 # Configure a CanTp session (nsdu_id must be numeric, hex or decimal)
@@ -146,6 +147,11 @@ boat can-tp send --nsdu-id 0x7E0 --data 0123456789ABCDEF...
 # reassembled First Frame + Consecutive Frame transfers)
 boat can-tp subscribe --nsdu-id 0x7E0
 
+# Stream N_Result error/abort events instead (N_Bs/N_Cr timeout, wrong CF
+# sequence number, buffer overflow) -- fires instead of (not in addition
+# to) a subscribe event for an attempt that didn't complete
+boat can-tp subscribe-errors --nsdu-id 0x7E0
+
 # Delete a configured session (fails while a multi-frame transfer is in flight)
 boat can-tp remove --nsdu-id 0x7E0
 ```
@@ -153,6 +159,43 @@ boat can-tp remove --nsdu-id 0x7E0
 A single-ID session (one CAN ID used for both directions) is expressed by
 passing that same value for both `--source-addr` and `--target-addr`
 explicitly -- there is no shortcut that infers it from `--nsdu-id`.
+
+**Timing, CAN FD, and padding** -- all optional, all default to ISO/AUTOSAR
+values:
+
+```bash
+boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 \
+  --n-bs-ms 1000 --n-cr-ms 1000 \    # ISO default 1000ms each; OBD-II uses 75/150
+  --dlc 64 --brs \                   # CAN FD with Bit Rate Switch (--brs needs a bus with a data-phase rate configured)
+  --pad-byte 0xCC                    # ISO/AUTOSAR default fill byte (decimal or 0x-hex)
+```
+
+**Addressing modes** (ISO 15765-2 §10.3) -- `normal` (default, no address
+byte), `extended`, or `mixed` (wire-identical to extended; different
+AUTOSAR/ISO semantic label). `extended`/`mixed` use `--address-byte` (N_TA/
+N_AE) independently of `--target-addr`, which is what actually lets multiple
+connections share one `--target-addr`, disambiguated by that byte:
+
+```bash
+# Extended addressing with an address byte independent of target_addr
+boat can-tp configure --nsdu-id 0x7E0 --source-addr 0x7E0 --target-addr 0x7E8 \
+  --addressing-mode extended --address-byte 0x10
+
+# Two connections sharing one target_addr, disambiguated by address byte
+boat can-tp configure --nsdu-id 1 --source-addr 0x7E0 --target-addr 0x7E8 --addressing-mode mixed --address-byte 0x01
+boat can-tp configure --nsdu-id 2 --source-addr 0x7E0 --target-addr 0x7E8 --addressing-mode mixed --address-byte 0x02
+```
+
+11-bit vs. 29-bit CAN ID isn't a separate addressing mode here -- it's just a
+property of the numeric value passed as `--source-addr`/`--target-addr`
+(anything > `0x7FF` gets the CAN extended-frame flag automatically).
+Conventional 29-bit "Normal Fixed" (`0x18DA<TA><SA>`/`0x18DB<TA><SA>`) and
+"Mixed 29-bit" (`0x18CE<TA><SA>`/`0x18CD<TA><SA>`) IDs are yours to construct
+and pass like any other CAN ID:
+
+```bash
+boat can-tp configure --nsdu-id 1 --source-addr 0x18DAF110 --target-addr 0x18DA10F1
+```
 
 If more than one CanTp instance is loaded (one per CAN interface, e.g. a
 gateway started with `BOAT_NODE_PLUGINS` pointing at `can_tp.so` twice with
@@ -164,11 +207,14 @@ boat can-tp send --nsdu-id 0x7E0 --data 0123 --iface vcan1
 ```
 
 List currently-configured sessions -- across every loaded instance by
-default (each row tagged with its `iface`), or scoped to one:
+default (each row tagged with its `iface`), or scoped to one. `--json`
+additionally includes `n_bs_ms`/`n_cr_ms`/`brs`/`pad_byte`/`address_byte`,
+left out of the plain table to avoid column truncation:
 
 ```bash
 boat can-tp list-sessions
 boat can-tp list-sessions --iface vcan0
+boat --json can-tp list-sessions
 ```
 
 ### 6. Plugin Management

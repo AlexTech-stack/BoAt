@@ -67,16 +67,17 @@ def can_tp_configure(
                      "payload-byte address (N_TA / N_AE respectively -- same wire format, "
                      "different semantic label) and, combined with --address-byte, let "
                      "multiple connections share one --target-addr.")] = AddressingMode.normal,
-    address_byte: Annotated[int, typer.Option("--address-byte", help="N_TA/N_AE byte for this "
-                     "connection (only meaningful with --addressing-mode extended/mixed). "
-                     "0 = derive from --target-addr's low byte (default, matches historical "
-                     "behavior); set explicitly to let multiple connections share one "
-                     "--target-addr, disambiguated by this byte.")] = 0,
+    address_byte: Annotated[str, typer.Option("--address-byte", help="N_TA/N_AE byte for this "
+                     "connection, hex or decimal (only meaningful with --addressing-mode "
+                     "extended/mixed). 0 = derive from --target-addr's low byte (default, "
+                     "matches historical behavior); set explicitly to let multiple connections "
+                     "share one --target-addr, disambiguated by this byte.")] = "0",
     brs: Annotated[bool, typer.Option("--brs", help="CAN FD Bit Rate Switch for this connection's "
                      "frames -- only meaningful with --dlc 64; not on by default, since not "
                      "every CAN FD bus has a distinct data-phase bit rate configured.")] = False,
-    pad_byte: Annotated[int, typer.Option("--pad-byte", help="Fill byte for unused trailing data "
-                     "bytes on every emitted frame (ISO/AUTOSAR default 0xCC).")] = 0xCC,
+    pad_byte: Annotated[str, typer.Option("--pad-byte", help="Fill byte for unused trailing data "
+                     "bytes on every emitted frame, hex or decimal (ISO/AUTOSAR default "
+                     "0xCC).")] = "0xCC",
     iface: Annotated[str, typer.Option("--iface", help="Which loaded CanTp instance to target "
                      "(one per CAN interface). Only needed if more than one is loaded -- "
                      "omit it while there's exactly one.")] = "",
@@ -119,6 +120,8 @@ def can_tp_configure(
     resolved_id = int(nsdu_id, 0)
     resolved_source = int(source_addr, 0)
     resolved_target = int(target_addr, 0)
+    resolved_address_byte = int(address_byte, 0)
+    resolved_pad_byte = int(pad_byte, 0)
 
     config = can_tp_pb2.CanTpConfig(
         nsdu_id=resolved_id,
@@ -131,9 +134,9 @@ def can_tp_configure(
         n_bs_ms=n_bs_ms,
         n_cr_ms=n_cr_ms,
         addressing_mode=_ADDRESSING_MODE_PROTO[addressing_mode],
-        address_byte=address_byte,
+        address_byte=resolved_address_byte,
         brs=brs,
-        pad_byte=pad_byte,
+        pad_byte=resolved_pad_byte,
     )
 
     try:
@@ -148,8 +151,8 @@ def can_tp_configure(
          "addr_mode", "address_byte", "brs", "pad_byte", "iface"],
         [[f"0x{resolved_id:X}", f"0x{resolved_source:X}", f"0x{resolved_target:X}",
           block_size, st_min, can_dlc, n_bs_ms, n_cr_ms, addressing_mode.value,
-          f"0x{address_byte:02X}" if address_byte else "(derived)", brs,
-          f"0x{pad_byte:02X}", resp.iface]],
+          f"0x{resolved_address_byte:02X}" if resolved_address_byte else "(derived)", brs,
+          f"0x{resolved_pad_byte:02X}", resp.iface]],
         ctx.obj.get("json_mode", False),
     )
 
