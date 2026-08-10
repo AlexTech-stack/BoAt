@@ -26,6 +26,8 @@ Note: most `:line` citations below predate the `nsdu_id`-keying refactor and no 
 
 **2026-08-10, quick-fix bundle** (`feat/can-tp-hardening-quickfixes`, stacked on the above) — #4, #5, #7, #12, #13 all resolved; see each item below for what actually shipped (#4 and #12 turned out to need more than the "quick" framing suggested). Also found and fixed, via hardware testing rather than review, a bug not in the original 16: **extended-addressing RX was fundamentally broken** — the PCI byte was read from the wrong position for every incoming extended-addressing frame, so it never worked at all (folded into #5's writeup, since it surfaced while verifying that fix). Full non-HIL/non-determinism test suite (133 tests) + Python suite (213 tests) green throughout; real round trips verified for classic, extended-addressing, and both timeout paths.
 
+**2026-08-10, continued on the same branch** — #3, #9, #10, and #6's remainder all resolved; see each item below. All verified on real PCAN hardware, including CAN FD with a data-phase bit rate configured (`dbitrate 2000000 fd on`) specifically to observe the BRS flag on the wire. One pre-existing unit test hardcoded the old pad-byte value (0x55) in its expected output and needed updating for the new default (0xCC) — a real, expected consequence of the fix, not a regression.
+
 ---
 
 ## ✅ What IS Implemented Correctly
@@ -82,15 +84,11 @@ Residual, smaller issue: the TX thread still reads `conn->tx_state`/`conn->confi
 
 ---
 
-### 3. `find_by_target` Returns First Match Only — still open, downgraded to 🟡 Important
+### 3. `find_by_target` Returns First Match Only — ✅ RESOLVED (2026-08-10)
 
-`can_tp_plugin.cpp:46-51`: Linear scan over `connections` still returns the first connection whose `target_addr` matches — this function is byte-for-byte unchanged since the original analysis.
+`can_tp_plugin.cpp:46-51`: Linear scan over `connections` returns the first connection whose `target_addr` matches — this function itself is unchanged, and still would silently misroute if it were ever reached with a genuine duplicate.
 
-**What changed**: the map is now keyed by `nsdu_id` instead of `source_addr` (`a247557`), so this is no longer entangled with the connection-overwrite bug (#9) — configuring two connections that happen to share a `target_addr` no longer clobbers one of them, they just both silently exist with only one reachable on RX. The underlying ambiguity is narrower than before (it now takes two *distinct, deliberately-configured* `nsdu_id`s pointing at the same peer CAN ID, rather than any accidental `source_addr` reuse) but the bug itself is untouched.
-
-If two connections use the same target_addr, incoming frames on that CAN ID are always routed to the first one found (unordered_map iteration order). The second connection never receives any frames.
-
-Violates AUTOSAR CanTp096 (multiple simultaneous connections).
+**Fixed at the source instead**: `find_by_target()`'s ambiguity is unfixable in general (nothing in a plain ISO-TP frame identifies which of two connections sharing a CAN ID it's for — that's what mixed addressing's N_AE byte is for, see #15), so `can_tp_configure()` now rejects configuring a `target_addr` already claimed by a *different* `nsdu_id` on the same instance (returns -3; a connection re-configuring itself with its own `target_addr` is not a conflict). Turns a silent, undetectable routing failure into an immediate, clear configuration-time error (AUTOSAR CanTp096: multiple simultaneous connections must be distinguishable). Verified on real hardware: a second `nsdu_id` targeting an already-claimed `target_addr` is rejected with `FAILED_PRECONDITION`; re-configuring the original `nsdu_id` with the same `target_addr` still succeeds.
 
 ---
 
@@ -112,20 +110,17 @@ Turned out to be more than a threshold tweak: ISO 15765-2:2016 Table 11 defines 
 
 ---
 
-### 6. No Padding Byte Handling — 🟡 Partially resolved (2026-08-10)
+### 6. No Padding Byte Handling — 🟡 Mostly resolved (2026-08-10)
 
 ISO 15765-2 §10.4: Unused CAN data bytes shall be padded (`0xCC` by default, or `0x00` for extended addressing). AUTOSAR CanTp320-325 define configurable padding per N-SDU.
 
-**Fixed**: every emitted SF/FF/CF/FC now goes through a `pad_frame()` helper (`can_tp_plugin.cpp:19-29`) and is sent at the connection's fixed `can_dlc`, not actual payload length — the "DLC set to actual payload size" complaint below no longer applies.
+**Fixed**: every emitted SF/FF/CF/FC now goes through a `pad_frame()` helper (`can_tp_plugin.cpp:19-29`) and is sent at the connection's fixed `can_dlc`, not actual payload length — the "DLC set to actual payload size" complaint below no longer applies. The pad byte is now `CanTpConfig::pad_byte`, configurable per N-SDU (CanTp320-325), defaulting to the AUTOSAR/ISO value `0xCC` (was hardcoded `0x55`) via the same 0-sentinel convention as `n_bs_ms`/`n_cr_ms` — one documented consequence: literal `0x00` padding isn't independently selectable through this field (0 always resolves to the 0xCC default), since 0x00 is both a legitimate real pad value and the sentinel. Verified on real hardware: default sends `0xCC`-padded frames, `--pad-byte <n>` (any non-zero value) sends that value instead.
 
-**Still open**:
-- Pad byte is hardcoded to `0x55`, not the AUTOSAR default `0xCC` (nor `0x00` for extended addressing), and isn't configurable per N-SDU (CanTp320-325).
-- No RX padding validation: padding errors from non-compliant peers still go undetected (CanTp321/322).
+**Deliberately deferred**: RX-side padding validation (CanTp321/322: reject SF/last CF shorter than `can_dlc`). Considered and rejected for now — enforcing it means treating any incoming frame shorter than the configured `can_dlc` as a protocol violation, but classic CAN legitimately allows variable-length frames, and this plugin has no "padding mode" config concept to distinguish "peer pads, reject anything short" from "peer doesn't pad, variable length is fine." Building that distinction properly is more scope than this pass; revisit alongside #11 (error reporting) so a violation has somewhere to be reported instead of just silently rejected.
+
 - OBD (`ISO15765-4 §6.4.1`): Requires DLC always 8 (padding mandatory) — satisfied by default `can_dlc=8`, but not enforced.
 
-~~Outgoing frames (`:440, :458, :102`): DLC is set to actual payload size, not `can_dlc`. Most CAN controllers pad to valid DLC — trailing bytes may contain stale data.~~ (fixed, see above)
-
-**AUTOSAR specifics**:
+**AUTOSAR specifics** (RX validation reference, for when #11 makes this worth implementing):
 - CanTp320: Rx padding ON → only accept SF/last CF with length = 8 bytes
 - CanTp321: Rx padding ON, SF length < 8 → reject with `CANTP_E_PADDING`
 - CanTp322: Rx padding ON, last CF length ≠ 8 → abort with `NTFRSLT_PADDING_E_NOT_OK`
@@ -143,47 +138,35 @@ ISO 15765-2 §9.6.3.2 Table 14: FF must carry at least 8 bytes (values 0-7 are i
 
 ---
 
-### 8. CF Sequence Wrap + Loss Desync
+### 8. CF Sequence Wrap + Loss Desync — 🔵 Downgraded to Minor, mitigated by #1 (2026-08-10)
 
-`can_tp_plugin.cpp:342`:
+`can_tp_plugin.cpp:342` (original line; sequence check logic unchanged):
 ```cpp
 conn->rx_next_seq = (seq + 1) & 0x0F;
 ```
 
-If a CF is lost just before the seq=15→0 wrap boundary, the receiver may re-synchronize on incorrect data. Example:
-- CF seq=14 sent, lost in transit
-- CF seq=15 sent, received — receiver expects 15, gets 15, accepts it
-- Buffer now has a gap (missing CF seq=14's data) but receiver continues
-
-ISO 15765-2 handles this via N_Cr timeout — if a CF is not received within N_Cr, the session is aborted. Since timeouts are not implemented, this edge case is undetected.
+The specific scenario described here is largely closed now that N_Cr exists (#1): the immediate seq-mismatch check (`if (seq != conn->rx_next_seq) { rx_state = RX_IDLE; return; }`, a few lines above) already catches a lost CF in the general case — the receiver expects seq N, gets seq N+1, and aborts immediately rather than accepting mismatched data. What remains is the exact-wrap edge case (a CF lost at precisely the 15→0 rollover, where the *next* correct-looking seq value coincidentally matches what's expected) — and even that residual case now has N_Cr as a backstop: if the session doesn't cleanly resync, it will time out rather than hang. Not reclassifying as fully resolved since the exact-wrap scenario is still theoretically reachable and untested, but no longer a hang-forever bug — downgraded from Important to Minor/Arch.
 
 ---
 
-### 9. Connection Overwrite Silently Discards Active Session — still open
+### 9. Connection Overwrite Silently Discards Active Session — ✅ RESOLVED (2026-08-10)
 
-`can_tp_plugin.cpp:485`:
-```cpp
-plugin->connections[conn.nsdu_id] = conn;
-```
+`can_tp_plugin.cpp:485` (old): `plugin->connections[conn.nsdu_id] = conn;` — unconditional overwrite, no busy check.
 
-Now keyed by `nsdu_id` rather than `source_addr`, but the behavior is unchanged — and now explicitly *intentional*, per the comment directly above it: "Re-configuring an already-configured nsdu_id overwrites it in place (doubles as 'edit'); this also resets rx/tx state, which is fine even mid-transfer since tp_on_frame's RX path and the TX pacing thread both hold this same lock before touching a connection." That comment addresses the *memory-safety* half (safe to overwrite without crashing, ties into #2's fix) but not the *protocol-compliance* half below:
-
-- If a connection with the same `nsdu_id` exists and has an active TX (TX_WAIT_FC, TX_SEND_CF), the old session is still silently destroyed. In-flight data is lost.
-- No error is returned to the caller.
-- AUTOSAR CanTp123: TX channel in CANTP_TX_PROCESSING shall reject new TX requests with E_NOT_OK.
+**Fixed**: `can_tp_configure()` now checks, before overwriting, whether the existing connection (if any) has an active TX (`tx_state` not `IDLE`/`COMPLETE`) or RX (`rx_state == RX_WAIT_CF`) and refuses with -2 if so — same convention and same "busy" return code as `can_tp_remove()`'s existing guard, extended here to RX for the same data-loss reason. Directly implements AUTOSAR CanTp123 ("TX channel in CANTP_TX_PROCESSING shall reject new TX requests with E_NOT_OK"). Verified on real hardware: re-configuring a session mid-transfer (`TX_WAIT_FC`) is rejected with `FAILED_PRECONDITION`; once the transfer settles (or times out via #1's N_Bs), the same re-configure succeeds.
 
 ---
 
-### 10. CAN FD DLC Encoding — reframed (2026-08-10), BRS flag gap still real
+### 10. CAN FD DLC Encoding — ✅ RESOLVED (2026-08-10)
 
-`can_tp_plugin.cpp:90, 542`:
+`can_tp_plugin.cpp:90, 542` (original lines):
 ```cpp
 const uint32_t max_payload = dlc;
 ```
 
-**Reframe**: `CanTpConfig::can_dlc` is documented in the public ABI (`sdk/cpp/include/boat/can_tp.h:25`) as "max CAN DLC for this connection (**8 or 64**)" — i.e. it's specified as a byte-length value by design, not the raw ISO 11898-1 4-bit DLC *code* (0-15). Given that, treating it as a byte count directly is correct, not a bug — the original framing (comparing against the DLC-code→byte-length table) doesn't apply to this field as designed. Worth double-checking there's no config path that ever hands this a code in the 9-15 range instead of a byte count, but no evidence of that in the current CLI/SDK.
+**Reframe (still stands)**: `CanTpConfig::can_dlc` is documented in the public ABI as "max CAN DLC for this connection (**8 or 64**)" — a byte-length value by design, not the raw ISO 11898-1 4-bit DLC *code*. Treating it as a byte count directly is correct, not a bug.
 
-**Still a real gap**: no BRS (Bit Rate Switch) flag is set for CAN FD frames — every `BoatFrameOwner::Can(...)` call passes `is_fd ? 0x04 : 0` (FDF only; `CANFD_BRS` is `0x01`, never set). CAN FD frames are always sent at the base data rate.
+**BRS flag gap — fixed**: `CanTpConfig` gets `brs` (default `false` — not forced on for every CAN FD connection, since not every CAN FD bus has a distinct data-phase bit rate configured to switch to), threaded through every outgoing frame's flags byte via a new `can_flags(is_fd, brs)` helper replacing the six duplicated `is_fd ? 0x04 : 0` call sites. Verified on real hardware with the interfaces explicitly reconfigured for CAN FD + a distinct data-phase bit rate (`dbitrate 2000000 fd on`): `candump -x` shows the `B` (BRS) flag present with `--brs`, absent without it, on otherwise-identical frames.
 
 ---
 
@@ -235,14 +218,14 @@ Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin
 
 ## Summary
 
-**As of 2026-08-10, end of day** — after `c35034e`, `a247557`, and the `feat/can-tp-nbs-ncr-timeouts` + `feat/can-tp-hardening-quickfixes` branches (not yet merged to master):
+**As of 2026-08-10, end of day (continued)** — after `c35034e`, `a247557`, and the `feat/can-tp-nbs-ncr-timeouts` + `feat/can-tp-hardening-quickfixes` branches (not yet merged to master):
 
 | Priority | Items | Count |
 |----------|-------|-------|
 | 🔴 Critical | — | **0** |
-| 🟡 Important | #3 find_by_target single match (downgraded from Critical), #6 No padding (partial), #8 CF wrap desync, #9 Connection overwrite, #10 CAN FD BRS flag (reframed) | **5** |
-| 🔵 Minor/Arch | #11 No error reporting, #14 Single mutex (reframed as intentional), #15 No 29-bit/mixed | **3** |
-| ✅ Resolved | #1 N_Bs/N_Cr timeouts (N_As/N_Ar/N_Br/N_Cs deliberately deferred, see #1), #2 Dangling pointer race, #4 SF threshold/FD escape format, #5 FF/CF payload calc (+ the extended-addressing RX bug found alongside it), #7 FF min length, #12 Busy-poll, #13 Triple-lock, #16 CLI separate .so | **8** |
+| 🟡 Important | #6 No padding (RX validation deliberately deferred, see #6) | **1** |
+| 🔵 Minor/Arch | #8 CF wrap desync (downgraded, mitigated by #1), #11 No error reporting, #14 Single mutex (reframed as intentional), #15 No 29-bit/mixed | **4** |
+| ✅ Resolved | #1 N_Bs/N_Cr timeouts (N_As/N_Ar/N_Br/N_Cs deliberately deferred), #2 Dangling pointer race, #3 find_by_target ambiguity (reject at Configure time), #4 SF threshold/FD escape format, #5 FF/CF payload calc (+ extended-addressing RX bug found alongside it), #7 FF min length, #9 Connection overwrite, #10 CAN FD BRS flag, #12 Busy-poll, #13 Triple-lock, #16 CLI separate .so | **11** |
 | **Total** | | **16** |
 
 **Original analysis (pre-2026-08-10), for reference:**
@@ -254,4 +237,4 @@ Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin
 | 🔵 Minor/Arch | #11 No error reporting, #12 Busy-poll, #13 Triple-lock, #14 Single mutex, #15 No 29-bit/mixed, #16 CLI separate .so | **6** |
 | **Total** | | **16** |
 
-No Critical items remain, and half the original 16 are now resolved. The most impactful open items are the **`find_by_target` single-match bug** (#3) and the **silent connection-overwrite mid-session** (#9) — both session-integrity issues rather than crashes or hangs — followed by **#11 (no error/event reporting)**, which is the natural next milestone now that timeouts and other silent-drop scenarios exist to report on.
+No Critical items remain, and 11 of the original 16 are now resolved. Only three genuinely open items remain: **#6's RX padding validation** (deliberately deferred, see its writeup for why), **#11 (no error/event reporting)** — the natural next milestone, now more valuable since there are several silent-drop/timeout scenarios worth surfacing — and **#15 (29-bit/mixed addressing)**, a large feature whose necessity for BoAt's simulation purpose is genuinely unclear (see the PDU gap analysis's Tier A/B framing). #14 is closed as an intentional tradeoff, not a gap.
