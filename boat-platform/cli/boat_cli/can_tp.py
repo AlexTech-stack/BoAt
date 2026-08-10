@@ -230,15 +230,22 @@ def can_tp_list_sessions(
         _rpc_error(ex)
         return
 
+    json_mode = ctx.obj.get("json_mode", False)
+    columns = ["iface", "nsdu_id", "source_addr", "target_addr", "bs", "stmin", "dlc", "ext_addr"]
     rows = [
         [s.iface, f"0x{s.nsdu_id:X}", f"0x{s.source_addr:X}", f"0x{s.target_addr:X}",
-         s.block_size, s.st_min, s.can_dlc, s.extended_addressing, s.n_bs_ms, s.n_cr_ms,
-         s.rx_state, s.tx_state]
+         s.block_size, s.st_min, s.can_dlc, s.extended_addressing]
         for s in resp.sessions
     ]
-    print_table(
-        ["iface", "nsdu_id", "source_addr", "target_addr", "bs", "stmin", "dlc",
-         "ext_addr", "n_bs_ms", "n_cr_ms", "rx_state", "tx_state"],
-        rows,
-        ctx.obj.get("json_mode", False),
-    )
+    # n_bs_ms/n_cr_ms ride along in --json (no width limit there) but are
+    # left out of the plain table -- this table already sits at the edge of
+    # Rich's default 80-col non-tty fallback, and two more columns push
+    # existing ones into "…"-truncation.
+    if json_mode:
+        columns += ["n_bs_ms", "n_cr_ms"]
+        for row, s in zip(rows, resp.sessions):
+            row += [s.n_bs_ms, s.n_cr_ms]
+    columns += ["rx_state", "tx_state"]
+    for row, s in zip(rows, resp.sessions):
+        row += [s.rx_state, s.tx_state]
+    print_table(columns, rows, json_mode)
