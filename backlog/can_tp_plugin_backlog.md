@@ -28,6 +28,8 @@ Note: most `:line` citations below predate the `nsdu_id`-keying refactor and no 
 
 **2026-08-10, continued on the same branch** — #3, #9, #10, and #6's remainder all resolved; see each item below. All verified on real PCAN hardware, including CAN FD with a data-phase bit rate configured (`dbitrate 2000000 fd on`) specifically to observe the BRS flag on the wire. One pre-existing unit test hardcoded the old pad-byte value (0x55) in its expected output and needed updating for the new default (0xCC) — a real, expected consequence of the fix, not a regression.
 
+**2026-08-10, #15 (mixed/29-bit addressing)** — implemented and verified on real hardware; see its writeup below. Also found and fixed a second bug outside the CanTp plugin entirely: `SocketCanDriver::ReadFrame()` didn't mask `CAN_EFF_FLAG` off received CAN IDs, silently breaking any 29-bit-ID comparison system-wide. Only three items remain open: #6's deliberately-deferred RX padding validation, and #11/#14 (#14 closed as an intentional tradeoff, not a real gap).
+
 ---
 
 ## ✅ What IS Implemented Correctly
@@ -199,14 +201,23 @@ TX thread used to acquire `tx_mutex` 3× per single CF send (read tx_seq/chunk, 
 
 No longer an unexamined oversight: the header now carries an explicit comment (`can_tp_plugin.h:80-84`) explaining this mutex is deliberately doing double duty as the RX-vs-`Remove()` serialization point (the fix for #2) — "it's effectively a general per-plugin connection-state mutex now, not just a TX-thread lock, so that Remove() erasing a connection can never race a concurrent on_frame() dereferencing the same NsduConnection*." Per-connection locking is still the right long-term fix if contention becomes a real problem, but the current single-mutex design is a considered choice, not neglect.
 
-### 15. No 29-Bit / Mixed Addressing
+### 15. No 29-Bit / Mixed Addressing — ✅ RESOLVED (2026-08-10)
 
-ISO 15765-2 §10.3.5 defines mixed addressing where:
-- 29-bit CAN ID carries source + target in extended identifier bits
-- First data byte carries N_AE (address extension)
-- AUTOSAR SRS_Can_01078 requires all four addressing formats (normal, extended, mixed 11-bit, mixed 29-bit, normal fixed)
+ISO 15765-2 §10.3.5 defines mixed addressing (29-bit CAN ID + N_AE address-extension byte) and normal fixed addressing (29-bit CAN ID, no address byte). AUTOSAR SRS_Can_01078 requires all four addressing formats (normal, extended, mixed 11-bit, mixed 29-bit, normal fixed).
 
-Plugin only supports 11-bit normal + 1-byte extended.
+**Byte layout verified against a reference implementation** ([can-isotp addressing docs](https://can-isotp.readthedocs.io/en/latest/isotp/addressing.html)) before implementing: Normal Fixed is `0x18DA<TA><SA>` (physical) / `0x18DB<TA><SA>` (functional); Mixed 29-bit is `0x18CE<TA><SA>` / `0x18CD<TA><SA>` plus an N_AE payload byte; Mixed 11-bit is wire-identical to Extended (same address-byte mechanism, different AUTOSAR/ISO semantic label).
+
+**Key design realization**: 11-bit vs. 29-bit isn't a separate addressing *mode* in this implementation — it's just a property of the numeric value passed as `source_addr`/`target_addr`, since the driver already auto-detects `CAN_EFF_FLAG` for any ID > 0x7FF, and this plugin has always treated those fields as opaque CAN IDs (never a raw 4-bit DLC-style code). So "Normal Fixed" is just `addressing_mode=NORMAL` with a 29-bit-valued `target_addr`/`source_addr` (caller constructs the `0x18DAxxyy` value themselves), and "Mixed 29-bit" is `addressing_mode=MIXED` the same way. No 29-bit-specific code was needed beyond that.
+
+**The real functional gap, found while designing this**: "extended addressing" as it existed before this fix only *added* a redundant address byte derived from the same CAN ID already used for routing (`target_addr & 0xFF`) — it could never do the one thing extended/mixed addressing exists for: letting multiple logical connections share one physical CAN ID, disambiguated by the address byte. Fixed by:
+- `CanTpConfig` gains `addressing_mode` (`CanTpAddressingMode`: NORMAL/EXTENDED/MIXED) and `address_byte` (independently configurable N_TA/N_AE, 0 = derive from `target_addr & 0xFF` for backward compatibility).
+- `find_by_target()` now collects *all* `target_addr` matches and, when there's more than one, disambiguates by reading the address byte (always `payload[0]` when present, regardless of 11- vs 29-bit ID — addressing mode only affects the CAN ID field, never the payload layout).
+- `can_tp_configure()`'s duplicate-`target_addr` rejection (the fix for #3) is relaxed to allow exactly this case: sharing is fine when every sharer has an address byte and they're all distinct; anything else (a NORMAL sharer, or colliding address bytes) is still rejected as a genuine unresolvable ambiguity.
+- `extended_addressing` (the old bool) is kept as a deprecated alias for `addressing_mode=EXTENDED`, so pre-existing configs keep working unchanged.
+
+**A second real bug found via hardware testing, outside the CanTp plugin entirely**: `SocketCanDriver::ReadFrame()` (`src/hil/can/socket_can_driver.cpp`) copied `raw.can_id` straight through without masking off `CAN_EFF_FLAG`/`CAN_RTR_FLAG`/`CAN_ERR_FLAG`, so every received 29-bit-ID frame's `can_id` silently carried `CAN_EFF_FLAG` (0x80000000) while `WriteFrame()` and every downstream comparison (not just CanTp) treat `can_id` as a plain value. A 29-bit frame could never match a plain-valued `target_addr` on RX. Fixed by masking with `CAN_EFF_MASK`/`CAN_SFF_MASK` as appropriate — this was a pre-existing, system-wide bug affecting any 29-bit CAN ID use, not something introduced by this work; it just happened to be the first thing to actually exercise 29-bit IDs end-to-end.
+
+**Verified on real hardware**: two connections sharing one `target_addr` with distinct `address_byte`s each correctly receive only their own data; a duplicate `target_addr` with NORMAL addressing (or colliding `address_byte`s) is rejected with `FAILED_PRECONDITION`; EXTENDED addressing with an `address_byte` independent of `target_addr`'s low byte round-trips correctly (confirmed the wire byte matches the configured value, not the derived one); a `0x18DAxxyy`-style 29-bit "Normal Fixed" transfer round-trips byte-exact.
 
 ### 16. CLI / Python SDK Loads Separate .so — ✅ RESOLVED (2026-08-10)
 
@@ -218,14 +229,14 @@ Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin
 
 ## Summary
 
-**As of 2026-08-10, end of day (continued)** — after `c35034e`, `a247557`, and the `feat/can-tp-nbs-ncr-timeouts` + `feat/can-tp-hardening-quickfixes` branches (not yet merged to master):
+**As of 2026-08-10, end of day** — after `c35034e`, `a247557`, and the `feat/can-tp-nbs-ncr-timeouts` + `feat/can-tp-hardening-quickfixes` branches (not yet merged to master):
 
 | Priority | Items | Count |
 |----------|-------|-------|
 | 🔴 Critical | — | **0** |
 | 🟡 Important | #6 No padding (RX validation deliberately deferred, see #6) | **1** |
-| 🔵 Minor/Arch | #8 CF wrap desync (downgraded, mitigated by #1), #11 No error reporting, #14 Single mutex (reframed as intentional), #15 No 29-bit/mixed | **4** |
-| ✅ Resolved | #1 N_Bs/N_Cr timeouts (N_As/N_Ar/N_Br/N_Cs deliberately deferred), #2 Dangling pointer race, #3 find_by_target ambiguity (reject at Configure time), #4 SF threshold/FD escape format, #5 FF/CF payload calc (+ extended-addressing RX bug found alongside it), #7 FF min length, #9 Connection overwrite, #10 CAN FD BRS flag, #12 Busy-poll, #13 Triple-lock, #16 CLI separate .so | **11** |
+| 🔵 Minor/Arch | #8 CF wrap desync (downgraded, mitigated by #1), #11 No error reporting, #14 Single mutex (reframed as intentional) | **3** |
+| ✅ Resolved | #1 N_Bs/N_Cr timeouts (N_As/N_Ar/N_Br/N_Cs deliberately deferred), #2 Dangling pointer race, #3 find_by_target ambiguity (properly fixed via address-byte disambiguation, see #15), #4 SF threshold/FD escape format, #5 FF/CF payload calc (+ extended-addressing RX bug found alongside it), #7 FF min length, #9 Connection overwrite, #10 CAN FD BRS flag, #12 Busy-poll, #13 Triple-lock, #15 29-bit/mixed addressing (+ a SocketCAN driver bug found alongside it), #16 CLI separate .so | **12** |
 | **Total** | | **16** |
 
 **Original analysis (pre-2026-08-10), for reference:**
@@ -237,4 +248,4 @@ Original finding: `CanTpHandle.configure()`/`send()` passed `None` as the plugin
 | 🔵 Minor/Arch | #11 No error reporting, #12 Busy-poll, #13 Triple-lock, #14 Single mutex, #15 No 29-bit/mixed, #16 CLI separate .so | **6** |
 | **Total** | | **16** |
 
-No Critical items remain, and 11 of the original 16 are now resolved. Only three genuinely open items remain: **#6's RX padding validation** (deliberately deferred, see its writeup for why), **#11 (no error/event reporting)** — the natural next milestone, now more valuable since there are several silent-drop/timeout scenarios worth surfacing — and **#15 (29-bit/mixed addressing)**, a large feature whose necessity for BoAt's simulation purpose is genuinely unclear (see the PDU gap analysis's Tier A/B framing). #14 is closed as an intentional tradeoff, not a gap.
+No Critical items remain, and 12 of the original 16 are now resolved. Two genuinely open items remain: **#6's RX padding validation** (deliberately deferred, see its writeup for why) and **#11 (no error/event reporting)** — the last real milestone, now more valuable since there are several silent-drop/timeout scenarios worth surfacing. #8 is downgraded/mitigated rather than fixed outright. #14 is closed as an intentional tradeoff, not a gap.
