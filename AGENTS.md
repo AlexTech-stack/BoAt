@@ -31,7 +31,8 @@
     - `someip.h` — SOME/IP protocol constants
   - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|replay|frame|can|eth|pdu|can-tp|plugin|...`)
   - `config/` — PDU database JSON files
-  - `demo/` — Demo node scripts (not web UI)
+  - `demo/` — Demo node scripts (not web UI; scenario-specific, e.g. `cyclic_sender_node.py`'s CAN-ID start/stop trigger)
+  - `nodes/` — General-purpose node scripts discovered/run by `ui/control_panel.py`'s "Nodes" web UI (any `.py` file not prefixed `_`, auto-listed with its module docstring's first line). Each accepts `--address` (default `None`, so `BOAT_HOST` decides when omitted) and its own behavior flags -- see `cyclic_can_sender.py` (configurable periodic CAN(FD) frame) and `can_request_responder.py` (replies to one CAN ID with a fixed response) for the pattern. `control_panel.py` always passes `--address <its gateway field>` explicitly, so both flows work: driven from that web UI, or from anything that just sets `BOAT_HOST` and omits `--address`.
 - **`ui/`** — 7 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, recorder:8083, control_panel, debug, system_dashboard)
 - **`tools/`** — 2 standalone tools (pdu_editor:8087, trace_analyzer:8088)
 - **`traces/`** — Trace output directory (gitignored)

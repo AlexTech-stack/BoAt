@@ -120,6 +120,8 @@ via `./start_ui.sh`.
 
 **Preconditions:**
 - At least one non-interactive node script under `boat-platform/nodes/`
+  (`cyclic_can_sender.py` and `can_request_responder.py`, added specifically
+  to satisfy this precondition -- see `backlog/nodes_backlog.md`)
 
 **TestSteps:**
 1. Open Nodes (8081); start a node; observe its rolling log
@@ -129,9 +131,20 @@ via `./start_ui.sh`.
 - Node subprocess starts (traffic/log visible), log streams into the UI, stop
   terminates it and shows the exit code; interactive nodes are marked not runnable
 
-**Verdict:** NOT_TESTED
+**Verdict:** OK
 
 **Result:**
+Verified on real hardware (`agn-testcomputer`) via the actual API calls the
+web UI's own JS makes (equivalent to using the page): `GET /api/nodes`
+correctly discovered both `cyclic_can_sender` and `can_request_responder`
+(neither interactive -- no `input()` in either), with their module
+docstrings shown. `POST /api/nodes/can_request_responder/start?address=
+localhost:50055` started it; confirmed it was genuinely functioning (not
+just "a process exists") by sending a real CAN request and capturing the
+reply on the wire via `candump`: `0x7E0 [22 F1 90]` → `0x7E8 [50 01]`,
+<1ms turnaround. `POST .../stop` cleanly terminated it; a subsequent
+`GET /api/nodes` showed `status: "stopped"`. `GET /api/nodes/.../log`
+showed the `[control-panel] started PID ...` line as expected.
 
 ---
 
