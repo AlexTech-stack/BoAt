@@ -373,6 +373,39 @@ Verified two ways:
   real, B vanishes + selection clears, click A for real, action helper
   resolves to A's real id) verified on real hardware (`agn-testcomputer`).
 
+## Done (2026-08-12, continued) — session save/load (docker-compose-style YAML)
+
+New `admin_gui/session.py` (Qt-free, `PyYAML`): `save_session()` writes
+every host + its agent-managed instance definitions (never `managed: false`
+rows) to a YAML file; `load_session()` reads one back and performs the
+actual `create_instance()` + `start_instance()` calls against each host's
+agent, returning `(hosts_to_add, errors)` for the caller (`MainWindow`) to
+add via its own `HostStore` and report. New **Save Session…** / **Load
+Session…** buttons next to the host controls. Deliberately a *recipe*, not
+a live-state resume -- loading always creates fresh instances (new ids,
+new PIDs), the same way `docker-compose up` doesn't resume old container
+ids; reloading the same file while those instances are still running hits
+a port conflict on the explicit saved `grpc_port`, same as
+`docker-compose up` against an already-bound port.
+
+This is the client-side answer to the "agent restart loses everything"
+in-memory-registry gap above -- not automatic recovery, but "save before
+you might lose it, reload after" now has a real workflow, and it doubles
+as a way to hand a whole multi-host setup to someone else as one file.
+
+Verified on real hardware (`agn-testcomputer`) with a full round trip:
+created two agent-managed instances (one with a plugin config, an eth
+interface, and an explicit port) plus one external (manually-started)
+process; saved -- confirmed the YAML contains exactly the two managed
+instances with every field matching what was created, and the external
+one is absent; wiped the agent completely (stopped+deleted both managed
+instances, killed the external process); loaded the saved file into a
+**totally fresh** `MainWindow`/`HostStore` (no hosts at all, simulating a
+different machine or a fresh session) -- `load_session()` reported zero
+errors, the host was added correctly, and both instances came back
+running with fields matching the original definitions exactly, each under
+a **new** id (confirmed `!= ` the original), not a resume.
+
 ## Next steps (not started)
 
 - Interface-creation UI / agent endpoints (still deliberately deferred, see

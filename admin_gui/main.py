@@ -22,6 +22,8 @@ import os
 import sys
 from typing import Optional, Tuple
 
+import yaml
+
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QInputDialog,
@@ -48,6 +51,7 @@ from PySide6.QtWidgets import (
 
 from agent_client import AgentClient, AgentError
 from host_store import HostStore
+import session
 
 _POLL_INTERVAL_SEC = 2.0
 
@@ -553,8 +557,14 @@ class MainWindow(QMainWindow):
         add_host_btn.clicked.connect(self.add_host)
         remove_host_btn = QPushButton("Remove Host")
         remove_host_btn.clicked.connect(self.remove_host)
+        save_session_btn = QPushButton("Save Session…")
+        save_session_btn.clicked.connect(self.save_session)
+        load_session_btn = QPushButton("Load Session…")
+        load_session_btn.clicked.connect(self.load_session)
         host_btns.addWidget(add_host_btn)
         host_btns.addWidget(remove_host_btn)
+        host_btns.addWidget(save_session_btn)
+        host_btns.addWidget(load_session_btn)
         host_bar.addLayout(host_btns)
         root.addLayout(host_bar)
 
@@ -648,6 +658,50 @@ class MainWindow(QMainWindow):
         host = self.host_store.list()[idx]
         self.host_store.remove(host["url"])
         self.refresh_host_list()
+
+    # ── Session save/load ───────────────────────────────────────────────
+
+    def save_session(self) -> None:
+        """Snapshots the current hosts + their agent-managed instance
+        *definitions* (not externally-discovered ones -- see session.py) to
+        a YAML file, docker-compose-style."""
+        path, _ = QFileDialog.getSaveFileName(self, "Save Session", "session.yaml", "YAML files (*.yaml *.yml)")
+        if not path:
+            return
+        try:
+            session.save_session(path, self.host_store.list(), self._snapshot)
+        except OSError as e:
+            QMessageBox.warning(self, "Save Session", f"Failed to write file: {e}")
+            return
+        QMessageBox.information(self, "Save Session", f"Saved to {path}")
+
+    def load_session(self) -> None:
+        """Adds every host in the file (skipping ones already present) and
+        re-creates + starts every saved instance definition -- a recipe
+        replay, not a resume: each loaded instance gets a fresh id/PID, the
+        same way `docker-compose up` doesn't resume old container ids."""
+        path, _ = QFileDialog.getOpenFileName(self, "Load Session", "", "YAML files (*.yaml *.yml)")
+        if not path:
+            return
+        try:
+            hosts_to_add, errors = session.load_session(path)
+        except (OSError, yaml.YAMLError) as e:
+            QMessageBox.warning(self, "Load Session", f"Failed to read file: {e}")
+            return
+        added = 0
+        for h in hosts_to_add:
+            try:
+                self.host_store.add(h["name"], h["url"])
+                added += 1
+            except ValueError:
+                pass  # already present -- fine, reuse the existing entry
+        self.refresh_host_list()
+        msg = f"Session loaded: {added} new host(s) added."
+        if errors:
+            msg += "\n\nSome instances failed:\n" + "\n".join(errors)
+            QMessageBox.warning(self, "Load Session", msg)
+        else:
+            QMessageBox.information(self, "Load Session", msg)
 
     # ── Poll callbacks ───────────────────────────────────────────────────
 

@@ -435,3 +435,49 @@ fed straight into `rebuild_table()` (no real subprocess/network timing
 involved -- a live-process version of this test hit repeated flakiness
 from SSH/agent round-trip latency in this environment) confirmed all four
 steps above.
+
+---
+
+### TC_AdminGui_012_save_and_load_session
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- Two agent-managed instances running (one with a plugin config, an eth
+  interface, and an explicit gRPC port) plus one externally-started
+  process on the same host
+
+**TestSteps:**
+1. **Save Session…** to a file; inspect its contents
+2. Stop+delete both managed instances and kill the external process (wipe
+   the host clean)
+3. In a **fresh** app instance with no hosts configured, **Load
+   Session…** that file
+4. Inspect the resulting hosts and instances
+
+**Expected:**
+- Step 1's file contains exactly the two agent-managed instances with
+  every field (interfaces, plugin path+config, port, gateway binary)
+  matching what was actually running; the external process is absent
+- Step 3/4: the host is added, and both instances come back **running**
+  with fields matching the saved definitions exactly, but under **new**
+  ids -- a recreation from the recipe, not a resume of the old processes
+
+**Verdict:** OK
+
+**Result:**
+Verified end-to-end on real hardware (`agn-testcomputer`) with a full
+round trip: created `session-inst-1` (`can_ifaces: [vcan0]`,
+`eth_ifaces: [veth0]`, `can_tp.so` with `{"iface": "vcan0"}`,
+`grpc_port: 50061`) and `session-inst-2` (`can_ifaces: [vcan1]`,
+`grpc_port: 50062`), plus an external process. `save_session()`'s output
+YAML contained exactly those two instances with every field matching, and
+no trace of the external one. Wiped the agent completely (stop+delete
+both, kill the external process, confirmed `GET /api/instances` empty).
+Constructed a **brand new** `MainWindow`/`HostStore` with zero hosts
+(simulating a different machine) and called `load_session()` on the saved
+file: zero errors, host added correctly, and polling confirmed both
+instances running again with `can_ifaces`/`eth_ifaces`/`node_plugins`/
+`grpc_port` all matching the original definitions exactly -- but with
+**different** ids than the originals, confirming it recreated rather than
+resumed them.

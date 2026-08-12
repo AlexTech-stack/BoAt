@@ -227,8 +227,13 @@ stop/delete, plus a log viewer and an **equivalent command line** panel
 with a Copy button -- for pasting into a script) for the selected instance.
 The New/Edit Instance dialog also runs the *reverse* direction: paste a
 command line into **From command line** and **Parse && Fill** populates
-every field from it. `agent_client.py`/`host_store.py` have no Qt import,
-so they're usable/testable headlessly.
+every field from it. **Save Session…**/**Load Session…** write/read a
+docker-compose-style YAML file (`session.py`, using `PyYAML`) capturing
+every host plus its agent-managed instance definitions (never
+`managed: false` rows -- nothing owned to save for those); loading
+recreates + starts each one fresh, same as `docker-compose up` not
+resuming old container ids. `agent_client.py`/`host_store.py`/`session.py`
+have no Qt import, so they're usable/testable headlessly.
 
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages

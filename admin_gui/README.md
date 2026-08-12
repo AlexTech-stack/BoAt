@@ -44,6 +44,9 @@ either way it's the same `xcb` plugin doing the rendering).
    `http://` is added automatically if omitted). Each host needs
    `ui/launcher_agent.py` already running there (`python3 ui/launcher_agent.py`,
    default port 8090). Hosts persist across runs in `~/.boat/admin_hosts.json`.
+   **Save Session…** / **Load Session…** capture/restore *all* hosts and
+   their agent-managed instance definitions at once, docker-compose-style
+   — see the dedicated section below.
 2. The instance table (Host, Name, ID, Port, Status, PID, **Managed**,
    Interfaces, Plugins, Uptime) aggregates every instance from every added
    host, refreshing every 2 seconds. A host's dot in the host list is
@@ -85,13 +88,50 @@ either way it's the same `xcb` plugin doing the rendering).
    button included). Updates automatically as the selection or that
    instance's config changes.
 
+## Session files (save/load your whole setup)
+
+**Save Session…** writes every added host and its **agent-managed**
+instance *definitions* (name, interfaces, plugins+configs, port, tick
+settings, gateway binary) to a YAML file, docker-compose-style — a recipe,
+not a live snapshot. Externally-discovered (`Managed: No`) rows are never
+included, since there's no owned definition to save for them.
+
+```yaml
+version: '1'
+hosts:
+- name: agn-testcomputer
+  url: http://agn-testcomputer:8090
+  instances:
+  - name: main
+    can_ifaces: [vcan0]
+    eth_ifaces: [veth0]
+    node_plugins:
+    - path: /home/.../can_tp.so
+      config: {iface: vcan0}
+    grpc_port: 50051
+    tick_ms: null
+    tick_us: null
+    gateway_bin: /home/.../boat_gateway
+```
+
+**Load Session…** adds every host in the file (skipping ones already
+present) and, for every saved instance, creates *and starts* a fresh one
+from that definition — same as `docker-compose up`, this doesn't resume
+the exact old processes (new ids, new PIDs each time), it recreates them
+from the recipe. Loading the same file twice against a host that still has
+those instances running will hit a port conflict on the second load (the
+saved `grpc_port` is explicit, not auto-allocated) — same as
+`docker-compose up` failing on an already-bound port; stop/remove first if
+you want to reload cleanly.
+
 ## What's not here yet
 
 - No interface-creation UI (create vcan/veth from this app) — the agent
   doesn't expose that yet either; use `ui/launcher.py`'s browser UI for
   interface setup on a given host for now.
 - No persistence for *instance definitions* on the agent side — an agent
-  restart forgets stopped instances (see the backlog doc). This app doesn't
-  work around that; it just reflects whatever the agent currently reports.
+  restart forgets stopped instances (see the backlog doc). Session files
+  are the client-side answer to this (save before a restart, reload
+  after), but there's still no automatic recovery.
 - No auth — same trust model as every other `ui/*.py`/`tools/*.py` service
   in this repo today (assumes a trusted lab network).
