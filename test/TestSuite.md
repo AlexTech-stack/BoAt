@@ -23,9 +23,9 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [Tools] | [Tools.md](Tools.md) | 18 | PDU Editor, Trace Analyzer, Trace Editor, Eth Analyzer, dbc2boatjson, offline operation |
 | [CLI] | [CLI.md](CLI.md) | 8 | Global flags, JSON mode, help accuracy, failure behavior, test runner, AI assistants, BOAT_HOST env var |
 | [LauncherAgent] | [LauncherAgent.md](LauncherAgent.md) | 8 | Multi-instance gateway lifecycle REST API: port auto-allocation, independent instances, duplicate-port rejection, delete-while-running rejection, host info, edit-in-place via PUT, invocation-independent path resolution, external (unmanaged) gateway discovery |
-| [AdminGui] | [AdminGui.md](AdminGui.md) | 10 | PySide6 desktop client: host polling, create/start/stop via real UI actions, delete-refused-while-running dialog flow, multi-host aggregation, Interfaces/Plugins columns, New Instance dropdown pickers, Edit instance, equivalent command-line panel, paste-to-fill, Managed column + external-gateway guard |
+| [AdminGui] | [AdminGui.md](AdminGui.md) | 11 | PySide6 desktop client: host polling, create/start/stop via real UI actions, delete-refused-while-running dialog flow, multi-host aggregation, Interfaces/Plugins columns, New Instance dropdown pickers, Edit instance, equivalent command-line panel, paste-to-fill, Managed column + external-gateway guard, stale-selection-cleared-on-rebuild |
 
-**Total: 156 TestCases.**
+**Total: 157 TestCases.**
 
 ## Cross-cutting TestSets (no own file)
 

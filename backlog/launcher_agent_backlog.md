@@ -325,6 +325,54 @@ Verified on real hardware (`agn-testcomputer`) end to end:
   `MainWindow.stop_selected()` on that same row genuinely terminated the
   manually-started process (confirmed via `Popen.wait()`).
 
+## Done (2026-08-12, continued) — fixed a real stale-selection bug the user caught by hand
+
+User's own testing (not a scripted check) found this: create+start a
+managed instance A, start an external instance B by hand, select B and
+Stop it (worked, B correctly vanished from the table) -- then select what
+looked like A's row and click Stop, and got `Stop failed: ... 404: process
+not found` naming B's *old* pid, not A's.
+
+Root cause: `rebuild_table()` runs its whole row-repopulation pass inside
+`self.table.blockSignals(True)`. When the previously-selected id
+(`self._selected`) is no longer present in the new snapshot (B just
+vanished), the old code did nothing further -- `select_row` stayed `None`,
+so `self.table.selectRow(...)` was never called, but *Qt's own selection
+model* was never told anything changed either (signals blocked), so
+whatever row **index** was highlighted before stayed highlighted, now
+showing completely different data (A's) at that index. The user saw A's
+row visually selected and clicked Stop, but `self._selected` -- what every
+action button actually reads -- still held B's stale key. A real
+correctness hazard, not just a display glitch: with a bigger table, that
+stale id could by coincidence still resolve to a *different, still-live*
+instance, and Stop/Edit/Delete would silently act on the wrong one with no
+error at all.
+
+Fixed: when `select_row` comes back `None` (the previously-selected
+instance isn't in this snapshot), explicitly `self.table.clearSelection()`
+and `self._selected = None` -- so nothing stale survives a rebuild, and an
+empty/no-longer-valid selection is *shown* as no selection, not silently
+misattributed to whatever's left.
+
+Verified two ways:
+- **Reproduced the user's exact bug against the actual pre-fix code**:
+  temporarily reverted just this one change, ran a deterministic test (see
+  below) that creates instance A, selects external instance B, "removes"
+  B from a hand-crafted snapshot while B is still selected, and asserts
+  `_selected` gets cleared -- with the revert in place, the assertion
+  correctly *failed* (`_selected` stayed pointing at B's dead key, and
+  `table.selectedItems()` showed a row still visually highlighted despite
+  no valid selection) -- confirming the test genuinely catches this bug,
+  not just a happy-path check. Restored the fix, same test passed cleanly.
+- **Deterministic, hand-crafted-snapshot test** (no real subprocess/network
+  timing involved, to avoid the flakiness a live-process version of this
+  test kept hitting in this environment -- SSH/agent round-trip latency
+  made `poll_until`-style waits unreliable): construct `MainWindow`,
+  feed `rebuild_table()` synthetic snapshots directly, assert `_selected`
+  and the visual selection at each step. All four steps (select B for
+  real, B vanishes + selection clears, click A for real, action helper
+  resolves to A's real id) verified on real hardware (`agn-testcomputer`).
+
 ## Next steps (not started)
 
 - Interface-creation UI / agent endpoints (still deliberately deferred, see

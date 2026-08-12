@@ -377,3 +377,61 @@ genuinely terminated the manually-started process, confirmed via
 `Popen.wait()` returning within the timeout. Log panel for the selected
 external row also correctly showed the server's friendly
 "log not captured" message rather than an error.
+
+---
+
+### TC_AdminGui_011_selection_cleared_when_selected_row_vanishes
+
+**TestSets:** [AdminGui], [Error]
+
+**Preconditions:**
+- Two rows in the table, e.g. one agent-managed (A) and one external (B)
+
+**TestSteps:**
+1. Select B (a real click, i.e. `table.selectRow()` with signals live)
+2. Cause B to disappear from the next snapshot (stop it, or otherwise have
+   it drop out) without changing the table selection in between
+3. Trigger a table rebuild (next poll cycle); inspect `_selected` and
+   `table.selectedItems()`
+4. Click the remaining row (A); check `_selected`, then trigger an action
+   (e.g. Stop) and confirm it targets A's real id
+
+**Expected:**
+- After step 3: `_selected` is `None` and no row is shown visually
+  selected -- a vanished selection must never silently persist as a stale
+  id, and the UI must not show a row highlighted that doesn't correspond
+  to a tracked selection
+- After step 4: `_selected` matches A's actual id, and any action reads
+  that real id -- never B's
+
+**Verdict:** OK
+
+**Result:**
+Found by the user's own manual testing, not a scripted check: create+start
+a managed instance, start an external one, stop the external one via the
+GUI (worked), then select what looked like the remaining row and click
+Stop -- got a "Stop failed" error naming the *previous* (already-stopped)
+external instance's pid, not the one actually selected on screen.
+
+Root cause: `rebuild_table()` repopulates rows inside
+`table.blockSignals(True)`. When the previously-selected id isn't in the
+new snapshot, the old code left `self._selected` untouched and never told
+Qt's selection model anything changed -- whatever row *index* was
+previously highlighted stayed highlighted with new data now underneath it,
+while `_selected` (what every action button actually reads) kept pointing
+at the vanished id. A real hazard, not just cosmetic: in a bigger table
+that stale id could coincidentally still resolve to a *different, still-
+live* instance, and an action would silently hit the wrong one with no
+error.
+
+Fixed by explicitly clearing both `table.clearSelection()` and
+`self._selected` when the previously-selected row isn't found during a
+rebuild. Verified on real hardware two ways: (1) reproduced the exact bug
+by temporarily reverting just this fix and re-running the deterministic
+test below -- it correctly *failed* (`_selected` stayed stale, a row
+stayed visually highlighted) -- then restored the fix and the same test
+passed; (2) the passing deterministic test itself: hand-crafted snapshots
+fed straight into `rebuild_table()` (no real subprocess/network timing
+involved -- a live-process version of this test hit repeated flakiness
+from SSH/agent round-trip latency in this environment) confirmed all four
+steps above.

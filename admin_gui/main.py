@@ -686,6 +686,23 @@ class MainWindow(QMainWindow):
                 self.table.setItem(r, c, item)
         if select_row is not None:
             self.table.selectRow(select_row)
+        elif self._selected is not None:
+            # The previously-selected instance no longer appears in this
+            # snapshot (stopped-and-vanished external row, deleted, etc).
+            # Signals are blocked here, so Qt's own selection model was
+            # never told anything changed -- left alone, it would keep
+            # whatever row index was highlighted before, now showing
+            # completely different data at that index while self._selected
+            # still pointed at the old, no-longer-existent id. That's a
+            # real correctness hazard: an action button reads self._selected,
+            # not what's visually highlighted, so it could act on a stale id
+            # that (in a bigger table) might by coincidence still resolve to
+            # a *different*, still-live instance. Explicitly clear both the
+            # visual selection and the tracked id so nothing stale survives
+            # a rebuild.
+            self.table.clearSelection()
+            self._selected = None
+            self.log_view.clear()
         self.table.blockSignals(False)
         # Interfaces/Plugins can be the widest cells (multiple entries,
         # iface annotations) -- size every column to its actual content
