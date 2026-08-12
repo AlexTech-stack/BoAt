@@ -115,14 +115,15 @@ hosts:
 ```
 
 **Load Session…** adds every host in the file (skipping ones already
-present) and, for every saved instance, creates *and starts* a fresh one
-from that definition — same as `docker-compose up`, this doesn't resume
-the exact old processes (new ids, new PIDs each time), it recreates them
-from the recipe. Loading the same file twice against a host that still has
-those instances running will hit a port conflict on the second load (the
-saved `grpc_port` is explicit, not auto-allocated) — same as
-`docker-compose up` failing on an already-bound port; stop/remove first if
-you want to reload cleanly.
+present) and, for every saved instance, creates a fresh one from that
+definition — left **stopped** (unlike `docker-compose up`, loading does
+not start anything automatically; review the table and hit Start on what
+you want). It's a recipe replay either way: a loaded instance never
+resumes the exact old process, it gets a new id every time. Loading the
+same file twice against a host that still has those instances *running*
+will hit a port conflict on the second load (the saved `grpc_port` is
+explicit, not auto-allocated) — stop/remove first if you want to reload
+cleanly.
 
 ## What's not here yet
 

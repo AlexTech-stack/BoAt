@@ -231,9 +231,10 @@ every field from it. **Save Session…**/**Load Session…** write/read a
 docker-compose-style YAML file (`session.py`, using `PyYAML`) capturing
 every host plus its agent-managed instance definitions (never
 `managed: false` rows -- nothing owned to save for those); loading
-recreates + starts each one fresh, same as `docker-compose up` not
-resuming old container ids. `agent_client.py`/`host_store.py`/`session.py`
-have no Qt import, so they're usable/testable headlessly.
+recreates each one fresh (new id every time, never a resume) but leaves it
+**stopped** -- unlike `docker-compose up`, nothing auto-starts.
+`agent_client.py`/`host_store.py`/`session.py` have no Qt import, so
+they're usable/testable headlessly.
 
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages

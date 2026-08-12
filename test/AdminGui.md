@@ -459,9 +459,11 @@ steps above.
 - Step 1's file contains exactly the two agent-managed instances with
   every field (interfaces, plugin path+config, port, gateway binary)
   matching what was actually running; the external process is absent
-- Step 3/4: the host is added, and both instances come back **running**
-  with fields matching the saved definitions exactly, but under **new**
-  ids -- a recreation from the recipe, not a resume of the old processes
+- Step 3/4: the host is added, and both instances are defined again with
+  fields matching the saved definitions exactly, under **new** ids -- but
+  left **stopped** (unlike `docker-compose up`, Load Session does not
+  start anything automatically -- confirmed per user request after the
+  first pass of this feature auto-started them)
 
 **Verdict:** OK
 
@@ -476,8 +478,10 @@ no trace of the external one. Wiped the agent completely (stop+delete
 both, kill the external process, confirmed `GET /api/instances` empty).
 Constructed a **brand new** `MainWindow`/`HostStore` with zero hosts
 (simulating a different machine) and called `load_session()` on the saved
-file: zero errors, host added correctly, and polling confirmed both
-instances running again with `can_ifaces`/`eth_ifaces`/`node_plugins`/
-`grpc_port` all matching the original definitions exactly -- but with
-**different** ids than the originals, confirming it recreated rather than
-resumed them.
+file: zero errors, host added correctly, both instances recreated with
+`can_ifaces`/`eth_ifaces`/`node_plugins`/`grpc_port` all matching the
+original definitions exactly under **different** ids than the originals
+(recreated, not resumed) -- and, after the auto-start behavior was
+explicitly changed per user request, re-verified separately that a loaded
+instance's `status` is `"stopped"` with `pid: null` immediately after
+`load_session()` returns, not automatically running.

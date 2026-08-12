@@ -23,3 +23,8 @@ boat-platform/demo/traces/
 
 # Local specification references (gitignored — symlink or copy your specs here)
 spec/
+
+# admin_gui session files -- personal saved setups, not repo content
+admin_gui/session.yaml
+admin_gui/session.yml
+admin_gui/*.session.yaml

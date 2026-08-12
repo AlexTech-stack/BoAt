@@ -406,6 +406,24 @@ errors, the host was added correctly, and both instances came back
 running with fields matching the original definitions exactly, each under
 a **new** id (confirmed `!= ` the original), not a resume.
 
+## Done (2026-08-12, continued) — Load Session leaves instances stopped
+
+User feedback after trying session save/load: instances created by **Load
+Session** should not auto-start. Changed `session.load_session()` to only
+call `create_instance()` (no `start_instance()`), so a load defines every
+saved instance but leaves it `stopped` -- review the table and Start what
+you actually want, rather than everything coming up at once. Diverges from
+the `docker-compose up` analogy on this one point deliberately (compose
+does auto-start); the recipe-not-resume framing (new id every load) still
+holds. `load_session()`'s return shape gained a `created_count` so
+`MainWindow`'s confirmation message reports how many instances were
+defined, not just how many hosts were added.
+
+Verified on real hardware (`agn-testcomputer`): saved a running instance,
+wiped it, reloaded -- confirmed `status: "stopped"`, `pid: null`, with
+every other field (`can_ifaces`, `grpc_port`, etc.) still matching the
+saved definition exactly.
+
 ## Next steps (not started)
 
 - Interface-creation UI / agent endpoints (still deliberately deferred, see

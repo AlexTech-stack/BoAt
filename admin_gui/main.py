@@ -677,14 +677,15 @@ class MainWindow(QMainWindow):
 
     def load_session(self) -> None:
         """Adds every host in the file (skipping ones already present) and
-        re-creates + starts every saved instance definition -- a recipe
-        replay, not a resume: each loaded instance gets a fresh id/PID, the
-        same way `docker-compose up` doesn't resume old container ids."""
+        re-creates every saved instance definition, left **stopped** --
+        review the table and Start what you want. A recipe replay, not a
+        resume: each loaded instance gets a fresh id, not the one it had
+        when saved."""
         path, _ = QFileDialog.getOpenFileName(self, "Load Session", "", "YAML files (*.yaml *.yml)")
         if not path:
             return
         try:
-            hosts_to_add, errors = session.load_session(path)
+            hosts_to_add, created_count, errors = session.load_session(path)
         except (OSError, yaml.YAMLError) as e:
             QMessageBox.warning(self, "Load Session", f"Failed to read file: {e}")
             return
@@ -696,7 +697,7 @@ class MainWindow(QMainWindow):
             except ValueError:
                 pass  # already present -- fine, reuse the existing entry
         self.refresh_host_list()
-        msg = f"Session loaded: {added} new host(s) added."
+        msg = f"Session loaded: {added} new host(s) added, {created_count} instance(s) created (stopped -- start them from the table)."
         if errors:
             msg += "\n\nSome instances failed:\n" + "\n".join(errors)
             QMessageBox.warning(self, "Load Session", msg)
