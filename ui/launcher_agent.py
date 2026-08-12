@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "boat-platform" / "sdk" / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "boat-platform" / "sdk" / "python"))
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -53,7 +53,7 @@ from pydantic import BaseModel
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-_PROJECT_ROOT   = Path(__file__).parent.parent / "boat-platform"
+_PROJECT_ROOT   = Path(__file__).resolve().parent.parent / "boat-platform"
 _DEFAULT_GW_BIN = str(_PROJECT_ROOT / "build" / "debug" / "src" / "gateway" / "grpc_gateway" / "boat_gateway")
 _GW_BIN_DEFAULT = os.environ.get("BOAT_GATEWAY_BIN", _DEFAULT_GW_BIN)
 _AGENT_PORT     = int(os.environ.get("BOAT_AGENT_PORT", "8090"))

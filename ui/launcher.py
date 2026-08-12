@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "boat-platform" / "sdk" / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "boat-platform" / "sdk" / "python"))
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -38,7 +38,7 @@ from fastapi.responses import HTMLResponse
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-_DEMO_DIR       = Path(__file__).parent
+_DEMO_DIR       = Path(__file__).resolve().parent
 _PROJECT_ROOT   = _DEMO_DIR.parent / "boat-platform"
 _DEFAULT_GW_BIN = str(_PROJECT_ROOT / "build" / "debug" / "src" / "gateway" / "grpc_gateway" / "boat_gateway")
 _GW_BIN         = os.environ.get("BOAT_GATEWAY_BIN", _DEFAULT_GW_BIN)

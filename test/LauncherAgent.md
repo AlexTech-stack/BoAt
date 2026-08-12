@@ -165,3 +165,41 @@ Verified on real hardware: created an instance on port 50051 with
 all fields updated, no port-conflict error despite resubmitting its own
 port). Started it, then `PUT` with a different name returned
 `{"detail":"instance '...' is running; stop it first"}` (409) as expected.
+
+---
+
+### TC_LauncherAgent_007_invocation_independent_paths
+
+**TestSets:** [LauncherAgent]
+
+**Preconditions:**
+- Agent NOT already running
+
+**TestSteps:**
+1. Start the agent via a relative path that itself contains `..`, from a
+   sibling directory: `cd admin_gui && python3 ../ui/launcher_agent.py`
+2. `GET /api/host/info`; inspect `gateway_bins`
+
+**Expected:**
+- Discovered gateway binary path is clean (`.../boat-platform/build/...`),
+  not `.../admin_gui/../boat-platform/build/...` -- the agent's own path
+  resolution must not depend on which directory or which relative path it
+  was launched from
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware: before the fix, launching via `cd admin_gui &&
+python3 ../ui/launcher_agent.py` (exactly reproducing a real user's
+invocation) produced `gateway_bins: [".../admin_gui/../boat-platform/
+build/debug/.../boat_gateway"]` -- confirmed against the user's own live
+agent process (`GET /api/instances` showed the same mangled path on a real
+running instance). Root cause: `Path(__file__).parent.parent` without
+`.resolve()`; Python absolutizes a relative `__file__` by prepending the
+CWD without collapsing `..`, so `.parent.parent`'s lexical (non-normalizing)
+stripping carried the `admin_gui/..` straight through. Fixed by adding
+`.resolve()` (already the convention used everywhere else in the repo,
+e.g. `tools/pdu_editor.py`). Re-verified with the same invocation after the
+fix (on a scratch port, so as not to disturb the user's own still-running
+session): `gateway_bins: [".../boat-platform/build/debug/.../boat_gateway"]`,
+clean.

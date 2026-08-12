@@ -225,6 +225,41 @@ independently checked before and after the edit, matching the actual
 `can_ifaces`/`eth_ifaces`/`node_plugins`/`grpc_port`/`gateway_bin` on the
 instance in both cases.
 
+## Done (2026-08-12, continued) — un-resolved `Path(__file__)` produced ugly/wrong-looking paths
+
+User ran `python3 ../ui/launcher_agent.py` from inside `admin_gui/` (a
+perfectly reasonable thing to do) and every discovered path -- gateway
+binary, plugin `.so` files, and therefore the "Equivalent command line"
+panel -- came out as `/home/testuser/ProjectBoat/admin_gui/../boat-platform/
+...` instead of the clean `/home/testuser/ProjectBoat/boat-platform/...`.
+
+Root cause: `ui/launcher_agent.py` and `ui/launcher.py` computed
+`_PROJECT_ROOT`/`_DEMO_DIR` from `Path(__file__).parent.parent` without
+`.resolve()`. When a script is invoked via a relative path that itself
+contains `..` (like `../ui/launcher_agent.py` from a sibling directory),
+Python absolutizes `__file__` by prepending the CWD *without* collapsing
+the `..` -- so `__file__` becomes `.../admin_gui/../ui/launcher_agent.py`,
+and `.parent.parent` (which only strips path components lexically, it
+doesn't normalize) carries that `admin_gui/..` straight through into every
+derived path. Every other script in the repo (`tools/pdu_editor.py`,
+`tools/trace_analyzer.py`, `tools/trace_editor.py`,
+`tools/eth_trace_analyzer.py`, `ui/commander.py`, `ui/control_panel.py`'s
+own `sys.path` line, `ui/dashboard.py`, `ui/debug.py`, `ui/recorder.py`,
+`ui/system_dashboard.py`) already used `.resolve()` for exactly this
+reason -- `launcher_agent.py`/`launcher.py` just didn't follow that existing
+convention. `ui/control_panel.py` had the same lapse in two of its own
+path constants (`_NODES_DIR`/`_SDK_PATH`) despite getting its `sys.path`
+line right. Fixed all of them to add `.resolve()`.
+
+**Note for anyone touching a *running* agent process to verify this kind of
+fix**: editing the `.py` file on disk does not affect an already-running
+process -- `_PROJECT_ROOT` is computed once at import time and stays
+whatever it was when that process started. Verifying required actually
+restarting the process (confirmed on real hardware: reproduced the exact
+`admin_gui/../boat-platform` path against the user's own live agent
+process before the fix, then a freshly-started process on a scratch port
+showed the clean path after).
+
 ## Next steps (not started)
 
 - Interface-creation UI / agent endpoints (still deliberately deferred, see

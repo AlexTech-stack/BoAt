@@ -19,8 +19,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 # ── Configuration ──────────────────────────────────────────────────────────────
-_NODES_DIR   = Path(__file__).parent.parent / "boat-platform" / "nodes"
-_SDK_PATH    = Path(__file__).parent.parent / "boat-platform" / "sdk" / "python"
+_NODES_DIR   = Path(__file__).resolve().parent.parent / "boat-platform" / "nodes"
+_SDK_PATH    = Path(__file__).resolve().parent.parent / "boat-platform" / "sdk" / "python"
 _DEFAULT_GW  = os.environ.get("BOAT_GATEWAY", "localhost:50051")
 _LOG_LINES   = 120   # rolling log lines kept per node
 _PORT        = int(os.environ.get("BOAT_CP_PORT", "8081"))
