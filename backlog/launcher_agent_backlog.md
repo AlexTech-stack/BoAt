@@ -260,9 +260,78 @@ restarting the process (confirmed on real hardware: reproduced the exact
 process before the fix, then a freshly-started process on a scratch port
 showed the clean path after).
 
+## Done (2026-08-12, continued) — paste-a-command-line, and see everything running (not just agent-managed)
+
+Two more QoL asks:
+
+- **Paste to create.** Reverse of `_format_command_line()`:
+  `_parse_command_line()` (+ brace-aware `_tokenize_command_line()`/
+  `_parse_plugins_value()` helpers) parses a pasted
+  `BOAT_CAN_INTERFACES=... BOAT_NODE_PLUGINS=... ./boat_gateway` line back
+  into the New/Edit-Instance dialog's fields. New **From command line**
+  field + **Parse && Fill** button at the top of the dialog; replaces
+  (doesn't merge into) whatever's already in the pickers, since pasting is
+  "start fresh from this."
+- **See what's actually running, not just what this agent started.** The
+  agent only ever tracked instances it spawned itself -- a `boat_gateway`
+  started by hand (SSH, a script, or orphaned by an earlier agent process
+  exiting -- the known in-memory-registry gap above) was invisible to
+  `GET /api/instances`. Added `_discover_external_gateways()`: scans
+  `/proc` for `boat_gateway` processes not already tracked, and recovers
+  their full config -- `BOAT_CAN_INTERFACES`, `BOAT_ETH_INTERFACES`,
+  `BOAT_GRPC_PORT`, `BOAT_NODE_PLUGINS` (parsed with the same
+  brace-aware-comma-split logic, independently implemented agent-side since
+  the agent has no reason to import Qt-side code) -- from
+  `/proc/<pid>/environ`, and the binary via `/proc/<pid>/exe`. These get
+  `id: "external:<pid>"`, `managed: false` (real registry-tracked instances
+  get `managed: true` from `to_dict()`), and appear in `GET /api/instances`
+  merged with the agent's own. Only `stop` works on them (`os.kill(pid,
+  SIGTERM)` -- doesn't care who spawned the process); `start`/`edit`/
+  `delete`/single-`GET` are refused with a clear 400
+  (`_reject_if_external()`), and `log` returns a fixed explanatory message
+  instead of erroring (stdout was never piped to an agent that didn't spawn
+  the process). Client got a new **Managed** table column (`Yes`/`No`) and
+  a `MainWindow._warn_if_external()` guard that short-circuits Edit/Start/
+  Delete on an external row client-side with a clear message, before even
+  making the (would-be-400) network call.
+
+Verified on real hardware (`agn-testcomputer`) end to end:
+- Paste-and-fill: parsed a pasted line with two interfaces, a port, and two
+  plugins (one with a config) -- every dialog field matched exactly, and
+  `create_instance()` from the parsed payload round-tripped back through
+  `_format_command_line()` to the same `BOAT_CAN_INTERFACES`/`BOAT_GRPC_PORT`
+  values.
+- External discovery: started a `boat_gateway` **manually** (not via the
+  agent, exactly reproducing the scenario that motivated this --
+  `BOAT_CAN_INTERFACES=vcan0,vcan1 BOAT_GRPC_PORT=50077
+  BOAT_NODE_PLUGINS=...can_tp.so?{"iface":"vcan0"} ./boat_gateway`
+  directly in a shell) and confirmed `GET /api/instances` discovered it
+  with every field correct -- interfaces, port, and (this took a second,
+  correctly-quoted attempt -- the first attempt's shell-escaping ate the
+  JSON's quotes before they reached the actual environment, which the
+  parser correctly treated as invalid JSON and fell back to `{}` for,
+  exactly as designed) the plugin's `iface` config.
+- Confirmed `start`/`delete`/`GET`-single on the external id all returned
+  400 with the expected message, `log` returned the friendly stub, and
+  `stop` actually sent `SIGTERM` and the process exited -- confirmed both
+  via `ps` (process gone) and that it dropped out of the next
+  `GET /api/instances`.
+- Full Qt pass with a real screenshot: table showed a real agent-managed
+  instance (`Managed: Yes`) alongside a real manually-started one
+  (`Managed: No`, real physical `can0` + `vcan0` interfaces) side by side;
+  `MainWindow.edit_selected()`/`start_selected()`/`delete_selected()` on the
+  external row each produced the client-side guard message (asserted via a
+  monkey-patched `QMessageBox.information`) without any network call;
+  `MainWindow.stop_selected()` on that same row genuinely terminated the
+  manually-started process (confirmed via `Popen.wait()`).
+
 ## Next steps (not started)
 
 - Interface-creation UI / agent endpoints (still deliberately deferred, see
   above).
 - Decide instance persistence approach once the "agent restart loses
   everything" gap actually costs someone time.
+- Possible future extension: an "Adopt" action turning a discovered
+  `external:<pid>` row into a real tracked `GatewayInstance` (the agent
+  already recovers enough from `/proc/<pid>/environ` to build one) --  not
+  requested yet, noted here since the discovery groundwork already exists.

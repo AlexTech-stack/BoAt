@@ -98,6 +98,124 @@ def _format_command_line(inst: dict) -> str:
     return " ".join(parts)
 
 
+_KNOWN_ENV_VARS = {
+    "BOAT_CAN_INTERFACES", "BOAT_ETH_INTERFACES", "BOAT_GRPC_PORT",
+    "BOAT_NODE_PLUGINS", "BOAT_NODE_TICK_MS", "BOAT_NODE_TICK_US",
+}
+
+
+def _tokenize_command_line(text: str) -> list:
+    """Split on whitespace, except inside {...} -- a pasted plugin config
+    might have spaces (e.g. {"iface": "vcan0"}) even though this app's own
+    _format_command_line() emits compact JSON without them."""
+    tokens = []
+    depth = 0
+    current: list = []
+    for ch in text:
+        if ch == "{":
+            depth += 1
+            current.append(ch)
+        elif ch == "}":
+            depth = max(0, depth - 1)
+            current.append(ch)
+        elif ch.isspace() and depth == 0:
+            if current:
+                tokens.append("".join(current))
+                current = []
+        else:
+            current.append(ch)
+    if current:
+        tokens.append("".join(current))
+    return tokens
+
+
+def _parse_plugins_value(value: str) -> list:
+    """path?{json},path2?{json2},path3(no config) -- reverse of
+    _format_command_line()'s BOAT_NODE_PLUGINS construction. Splits on
+    commas that are NOT inside a {...} span, since a plugin's own config
+    can contain commas (multiple keys)."""
+    parts = []
+    depth = 0
+    current: list = []
+    for ch in value:
+        if ch == "{":
+            depth += 1
+            current.append(ch)
+        elif ch == "}":
+            depth = max(0, depth - 1)
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        parts.append("".join(current))
+
+    plugins = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        if "?" in part:
+            path, _, cfg_str = part.partition("?")
+            try:
+                cfg = json.loads(cfg_str)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"invalid plugin config JSON for '{path}': {e}") from e
+            plugins.append({"path": path, "config": cfg})
+        else:
+            plugins.append({"path": part, "config": {}})
+    return plugins
+
+
+def _parse_command_line(text: str) -> dict:
+    """Reverse of _format_command_line() -- parse a pasted
+    BOAT_CAN_INTERFACES=... BOAT_NODE_PLUGINS=... ./boat_gateway line back
+    into New/Edit-Instance-dialog fields. Raises ValueError with a clear
+    message on anything it can't make sense of."""
+    tokens = _tokenize_command_line(text.strip())
+    if not tokens:
+        raise ValueError("empty command line")
+
+    result = {
+        "can_ifaces": [], "eth_ifaces": [], "node_plugins": [],
+        "grpc_port": None, "tick_ms": None, "tick_us": None, "gateway_bin": None,
+    }
+    for tok in tokens:
+        key, sep, value = tok.partition("=")
+        if sep and key in _KNOWN_ENV_VARS:
+            if key == "BOAT_CAN_INTERFACES":
+                result["can_ifaces"] = [s for s in value.split(",") if s]
+            elif key == "BOAT_ETH_INTERFACES":
+                result["eth_ifaces"] = [s for s in value.split(",") if s]
+            elif key == "BOAT_GRPC_PORT":
+                try:
+                    result["grpc_port"] = int(value)
+                except ValueError as e:
+                    raise ValueError(f"BOAT_GRPC_PORT is not a valid integer: '{value}'") from e
+            elif key == "BOAT_NODE_PLUGINS":
+                result["node_plugins"] = _parse_plugins_value(value)
+            elif key == "BOAT_NODE_TICK_MS":
+                result["tick_ms"] = int(value) if value.isdigit() else None
+            elif key == "BOAT_NODE_TICK_US":
+                result["tick_us"] = int(value) if value.isdigit() else None
+            continue
+        if sep:
+            # An unrecognized VAR=value token (some other env var prefix) --
+            # skip it rather than mistaking it for the binary path.
+            continue
+        # First token with no '=' is the gateway binary; anything after is
+        # ignored (trailing args aren't part of this format).
+        result["gateway_bin"] = tok
+        break
+
+    if result["gateway_bin"] is None:
+        raise ValueError("couldn't find the boat_gateway binary path "
+                          "(expected as a token with no '=', e.g. at the end)")
+    return result
+
+
 class PollWorker(QThread):
     """Background thread: polls every configured host's /api/instances (and
     the selected instance's log, if any) on a fixed interval, emitting
@@ -287,6 +405,17 @@ class NewInstanceDialog(QDialog):
         self.resize(560, 600)
         layout = QFormLayout(self)
 
+        paste_row = QHBoxLayout()
+        self.paste_edit = QLineEdit()
+        self.paste_edit.setPlaceholderText(
+            'Paste a BOAT_CAN_INTERFACES=... BOAT_NODE_PLUGINS=... ./boat_gateway line here'
+        )
+        paste_row.addWidget(self.paste_edit, 1)
+        parse_btn = QPushButton("Parse && Fill")
+        parse_btn.clicked.connect(self._parse_and_fill)
+        paste_row.addWidget(parse_btn)
+        layout.addRow("From command line:", paste_row)
+
         self.host_combo = QComboBox()
         for h in hosts:
             self.host_combo.addItem(f"{h['name']} ({h['url']})", h["url"])
@@ -344,6 +473,30 @@ class NewInstanceDialog(QDialog):
 
     def selected_host_url(self) -> str:
         return self.host_combo.currentData()
+
+    def _parse_and_fill(self) -> None:
+        text = self.paste_edit.text().strip()
+        if not text:
+            return
+        try:
+            parsed = _parse_command_line(text)
+        except ValueError as e:
+            QMessageBox.warning(self, "Parse failed", str(e))
+            return
+        # Replace whatever's already in the pickers -- pasting is a "start
+        # fresh from this" action, not a merge.
+        self.can_picker.list_widget.clear()
+        self.eth_picker.list_widget.clear()
+        self.plugin_picker.list_widget.clear()
+        for iface in parsed["can_ifaces"]:
+            self.can_picker.add_value(iface)
+        for iface in parsed["eth_ifaces"]:
+            self.eth_picker.add_value(iface)
+        for p in parsed["node_plugins"]:
+            self.plugin_picker.add_value(p["path"], p["config"])
+        self.port_edit.setText(str(parsed["grpc_port"]) if parsed["grpc_port"] is not None else "")
+        self.gw_bin_edit.setText(parsed["gateway_bin"] or "")
+        self.paste_edit.clear()
 
     def _reload_host_info(self) -> None:
         url = self.selected_host_url()
@@ -406,9 +559,9 @@ class MainWindow(QMainWindow):
         root.addLayout(host_bar)
 
         # ── Instance table ──
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
-            ["Host", "Name", "ID", "Port", "Status", "PID", "Interfaces", "Plugins", "Uptime"]
+            ["Host", "Name", "ID", "Port", "Status", "PID", "Managed", "Interfaces", "Plugins", "Uptime"]
         )
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -524,6 +677,7 @@ class MainWindow(QMainWindow):
             values = [
                 host_name, inst["name"], inst["id"], str(inst["grpc_port"]),
                 inst["status"], str(inst["pid"] or "—"),
+                "Yes" if inst.get("managed", True) else "No",
                 _format_interfaces(inst), _format_plugins(inst), uptime,
             ]
             for c, v in enumerate(values):
@@ -591,11 +745,32 @@ class MainWindow(QMainWindow):
         host_url, inst_id = self._selected
         return AgentClient(host_url), inst_id
 
+    @staticmethod
+    def _is_external(inst_id: str) -> bool:
+        return inst_id.startswith("external:")
+
+    def _warn_if_external(self, inst_id: str, action: str) -> bool:
+        """Discovered-but-not-agent-managed rows (see the "Managed" column)
+        only support Stop -- a plain signal by pid, which works regardless
+        of who spawned the process. Everything else needs the agent's own
+        stored definition, which these rows don't have. Returns True (and
+        shows a message) if the action should be aborted."""
+        if self._is_external(inst_id):
+            QMessageBox.information(
+                self, "Not managed",
+                f"This gateway wasn't started by this agent (see the Managed "
+                f"column), so it can't be {action} here. Stop still works.",
+            )
+            return True
+        return False
+
     def start_selected(self) -> None:
         res = self._selected_client_and_id()
         if not res:
             return
         client, inst_id = res
+        if self._warn_if_external(inst_id, "started"):
+            return
         try:
             client.start_instance(inst_id)
         except AgentError as e:
@@ -616,6 +791,8 @@ class MainWindow(QMainWindow):
         if not res:
             return
         client, inst_id = res
+        if self._warn_if_external(inst_id, "deleted"):
+            return
         if QMessageBox.question(self, "Delete", "Delete this instance definition?") != QMessageBox.Yes:
             return
         try:
@@ -647,6 +824,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "No selection", "Select an instance in the table first.")
             return
         host_url, inst_id = self._selected
+        if self._warn_if_external(inst_id, "edited"):
+            return
         inst = self.find_instance(host_url, inst_id)
         if inst is None:
             QMessageBox.warning(self, "Edit", "Instance not found (it may have just been removed).")

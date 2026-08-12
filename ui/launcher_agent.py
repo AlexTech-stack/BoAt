@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -234,6 +235,7 @@ class GatewayInstance:
             "exit_code": self.exit_code,
             "created_at": self.created_at,
             "started_at": self.started_at,
+            "managed": True,
         }
 
 
@@ -391,6 +393,121 @@ def _discover_plugins() -> List[str]:
     return out
 
 
+# ── External (unmanaged) gateway discovery ──────────────────────────────────
+#
+# This agent only ever *manages* boat_gateway processes it spawned itself
+# (InstanceRegistry). But "what gateways are running on this host" is a
+# reasonable question regardless of who started them -- someone SSHed in and
+# ran one by hand, or a previous agent process exited without stopping its
+# children first (see the v1 in-memory-registry gap in the backlog). Answer
+# it by scanning /proc for boat_gateway processes this registry doesn't
+# already know about, and recovering their config from /proc/<pid>/environ
+# -- the same BOAT_* env vars this agent itself sets when it spawns one.
+# Linux-only (matches this project's deployment target); returns [] anywhere
+# /proc doesn't exist rather than erroring.
+
+def _parse_plugins_env(value: str) -> List[dict]:
+    """Parse a BOAT_NODE_PLUGINS env value (path?{json},path2?{json2},...)
+    into the structured [{"path", "config"}, ...] form. Splits on commas
+    that are NOT inside a {...} span, since a plugin's JSON config can
+    itself contain commas (multiple keys)."""
+    parts = []
+    depth = 0
+    current: List[str] = []
+    for ch in value:
+        if ch == "{":
+            depth += 1
+            current.append(ch)
+        elif ch == "}":
+            depth = max(0, depth - 1)
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        parts.append("".join(current))
+
+    plugins = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        if "?" in part:
+            path, _, cfg_str = part.partition("?")
+            try:
+                cfg = json.loads(cfg_str)
+            except json.JSONDecodeError:
+                cfg = {}
+            plugins.append({"path": path, "config": cfg})
+        else:
+            plugins.append({"path": part, "config": {}})
+    return plugins
+
+
+def _discover_external_gateways(known_pids: set) -> List[dict]:
+    if not os.path.isdir("/proc"):
+        return []
+    out = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid in known_pids:
+            continue
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                if f.read().strip() != "boat_gateway":
+                    continue
+            with open(f"/proc/{pid}/environ", "rb") as f:
+                raw_env = f.read()
+            env = {}
+            for kv in raw_env.split(b"\0"):
+                if b"=" in kv:
+                    k, _, v = kv.partition(b"=")
+                    env[k.decode(errors="replace")] = v.decode(errors="replace")
+            try:
+                gateway_bin = os.readlink(f"/proc/{pid}/exe")
+            except OSError:
+                gateway_bin = None
+            try:
+                # /proc/<pid>'s ctime approximates process start time on
+                # Linux -- not exact, but good enough for an uptime display.
+                started_at = os.stat(f"/proc/{pid}").st_ctime
+            except OSError:
+                started_at = None
+        except (OSError, FileNotFoundError):
+            continue  # exited mid-scan, or unreadable (different user's process)
+
+        try:
+            grpc_port = int(env.get("BOAT_GRPC_PORT", "50051"))
+        except ValueError:
+            grpc_port = 50051
+        tick_ms_str = env.get("BOAT_NODE_TICK_MS", "")
+        tick_us_str = env.get("BOAT_NODE_TICK_US", "")
+
+        out.append({
+            "id": f"external:{pid}",
+            "name": "(unmanaged)",
+            "gateway_bin": gateway_bin,
+            "can_ifaces": [s for s in env.get("BOAT_CAN_INTERFACES", "").split(",") if s],
+            "eth_ifaces": [s for s in env.get("BOAT_ETH_INTERFACES", "").split(",") if s],
+            "node_plugins": _parse_plugins_env(env.get("BOAT_NODE_PLUGINS", "")),
+            "grpc_port": grpc_port,
+            "tick_ms": int(tick_ms_str) if tick_ms_str.isdigit() else None,
+            "tick_us": int(tick_us_str) if tick_us_str.isdigit() else None,
+            "status": "running",
+            "pid": pid,
+            "uptime_sec": (time.time() - started_at) if started_at else None,
+            "exit_code": None,
+            "created_at": started_at,
+            "started_at": started_at,
+            "managed": False,
+        })
+    return out
+
+
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI(title="BoAt Launcher Agent")
@@ -427,9 +544,26 @@ def api_host_info():
     }
 
 
+def _reject_if_external(instance_id: str) -> None:
+    """external:<pid> ids are discovered, not created by this agent -- it
+    has no stored definition for them, so Edit/Start/Delete don't make
+    sense (Stop does, and is handled separately: a plain signal by pid
+    works regardless of who spawned the process)."""
+    if instance_id.startswith("external:"):
+        raise HTTPException(
+            status_code=400,
+            detail="this gateway isn't managed by this agent (discovered "
+                   "running, not started via this API) -- only Stop is "
+                   "supported for it",
+        )
+
+
 @app.get("/api/instances")
 def api_list_instances():
-    return {"instances": [i.to_dict() for i in _registry.list()]}
+    managed = [i.to_dict() for i in _registry.list()]
+    known_pids = {pid for pid in (i.pid() for i in _registry.list()) if pid is not None}
+    external = _discover_external_gateways(known_pids)
+    return {"instances": managed + external}
 
 
 @app.post("/api/instances")
@@ -452,6 +586,7 @@ def api_create_instance(req: CreateInstanceRequest):
 
 @app.get("/api/instances/{instance_id}")
 def api_get_instance(instance_id: str):
+    _reject_if_external(instance_id)
     try:
         return _registry.get(instance_id).to_dict()
     except KeyError:
@@ -460,6 +595,7 @@ def api_get_instance(instance_id: str):
 
 @app.put("/api/instances/{instance_id}")
 def api_update_instance(instance_id: str, req: CreateInstanceRequest):
+    _reject_if_external(instance_id)
     try:
         inst = _registry.update(
             instance_id=instance_id,
@@ -483,6 +619,7 @@ def api_update_instance(instance_id: str, req: CreateInstanceRequest):
 
 @app.post("/api/instances/{instance_id}/start")
 def api_start_instance(instance_id: str):
+    _reject_if_external(instance_id)
     try:
         inst = _registry.get(instance_id)
     except KeyError:
@@ -496,6 +633,15 @@ def api_start_instance(instance_id: str):
 
 @app.post("/api/instances/{instance_id}/stop")
 def api_stop_instance(instance_id: str):
+    if instance_id.startswith("external:"):
+        pid = int(instance_id.split(":", 1)[1])
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            raise HTTPException(status_code=404, detail="process not found (it may have already exited)")
+        except PermissionError:
+            raise HTTPException(status_code=403, detail=f"no permission to signal pid {pid} (owned by a different user?)")
+        return {"id": instance_id, "pid": pid, "status": "stopping"}
     try:
         inst = _registry.get(instance_id)
     except KeyError:
@@ -506,6 +652,10 @@ def api_stop_instance(instance_id: str):
 
 @app.get("/api/instances/{instance_id}/log")
 def api_instance_log(instance_id: str):
+    if instance_id.startswith("external:"):
+        return {"log": [{"ts": "", "text": "(log not captured -- this gateway "
+                                            "wasn't started by this agent, so "
+                                            "its stdout/stderr was never piped here)"}]}
     try:
         inst = _registry.get(instance_id)
     except KeyError:
@@ -515,6 +665,7 @@ def api_instance_log(instance_id: str):
 
 @app.delete("/api/instances/{instance_id}")
 def api_delete_instance(instance_id: str):
+    _reject_if_external(instance_id)
     try:
         _registry.delete(instance_id)
     except KeyError:
@@ -526,6 +677,7 @@ def api_delete_instance(instance_id: str):
 
 @app.get("/api/instances/{instance_id}/sim-state")
 def api_instance_sim_state(instance_id: str):
+    _reject_if_external(instance_id)
     try:
         inst = _registry.get(instance_id)
     except KeyError:

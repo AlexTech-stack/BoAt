@@ -201,6 +201,18 @@ instance's own current port excluded from the collision check, so
 resubmitting the same port (what the Edit dialog pre-fills) never conflicts
 with itself.
 
+`GET /api/instances` doesn't only return instances this agent created --
+it also scans `/proc` for any other `boat_gateway` process on the host
+(started by hand, by a script, or by a now-exited earlier agent) and
+recovers its config from `/proc/<pid>/environ`, the same `BOAT_*` vars this
+agent itself sets. Those entries get `"id": "external:<pid>"`,
+`"managed": false` (vs. `true` for agent-created ones), and can only be
+targeted by `stop` (`POST .../external:<pid>/stop` sends a plain
+`SIGTERM`/pid-based signal, which works regardless of who spawned the
+process) -- `start`/`edit`/`delete`/`GET` on an `external:` id are refused
+with 400 (no stored definition to act on), and `log` returns a fixed
+"not captured" message (stdout was never piped to this agent).
+
 Not yet built: instance persistence across an agent restart (v1 is
 in-memory only).
 
@@ -208,12 +220,15 @@ in-memory only).
 
 `admin_gui/` is the desktop client for one or more launcher agents above —
 host list (persisted to `~/.boat/admin_hosts.json`) → aggregated instance
-table, polled every 2s on a background `QThread` → create/**edit**/start/
+table (with a **Managed** column, `Yes`/`No` per the `external:` discovery
+above), polled every 2s on a background `QThread` → create/**edit**/start/
 stop/delete, plus a log viewer and an **equivalent command line** panel
 (the `BOAT_*=... ./boat_gateway` form of whatever instance is selected,
 with a Copy button -- for pasting into a script) for the selected instance.
-`agent_client.py`/`host_store.py` have no Qt import, so they're usable/
-testable headlessly.
+The New/Edit Instance dialog also runs the *reverse* direction: paste a
+command line into **From command line** and **Parse && Fill** populates
+every field from it. `agent_client.py`/`host_store.py` have no Qt import,
+so they're usable/testable headlessly.
 
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages

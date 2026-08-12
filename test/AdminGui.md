@@ -304,3 +304,76 @@ by `rebuild_table()` calling the same recompute on every poll refresh).
 Clipboard content itself not separately asserted (`_copy_command_line()`
 is a one-line `QApplication.clipboard().setText()` call on the same text
 already verified correct).
+
+---
+
+### TC_AdminGui_009_paste_command_line_to_fill
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- New Instance dialog open
+
+**TestSteps:**
+1. Paste a full `BOAT_CAN_INTERFACES=... BOAT_NODE_PLUGINS=...
+   ./boat_gateway` line (two interfaces, a port, two plugins -- one with a
+   config, one without) into **From command line**, click **Parse && Fill**
+2. Submit; inspect the created instance
+
+**Expected:**
+- Every field (CAN interfaces, port, both plugins with correct configs,
+  gateway binary) matches the pasted line exactly
+- The created instance's own "Equivalent command line" matches what was
+  originally pasted (paste → parse → create → format round-trips)
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware: pasted a line with `vcan0,vcan1`, port `50078`,
+and two plugins; `can_picker.values()`, `port_edit.text()`, and
+`plugin_picker.values()` all matched exactly after **Parse && Fill**.
+Created the instance from the parsed payload and confirmed
+`_format_command_line()` on the server's response still contained
+`BOAT_CAN_INTERFACES=vcan0,vcan1` and `BOAT_GRPC_PORT=50078` -- full
+round trip.
+
+---
+
+### TC_AdminGui_010_managed_column_and_external_guard
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- An agent-managed instance running, and a `boat_gateway` started manually
+  (not via the agent) on the same host
+
+**TestSteps:**
+1. Observe the table's **Managed** column for both rows
+2. Select the externally-started row; click **Edit…**, then **Start**,
+   then **Delete**
+3. With the same row still selected, click **Stop**
+
+**Expected:**
+- Agent-managed row shows `Managed: Yes`; the externally-started row shows
+  `Managed: No` with its real port/interfaces/plugins still populated
+  correctly
+- Step 2's three actions each short-circuit client-side with a clear
+  message (no network round trip needed) -- "wasn't started by this
+  agent ... Stop still works"
+- Step 3 actually stops the manually-started process
+
+**Verdict:** OK
+
+**Result:**
+Verified end-to-end on real hardware with a screenshot: table showed
+`managed-two` (`Managed: Yes`, `vcan1`) and an externally-started gateway
+(`Managed: No`, `id: external:<pid>`, real `can0, vcan0` interfaces) side
+by side. Selecting the external row and calling
+`edit_selected()`/`start_selected()`/`delete_selected()` each produced the
+guard message (captured via a monkey-patched `QMessageBox.information`,
+three calls, all containing "wasn't started by this agent") without any
+of them reaching the network. Calling `stop_selected()` on that same row
+genuinely terminated the manually-started process, confirmed via
+`Popen.wait()` returning within the timeout. Log panel for the selected
+external row also correctly showed the server's friendly
+"log not captured" message rather than an error.

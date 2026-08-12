@@ -22,10 +22,10 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [WebUIs] | [WebUIs.md](WebUIs.md) | 10 | Launcher, Dashboard, Nodes, Commander, Recorder UI, Debug inspector, nav, gateway-down behavior |
 | [Tools] | [Tools.md](Tools.md) | 18 | PDU Editor, Trace Analyzer, Trace Editor, Eth Analyzer, dbc2boatjson, offline operation |
 | [CLI] | [CLI.md](CLI.md) | 8 | Global flags, JSON mode, help accuracy, failure behavior, test runner, AI assistants, BOAT_HOST env var |
-| [LauncherAgent] | [LauncherAgent.md](LauncherAgent.md) | 7 | Multi-instance gateway lifecycle REST API: port auto-allocation, independent instances, duplicate-port rejection, delete-while-running rejection, host info, edit-in-place via PUT, invocation-independent path resolution |
-| [AdminGui] | [AdminGui.md](AdminGui.md) | 8 | PySide6 desktop client: host polling, create/start/stop via real UI actions, delete-refused-while-running dialog flow, multi-host aggregation, Interfaces/Plugins columns, New Instance dropdown pickers, Edit instance, equivalent command-line panel |
+| [LauncherAgent] | [LauncherAgent.md](LauncherAgent.md) | 8 | Multi-instance gateway lifecycle REST API: port auto-allocation, independent instances, duplicate-port rejection, delete-while-running rejection, host info, edit-in-place via PUT, invocation-independent path resolution, external (unmanaged) gateway discovery |
+| [AdminGui] | [AdminGui.md](AdminGui.md) | 10 | PySide6 desktop client: host polling, create/start/stop via real UI actions, delete-refused-while-running dialog flow, multi-host aggregation, Interfaces/Plugins columns, New Instance dropdown pickers, Edit instance, equivalent command-line panel, paste-to-fill, Managed column + external-gateway guard |
 
-**Total: 153 TestCases.**
+**Total: 156 TestCases.**
 
 ## Cross-cutting TestSets (no own file)
 

@@ -44,12 +44,21 @@ either way it's the same `xcb` plugin doing the rendering).
    `http://` is added automatically if omitted). Each host needs
    `ui/launcher_agent.py` already running there (`python3 ui/launcher_agent.py`,
    default port 8090). Hosts persist across runs in `~/.boat/admin_hosts.json`.
-2. The instance table (Host, Name, ID, Port, Status, PID, Interfaces,
-   Plugins, Uptime) aggregates every instance from every added host,
-   refreshing every 2 seconds. A host's dot in the host list is filled (●)
-   when reachable, hollow (○) when not. **Plugins** shows each plugin's
-   `.so` basename, with the interface it's bound to in brackets when its
-   config carries one (`can_tp.so [vcan0]`).
+2. The instance table (Host, Name, ID, Port, Status, PID, **Managed**,
+   Interfaces, Plugins, Uptime) aggregates every instance from every added
+   host, refreshing every 2 seconds. A host's dot in the host list is
+   filled (●) when reachable, hollow (○) when not. **Plugins** shows each
+   plugin's `.so` basename, with the interface it's bound to in brackets
+   when its config carries one (`can_tp.so [vcan0]`). **Managed** is
+   `Yes` for instances this agent created, or `No` for a `boat_gateway`
+   the agent found already running on that host but didn't start itself
+   (started by hand, by a script, or by a now-exited earlier agent process)
+   — its port/interfaces/plugins are recovered from the process's own
+   environment (`/proc/<pid>/environ`) and shown the same as any other row.
+   `Edit`/`Start`/`Delete` don't apply to an unmanaged row (there's no
+   stored definition to act on) and are refused with a clear message;
+   `Stop` still works — it's a plain signal by pid, which doesn't care who
+   spawned the process.
 3. **New Instance…** picks a host, then defines CAN interfaces, Eth
    interfaces, and node plugins via a dropdown + **+ Add** pattern: each
    dropdown is pre-populated from that host's `GET /api/host/info`
@@ -60,6 +69,11 @@ either way it's the same `xcb` plugin doing the rendering).
    (`{"iface": "vcan0"}`) alongside the path. **Remove selected** drops an
    already-added entry. Also: an optional explicit gRPC port (blank = auto-
    allocated by that host's agent), and an optional gateway binary override.
+   At the top, **From command line** takes a pasted
+   `BOAT_CAN_INTERFACES=... BOAT_NODE_PLUGINS=... ./boat_gateway` line
+   (exactly what the "Equivalent command line" panel below produces) and
+   **Parse && Fill** populates every field above from it in one shot —
+   the reverse direction of that panel.
 4. Select a row, then **Start** / **Stop** / **Delete** act on it (Delete is
    refused by the agent while the instance is running). **Edit…** reopens
    the same dialog pre-filled with that instance's current definition

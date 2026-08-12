@@ -203,3 +203,48 @@ e.g. `tools/pdu_editor.py`). Re-verified with the same invocation after the
 fix (on a scratch port, so as not to disturb the user's own still-running
 session): `gateway_bins: [".../boat-platform/build/debug/.../boat_gateway"]`,
 clean.
+
+---
+
+### TC_LauncherAgent_008_discovers_external_gateways
+
+**TestSets:** [LauncherAgent]
+
+**Preconditions:**
+- Agent running; a `boat_gateway` started **manually** (not via this
+  agent), e.g. `BOAT_CAN_INTERFACES=vcan0 BOAT_GRPC_PORT=50077
+  ./boat_gateway &`
+
+**TestSteps:**
+1. `GET /api/instances`
+2. `POST /api/instances/external:<pid>/start`, `/delete`, and
+   `GET /api/instances/external:<pid>` (each should be refused)
+3. `GET /api/instances/external:<pid>/log`
+4. `POST /api/instances/external:<pid>/stop`
+
+**Expected:**
+- Step 1 includes an entry with `id: "external:<pid>"`, `managed: false`,
+  and correct `can_ifaces`/`eth_ifaces`/`grpc_port`/`node_plugins`
+  (including per-plugin config) recovered from the process's own
+  environment -- alongside any agent-managed instances (`managed: true`)
+- Step 2's three calls are each refused with HTTP 400 and a clear message
+  ("... isn't managed by this agent ... only Stop is supported")
+- Step 3 returns a fixed explanatory log entry instead of erroring
+- Step 4 actually terminates the process (`SIGTERM`); it no longer appears
+  in a subsequent `GET /api/instances`
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware: started a `boat_gateway` by hand with
+`BOAT_CAN_INTERFACES=vcan0,vcan1 BOAT_GRPC_PORT=50077
+BOAT_NODE_PLUGINS=.../can_tp.so?{"iface":"vcan0"}` (properly quoted via a
+shell script -- a first attempt lost the JSON's quotes to shell-escaping
+across the SSH/bash layering, which the parser correctly treated as
+invalid JSON and fell back to `{}` for rather than crashing, exactly as
+designed). `GET /api/instances` returned it with `id: "external:2343356"`,
+`managed: false`, `can_ifaces: ["vcan0","vcan1"]`, `grpc_port: 50077`, and
+the plugin's config correctly as `{"iface": "vcan0"}`. `start`/`delete`/
+single-`GET` each returned the expected 400; `log` returned the fixed
+"not captured" message; `stop` sent `SIGTERM` and the process was
+confirmed gone via `ps` and absent from the next `GET /api/instances`.
