@@ -131,3 +131,44 @@ both, created one instance on each. The aggregated snapshot contained
 instances from both host URLs, and `win.rebuild_table()` produced exactly 2
 rows with distinct Host-column values (`host-a`, `host-b`) matching each
 instance's actual origin.
+
+---
+
+### TC_AdminGui_005_interfaces_and_plugins_columns
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent; at least one CAN and one Eth interface available on it
+
+**TestSteps:**
+1. **New Instance…** with multiple CAN interfaces, an Eth interface, and
+   two node plugins — one with an `{"iface": ...}` config, one without
+2. Observe the row's Interfaces and Plugins columns
+
+**Expected:**
+- Interfaces column lists CAN + Eth interfaces together, comma-separated
+- Plugins column lists each plugin's `.so` basename; the one with an
+  `iface` config shows it in brackets (`can_tp.so [vcan0]`), the one
+  without shows just the basename (`pdu_router.so`)
+- Columns aren't truncated -- sized to their actual content
+
+**Verdict:** OK
+
+**Result:**
+Verified with a real screenshot on real hardware (`agn-testcomputer`, Xvfb +
+`QWidget.grab()`, not headless-only): created an instance with
+`can_ifaces=["vcan0","vcan1"]`, `eth_ifaces=["veth0"]`, and
+`node_plugins=[pdu_router.so (no config), can_tp.so ({"iface":"vcan0"})]`.
+Row rendered `Interfaces: vcan0, vcan1, veth0` and
+`Plugins: pdu_router.so, can_tp.so [vcan0]`, both fully visible after adding
+`resizeColumnsToContents()` (the initial pass truncated both columns under
+the default even-width split).
+
+Building this screenshot also incidentally caught a real, previously-latent
+bug unrelated to these columns: `AgentClient`'s default 5s timeout could be
+shorter than a stop call's worst-case server-side duration (SIGTERM + up to
+a 5s wait + SIGKILL fallback), so a real Stop click could read back a false
+timeout error even though the gateway did stop. Fixed by giving
+`start_instance`/`stop_instance` a dedicated 15s timeout — see
+`backlog/launcher_agent_backlog.md` for the full account.

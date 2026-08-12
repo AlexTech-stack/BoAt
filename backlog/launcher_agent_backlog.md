@@ -130,6 +130,37 @@ correctly — host list with a filled health dot, instance table showing the
 real running PID/uptime, action buttons, log panel all positioned and
 readable as designed.
 
+## Done (2026-08-12) — Interfaces/Plugins columns, and a real timeout bug they surfaced
+
+Added `Interfaces` and `Plugins` columns to the instance table (full order:
+Host, Name, ID, Port, Status, PID, Interfaces, Plugins, Uptime).
+`Interfaces` combines `can_ifaces` + `eth_ifaces`. `Plugins` shows each node
+plugin's `.so` basename, with the interface it's bound to in brackets when
+its config carries one (`can_tp.so [vcan0]`) — the "linked to the plugin"
+association the user asked for. `QTableWidget.resizeColumnsToContents()`
+added after populating rows, since the default even-width split truncated
+the wider Interfaces/Plugins cells.
+
+Building a real screenshot to check this (two plugins, one with an `iface`
+config) surfaced a genuine, previously-unnoticed bug, not a test artifact
+this time: `AgentClient`'s default 5s timeout could be shorter than
+`GatewayInstance.stop()`'s own worst case (SIGTERM + up to a 5s wait, then
+SIGKILL) — a real user clicking **Stop** in the UI on a slightly slow
+shutdown could get a false "Stop failed" read-timeout error even though the
+gateway did actually stop a moment later. First reproduction: two demo
+gateway processes ended up killed with `exit_code: -9` because an *external*
+test-harness `timeout` wrapper (not the app) expired while waiting on that
+same slow HTTP response and SIGKILLed the whole process group. Fixed by
+giving `start_instance`/`stop_instance` specifically a 15s client-side
+timeout (`_LIFECYCLE_TIMEOUT`), well clear of the server's worst case;
+quick reads (list/get/log) keep the original 5s default.
+
+Verified on real hardware: re-ran the same scenario with the fix and an
+adequately long harness timeout — no timeout, `stop_instance` returned
+normally, and the screenshot confirmed both new columns render correctly:
+`Interfaces: vcan0, vcan1, veth0`, `Plugins: pdu_router.so, can_tp.so
+[vcan0]`.
+
 ## Next steps (not started)
 
 - Interface-creation UI / agent endpoints (still deliberately deferred, see

@@ -18,6 +18,7 @@ agent doesn't expose that either -- see the backlog).
 from __future__ import annotations
 
 import json
+import os
 import sys
 from typing import Optional, Tuple
 
@@ -48,6 +49,23 @@ from agent_client import AgentClient, AgentError
 from host_store import HostStore
 
 _POLL_INTERVAL_SEC = 2.0
+
+
+def _format_interfaces(inst: dict) -> str:
+    ifaces = list(inst.get("can_ifaces") or []) + list(inst.get("eth_ifaces") or [])
+    return ", ".join(ifaces) if ifaces else "—"
+
+
+def _format_plugins(inst: dict) -> str:
+    """One entry per node_plugins item: the .so basename, plus the iface it's
+    bound to (from its config, e.g. can_tp.so?{"iface": "vcan0"}) in brackets
+    when present -- that's the "linked to" association the table shows."""
+    parts = []
+    for p in inst.get("node_plugins") or []:
+        name = os.path.basename(p.get("path", "")) or p.get("path", "?")
+        iface = (p.get("config") or {}).get("iface")
+        parts.append(f"{name} [{iface}]" if iface else name)
+    return ", ".join(parts) if parts else "—"
 
 
 class PollWorker(QThread):
@@ -204,8 +222,10 @@ class MainWindow(QMainWindow):
         root.addLayout(host_bar)
 
         # ── Instance table ──
-        self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels(["Host", "Name", "ID", "Port", "Status", "PID", "Uptime"])
+        self.table = QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels(
+            ["Host", "Name", "ID", "Port", "Status", "PID", "Interfaces", "Plugins", "Uptime"]
+        )
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -305,7 +325,8 @@ class MainWindow(QMainWindow):
             uptime = f"{inst['uptime_sec']:.0f}s" if inst.get("uptime_sec") is not None else "—"
             values = [
                 host_name, inst["name"], inst["id"], str(inst["grpc_port"]),
-                inst["status"], str(inst["pid"] or "—"), uptime,
+                inst["status"], str(inst["pid"] or "—"),
+                _format_interfaces(inst), _format_plugins(inst), uptime,
             ]
             for c, v in enumerate(values):
                 item = QTableWidgetItem(v)
@@ -314,6 +335,10 @@ class MainWindow(QMainWindow):
         if select_row is not None:
             self.table.selectRow(select_row)
         self.table.blockSignals(False)
+        # Interfaces/Plugins can be the widest cells (multiple entries,
+        # iface annotations) -- size every column to its actual content
+        # instead of the default even split, which truncated them.
+        self.table.resizeColumnsToContents()
 
     def on_selection_changed(self) -> None:
         items = self.table.selectedItems()

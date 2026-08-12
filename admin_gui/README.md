@@ -42,9 +42,12 @@ either way it's the same `xcb` plugin doing the rendering).
    `http://` is added automatically if omitted). Each host needs
    `ui/launcher_agent.py` already running there (`python3 ui/launcher_agent.py`,
    default port 8090). Hosts persist across runs in `~/.boat/admin_hosts.json`.
-2. The instance table aggregates every instance from every added host,
+2. The instance table (Host, Name, ID, Port, Status, PID, Interfaces,
+   Plugins, Uptime) aggregates every instance from every added host,
    refreshing every 2 seconds. A host's dot in the host list is filled (●)
-   when reachable, hollow (○) when not.
+   when reachable, hollow (○) when not. **Plugins** shows each plugin's
+   `.so` basename, with the interface it's bound to in brackets when its
+   config carries one (`can_tp.so [vcan0]`).
 3. **New Instance…** picks a host, then defines CAN/Eth interfaces
    (comma-separated), node plugins (one per line: a `.so` path, optionally
    followed by a space and a JSON config object), an optional explicit gRPC

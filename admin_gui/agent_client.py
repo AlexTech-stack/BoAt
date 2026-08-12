@@ -17,15 +17,25 @@ class AgentError(Exception):
     {"detail": ...} body when present)."""
 
 
+# start/stop spawn or tear down a whole boat_gateway process (SIGTERM,
+# then up to a 5s wait, then SIGKILL as a fallback -- see
+# ui/launcher_agent.py's GatewayInstance.stop()). A client-side timeout at
+# or below that 5s wait is a real, previously-hit bug: the server-side call
+# can legitimately take just over 5s and still succeed, but a <=5s client
+# timeout reads that as a failure -- a false "Stop failed" even though the
+# gateway did stop. Give lifecycle calls real headroom over that worst case.
+_LIFECYCLE_TIMEOUT = 15.0
+
+
 class AgentClient:
     def __init__(self, base_url: str, timeout: float = 5.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    def _request(self, method: str, path: str, **kwargs) -> Any:
+    def _request(self, method: str, path: str, timeout: Optional[float] = None, **kwargs) -> Any:
         url = f"{self.base_url}{path}"
         try:
-            resp = requests.request(method, url, timeout=self.timeout, **kwargs)
+            resp = requests.request(method, url, timeout=timeout or self.timeout, **kwargs)
         except requests.RequestException as e:
             raise AgentError(f"{method} {url}: {e}") from e
         if not resp.ok:
@@ -73,10 +83,10 @@ class AgentClient:
         return self._request("POST", "/api/instances", json=body)
 
     def start_instance(self, instance_id: str) -> dict:
-        return self._request("POST", f"/api/instances/{instance_id}/start")
+        return self._request("POST", f"/api/instances/{instance_id}/start", timeout=_LIFECYCLE_TIMEOUT)
 
     def stop_instance(self, instance_id: str) -> dict:
-        return self._request("POST", f"/api/instances/{instance_id}/stop")
+        return self._request("POST", f"/api/instances/{instance_id}/stop", timeout=_LIFECYCLE_TIMEOUT)
 
     def delete_instance(self, instance_id: str) -> None:
         self._request("DELETE", f"/api/instances/{instance_id}")
