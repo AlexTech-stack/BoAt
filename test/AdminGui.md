@@ -172,3 +172,57 @@ a 5s wait + SIGKILL fallback), so a real Stop click could read back a false
 timeout error even though the gateway did stop. Fixed by giving
 `start_instance`/`stop_instance` a dedicated 15s timeout — see
 `backlog/launcher_agent_backlog.md` for the full account.
+
+---
+
+### TC_AdminGui_006_new_instance_dropdown_pickers
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent with at least one CAN interface and one discoverable
+  plugin `.so`
+
+**TestSteps:**
+1. Open **New Instance…**; inspect the CAN/Eth/Plugin combo boxes
+2. Pick an existing interface from the CAN dropdown, click **+ Add**
+3. Type an interface name that doesn't exist yet into the same combo,
+   click **+ Add**
+4. Pick a plugin path from its dropdown, enter `{"iface": "vcan0"}` in its
+   config field, click **+ Add**; pick another plugin with no config,
+   click **+ Add**
+5. Try adding a plugin with invalid JSON in the config field
+6. Submit and inspect `result_payload()` / the created instance
+
+**Expected:**
+- Combos are pre-populated from that host's real `GET /api/host/info`
+  (interfaces, plugin `.so` paths) but remain editable for manual entry
+- Both the dropdown-picked and manually-typed CAN interface end up in the
+  accumulated list
+- Both plugin entries store correctly as structured `{path, config}` --
+  the one with a config carries it, the one without gets `{}`
+- Invalid JSON is rejected with a warning dialog and adds nothing
+- `result_payload()`'s `can_ifaces`/`node_plugins` match exactly what was
+  added via the pickers
+
+**Verdict:** OK
+
+**Result:**
+Verified with real screenshots on real hardware (`agn-testcomputer`,
+Xvfb): dropdowns were populated from a live `host_info()` call and included
+real interfaces (`vcan0`, `vcan1`, `can0`, `can1`, plus PDU-DB-imported
+ones) and real plugin paths (`can_tp.so`, `pdu_router.so`, etc.). Added
+`vcan0` (picked) and `vcan-manual-entry` (typed) to the CAN list -- both
+present. Added `can_tp.so` with `{"iface": "vcan0"}` and `pdu_router.so`
+with no config -- `plugin_picker.values()` returned exactly
+`[{"path": ".../can_tp.so", "config": {"iface": "vcan0"}}, {"path":
+".../pdu_router.so", "config": {}}]`. Invalid JSON (`{not valid json`)
+correctly showed a warning dialog and left the list unchanged.
+`result_payload()` matched the picker state exactly.
+
+The first screenshot attempt also caught a real layout bug: the plugin
+path combo, config field, and Add button crammed into one row left the
+config field showing only `"d json"` of its placeholder — fixed by
+stacking the path row and the config field onto separate lines; a second
+screenshot confirmed the fix (full paths and full placeholder text both
+visible).

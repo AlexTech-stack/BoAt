@@ -161,6 +161,32 @@ normally, and the screenshot confirmed both new columns render correctly:
 `Interfaces: vcan0, vcan1, veth0`, `Plugins: pdu_router.so, can_tp.so
 [vcan0]`.
 
+## Done (2026-08-12, continued) — dropdown pickers for interfaces/plugins in New Instance
+
+The New Instance dialog's CAN/Eth interface and node-plugin fields were
+free-typed text (comma-separated / one-per-line), error-prone and requiring
+the user to already know exact interface names and full plugin paths. Added
+`ListPicker` (CAN/Eth) and `PluginListPicker` (plugins, with an optional
+per-entry JSON config) -- both an *editable* `QComboBox` (so manual entry
+always still works, e.g. for an interface not created yet) pre-populated
+from the selected host's `GET /api/host/info`, plus a `+ Add`/`Remove
+selected`-backed accumulated list. Combos reload when the host selection
+changes. Plugin entries are stored structured (`{"path", "config"}` dicts
+via `Qt.UserRole`), not re-parsed from display text.
+
+Verified with real screenshots on real hardware (`agn-testcomputer`,
+Xvfb): dropdown genuinely populated from a live `host_info()` call (real
+`vcan0`/`vcan1`/`can0`/`can1`/PDU-DB-imported ifaces, real discovered
+`.so` paths); both a dropdown-picked and a manually-typed CAN interface
+accepted into the same list; a plugin added with a JSON config and one
+without both stored and round-tripped correctly through `result_payload()`;
+invalid JSON in the config field rejected via a warning dialog without
+adding a stray entry. First screenshot caught a real layout bug --
+cramming the plugin path combo, config field, and Add button into one row
+left the config field showing only "d json" of its placeholder text; fixed
+by stacking path and config onto separate lines, re-verified with a second
+screenshot showing the fix.
+
 ## Next steps (not started)
 
 - Interface-creation UI / agent endpoints (still deliberately deferred, see

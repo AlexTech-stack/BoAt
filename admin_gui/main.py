@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -114,10 +115,127 @@ class PollWorker(QThread):
                 self.msleep(100)
 
 
+class ListPicker(QWidget):
+    """An editable combo box (dropdown of known choices, but free text is
+    always accepted too) plus an Add/Remove-backed list of accumulated
+    string values. Used for CAN/Eth interfaces: pick from what the host
+    actually has, or type one that doesn't exist yet (e.g. before creating
+    it in ui/launcher.py)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        row = QHBoxLayout()
+        self.combo = QComboBox()
+        self.combo.setEditable(True)
+        row.addWidget(self.combo, 1)
+        add_btn = QPushButton("+ Add")
+        add_btn.clicked.connect(self.add_current)
+        row.addWidget(add_btn)
+        layout.addLayout(row)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setFixedHeight(60)
+        layout.addWidget(self.list_widget)
+        remove_btn = QPushButton("Remove selected")
+        remove_btn.clicked.connect(self.remove_selected)
+        layout.addWidget(remove_btn)
+
+    def set_choices(self, choices: list) -> None:
+        current = self.combo.currentText()
+        self.combo.clear()
+        self.combo.addItems(choices)
+        self.combo.setCurrentText(current)
+
+    def add_current(self) -> None:
+        text = self.combo.currentText().strip()
+        if not text:
+            return
+        if text in self.values():
+            return
+        self.list_widget.addItem(text)
+        self.combo.setCurrentText("")
+
+    def remove_selected(self) -> None:
+        for item in self.list_widget.selectedItems():
+            self.list_widget.takeItem(self.list_widget.row(item))
+
+    def values(self) -> list:
+        return [self.list_widget.item(i).text() for i in range(self.list_widget.count())]
+
+
+class PluginListPicker(QWidget):
+    """Same idea as ListPicker, but each entry is a discovered plugin .so
+    path plus an optional JSON config (e.g. {"iface": "vcan0"}), stored
+    structured (not re-parsed from display text)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        path_row = QHBoxLayout()
+        self.combo = QComboBox()
+        self.combo.setEditable(True)
+        path_row.addWidget(self.combo, 1)
+        add_btn = QPushButton("+ Add")
+        add_btn.clicked.connect(self.add_current)
+        path_row.addWidget(add_btn)
+        layout.addLayout(path_row)
+
+        self.config_edit = QLineEdit()
+        self.config_edit.setPlaceholderText('optional config, e.g. {"iface": "vcan0"}')
+        layout.addWidget(self.config_edit)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setFixedHeight(70)
+        layout.addWidget(self.list_widget)
+        remove_btn = QPushButton("Remove selected")
+        remove_btn.clicked.connect(self.remove_selected)
+        layout.addWidget(remove_btn)
+
+    def set_choices(self, paths: list) -> None:
+        current = self.combo.currentText()
+        self.combo.clear()
+        self.combo.addItems(paths)
+        self.combo.setCurrentText(current)
+
+    def add_current(self) -> None:
+        path = self.combo.currentText().strip()
+        if not path:
+            return
+        cfg_text = self.config_edit.text().strip()
+        cfg = {}
+        if cfg_text:
+            try:
+                cfg = json.loads(cfg_text)
+            except json.JSONDecodeError as e:
+                QMessageBox.warning(self, "Invalid plugin config", f"Not valid JSON: {e}")
+                return
+        label = os.path.basename(path) or path
+        if cfg:
+            label += f"  {cfg_text}"
+        item = QListWidgetItem(label)
+        item.setData(Qt.UserRole, {"path": path, "config": cfg})
+        self.list_widget.addItem(item)
+        self.combo.setCurrentText("")
+        self.config_edit.clear()
+
+    def remove_selected(self) -> None:
+        for item in self.list_widget.selectedItems():
+            self.list_widget.takeItem(self.list_widget.row(item))
+
+    def values(self) -> list:
+        return [self.list_widget.item(i).data(Qt.UserRole) for i in range(self.list_widget.count())]
+
+
 class NewInstanceDialog(QDialog):
     def __init__(self, hosts: list, parent=None):
         super().__init__(parent)
         self.setWindowTitle("New Gateway Instance")
+        self.resize(560, 600)
         layout = QFormLayout(self)
 
         self.host_combo = QComboBox()
@@ -128,22 +246,14 @@ class NewInstanceDialog(QDialog):
         self.name_edit = QLineEdit()
         layout.addRow("Name:", self.name_edit)
 
-        self.can_edit = QLineEdit()
-        self.can_edit.setPlaceholderText("vcan0, vcan1")
-        layout.addRow("CAN interfaces:", self.can_edit)
+        self.can_picker = ListPicker()
+        layout.addRow("CAN interfaces:", self.can_picker)
 
-        self.eth_edit = QLineEdit()
-        self.eth_edit.setPlaceholderText("veth0")
-        layout.addRow("Eth interfaces:", self.eth_edit)
+        self.eth_picker = ListPicker()
+        layout.addRow("Eth interfaces:", self.eth_picker)
 
-        self.plugins_edit = QPlainTextEdit()
-        self.plugins_edit.setPlaceholderText(
-            "One plugin per line:\n"
-            "/path/to/pdu_router.so\n"
-            '/path/to/can_tp.so {"iface": "vcan0"}'
-        )
-        self.plugins_edit.setFixedHeight(80)
-        layout.addRow("Node plugins:", self.plugins_edit)
+        self.plugin_picker = PluginListPicker()
+        layout.addRow("Node plugins:", self.plugin_picker)
 
         self.port_edit = QLineEdit()
         self.port_edit.setPlaceholderText("auto")
@@ -158,33 +268,38 @@ class NewInstanceDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
+        # Populate the pickers' dropdowns from the initially-selected host,
+        # and again whenever the host selection changes.
+        self.host_combo.currentIndexChanged.connect(self._reload_host_info)
+        self._reload_host_info()
+
     def selected_host_url(self) -> str:
         return self.host_combo.currentData()
 
-    def _parse_plugins(self) -> list:
-        out = []
-        for line in self.plugins_edit.toPlainText().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            if " " in line:
-                path, cfg_str = line.split(" ", 1)
-                try:
-                    cfg = json.loads(cfg_str)
-                except json.JSONDecodeError as e:
-                    raise ValueError(f"invalid JSON config for plugin '{path}': {e}") from e
-                out.append({"path": path, "config": cfg})
-            else:
-                out.append({"path": line, "config": {}})
-        return out
+    def _reload_host_info(self) -> None:
+        url = self.selected_host_url()
+        if not url:
+            return
+        try:
+            info = AgentClient(url).host_info()
+        except AgentError:
+            # Host unreachable right now -- leave dropdowns as-is; manual
+            # entry (the combo boxes are editable) still works regardless.
+            return
+        ifaces = info.get("interfaces", [])
+        can_names = [i["name"] for i in ifaces if i.get("type") in ("vcan", "can")]
+        eth_names = [i["name"] for i in ifaces if i.get("type") in ("veth", "ether", "eth-virtual", "eth-raw")]
+        self.can_picker.set_choices(can_names)
+        self.eth_picker.set_choices(eth_names)
+        self.plugin_picker.set_choices(info.get("plugins", []))
 
     def result_payload(self) -> dict:
         port_text = self.port_edit.text().strip()
         return {
             "name": self.name_edit.text().strip(),
-            "can_ifaces": [s.strip() for s in self.can_edit.text().split(",") if s.strip()],
-            "eth_ifaces": [s.strip() for s in self.eth_edit.text().split(",") if s.strip()],
-            "node_plugins": self._parse_plugins(),
+            "can_ifaces": self.can_picker.values(),
+            "eth_ifaces": self.eth_picker.values(),
+            "node_plugins": self.plugin_picker.values(),
             "grpc_port": int(port_text) if port_text else None,
             "gateway_bin": self.gw_bin_edit.text().strip() or None,
         }

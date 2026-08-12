@@ -36,6 +36,8 @@ either way it's the same `xcb` plugin doing the rendering).
 
 ![admin_gui main window, showing a host with a running instance](docs/screenshot.png)
 
+![New Instance dialog, showing the dropdown pickers for interfaces and plugins](docs/new_instance_dialog.png)
+
 ## Usage
 
 1. **Add Host** — display name + agent URL (e.g. `agn-testcomputer:8090`;
@@ -48,11 +50,16 @@ either way it's the same `xcb` plugin doing the rendering).
    when reachable, hollow (○) when not. **Plugins** shows each plugin's
    `.so` basename, with the interface it's bound to in brackets when its
    config carries one (`can_tp.so [vcan0]`).
-3. **New Instance…** picks a host, then defines CAN/Eth interfaces
-   (comma-separated), node plugins (one per line: a `.so` path, optionally
-   followed by a space and a JSON config object), an optional explicit gRPC
-   port (blank = auto-allocated by that host's agent), and an optional
-   gateway binary override.
+3. **New Instance…** picks a host, then defines CAN interfaces, Eth
+   interfaces, and node plugins via a dropdown + **+ Add** pattern: each
+   dropdown is pre-populated from that host's `GET /api/host/info`
+   (interfaces it actually has, plugin `.so` files discovered under its
+   `build/{debug,release}`), but stays editable — type anything not listed
+   (e.g. an interface you're about to create) and **+ Add** still accepts
+   it. Plugins additionally take an optional JSON config
+   (`{"iface": "vcan0"}`) alongside the path. **Remove selected** drops an
+   already-added entry. Also: an optional explicit gRPC port (blank = auto-
+   allocated by that host's agent), and an optional gateway binary override.
 4. Select a row, then **Start** / **Stop** / **Delete** act on it (Delete is
    refused by the agent while the instance is running). The log panel below
    shows that instance's stdout/stderr, refreshing on the same 2s cadence.
