@@ -188,9 +188,18 @@ curl -X POST localhost:8090/api/instances/<id>/start
 curl localhost:8090/api/instances                  # list all, with status/pid/port
 curl localhost:8090/api/instances/<id>/log          # tail stdout/stderr
 curl -X POST localhost:8090/api/instances/<id>/stop
+curl -X PUT localhost:8090/api/instances/<id> -d '...'  # edit in place, refused (409) while running
 curl -X DELETE localhost:8090/api/instances/<id>    # refused (409) while running
 curl localhost:8090/api/host/info                   # interfaces, gateway binaries, plugins found on this host
 ```
+
+`PUT` takes the same body shape as `POST` and replaces the stopped
+instance's definition in place (same id) -- the same
+edit-refused-while-running pattern `CanTpService`'s re-run-`configure`
+already uses. `grpc_port` re-runs through the same allocator, with this
+instance's own current port excluded from the collision check, so
+resubmitting the same port (what the Edit dialog pre-fills) never conflicts
+with itself.
 
 Not yet built: instance persistence across an agent restart (v1 is
 in-memory only).
@@ -199,9 +208,12 @@ in-memory only).
 
 `admin_gui/` is the desktop client for one or more launcher agents above —
 host list (persisted to `~/.boat/admin_hosts.json`) → aggregated instance
-table, polled every 2s on a background `QThread` → create/start/stop/delete,
-plus a log viewer for the selected instance. `agent_client.py`/`host_store.py`
-have no Qt import, so they're usable/testable headlessly.
+table, polled every 2s on a background `QThread` → create/**edit**/start/
+stop/delete, plus a log viewer and an **equivalent command line** panel
+(the `BOAT_*=... ./boat_gateway` form of whatever instance is selected,
+with a Copy button -- for pasting into a script) for the selected instance.
+`agent_client.py`/`host_store.py` have no Qt import, so they're usable/
+testable headlessly.
 
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages

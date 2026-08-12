@@ -226,3 +226,81 @@ config field showing only `"d json"` of its placeholder — fixed by
 stacking the path row and the config field onto separate lines; a second
 screenshot confirmed the fix (full paths and full placeholder text both
 visible).
+
+---
+
+### TC_AdminGui_007_edit_instance
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent with an existing stopped instance selected in the table
+
+**TestSteps:**
+1. Click **Edit…**; inspect the dialog's pre-filled fields and the Host
+   combo
+2. Add an Eth interface, change the name, submit
+3. Inspect the table row and the "Equivalent command line" panel afterward
+
+**Expected:**
+- Dialog opens titled "Edit Gateway Instance", Host combo shows the
+  instance's actual host and is disabled (can't reassign an instance to a
+  different agent), and CAN interfaces/plugins (with their configs)/gRPC
+  port are all pre-filled from the instance's current definition
+- Submitting calls the agent's update (not create) endpoint -- same
+  instance id afterward, not a duplicate
+- The table row and the command-line panel both reflect the new name and
+  the added interface immediately after
+
+**Verdict:** OK
+
+**Result:**
+Verified end-to-end on real hardware (`agn-testcomputer`, with a real
+screenshot): built the Edit dialog exactly as `edit_selected()` does for a
+real instance (CAN iface `vcan0` + a `can_tp.so` plugin with `{"iface":
+"vcan0"}`) and asserted every field pre-filled correctly -- host combo
+`isEnabled() == False`, name/CAN-picker/plugin-picker/port all matching
+the existing instance exactly. Added an Eth interface and a new name,
+submitted via `update_instance()` (the same call `edit_selected()` makes),
+then confirmed via `GET /api/instances/{id}` that the *same id* now carried
+the new name and eth interface while keeping its original CAN interface.
+Screenshot confirmed the table row showed `edited-name` with
+`vcan0, veth0` in Interfaces.
+
+---
+
+### TC_AdminGui_008_equivalent_command_line
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- An instance with CAN interfaces, a plugin with an `iface` config, and a
+  non-default-looking `grpc_port` selected in the table
+
+**TestSteps:**
+1. Select the instance; read the "Equivalent command line" field
+2. Click **Copy**; paste elsewhere to confirm clipboard content
+3. Edit the instance (e.g. add an interface); reselect/observe the panel
+
+**Expected:**
+- Shown command line matches the
+  `BOAT_CAN_INTERFACES=... BOAT_NODE_PLUGINS=<path>?<json> ... <gateway_bin>`
+  form documented in `README.md`/`AGENTS.md`, using this instance's actual
+  `can_ifaces`/`eth_ifaces`/`node_plugins`/`grpc_port`/`gateway_bin`
+- Copy places exactly that text on the clipboard
+- Panel updates to reflect the edited config without needing to reselect
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware: for an instance with `can_ifaces=["vcan0"]` and
+one plugin (`can_tp.so`, config `{"iface": "vcan0"}`) on port 50051, the
+panel read `BOAT_CAN_INTERFACES=vcan0 BOAT_GRPC_PORT=50051
+BOAT_NODE_PLUGINS=<path>/can_tp.so?{"iface":"vcan0"} <path>/boat_gateway` --
+asserted programmatically (not just visually) before and after an edit
+that added `eth_ifaces: ["veth0"]`; the post-edit panel text included
+`BOAT_ETH_INTERFACES=veth0` without any manual reselection needed (driven
+by `rebuild_table()` calling the same recompute on every poll refresh).
+Clipboard content itself not separately asserted (`_copy_command_line()`
+is a one-line `QApplication.clipboard().setText()` call on the same text
+already verified correct).

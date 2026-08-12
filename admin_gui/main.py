@@ -69,6 +69,35 @@ def _format_plugins(inst: dict) -> str:
     return ", ".join(parts) if parts else "—"
 
 
+def _format_command_line(inst: dict) -> str:
+    """The BOAT_* env vars + boat_gateway invocation that reproduces this
+    instance from a shell -- lets a user copy what the admin GUI is doing
+    into a script. Mirrors the env var names/format documented in
+    boat-platform/README.md and AGENTS.md."""
+    parts = []
+    if inst.get("can_ifaces"):
+        parts.append(f"BOAT_CAN_INTERFACES={','.join(inst['can_ifaces'])}")
+    if inst.get("eth_ifaces"):
+        parts.append(f"BOAT_ETH_INTERFACES={','.join(inst['eth_ifaces'])}")
+    parts.append(f"BOAT_GRPC_PORT={inst.get('grpc_port', 50051)}")
+    node_plugins = inst.get("node_plugins") or []
+    if node_plugins:
+        plugin_parts = []
+        for p in node_plugins:
+            cfg = p.get("config") or {}
+            entry = p.get("path", "")
+            if cfg:
+                entry += "?" + json.dumps(cfg, separators=(",", ":"))
+            plugin_parts.append(entry)
+        parts.append(f"BOAT_NODE_PLUGINS={','.join(plugin_parts)}")
+    if inst.get("tick_ms"):
+        parts.append(f"BOAT_NODE_TICK_MS={inst['tick_ms']}")
+    if inst.get("tick_us"):
+        parts.append(f"BOAT_NODE_TICK_US={inst['tick_us']}")
+    parts.append(inst.get("gateway_bin") or "./boat_gateway")
+    return " ".join(parts)
+
+
 class PollWorker(QThread):
     """Background thread: polls every configured host's /api/instances (and
     the selected instance's log, if any) on a fixed interval, emitting
@@ -155,8 +184,13 @@ class ListPicker(QWidget):
             return
         if text in self.values():
             return
-        self.list_widget.addItem(text)
+        self.add_value(text)
         self.combo.setCurrentText("")
+
+    def add_value(self, text: str) -> None:
+        """Programmatic add, bypassing the combo -- used to pre-fill the
+        Edit dialog from an existing instance's current interfaces."""
+        self.list_widget.addItem(text)
 
     def remove_selected(self) -> None:
         for item in self.list_widget.selectedItems():
@@ -214,14 +248,20 @@ class PluginListPicker(QWidget):
             except json.JSONDecodeError as e:
                 QMessageBox.warning(self, "Invalid plugin config", f"Not valid JSON: {e}")
                 return
-        label = os.path.basename(path) or path
-        if cfg:
-            label += f"  {cfg_text}"
-        item = QListWidgetItem(label)
-        item.setData(Qt.UserRole, {"path": path, "config": cfg})
-        self.list_widget.addItem(item)
+        self.add_value(path, cfg)
         self.combo.setCurrentText("")
         self.config_edit.clear()
+
+    def add_value(self, path: str, config: dict) -> None:
+        """Programmatic add, bypassing the combo/config-field parsing --
+        used to pre-fill the Edit dialog from an existing instance's
+        current node_plugins (already-structured, no JSON text to parse)."""
+        label = os.path.basename(path) or path
+        if config:
+            label += f"  {json.dumps(config)}"
+        item = QListWidgetItem(label)
+        item.setData(Qt.UserRole, {"path": path, "config": config})
+        self.list_widget.addItem(item)
 
     def remove_selected(self) -> None:
         for item in self.list_widget.selectedItems():
@@ -232,18 +272,32 @@ class PluginListPicker(QWidget):
 
 
 class NewInstanceDialog(QDialog):
-    def __init__(self, hosts: list, parent=None):
+    """Doubles as the Edit dialog: pass `existing` (an instance dict from
+    the table) + `existing_host_url` to pre-fill every field from its
+    current definition, lock the host (an instance can't move between
+    agents), and change the title/submit semantics accordingly --
+    MainWindow.edit_selected() calls update_instance() instead of
+    create_instance() with the same result_payload()."""
+
+    def __init__(self, hosts: list, parent=None, existing: Optional[dict] = None,
+                 existing_host_url: Optional[str] = None):
         super().__init__(parent)
-        self.setWindowTitle("New Gateway Instance")
+        editing = existing is not None
+        self.setWindowTitle("Edit Gateway Instance" if editing else "New Gateway Instance")
         self.resize(560, 600)
         layout = QFormLayout(self)
 
         self.host_combo = QComboBox()
         for h in hosts:
             self.host_combo.addItem(f"{h['name']} ({h['url']})", h["url"])
+        if editing and existing_host_url:
+            idx = self.host_combo.findData(existing_host_url)
+            if idx >= 0:
+                self.host_combo.setCurrentIndex(idx)
+            self.host_combo.setEnabled(False)
         layout.addRow("Host:", self.host_combo)
 
-        self.name_edit = QLineEdit()
+        self.name_edit = QLineEdit(existing.get("name", "") if editing else "")
         layout.addRow("Name:", self.name_edit)
 
         self.can_picker = ListPicker()
@@ -272,6 +326,21 @@ class NewInstanceDialog(QDialog):
         # and again whenever the host selection changes.
         self.host_combo.currentIndexChanged.connect(self._reload_host_info)
         self._reload_host_info()
+
+        if editing:
+            for iface in existing.get("can_ifaces", []):
+                self.can_picker.add_value(iface)
+            for iface in existing.get("eth_ifaces", []):
+                self.eth_picker.add_value(iface)
+            for p in existing.get("node_plugins", []):
+                self.plugin_picker.add_value(p["path"], p.get("config") or {})
+            # Pre-filling the current port means "leave unchanged" round-trips
+            # correctly -- InstanceRegistry.update() excludes this instance's
+            # own current port from its collision check.
+            if existing.get("grpc_port"):
+                self.port_edit.setText(str(existing["grpc_port"]))
+            if existing.get("gateway_bin"):
+                self.gw_bin_edit.setText(existing["gateway_bin"])
 
     def selected_host_url(self) -> str:
         return self.host_combo.currentData()
@@ -352,13 +421,15 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
         new_btn = QPushButton("New Instance…")
         new_btn.clicked.connect(self.new_instance)
+        edit_btn = QPushButton("Edit…")
+        edit_btn.clicked.connect(self.edit_selected)
         start_btn = QPushButton("Start")
         start_btn.clicked.connect(self.start_selected)
         stop_btn = QPushButton("Stop")
         stop_btn.clicked.connect(self.stop_selected)
         delete_btn = QPushButton("Delete")
         delete_btn.clicked.connect(self.delete_selected)
-        for b in (new_btn, start_btn, stop_btn, delete_btn):
+        for b in (new_btn, edit_btn, start_btn, stop_btn, delete_btn):
             actions.addWidget(b)
         actions.addStretch(1)
         root.addLayout(actions)
@@ -369,6 +440,18 @@ class MainWindow(QMainWindow):
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(2000)
         root.addWidget(self.log_view, 1)
+
+        # ── Equivalent command line ──
+        root.addWidget(QLabel("Equivalent command line (selected instance):"))
+        cmd_row = QHBoxLayout()
+        self.cmdline_view = QLineEdit()
+        self.cmdline_view.setReadOnly(True)
+        self.cmdline_view.setPlaceholderText("Select an instance to see the equivalent shell command")
+        cmd_row.addWidget(self.cmdline_view, 1)
+        copy_btn = QPushButton("Copy")
+        copy_btn.clicked.connect(self._copy_command_line)
+        cmd_row.addWidget(copy_btn)
+        root.addLayout(cmd_row)
 
         self.statusBar()
         self.refresh_host_list()
@@ -454,16 +537,43 @@ class MainWindow(QMainWindow):
         # iface annotations) -- size every column to its actual content
         # instead of the default even split, which truncated them.
         self.table.resizeColumnsToContents()
+        # Recompute in case the selected instance's own config changed
+        # (e.g. just edited) even though the selection itself didn't.
+        self._update_command_line()
+
+    def find_instance(self, host_url: str, instance_id: str) -> Optional[dict]:
+        data = self._snapshot.get(host_url)
+        if not data:
+            return None
+        for inst in data.get("instances", []):
+            if inst["id"] == instance_id:
+                return inst
+        return None
 
     def on_selection_changed(self) -> None:
         items = self.table.selectedItems()
         if not items:
             self._selected = None
+            self._update_command_line()
             return
         key = items[0].data(Qt.UserRole)
         if key != self._selected:
             self.log_view.clear()
         self._selected = key
+        self._update_command_line()
+
+    def _update_command_line(self) -> None:
+        if not self._selected:
+            self.cmdline_view.clear()
+            return
+        host_url, inst_id = self._selected
+        inst = self.find_instance(host_url, inst_id)
+        self.cmdline_view.setText(_format_command_line(inst) if inst else "")
+
+    def _copy_command_line(self) -> None:
+        text = self.cmdline_view.text()
+        if text:
+            QApplication.clipboard().setText(text)
 
     def on_log(self, instance_id: str, log_lines: list) -> None:
         if not self._selected or self._selected[1] != instance_id:
@@ -531,6 +641,28 @@ class MainWindow(QMainWindow):
             client.create_instance(**payload)
         except AgentError as e:
             QMessageBox.warning(self, "Create failed", str(e))
+
+    def edit_selected(self) -> None:
+        if not self._selected:
+            QMessageBox.information(self, "No selection", "Select an instance in the table first.")
+            return
+        host_url, inst_id = self._selected
+        inst = self.find_instance(host_url, inst_id)
+        if inst is None:
+            QMessageBox.warning(self, "Edit", "Instance not found (it may have just been removed).")
+            return
+        hosts = self.host_store.list()
+        dlg = NewInstanceDialog(hosts, self, existing=inst, existing_host_url=host_url)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        payload = dlg.result_payload()
+        client = AgentClient(host_url)
+        try:
+            client.update_instance(inst_id, **payload)
+        except AgentError as e:
+            # Most commonly the agent's 409 if the instance was started in
+            # the gap between opening this dialog and clicking OK.
+            QMessageBox.warning(self, "Edit failed", str(e))
 
 
 def main() -> None:

@@ -187,6 +187,44 @@ left the config field showing only "d json" of its placeholder text; fixed
 by stacking path and config onto separate lines, re-verified with a second
 screenshot showing the fix.
 
+## Done (2026-08-12, continued) — Edit instance + equivalent command-line panel
+
+Two QoL additions:
+
+- **Edit.** Agent gained `PUT /api/instances/{id}` (`InstanceRegistry.update()`)
+  -- same edit-in-place-refused-while-running pattern as `CanTpService`'s
+  re-run-`configure`, not delete+recreate (keeps the same id). `grpc_port`
+  reuses `_allocate_port()` with the instance's own current port excluded
+  from the collision set, so resubmitting the same port (what the dialog
+  pre-fills) is never mistaken for a self-conflict. `AgentClient.
+  update_instance()` added to match. `NewInstanceDialog` now doubles as the
+  Edit dialog (`existing`/`existing_host_url` params): pre-fills every field
+  from the instance's current definition, locks the host combo (an instance
+  can't move agents), and `MainWindow.edit_selected()` calls
+  `update_instance()` instead of `create_instance()` with the same
+  `result_payload()`. New **Edit…** button next to New Instance.
+- **Equivalent command line.** A read-only field + Copy button below the
+  log panel shows the `BOAT_CAN_INTERFACES=... BOAT_NODE_PLUGINS=...
+  ./boat_gateway` invocation for whichever instance is selected --
+  `_format_command_line()`, updated on selection change and on every
+  table rebuild (so an edit is reflected immediately). Matches the env var
+  names/format already documented in `README.md`/`AGENTS.md`.
+
+Verified on real hardware (`agn-testcomputer`): raw agent API first --
+created an instance, `PUT` while stopped (renamed, added an eth iface, same
+port) applied cleanly, started it, confirmed `PUT` while running was correctly refused with 409,
+stopped+deleted. Then the full Qt flow with a real screenshot:
+built the Edit dialog exactly as `edit_selected()` does and asserted every
+field pre-filled correctly (host combo disabled, name/CAN/plugin config all
+matching the existing instance, port pre-filled with the current value);
+mutated it (added an eth iface, renamed) and submitted via
+`update_instance()`; confirmed the change landed server-side
+(`get_instance()`) and that both the table row and the command-line panel
+picked up the new config afterward. Command-line panel's own content
+independently checked before and after the edit, matching the actual
+`can_ifaces`/`eth_ifaces`/`node_plugins`/`grpc_port`/`gateway_bin` on the
+instance in both cases.
+
 ## Next steps (not started)
 
 - Interface-creation UI / agent endpoints (still deliberately deferred, see

@@ -291,6 +291,41 @@ class InstanceRegistry:
                 raise RuntimeError(f"instance '{instance_id}' is running; stop it first")
             del self._instances[instance_id]
 
+    def update(
+        self,
+        instance_id: str,
+        name: str,
+        can_ifaces: List[str],
+        eth_ifaces: List[str],
+        node_plugins: List[dict],
+        grpc_port: Optional[int],
+        tick_ms: Optional[int],
+        tick_us: Optional[int],
+        gateway_bin: Optional[str],
+    ) -> GatewayInstance:
+        """Edit a stopped instance's definition in place -- same id, same
+        semantics as CanTp's re-run-configure-to-edit pattern: refused while
+        running (see ICanTp / CanTpServiceImpl for the precedent this
+        follows). grpc_port re-runs through _allocate_port with the
+        instance's *own current port* excluded from the collision set, so
+        submitting the same port back (the common case -- the Edit dialog
+        pre-fills it) is never mistaken for a conflict with itself."""
+        with self._lock:
+            inst = self.get(instance_id)
+            if inst.running:
+                raise RuntimeError(f"instance '{instance_id}' is running; stop it first")
+            reserved = {i.grpc_port for i in self._instances.values() if i.id != instance_id}
+            port = _allocate_port(grpc_port, reserved)
+            inst.name = name or inst.name
+            inst.can_ifaces = list(can_ifaces or [])
+            inst.eth_ifaces = list(eth_ifaces or [])
+            inst.node_plugins = list(node_plugins or [])
+            inst.grpc_port = port
+            inst.tick_ms = tick_ms
+            inst.tick_us = tick_us
+            inst.gateway_bin = gateway_bin or inst.gateway_bin
+            return inst
+
 
 _registry = InstanceRegistry()
 
@@ -421,6 +456,29 @@ def api_get_instance(instance_id: str):
         return _registry.get(instance_id).to_dict()
     except KeyError:
         raise HTTPException(status_code=404, detail="instance not found")
+
+
+@app.put("/api/instances/{instance_id}")
+def api_update_instance(instance_id: str, req: CreateInstanceRequest):
+    try:
+        inst = _registry.update(
+            instance_id=instance_id,
+            name=req.name,
+            can_ifaces=req.can_ifaces,
+            eth_ifaces=req.eth_ifaces,
+            node_plugins=[p.dict() for p in req.node_plugins],
+            grpc_port=req.grpc_port,
+            tick_ms=req.tick_ms,
+            tick_us=req.tick_us,
+            gateway_bin=req.gateway_bin,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="instance not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return inst.to_dict()
 
 
 @app.post("/api/instances/{instance_id}/start")

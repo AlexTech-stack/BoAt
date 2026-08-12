@@ -82,6 +82,32 @@ class AgentClient:
         }
         return self._request("POST", "/api/instances", json=body)
 
+    def update_instance(
+        self,
+        instance_id: str,
+        name: str = "",
+        can_ifaces: Optional[List[str]] = None,
+        eth_ifaces: Optional[List[str]] = None,
+        node_plugins: Optional[List[Dict[str, Any]]] = None,
+        grpc_port: Optional[int] = None,
+        tick_ms: Optional[int] = None,
+        tick_us: Optional[int] = None,
+        gateway_bin: Optional[str] = None,
+    ) -> dict:
+        """Edit a stopped instance's definition in place -- refused (409) by
+        the agent while it's running."""
+        body = {
+            "name": name,
+            "can_ifaces": can_ifaces or [],
+            "eth_ifaces": eth_ifaces or [],
+            "node_plugins": node_plugins or [],
+            "grpc_port": grpc_port,
+            "tick_ms": tick_ms,
+            "tick_us": tick_us,
+            "gateway_bin": gateway_bin,
+        }
+        return self._request("PUT", f"/api/instances/{instance_id}", json=body)
+
     def start_instance(self, instance_id: str) -> dict:
         return self._request("POST", f"/api/instances/{instance_id}/start", timeout=_LIFECYCLE_TIMEOUT)
 

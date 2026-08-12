@@ -131,3 +131,37 @@ and the instance no longer appeared in `GET /api/instances`.
 **Result:**
 Verified on real hardware: response included `hostname: "agn-testcomputer"`
 and `vcan0` among the listed interfaces.
+
+---
+
+### TC_LauncherAgent_006_update_edit_in_place
+
+**TestSets:** [LauncherAgent]
+
+**Preconditions:**
+- Common preconditions of this TestSet (see top of file)
+
+**TestSteps:**
+1. Create an instance; `PUT /api/instances/{id}` while stopped with a
+   changed name, an added interface, and the *same* `grpc_port` it already
+   has
+2. `POST .../start`, then `PUT /api/instances/{id}` again with a different
+   name while it's running
+
+**Expected:**
+- Step 1 applies cleanly (same id, updated fields) -- submitting the
+  instance's own current port back is not mistaken for a port conflict
+  with itself
+- Step 2 is refused with 409 (`"... is running; stop it first"`), matching
+  `DELETE`'s running-refusal; the instance keeps running unaffected
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware: created an instance on port 50051 with
+`can_ifaces: ["vcan0"]`; `PUT` while stopped with
+`{"name": "edit-test-renamed", "can_ifaces": ["vcan0", "vcan1"],
+"eth_ifaces": ["veth0"], "grpc_port": 50051}` applied cleanly (same id,
+all fields updated, no port-conflict error despite resubmitting its own
+port). Started it, then `PUT` with a different name returned
+`{"detail":"instance '...' is running; stop it first"}` (409) as expected.

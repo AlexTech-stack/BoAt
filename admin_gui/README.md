@@ -61,8 +61,15 @@ either way it's the same `xcb` plugin doing the rendering).
    already-added entry. Also: an optional explicit gRPC port (blank = auto-
    allocated by that host's agent), and an optional gateway binary override.
 4. Select a row, then **Start** / **Stop** / **Delete** act on it (Delete is
-   refused by the agent while the instance is running). The log panel below
-   shows that instance's stdout/stderr, refreshing on the same 2s cadence.
+   refused by the agent while the instance is running). **Edit…** reopens
+   the same dialog pre-filled with that instance's current definition
+   (host locked -- an instance can't move agents) and submits an update in
+   place, same id, same rules as Delete: refused by the agent while running.
+5. Below the log panel, **Equivalent command line** shows the
+   `BOAT_CAN_INTERFACES=... BOAT_NODE_PLUGINS=... ./boat_gateway` form of
+   whatever instance is selected -- for copying into a script (**Copy**
+   button included). Updates automatically as the selection or that
+   instance's config changes.
 
 ## What's not here yet
 
