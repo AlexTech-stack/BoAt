@@ -524,12 +524,63 @@ class NodeRegistry:
 _node_registry = NodeRegistry()
 
 
+def _introspect_node_args(py: Path) -> List[dict]:
+    """Imports a node script as a module -- by convention (see
+    boat-platform/nodes/cyclic_can_sender.py's docstring) never running its
+    main(), only calling build_parser() if the script defines one at module
+    level -- and turns its argparse actions into a JSON-serializable schema
+    admin_gui uses to build one input field per argument. --address is
+    skipped (that's the dialog's separate Target gateway field); so is -h.
+
+    Deliberately swallows *any* failure into an empty list: a script with
+    no build_parser(), one that isn't valid Python, one whose module-level
+    imports fail in this particular environment, etc. should just fall back
+    to a flat free-text field client-side, not break discovery for every
+    other script under boat-platform/nodes/."""
+    mod_name = f"_boat_node_introspect_{py.stem}"
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(mod_name, py)
+        if spec is None or spec.loader is None:
+            return []
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[mod_name] = module
+        try:
+            spec.loader.exec_module(module)
+            build_parser = getattr(module, "build_parser", None)
+            if not callable(build_parser):
+                return []
+            parser = build_parser()
+        finally:
+            sys.modules.pop(mod_name, None)
+
+        actions = []
+        for action in parser._actions:
+            if not action.option_strings:
+                continue  # positional args -- none of our scripts use these
+            if "--address" in action.option_strings or "-h" in action.option_strings:
+                continue
+            default = action.default
+            if not isinstance(default, (str, int, float, bool)) and default is not None:
+                default = str(default)
+            actions.append({
+                "flag": action.option_strings[-1],  # prefer the long form (assumes short-then-long order)
+                "help": action.help or "",
+                "default": default,
+                "is_flag": action.nargs == 0,  # store_true/store_false/store_const -- no value typed
+            })
+        return actions
+    except Exception:
+        return []
+
+
 def _discover_node_scripts() -> List[dict]:
     """Mirrors ui/control_panel.py's node discovery: any *.py file directly
     under boat-platform/nodes/, not prefixed with '_', with its module
     docstring's first line and whether it uses input() (can't run headlessly,
     so the client can grey out Start for it the same way control_panel.py
-    disables its own start button)."""
+    disables its own start button). Also carries each script's argument
+    schema (see _introspect_node_args()) when discoverable."""
     out: List[dict] = []
     if not _NODES_DIR.is_dir():
         return out
@@ -551,6 +602,7 @@ def _discover_node_scripts() -> List[dict]:
             "path": str(py.absolute()),
             "docstring": docstring,
             "interactive": "input(" in src,
+            "args": _introspect_node_args(py),
         })
     return out
 

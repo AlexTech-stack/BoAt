@@ -228,6 +228,17 @@ CLI args, since each node script's own flags differ). No external-discovery
 equivalent for nodes (arbitrary Python scripts aren't reliably identifiable
 by process name the way `boat_gateway` is).
 
+`GET /api/node-scripts` also carries each script's argument schema under
+`"args"`, when discoverable: `_introspect_node_args()` imports the script
+(never running `main()`) and, if it defines a module-level
+`build_parser() -> argparse.ArgumentParser` (the convention
+`cyclic_can_sender.py`/`can_request_responder.py` follow), turns
+`parser._actions` into `[{"flag", "help", "default", "is_flag"}, ...]` --
+skipping `--address`/`-h`. Any failure (no `build_parser()`, an import
+error in this environment, anything) degrades to an empty list, never a
+broken response. `admin_gui`'s New/Edit Node dialog uses this to build one
+input field per argument (see below).
+
 ```bash
 curl -X POST localhost:8090/api/nodes -H 'Content-Type: application/json' \
   -d '{"name":"responder","script_path":".../nodes/can_request_responder.py",
@@ -271,15 +282,22 @@ will produce a `localhost` cross-host entry too, which is only actually
 correct if the node's own host is that literal same box -- add hosts by
 real address to target them from nodes elsewhere.) Typing a bare port
 normalizes to `localhost:<port>`; typing a full `host:port` by hand always
-works too. **Extra args** is a free-text field
-(`shlex.split()` on submit) rather than a structured picker, since node
-scripts have arbitrary, script-specific CLI flags (unlike gateway plugin
-configs, there's no one shape to build a form around). Also has its own
+works too. **Script arguments** builds one input field per argument the
+selected script's schema declares (see `/api/node-scripts`'s `"args"`
+above) -- a checkbox per boolean flag, a text field for everything else
+with an `e.g. <default>` placeholder (falling back to the argument's help
+text when the default is empty, e.g. `--data`). Empty/hidden for a script
+with no discoverable schema. **Extra args** remains a free-text field
+(`shlex.split()` on submit) as the escape hatch for anything outside that
+schema -- populated per-argument fields are combined with it on submit;
+in Edit mode, `_prefill_arg_fields()` walks the node's saved `extra_args`
+and pulls recognized `--flag [value]` pairs back into their matching
+field, leaving only the unrecognized leftovers here. Also has its own
 **From command line** / **Parse && Fill** (`_parse_node_command_line()`,
 shlex-based -- not the brace-aware tokenizer the Gateways one uses, since
-node args can contain quoted values with no JSON to protect). Session
-save/load does not currently cover nodes -- see
-`backlog/nodes_backlog.md`.
+node args can contain quoted values with no JSON to protect), which does
+the same recognized/leftover split. Session save/load does not currently
+cover nodes -- see `backlog/nodes_backlog.md`.
 
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages

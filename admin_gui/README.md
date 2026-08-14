@@ -122,15 +122,33 @@ own:
   running elsewhere.) Typing a bare port number (e.g. `50052`) normalizes
   to `localhost:50052`; typing a full `host:port` by hand is always
   accepted too, for anything not in either list.
-- **Extra args** is a single free-text field (e.g. `--iface vcan0
-  --can-id 0x300 --data AABBCCDD --cycle-ms 500`), parsed with
-  `shlex.split()` on submit -- there's no structured picker here since
-  every node script has its own, different CLI flags (check its docstring
-  or `--help`). At the top, **From command line** takes a pasted
-  `BOAT_HOST=... python3 <script> <args>` line (exactly what the
-  "Equivalent command line" panel produces) and **Parse && Fill**
-  populates Target gateway/Script/Extra args from it in one shot -- same
-  idea as the Gateways tab's paste feature.
+- **Script arguments** builds one input field per CLI argument the
+  selected script declares, if the script follows the `build_parser()`
+  convention (see `boat-platform/nodes/cyclic_can_sender.py`'s
+  docstring): a checkbox for boolean flags (`--fd`, `--brs`, ...), a text
+  field for everything else, pre-filled with an `e.g. <default>`
+  placeholder -- falling back to the argument's help text when its
+  default is empty, so an argument like `--data` (default `""`) still
+  shows a usable example (`Payload as hex bytes, e.g. AABBCCDD ...`)
+  instead of a blank hint. `--address` is never one of these fields --
+  that's the **Target gateway** dropdown above. The group is empty/hidden
+  for a script with no discoverable `build_parser()` (introspection
+  failures on the agent side -- import errors, missing convention, etc.
+  -- degrade silently to an empty schema, never a broken dialog).
+- **Extra args** stays a free-text field parsed with `shlex.split()` on
+  submit, now specifically the escape hatch for anything the per-argument
+  fields above don't cover -- a flag genuinely outside the script's
+  declared schema. Populated per-argument fields are combined with
+  whatever's typed here when the node is created. In **Edit**, an
+  existing node's saved `extra_args` are walked and any recognized
+  `--flag [value]` pairs are pulled back into their matching field
+  automatically, leaving only the unrecognized leftovers in this field.
+  At the top, **From command line** takes a pasted `BOAT_HOST=...
+  python3 <script> <args>` line (exactly what the "Equivalent command
+  line" panel produces) and **Parse && Fill** does the same
+  recognized/leftover split into Target gateway/Script/Script
+  arguments/Extra args in one shot -- same idea as the Gateways tab's
+  paste feature.
 - No **Managed** column or external-process discovery -- every row here is
   something this agent created; arbitrary Python scripts aren't reliably
   identifiable by process name the way `boat_gateway` is, so unmanaged node

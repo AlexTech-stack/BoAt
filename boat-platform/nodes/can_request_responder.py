@@ -13,7 +13,9 @@ Usage:
 Gateway address resolution -- same order as everywhere else in this repo:
 --address flag > BOAT_HOST env var > localhost:50051. See
 cyclic_can_sender.py's docstring for why --address defaults to None rather
-than a hardcoded string.
+than a hardcoded string, and for why argument parsing lives in
+build_parser() separate from main() (admin_gui's New Node dialog
+introspects it for a per-argument form).
 """
 
 from __future__ import annotations
@@ -27,15 +29,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"
 from boat.frame_node import FrameNode
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="BoAt CAN request/responder node")
     parser.add_argument("--address", default=None,
                          help="Gateway address (default: BOAT_HOST env var, then localhost:50051)")
     parser.add_argument("--iface", default="vcan0", help="CAN interface to listen/reply on")
     parser.add_argument("--request-id", default="0x7E0", help="CAN ID to react to, hex (0x..) or decimal")
     parser.add_argument("--response-id", default="0x7E8", help="CAN ID to reply with, hex (0x..) or decimal")
-    parser.add_argument("--response-data", default="", help="Reply payload as hex bytes (empty = 0-byte frame)")
-    args = parser.parse_args()
+    parser.add_argument("--response-data", default="",
+                         help="Reply payload as hex bytes, e.g. 5001 (empty = 0-byte frame)")
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     request_id = int(args.request_id, 0)
     response_id = int(args.response_id, 0)

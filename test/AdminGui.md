@@ -636,3 +636,65 @@ process as an `(unmanaged)` entry (expected, since `/proc` scanning isn't
 scoped per-agent) -- these appeared in the dropdown too, which is correct:
 a real running gateway is a valid target regardless of which agent (if
 any) manages it.
+
+---
+
+### TC_AdminGui_016_node_dynamic_argument_fields
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent whose `boat-platform/nodes/` scripts follow the
+  `build_parser()` convention (`cyclic_can_sender.py`,
+  `can_request_responder.py`)
+
+**TestSteps:**
+1. Open **New Node…**; select `cyclic_can_sender` in Script; inspect the
+   **Script arguments** group
+2. Fill some of the per-argument fields and check `--fd`; inspect
+   `result_payload()["extra_args"]`
+3. Create a node with `extra_args` mixing recognized flags (`--iface`,
+   `--cycle-ms`, `--fd`) and one flag not in the script's schema
+   (`--not-a-real-flag xyz`); reopen it via **Edit…**
+4. Select a script with no discoverable `build_parser()` (or none at all)
+
+**Expected:**
+- Step 1: one field per declared argument (`--iface`, `--can-id`,
+  `--data`, `--cycle-ms`, `--fd`, `--brs`) -- never `--address` (that's
+  the Target gateway field). Text fields show `e.g. <default>` as a
+  placeholder, falling back to the argument's help text when its default
+  is empty (`--data`); `--fd`/`--brs` render as checkboxes
+- Step 2: filled/checked fields appear in `extra_args` as `--flag value`
+  / bare `--flag` pairs, ahead of whatever's in the flat Extra args field
+- Step 3: `--iface`/`--cycle-ms`/`--fd` pre-fill into their matching
+  fields; Extra args shows only `--not-a-real-flag xyz`
+- Step 4: the Script arguments group is empty/hidden; Extra args remains
+  the only way to pass anything -- no crash, no error
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware (`agn-testcomputer`) via two throwaway Qt
+driver scripts run under a real Xvfb + `xcb` platform (not offscreen),
+screenshotted with `QWidget.grab()`. Step 1: agent's `/api/node-scripts`
+correctly introspected both real node scripts' `build_parser()` output
+via `importlib`, e.g. `cyclic_can_sender`'s six non-`--address` arguments
+with correct types/defaults (`--cycle-ms` default `1000` as an `int`,
+`--fd`/`--brs` as `is_flag: true`); the dialog rendered one field per
+argument, `--data`'s placeholder correctly fell back to its help text
+("Payload as hex bytes, e.g. AABBCCDD (empty = 0-byte frame)") since its
+default is `""`. Steps 3: created a node via `create_node()` with
+`extra_args=["--iface","vcan1","--cycle-ms","250","--fd",
+"--not-a-real-flag","xyz"]`, reopened it via `NewNodeDialog(existing=...)`
+-- `_arg_widgets["--iface"].text() == "vcan1"`,
+`_arg_widgets["--cycle-ms"].text() == "250"`,
+`_arg_widgets["--fd"].isChecked() is True`,
+`_arg_widgets["--brs"].isChecked() is False` (untouched), and
+`extra_args_edit.text() == "--not-a-real-flag xyz"` -- exactly the
+recognized/leftover split described in `admin_gui/README.md`. Screenshots
+confirmed both dialogs visually match (see
+`admin_gui/docs/new_node_dialog.png` for the New Node case). Step 4 not
+separately screenshotted but covered by `_rebuild_arg_fields()`'s
+`specs = specs or []` guard and `_introspect_node_args()`'s broad
+`except Exception: return []` on the agent side, already exercised
+in practice by every script that predates this feature.

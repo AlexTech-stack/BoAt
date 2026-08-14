@@ -17,6 +17,14 @@ defaults to None (not a hardcoded string) specifically so that omitting it
 lets BOAT_HOST decide; ui/control_panel.py's "Nodes" web UI still works
 unmodified since it always passes --address explicitly (its own gateway
 field), while a BOAT_HOST-env-var-driven launcher can omit it entirely.
+
+Argument parsing lives in build_parser(), separate from main(), by
+convention: ui/launcher_agent.py's node discovery imports this module
+(without running main()) and introspects build_parser()'s actions to show
+one input field per argument in admin_gui's New Node dialog, with each
+argument's help text and default as a placeholder/example. A script
+without a module-level build_parser() still works fine everywhere else --
+admin_gui just falls back to one flat free-text "Extra args" field for it.
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"
 from boat.frame_node import FrameNode
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="BoAt cyclic CAN sender node")
     parser.add_argument("--address", default=None,
                          help="Gateway address (default: BOAT_HOST env var, then localhost:50051)")
@@ -41,7 +49,11 @@ def main() -> None:
     parser.add_argument("--cycle-ms", type=int, default=1000, help="Send interval in milliseconds")
     parser.add_argument("--fd", action="store_true", help="Send as CAN FD")
     parser.add_argument("--brs", action="store_true", help="Set the Bit Rate Switch flag (only meaningful with --fd)")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     can_id = int(args.can_id, 0)
     payload = bytes.fromhex(args.data) if args.data else b""

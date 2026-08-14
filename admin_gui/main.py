@@ -37,11 +37,13 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -625,10 +627,29 @@ class NewNodeDialog(QDialog):
     """New/Edit dialog for a node instance -- same doubles-as-Edit pattern as
     NewInstanceDialog. The Script combo is populated from the selected
     host's GET /api/node-scripts (boat-platform/nodes/*.py) and shows each
-    script's module docstring below it; Extra Args is a free-text field
-    parsed with shlex.split() on submit, since node scripts have wildly
-    different CLI flags from each other (unlike gateway plugin configs,
-    there's no single structured shape to build a picker around).
+    script's module docstring below it.
+
+    "Script arguments" builds one input field per CLI argument the script's
+    build_parser() declares (see the "args" schema returned by
+    /api/node-scripts, introspected agent-side) -- a QCheckBox for boolean
+    flags (action="store_true"/"store_false"), a QLineEdit with the
+    argument's default shown as an "e.g. ..." placeholder for everything
+    else. --address is never among them (that's the Target gateway field
+    below); the group is rebuilt from scratch whenever the Script selection
+    changes. A script with no module-level build_parser() (or one whose
+    introspection failed for any reason -- see launcher_agent.py's
+    _introspect_node_args()) simply has an empty args schema, so this group
+    stays empty/hidden and Extra args below is the only way to pass
+    anything -- exactly today's behavior, unregressed.
+
+    Extra args below remains a free-text field parsed with shlex.split()
+    on submit, now specifically as the escape hatch for anything the
+    per-argument fields don't cover: a flag genuinely not in the script's
+    schema, or fields left blank on purpose. On submit, populated
+    per-argument fields are prepended to whatever's typed in Extra args.
+    In Edit mode, existing extra_args are walked and any recognized
+    --flag [value] pairs are pulled back into their matching field,
+    leaving only the unrecognized leftovers in Extra args.
 
     Target gateway is a dropdown of that same host's own gateway instances
     (from GET /api/instances) rather than a free-text "host:port" field --
@@ -648,7 +669,7 @@ class NewNodeDialog(QDialog):
                               # configured host, not just the selected one
         editing = existing is not None
         self.setWindowTitle("Edit Node" if editing else "New Node")
-        self.resize(520, 360)
+        self.resize(560, 480)
         layout = QFormLayout(self)
 
         paste_row = QHBoxLayout()
@@ -690,11 +711,19 @@ class NewNodeDialog(QDialog):
         )
         layout.addRow("Target gateway:", self.target_host_combo)
 
-        self.extra_args_edit = QLineEdit(
-            shlex.join(existing.get("extra_args", [])) if editing else ""
-        )
+        # One field per script argument, rebuilt whenever the Script
+        # selection changes -- see _rebuild_arg_fields(). Empty/hidden for
+        # a script with no discoverable build_parser().
+        self.args_group = QGroupBox("Script arguments")
+        self.args_form = QFormLayout(self.args_group)
+        self.args_group.setVisible(False)
+        layout.addRow(self.args_group)
+        self._arg_widgets: dict = {}   # flag ("--iface") -> QCheckBox | QLineEdit
+        self._arg_is_flag: dict = {}   # flag -> bool (True = boolean store_true/store_false)
+
+        self.extra_args_edit = QLineEdit("")
         self.extra_args_edit.setPlaceholderText(
-            '--iface vcan0 --can-id 0x300 --data AABBCCDD --cycle-ms 500'
+            'anything not covered above, e.g. --some-flag value'
         )
         layout.addRow("Extra args:", self.extra_args_edit)
 
@@ -706,6 +735,7 @@ class NewNodeDialog(QDialog):
         self.host_combo.currentIndexChanged.connect(self._reload_scripts)
         self.host_combo.currentIndexChanged.connect(self._reload_target_hosts)
         self.script_combo.currentIndexChanged.connect(self._update_doc_label)
+        self.script_combo.currentIndexChanged.connect(self._rebuild_arg_fields)
         self._reload_scripts()
         self._reload_target_hosts()
 
@@ -714,6 +744,13 @@ class NewNodeDialog(QDialog):
             if idx >= 0:
                 self.script_combo.setCurrentIndex(idx)
             self._update_doc_label()
+            self._rebuild_arg_fields()  # defensive re-run: guarantees the
+                                         # fields match this script even if
+                                         # setCurrentIndex() above didn't
+                                         # actually change the index (and so
+                                         # didn't fire currentIndexChanged)
+            leftover = self._prefill_arg_fields(existing.get("extra_args", []))
+            self.extra_args_edit.setText(shlex.join(leftover))
             self.target_host_combo.setCurrentText(existing.get("target_host", ""))
 
     def selected_host_url(self) -> str:
@@ -736,11 +773,13 @@ class NewNodeDialog(QDialog):
                 label += "  (interactive -- can't run headlessly)"
             self.script_combo.addItem(label, s["path"])
             self.script_combo.setItemData(self.script_combo.count() - 1, s.get("docstring", ""), Qt.UserRole + 1)
+            self.script_combo.setItemData(self.script_combo.count() - 1, s.get("args", []), Qt.UserRole + 2)
         if current:
             idx = self.script_combo.findData(current)
             if idx >= 0:
                 self.script_combo.setCurrentIndex(idx)
         self._update_doc_label()
+        self._rebuild_arg_fields()
 
     def _reload_target_hosts(self) -> None:
         """Populate from *every* configured host's gateway instances, not
@@ -778,6 +817,69 @@ class NewNodeDialog(QDialog):
         doc = self.script_combo.itemData(idx, Qt.UserRole + 1) if idx >= 0 else None
         self.script_doc_label.setText(doc or "")
 
+    def _rebuild_arg_fields(self) -> None:
+        """Rebuilds the "Script arguments" group from the selected script's
+        args schema (see /api/node-scripts' "args", stashed on the combo
+        item at construction time). Values are NOT preserved across a
+        rebuild -- a different script has unrelated arguments -- Edit mode
+        re-populates fresh via _prefill_arg_fields() right after this
+        runs."""
+        while self.args_form.rowCount():
+            self.args_form.removeRow(0)
+        self._arg_widgets = {}
+        self._arg_is_flag = {}
+
+        idx = self.script_combo.currentIndex()
+        specs = self.script_combo.itemData(idx, Qt.UserRole + 2) if idx >= 0 else None
+        specs = specs or []
+        for spec in specs:
+            flag = spec.get("flag")
+            if not flag:
+                continue
+            is_flag = bool(spec.get("is_flag"))
+            help_text = spec.get("help") or ""
+            self._arg_is_flag[flag] = is_flag
+            if is_flag:
+                w = QCheckBox()
+                w.setChecked(bool(spec.get("default")))
+                if help_text:
+                    w.setToolTip(help_text)
+            else:
+                w = QLineEdit()
+                default = spec.get("default")
+                w.setPlaceholderText(f"e.g. {default}" if default not in (None, "") else help_text)
+                if help_text:
+                    w.setToolTip(help_text)
+            self.args_form.addRow(flag, w)
+            self._arg_widgets[flag] = w
+
+        self.args_group.setVisible(bool(specs))
+
+    def _prefill_arg_fields(self, extra_args: list) -> list:
+        """Walks an existing node's extra_args, pulling any --flag [value]
+        pair the current script's schema recognizes into its matching
+        dynamic field, and returns the leftover tokens (an argument the
+        schema doesn't know about -- e.g. saved by an older version of the
+        script, or genuinely free-form) for the flat Extra args field."""
+        leftover: list = []
+        i = 0
+        while i < len(extra_args):
+            tok = extra_args[i]
+            if tok in self._arg_widgets:
+                w = self._arg_widgets[tok]
+                if self._arg_is_flag.get(tok):
+                    w.setChecked(True)
+                    i += 1
+                elif i + 1 < len(extra_args):
+                    w.setText(extra_args[i + 1])
+                    i += 2
+                else:
+                    i += 1  # flag with no following value -- drop it, nothing to fill
+            else:
+                leftover.append(tok)
+                i += 1
+        return leftover
+
     def _parse_and_fill(self) -> None:
         text = self.paste_edit.text().strip()
         if not text:
@@ -799,15 +901,33 @@ class NewNodeDialog(QDialog):
             idx = self.script_combo.count() - 1
         self.script_combo.setCurrentIndex(idx)
         self._update_doc_label()
-        self.extra_args_edit.setText(shlex.join(parsed["extra_args"]))
+        self._rebuild_arg_fields()  # defensive re-run, same reasoning as in __init__
+        leftover = self._prefill_arg_fields(parsed["extra_args"])
+        self.extra_args_edit.setText(shlex.join(leftover))
         self.paste_edit.clear()
 
     def result_payload(self) -> dict:
         script_path = self.script_combo.currentData()
         if not script_path:
             raise ValueError("select a node script")
+
+        # Populated per-argument fields first, then whatever's typed in
+        # the flat Extra args field -- if both happen to set the same
+        # flag (e.g. the user filled --iface above AND typed "--iface
+        # vcan1" below), the script itself will just take the last one on
+        # its command line, same as any argparse invocation would.
+        extra_args: list = []
+        for flag, w in self._arg_widgets.items():
+            if self._arg_is_flag.get(flag):
+                if w.isChecked():
+                    extra_args.append(flag)
+            else:
+                val = w.text().strip()
+                if val:
+                    extra_args.append(flag)
+                    extra_args.append(val)
         try:
-            extra_args = shlex.split(self.extra_args_edit.text().strip())
+            extra_args += shlex.split(self.extra_args_edit.text().strip())
         except ValueError as e:
             raise ValueError(f"invalid extra args: {e}") from e
 

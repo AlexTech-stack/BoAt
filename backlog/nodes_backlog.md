@@ -270,6 +270,72 @@ loops. Left as-is: out of scope for this fix since nothing in the current
 Nodes/admin_gui path uses them, but noted here in case they're ever
 resurrected.
 
+## Done (2026-08-14) — dynamic per-argument fields in New/Edit Node
+
+User feedback on the Extra Args free-text field: "Is it possible to add a
+variable amount of fields with examples for every argument a node might
+have (for the once that are not already defined at another point)?" --
+i.e. build one input field per CLI argument a node script declares,
+showing an example value, for everything not already covered by another
+dialog field (`--address`, already the Target gateway dropdown).
+
+Two-sided change:
+
+- **Node scripts**: `cyclic_can_sender.py` and `can_request_responder.py`
+  refactored to extract argument parsing into a module-level
+  `build_parser() -> argparse.ArgumentParser`, separate from `main()`, by
+  convention -- documented in each script's docstring. This lets
+  `launcher_agent.py` import a script and call `build_parser()` alone,
+  without triggering any of `main()`'s side effects (connecting to a
+  gateway, parsing `sys.argv`, running forever). `--response-data`'s help
+  text also gained a concrete example (`e.g. 5001`) specifically so a
+  default-empty-string argument still has something to show.
+- **Agent**: `_introspect_node_args()` (`ui/launcher_agent.py`) imports a
+  discovered script via `importlib.util.spec_from_file_location` +
+  `exec_module` (registering it in `sys.modules` under a synthetic name
+  for the duration, so any relative-import assumptions in the script's
+  own top-level code still work, then popping it back out), calls
+  `build_parser()` if present, and turns `parser._actions` into a JSON
+  schema: `flag` (the long option string), `help`, `default` (its native
+  JSON-serializable type -- `int`/`bool`/`str`/`null`, not always a
+  string), and `is_flag` (`action.nargs == 0`, true for
+  `store_true`/`store_false`/`store_const`/help actions alike -- a more
+  general test than checking against argparse's specific private action
+  classes). `--address` and `-h` are always skipped. The whole function is
+  wrapped in a blanket `try/except Exception: return []` -- a script with
+  no `build_parser()`, one that isn't importable in this environment
+  (e.g. a missing dependency), or anything else going wrong just yields an
+  empty schema, never a broken `/api/node-scripts` response for every
+  *other* script. `_discover_node_scripts()` now includes this schema as
+  each script's `"args"` key.
+- **admin_gui**: `NewNodeDialog` grew a "Script arguments" `QGroupBox`,
+  rebuilt via `_rebuild_arg_fields()` whenever the Script selection
+  changes -- a `QCheckBox` per boolean flag, a `QLineEdit` per everything
+  else, placeholder text `e.g. <default>` falling back to the argument's
+  help text when the default is empty (so `--data`, default `""`, still
+  shows "Payload as hex bytes, e.g. AABBCCDD ..." rather than a blank
+  hint). Extra Args remains as the escape hatch for anything outside the
+  script's declared schema; on submit, populated per-argument fields are
+  prepended to whatever's typed there. In Edit mode (and in **Parse &&
+  Fill**), `_prefill_arg_fields()` walks the node's existing `extra_args`
+  list, pulling any recognized `--flag [value]` pair back into its
+  matching field and returning the unrecognized leftovers for the flat
+  field -- so a node saved before this feature (or one using a flag
+  outside the current schema) still edits cleanly.
+
+Verified on real hardware (`agn-testcomputer`): `/api/node-scripts` via
+curl showed both scripts' correct argument schemas (six args for
+`cyclic_can_sender`, `--fd`/`--brs` correctly typed as `is_flag: true`,
+`--cycle-ms` default as a real `int`). Two throwaway Qt driver scripts run
+under a real Xvfb + `xcb` platform (screenshotted via `QWidget.grab()`,
+not an offscreen render) confirmed: the New Node dialog rendered all six
+fields with correct placeholders/checkboxes; a node created with
+`extra_args` mixing three recognized flags and one unrecognized one
+(`--not-a-real-flag xyz`), reopened via Edit, pre-filled the three
+recognized fields exactly and left only the unrecognized pair in Extra
+Args. See `test/AdminGui.md`'s TC_AdminGui_016 for the full account;
+`admin_gui/docs/new_node_dialog.png` updated to the new dialog layout.
+
 ## Next steps (not started)
 
 - More node scripts as real needs surface -- the two here are deliberately
