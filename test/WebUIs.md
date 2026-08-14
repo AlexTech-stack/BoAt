@@ -246,3 +246,61 @@ never wrong -- see `backlog/nodes_backlog.md` for the full account.
 **Verdict:** NOT_TESTED
 
 **Result:**
+
+---
+
+### TC_WebUIs_011_node_gateway_restart_resilience
+
+**TestSets:** [WebUIs], [Error]
+
+**Preconditions:**
+- A gateway running with `BOAT_CAN_INTERFACES=vcan0`; both `cyclic_can_sender.py`
+  and `can_request_responder.py` started against it (`FrameNode`-based nodes)
+
+**TestSteps:**
+1. Confirm both nodes are genuinely functioning (cyclic traffic on the wire;
+   `cansend` a request, confirm the responder's reply) via `candump`
+2. Stop the gateway; observe both node processes and their logs
+3. Restart the gateway (same port); without touching the node processes, repeat
+   step 1's checks
+
+**Expected:**
+- Step 2: neither node process crashes or exits; each logs its own failure
+  (`send failed ... will retry next cycle` / `subscribe stream failed ...
+  reconnecting in Ns...`) instead of going silent or exiting
+- Step 3: both nodes resume working entirely on their own — no manual
+  stop/start of either node process — within a few seconds of the gateway
+  becoming reachable again
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware (`agn-testcomputer`), on an isolated test gateway/
+`vcan0` pair (the user's own live 50056/`vcan1` session was confirmed
+untouched throughout via `ps`/`ss`). This TestCase exists because of a real
+bug found by the user running exactly this scenario through admin_gui: on
+stopping the gateway, `cyclic_can_sender.py` crashed outright (uncaught
+exception from `send_can()`) while `can_request_responder.py` stayed alive
+but went silently idle forever (a bare `except: pass` around
+`FrameNode.subscribe()`'s stream loop swallowed the disconnect, and nothing
+ever told the main thread the subscription had died) — needing a manual
+stop+start to work again after the gateway came back. Root-caused and fixed
+in the SDK (`sdk/python/boat/frame_node.py`): `subscribe()` now retries with
+capped exponential backoff instead of dying silently, `send()`/`send_can()`
+raise instead of hanging (matched by a `try/except` added to
+`cyclic_can_sender.py`'s send loop so it retries next cycle instead of
+crashing), and — found only by actually testing recovery time, not just
+"does it crash" — `FrameNode._reconnect()` discards and recreates the gRPC
+channel on every retry, since retrying against the *same* channel left both
+nodes stuck 90+ seconds after the gateway was already confirmed reachable
+again (grpc-python's own per-channel reconnect backoff, independent of
+anything this SDK's retry loop does). With all three pieces in place: killed
+the test gateway, confirmed via log tail that neither node crashed and both
+logged their own retry/backoff messages; restarted the gateway on the same
+port (after an unrelated `TIME-WAIT` delay — see
+`backlog/gateway_backlog.md`'s "Restarting a gateway on the same port" entry,
+a separate finding, not this bug); `candump` showed the cyclic sender's
+300ms-cycle traffic resume within seconds with zero manual action, and a
+fresh `cansend vcan0 7E0#22F19000` got the expected `7E8 [50 01]` reply back
+in ~3.6ms from the still-running responder process. Full account in
+`backlog/nodes_backlog.md`'s "gateway restart left nodes stuck" entry.

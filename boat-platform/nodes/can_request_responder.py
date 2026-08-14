@@ -16,6 +16,13 @@ cyclic_can_sender.py's docstring for why --address defaults to None rather
 than a hardcoded string, and for why argument parsing lives in
 build_parser() separate from main() (admin_gui's New Node dialog
 introspects it for a per-argument form).
+
+Survives the gateway restarting: node.subscribe() (sdk/python/boat/
+frame_node.py) auto-reconnects its stream with backoff on failure, so
+this node keeps listening across a gateway bounce with no manual
+stop/start needed -- it used to go silently idle forever on the first
+disconnect (a bare `except: pass` swallowed the stream error), looking
+"running" while never receiving another frame.
 """
 
 from __future__ import annotations

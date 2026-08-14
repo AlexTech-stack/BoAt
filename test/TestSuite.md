@@ -19,13 +19,13 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [PDU] | [PDU.md](PDU.md) | 10 | Routes, cyclic schedules, I-PDU groups, signal packing, E2E, db inspection, plugin delegation |
 | [CanTp] | [CanTp.md](CanTp.md) | 15 | ISO 15765-2 sessions, single/multi-frame, flow control, N_Bs/N_Cr timeouts, extended/mixed/29-bit addressing, CAN FD BRS, padding, error/event reporting, always-on reception |
 | [Plugins] | [Plugins.md](Plugins.md) | 7 | Register/list/info/unload, JSON config, bus-type filtering, dual managers, replay delivery |
-| [WebUIs] | [WebUIs.md](WebUIs.md) | 10 | Launcher, Dashboard, Nodes, Commander, Recorder UI, Debug inspector, nav, gateway-down behavior |
+| [WebUIs] | [WebUIs.md](WebUIs.md) | 11 | Launcher, Dashboard, Nodes, Commander, Recorder UI, Debug inspector, nav, gateway-down behavior, node gateway-restart resilience |
 | [Tools] | [Tools.md](Tools.md) | 18 | PDU Editor, Trace Analyzer, Trace Editor, Eth Analyzer, dbc2boatjson, offline operation |
 | [CLI] | [CLI.md](CLI.md) | 8 | Global flags, JSON mode, help accuracy, failure behavior, test runner, AI assistants, BOAT_HOST env var |
 | [LauncherAgent] | [LauncherAgent.md](LauncherAgent.md) | 9 | Multi-instance gateway lifecycle REST API: port auto-allocation, independent instances, duplicate-port rejection, delete-while-running rejection, host info, edit-in-place via PUT, invocation-independent path resolution, external (unmanaged) gateway discovery, node lifecycle |
 | [AdminGui] | [AdminGui.md](AdminGui.md) | 15 | PySide6 desktop client: host polling, create/start/stop via real UI actions, delete-refused-while-running dialog flow, multi-host aggregation, Interfaces/Plugins columns, New Instance dropdown pickers, Edit instance, equivalent command-line panel, paste-to-fill, Managed column + external-gateway guard, stale-selection-cleared-on-rebuild, session save/load, Nodes tab, Nodes target-gateway dropdown + paste-to-fill, cross-host target-gateway resolution |
 
-**Total: 162 TestCases.**
+**Total: 163 TestCases.**
 
 ## Cross-cutting TestSets (no own file)
 

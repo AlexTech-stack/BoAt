@@ -25,6 +25,13 @@ one input field per argument in admin_gui's New Node dialog, with each
 argument's help text and default as a placeholder/example. A script
 without a module-level build_parser() still works fine everywhere else --
 admin_gui just falls back to one flat free-text "Extra args" field for it.
+
+A send failure (e.g. the gateway restarting) doesn't crash the node -- it
+logs and retries next cycle, since BoAtClient's underlying gRPC channel
+reconnects on its own once the gateway is reachable again. Mirrors
+FrameNode.subscribe()'s auto-reconnect (sdk/python/boat/frame_node.py),
+so this node and a subscribe-based one like can_request_responder.py
+behave consistently across a gateway restart.
 """
 
 from __future__ import annotations
@@ -82,7 +89,21 @@ def main() -> None:
     cycle_s = args.cycle_ms / 1000.0
     while not stop:
         cycle_start = time.monotonic()
-        node.send_can(args.iface, can_id, payload, is_fd=args.fd, flags=flags)
+        try:
+            node.send_can(args.iface, can_id, payload, is_fd=args.fd, flags=flags)
+        except Exception as e:
+            # A transient failure (gateway restarting, brief network blip)
+            # used to crash the whole node -- skip this cycle and keep
+            # going instead. BoAtClient's underlying gRPC channel retries
+            # connecting on its own, so the next cycle's send_can() picks
+            # back up automatically once the gateway is reachable again --
+            # no special reconnect logic needed here, just don't let one
+            # failed call take the process down with it. Mirrors
+            # FrameNode.subscribe()'s auto-reconnect in frame_node.py,
+            # so a sender and a subscriber node behave consistently
+            # across a gateway restart.
+            print(f"[cyclic-can-sender] send failed ({e}); will retry next cycle",
+                  file=sys.stderr)
         # Deadline is relative to when THIS cycle started, not to when
         # send_can() returned -- send_can() is a synchronous gRPC call
         # (loopback round trip + protobuf serialization), a few ms even

@@ -156,6 +156,18 @@ no address hardcoded, then `BOAT_HOST=192.168.1.50:50052 python my_node.py`
 points the same script at a different gateway without touching its code. The
 `boat` CLI's `--host` flag follows the identical resolution order.
 
+`FrameNode` survives its gateway restarting: `send()`/`send_can()`/etc.
+re-raise on failure (so a caller sees the error) but also discard and
+recreate the underlying gRPC channel first, and `subscribe()`'s background
+stream auto-reconnects with capped exponential backoff on any failure.
+Both matter -- just retrying an RPC against the *same* channel can stay
+stuck behind grpc-python's own internal reconnect backoff (up to ~120s by
+default) long after the gateway is reachable again; recreating the
+channel forces an immediate fresh attempt instead. See
+`backlog/nodes_backlog.md`'s "gateway restart left nodes stuck" entry for
+the full incident (a real bug caught via a user manually stopping a
+gateway with two different node types pointed at it).
+
 ## UI services
 
 ```bash

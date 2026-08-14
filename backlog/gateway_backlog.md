@@ -104,3 +104,40 @@ exposes state and error counters, and error frames arrive in-band.
   absence.
 
 **Effort:** Small (document the limitation) to Medium (firmware).
+
+---
+
+## 🟡 Restarting a gateway on the same port can refuse to start for up to ~60s
+
+Surfaced while reproducing a node-side bug (`backlog/nodes_backlog.md`'s
+"gateway restart left nodes stuck" entry): killing a `boat_gateway` that
+had active gRPC clients connected, then immediately starting a new one on
+the *same* `BOAT_GRPC_PORT`, hits the startup port-in-use refusal (see
+this file's "A second gateway binds the same port silently" entry above
+for why that check exists) even though nothing is actually listening —
+`ss -ltnp` shows no listener at all. `ss -tan` shows why: a lingering
+`[::1]:<port>` connection from a just-killed client sits in `TIME-WAIT`
+for the OS's usual ~60s, and without `SO_REUSEADDR` on the listening
+socket, that alone is enough to make a fresh `bind()` to the same port
+fail — the port-in-use check isn't being fooled by a phantom process, the
+underlying socket genuinely can't rebind yet.
+
+**Impact.** A gateway that's stopped and restarted on the same port
+shortly after (exactly what a real gateway-restart workflow looks like,
+e.g. via admin_gui's Stop then Start on the same instance) can fail to
+start for up to a minute with the same "port already in use" message
+used for the genuine second-instance case above — misleading, since nothing
+else is actually running.
+
+**Options.**
+- Set `SO_REUSEADDR` on the gateway's own listening socket (standard,
+  safe practice for TCP servers restarting on a fixed port — distinct
+  from `SO_REUSEPORT`, which is what the resolved issue above was
+  correctly getting rid of; `SO_REUSEADDR` does not reintroduce that
+  problem, it only allows rebinding through `TIME-WAIT`).
+- Or have the port-in-use check specifically distinguish "another live
+  process is listening" (genuine conflict, refuse) from "the port is
+  between binds because of `TIME-WAIT`" (should just wait/retry a short,
+  bounded amount rather than fail outright).
+
+**Effort:** Small (a socket option in the gateway's listen setup).

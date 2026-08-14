@@ -336,6 +336,94 @@ recognized fields exactly and left only the unrecognized pair in Extra
 Args. See `test/AdminGui.md`'s TC_AdminGui_016 for the full account;
 `admin_gui/docs/new_node_dialog.png` updated to the new dialog layout.
 
+## Done (2026-08-14, continued) — gateway restart left nodes stuck (SDK-level fix)
+
+User feedback, running two different node types against one gateway
+through admin_gui: "When i start the two different nodes on one gw 50057.
+Then i stop the gw only the cyclic_can_sender.py actually stops, the
+can_request_responder keeps running. However it does not react (as the gw
+is stopped). Then when i restart the gw i have to first stop and then
+start the can_request_responder node again. In addition a second gw was
+running on 50056 with a can_request_responder node without issues." (The
+50056 instance being fine wasn't a contradiction -- its gateway simply
+never went down during that session.)
+
+Root cause was in the shared SDK, not either node script:
+`FrameNode.subscribe()`'s background thread (`sdk/python/boat/
+frame_node.py`) wrapped its entire streaming-RPC read loop in a bare
+`except Exception: pass`. When the gateway went away, the stream raised
+`grpc.RpcError` (`UNAVAILABLE`), that got silently swallowed, and the
+background thread just quietly exited -- `run()`'s main-thread wait loop
+had no idea the subscription had died, so it waited forever, keeping the
+process "running" while genuinely doing nothing forever after. Meanwhile
+`cyclic_can_sender.py`'s main loop called `node.send_can(...)` with no
+try/except at all, so the *same* underlying failure crashed that process
+outright -- different code, same underlying gap (no failure handling at
+all), producing opposite-looking symptoms (zombie-but-alive vs. crashed)
+purely by accident of which SDK method each script happened to call.
+
+Two-layer fix, both needed (confirmed on real hardware -- see below, the
+first alone was not enough):
+
+1. `FrameNode.subscribe()`'s background thread now retries the stream on
+   any failure with capped exponential backoff (1s, 2s, 4s, ..., capped
+   at 10s, reset after a connection stays up >5s), logging each failure
+   to stderr instead of hiding it. `cyclic_can_sender.py`'s send loop got
+   a matching `try/except` around `send_can()` so a transient failure
+   logs and retries next cycle instead of crashing the process -- makes
+   the two node types behave consistently across a gateway restart, which
+   was the other half of the user's report (the asymmetry itself, not
+   just the responder's non-recovery).
+2. Retrying against the *same* gRPC channel turned out not to be enough
+   on its own: verifying on real hardware, both a sender and a responder
+   stayed stuck in a `Connection refused` retry loop for 90+ seconds
+   *after* the gateway had already come back up and was independently
+   confirmed reachable (a fresh `grpc.channel_ready_future` check from a
+   brand new process succeeded immediately). grpc-python tracks each
+   channel's own reconnect backoff internally, uncapped by anything the
+   SDK controls, up to grpc's own ceiling (~120s default) -- after enough
+   consecutive failures, retrying an RPC on the *same* channel can just
+   fail fast against a still-backed-off subchannel without the client
+   library even attempting a fresh TCP connection, regardless of how
+   often the application layer calls the RPC. This is exactly why the
+   user's manual workaround (stop, then start the node again) "worked":
+   a fresh process means a fresh `BoAtClient`/channel with no failure
+   history, bypassing the stale backoff entirely. Fixed by adding
+   `FrameNode._reconnect()`, which closes the current channel and opens a
+   fresh `BoAtClient` -- called from `subscribe()`'s retry loop, and from
+   `send()` on any failure (re-raising the original exception after, so
+   callers still see it) -- so every retry gets a channel with no backoff
+   baggage, not just a repeated call on the same stuck one.
+
+Verified on real hardware (`agn-testcomputer`), on an isolated test
+gateway/vcan0 pair the user's own live session (port 50056, vcan1) was
+never touched: started both node types against a test gateway, confirmed
+baseline (cyclic traffic + a real request/response round trip via
+`cansend`/`candump`), killed the gateway. With only the auto-reconnect fix
+(no channel recreation) applied, both nodes correctly avoided crashing
+this time, but genuinely failed to recover even 90+ seconds after the
+gateway came back up and was confirmed independently reachable --
+reproducing the *actual* remaining bug behind the user's report, not just
+the crash/zombie asymmetry. With `_reconnect()` added, restarting the
+gateway (on the same port, after waiting out an unrelated TIME_WAIT delay
+-- see below) had both nodes fully working again within a few seconds,
+with zero manual intervention: `candump` showed the cyclic sender's
+300ms-cycle traffic resume on its own, and a fresh `cansend vcan0
+7E0#22F19000` got the expected `7E8 [50 01]` reply back in ~3.6ms.
+
+Side finding, not fixed (different component, out of scope here): while
+restarting the test gateway on the *same* port shortly after killing the
+previous instance, the C++ gateway's own "port already in use" startup
+check refused to start for up to ~60s even though nothing was actually
+listening (`ss -ltnp` showed no listener) -- `ss -tan` showed why: a
+lingering IPv6 `[::1]:<port>` connection in `TIME-WAIT` from a killed
+client connection was blocking the rebind, meaning the gateway's listening
+socket isn't using `SO_REUSEADDR`. Not touched as part of this fix (C++
+gateway startup code, unrelated component) -- noted here since it
+surfaced directly out of reproducing this bug and would make a real
+same-port gateway restart take up to a minute longer than necessary in
+practice. See `backlog/gateway_backlog.md` if/when this gets picked up.
+
 ## Next steps (not started)
 
 - More node scripts as real needs surface -- the two here are deliberately

@@ -19,7 +19,9 @@ Usage::
 
 from __future__ import annotations
 
+import sys
 import threading
+import time
 from typing import Callable, List, Optional
 
 from boat.client import BoAtClient
@@ -32,6 +34,7 @@ class FrameNode:
 
     def __init__(self, address: Optional[str] = None,
                  bus_types: Optional[List[str]] = None) -> None:
+        self._address = address
         self._client = BoAtClient(address)
         self._bus_types = bus_types or []
         self._stop = threading.Event()
@@ -41,12 +44,37 @@ class FrameNode:
     def client(self) -> BoAtClient:
         return self._client
 
+    def _reconnect(self) -> None:
+        """Discards the current gRPC channel and opens a fresh one.
+
+        grpc-python tracks each channel's own reconnect state internally:
+        after repeated connection failures its backoff grows (uncapped by
+        anything this SDK controls, up to grpc's own default ceiling of
+        ~120s), so simply calling an RPC again on the *same* channel can
+        silently keep failing fast against a still-backed-off subchannel
+        long after the gateway is actually reachable again -- the exact
+        gap that made a real gateway restart require manually stopping
+        and restarting a node (which happens to create a brand new
+        channel with no backoff history) before it would work again.
+        Recreating the channel here on every failure sidesteps that: the
+        new channel has no failure history, so its very next connection
+        attempt is immediate rather than queued behind a stale backoff."""
+        try:
+            self._client.channel.close()
+        except Exception:
+            pass
+        self._client = BoAtClient(self._address)
+
     # ── Send helpers ───────────────────────────────────────────────────
 
     def send(self, frame: frame_pb2.Frame) -> bool:
         """Send a unified Frame. Returns True if accepted."""
         req = frame_pb2.SendFrameRequest(frame=frame)
-        resp = self._client.frame.SendFrame(req)
+        try:
+            resp = self._client.frame.SendFrame(req)
+        except Exception:
+            self._reconnect()
+            raise
         return resp.accepted
 
     def send_can(self, iface: str, can_id: int, data: bytes,
@@ -109,13 +137,44 @@ class FrameNode:
             req = frame_pb2.SubscribeFramesRequest()
             if bt_values:
                 req.bus_types.extend(bt_values)
-            try:
-                for frame in self._client.frame.SubscribeFrames(req):
+            # Auto-reconnects with capped exponential backoff on any stream
+            # failure (gateway restart, network blip, ...) instead of
+            # silently dying -- a bare `except: pass` here used to leave
+            # the background thread gone while run()'s main-thread wait
+            # loop kept the process alive forever, looking "running" but
+            # never receiving another frame until the caller manually
+            # stopped and restarted the whole node. Backoff resets once a
+            # connection has stayed up a while, so a long-lived stream
+            # that eventually drops doesn't inherit a stale long delay.
+            backoff = 1.0
+            max_backoff = 10.0
+            while not self._stop.is_set():
+                connected_at = time.monotonic()
+                try:
+                    for frame in self._client.frame.SubscribeFrames(req):
+                        if self._stop.is_set():
+                            return
+                        callback(frame)
+                except Exception as e:
                     if self._stop.is_set():
                         return
-                    callback(frame)
-            except Exception:
-                pass
+                    print(f"[FrameNode] subscribe stream failed ({e}); "
+                          f"reconnecting in {backoff:.0f}s...", file=sys.stderr)
+                else:
+                    if self._stop.is_set():
+                        return
+                    print(f"[FrameNode] subscribe stream ended; "
+                          f"reconnecting in {backoff:.0f}s...", file=sys.stderr)
+                if time.monotonic() - connected_at > 5.0:
+                    backoff = 1.0
+                # New channel each retry -- see _reconnect()'s docstring:
+                # without this, retrying against the *same* channel can
+                # stay stuck behind grpc's own internal backoff long after
+                # the gateway is reachable again.
+                self._reconnect()
+                if self._stop.wait(backoff):
+                    return
+                backoff = min(backoff * 2, max_backoff)
 
         self._stop.clear()
         self._thread = threading.Thread(target=_run, daemon=True)
