@@ -304,3 +304,59 @@ a separate finding, not this bug); `candump` showed the cyclic sender's
 fresh `cansend vcan0 7E0#22F19000` got the expected `7E8 [50 01]` reply back
 in ~3.6ms from the still-running responder process. Full account in
 `backlog/nodes_backlog.md`'s "gateway restart left nodes stuck" entry.
+
+---
+
+### TC_WebUIs_012_plugin_based_nodes
+
+**TestSets:** [WebUIs], [PDU], [CanTp]
+
+**Preconditions:**
+- A gateway running with `BOAT_CAN_INTERFACES=vcan0` and
+  `BOAT_NODE_PLUGINS=<path>/pdu_router.so,<path>/can_tp.so?{"iface":"vcan0"}`
+
+**TestSteps:**
+1. Start `pdu_cyclic_publisher.py` against it; observe the wire via `candump`
+2. Start `can_tp_echo_responder.py` against it; send a short (<=7 byte)
+   single-frame ISO-TP request via `cansend`, observe the reply
+3. Send a >7 byte request via `isotpsend -D <len>` (or equivalent), forcing
+   real First-Frame/Flow-Control/Consecutive-Frame segmentation, and observe
+   the plugin's reassembly and re-segmented echo
+4. Start both nodes against a gateway *without* either plugin loaded
+
+**Expected:**
+- Step 1: the configured PDU ID appears on the wire as a CAN frame with the
+  configured payload, on the configured cycle
+- Step 2: the request is echoed back correctly on the reverse addressing
+- Step 3: the request reassembles correctly server-side (First Frame length
+  matches, Consecutive Frame data matches byte-for-byte), and the echo starts
+  going back out correctly segmented (matching First Frame)
+- Step 4: `configure()`/`configure_route()` fails cleanly with a clear
+  "is the plugin loaded?" message -- no crash, no silent no-op
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware (`agn-testcomputer`) on an isolated test
+gateway/`vcan0` pair with both plugins loaded, the user's own live session
+confirmed untouched throughout. Step 1: `candump` showed CAN ID `0x100`
+with payload `01 02 03 04 05 06 07 08` on a 300ms cycle as configured.
+Step 2: `cansend vcan0 7E0#03112233` came back as
+`7E8#03112233CCCCCCCC` (`CC` = default pad byte) in ~4ms. Step 3:
+`isotpsend -s 7E0 -d 7E8 -D 20 vcan0` produced the full expected wire
+exchange -- First Frame (`10 14 01 02 03 04 05 06`, length 0x14=20),
+Flow Control (`30 00 00 ...`), two Consecutive Frames reconstructing the
+full 20-byte payload -- and the plugin's echo correctly began with a
+matching First Frame (`10 14 01 02 03 04 05 06`) before the capture
+window ended. Step 4 verified both nodes against a gateway with neither plugin loaded:
+`pdu_cyclic_publisher.py`'s `configure_route()` (`PduNode`, which catches
+`grpc.RpcError` internally) returned `False` cleanly, printed the expected
+hint, and kept retrying. `can_tp_echo_responder.py`'s `configure()`
+(`CanTpHandle`, which does **not** catch `grpc.RpcError` -- see this
+node's writeup in `backlog/nodes_backlog.md`) raised instead, caught by
+the node's own `try/except`; the exception's message turned out to be
+more specific than a generic "unreachable" guess would have been --
+`NOT_FOUND: "no CanTp plugin loaded for iface 'vcan0'"`, distinguishing
+"plugin not loaded" from "gateway unreachable" -- so the node's error
+message was rewritten to print that detail verbatim rather than assume a
+cause, confirmed by re-running this exact scenario after the change.

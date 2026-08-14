@@ -423,10 +423,96 @@ probe wasn't using `SO_REUSEADDR`. Picked up and fixed the same day -- see
 `backlog/gateway_backlog.md`'s now-✅-RESOLVED entry for the fix and its
 own real-hardware verification.
 
+## Done (2026-08-14, continued) — plugin-based example node scripts
+
+User feedback: "we need some more nodes. They shall work (of course) but
+they shall also be examples of how to create notes, especially how to use
+plugins." `cyclic_can_sender.py`/`can_request_responder.py` only ever
+exercised `FrameNode` -- raw CAN frames straight through the gateway's
+core `FrameSink`, no plugin involved. Added two new nodes specifically to
+show the *other* shape: talking to a plugin's own gRPC service instead.
+
+- **`pdu_cyclic_publisher.py`** -- `pdu_router` plugin example.
+  `PduNode.configure_route()` registers a PDU ID -> (transport, iface, CAN
+  ID) routing rule, then `send()` sends a fixed payload as that PDU on a
+  cycle. Mirrors `PduMessageNode`'s database-driven approach
+  (`sdk/python/boat/pdu_message_node.py`) but spelled out by hand for one
+  message, as the simplest possible example.
+- **`can_tp_echo_responder.py`** -- `can_tp` plugin example. Same
+  request/responder shape as `can_request_responder.py`, but over ISO-TP
+  (`CanTpHandle.configure()` registers an N-SDU session, `subscribe()`
+  streams reassembled RX payloads, `send()` echoes each one back through
+  the plugin's own segmentation) -- so it carries payloads far longer than
+  one raw CAN frame, closer to what real UDS/diagnostic services need.
+
+Key lesson both docstrings call out explicitly, and both nodes' reconnect
+loops implement: a plugin's configuration (routes, N-SDU sessions) lives
+in the *gateway process*, not the client -- unlike a raw CAN sender, which
+has nothing to lose when the gateway restarts, a gateway restart wipes a
+plugin's state along with the connection. Retrying the data call alone
+(what `FrameNode`'s fix from earlier the same day does) isn't enough here;
+both nodes re-run `configure()`/`configure_route()` on every reconnect,
+not just retry `send()`.
+
+Building `can_tp_echo_responder.py`'s reconnect loop surfaced a real,
+separate finding: unlike `PduNode.configure_route()`/`send()` (which catch
+`grpc.RpcError` internally and return `False`), `CanTpHandle.configure()`/
+`send()`/`subscribe()` (`sdk/python/boat/can_tp.py`) do **not** catch it --
+they raise. My first draft assumed the same "returns False on failure"
+contract as `PduNode` and crashed with an unhandled traceback the first
+time it hit a real disconnect during verification. Fixed at the call site
+(wrapped `configure()` in its own `try/except` in the node's reconnect
+loop) rather than changing the shared SDK class this time, to keep this
+change scoped to "add example nodes" -- the inconsistency itself is noted
+in `AGENTS.md`'s "Plugin-based node scripts" section for whoever picks up
+`can_tp.py` next.
+
+Also surfaced, and fixed, a real bug in `launcher_agent.py` unrelated to
+either specific plugin: `NodeInstance.start()`'s `subprocess.Popen` never
+set `PYTHONUNBUFFERED`, so every node's stdout -- CPython fully
+block-buffers it whenever it isn't a tty, which a piped subprocess never
+is -- sat invisibly in an ~8KB libc buffer until it filled or the process
+exited. Only `stderr` writes (Python's `stderr` is always unbuffered) were
+ever actually appearing promptly in `admin_gui`'s/`control_panel`'s live
+log -- meaning ordinary informational `print()` output from *every* node
+script, not just the two new ones, was effectively invisible in real time
+this whole session; only the retry/backoff `stderr` warnings added for
+gateway-restart resilience earlier the same day were ever visible live.
+Fixed with one line (`env["PYTHONUNBUFFERED"] = "1"`).
+
+Verified on real hardware (`agn-testcomputer`) on an isolated test
+gateway/`vcan0` with both plugins loaded
+(`BOAT_NODE_PLUGINS=pdu_router.so,can_tp.so?{"iface":"vcan0"}`), the
+user's own live session confirmed untouched throughout:
+- `pdu_cyclic_publisher.py`: `candump` showed CAN ID `0x100` with the
+  configured payload on the configured cycle.
+- `can_tp_echo_responder.py`: a single-frame request (`7E0#03112233`) came
+  back correctly echoed (`7E8#03112233CCCCCCCC`, `CC` = the default pad
+  byte) in ~4ms. A genuine multi-frame exchange via `isotpsend -D 20`
+  (First Frame + Flow Control + 2 Consecutive Frames, 20-byte payload)
+  reassembled correctly server-side, and the plugin correctly began
+  segmenting the matching echo back out (First Frame with the same length
+  and leading bytes) -- confirming real multi-frame reassembly, not just
+  the single-frame path.
+- Introspection: `/api/node-scripts` correctly showed both scripts' full
+  argument schemas via curl.
+- `PYTHONUNBUFFERED` fix: log output appeared within ~1s of process start
+  (previously invisible for 60+ seconds in the same setup).
+- Gateway-restart resilience (repeating the earlier scenario, this time
+  with plugins loaded): killed the plugin-loaded gateway -- neither node
+  crashed, both logged clean retry/backoff messages (including the
+  now-fixed `can_tp_echo_responder.py`, which crashed with a traceback
+  before the `try/except` fix above). Restarted the gateway on the same
+  port -- both nodes recovered entirely on their own, `candump` showing
+  the PDU publisher's traffic resume and a fresh single-frame request
+  getting echoed correctly, no manual intervention.
+
 ## Next steps (not started)
 
-- More node scripts as real needs surface -- the two here are deliberately
-  minimal building blocks, not a complete ECU simulation library.
+- More node scripts as real needs surface -- four now cover raw-CAN
+  send/responder and PDU-route/CanTp-session plugin examples; still not a
+  complete ECU simulation library (Ethernet/PDU-database/SOME-IP examples
+  are still unwritten).
 - Session save/load doesn't cover Nodes yet -- only Gateway instances are
   captured in a session file today.
 - Node instance persistence across an agent restart -- same in-memory-only

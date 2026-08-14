@@ -409,6 +409,17 @@ class NodeInstance:
             env = os.environ.copy()
             if self.target_host:
                 env["BOAT_HOST"] = self.target_host
+            # CPython fully block-buffers stdout (unlike stderr, which is
+            # always unbuffered) whenever it isn't a tty -- which a piped
+            # subprocess never is. Without this, a node's ordinary print()
+            # output sits invisibly in the child's own libc buffer (~8KB)
+            # until it fills or the process exits; bufsize=1 below only
+            # controls how *this* process reads the pipe, it has no effect
+            # on how the *child* fills it. Every node script's routine log
+            # line was silently subject to this -- only their stderr
+            # warnings (e.g. the retry/backoff messages added for gateway-
+            # restart resilience) were ever actually showing up promptly.
+            env["PYTHONUNBUFFERED"] = "1"
             self.exit_code = None
             self.started_at = time.time()
             cmd = [sys.executable, self.script_path] + list(self.extra_args)

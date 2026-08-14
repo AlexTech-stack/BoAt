@@ -32,7 +32,7 @@
   - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|replay|frame|can|eth|pdu|can-tp|plugin|...`)
   - `config/` — PDU database JSON files
   - `demo/` — Demo node scripts (not web UI; scenario-specific, e.g. `cyclic_sender_node.py`'s CAN-ID start/stop trigger)
-  - `nodes/` — General-purpose node scripts, discoverable/runnable two ways: `ui/control_panel.py`'s "Nodes" web UI (any `.py` file not prefixed `_`, auto-listed with its module docstring's first line), and `ui/launcher_agent.py`/`admin_gui`'s Nodes tab (same discovery, but as a tracked, multi-node, multi-host registry -- see "Launcher Agent"/"Admin GUI" below). Each script accepts `--address` (default `None`, so `BOAT_HOST` decides when omitted) and its own behavior flags -- see `cyclic_can_sender.py` (configurable periodic CAN(FD) frame) and `can_request_responder.py` (replies to one CAN ID with a fixed response) for the pattern. `control_panel.py` always passes `--address <its gateway field>` explicitly; `launcher_agent.py` sets `BOAT_HOST` in the spawned process's env instead -- both work since `--address` defaults to `None`.
+  - `nodes/` — General-purpose node scripts, discoverable/runnable two ways: `ui/control_panel.py`'s "Nodes" web UI (any `.py` file not prefixed `_`, auto-listed with its module docstring's first line), and `ui/launcher_agent.py`/`admin_gui`'s Nodes tab (same discovery, but as a tracked, multi-node, multi-host registry -- see "Launcher Agent"/"Admin GUI" below). Each script accepts `--address` (default `None`, so `BOAT_HOST` decides when omitted) and its own behavior flags -- see `cyclic_can_sender.py` (configurable periodic CAN(FD) frame) and `can_request_responder.py` (replies to one CAN ID with a fixed response) for the raw-CAN pattern, or `pdu_cyclic_publisher.py`/`can_tp_echo_responder.py` for the equivalent pattern **through a plugin** (`pdu_router`/`can_tp` respectively) instead of the gateway's core FrameSink -- see "Plugin-based node scripts" below. `control_panel.py` always passes `--address <its gateway field>` explicitly; `launcher_agent.py` sets `BOAT_HOST` in the spawned process's env instead -- both work since `--address` defaults to `None`.
 - **`ui/`** — 7 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, recorder:8083, control_panel, debug, system_dashboard)
 - **`tools/`** — 2 standalone tools (pdu_editor:8087, trace_analyzer:8088)
 - **`traces/`** — Trace output directory (gitignored)
@@ -168,6 +168,28 @@ channel forces an immediate fresh attempt instead. See
 the full incident (a real bug caught via a user manually stopping a
 gateway with two different node types pointed at it).
 
+**Plugin-based node scripts.** `FrameNode.send_can()`/`send_eth()` go
+straight through the gateway's core `FrameSink` -- stateless, nothing to
+lose on a restart. `PduNode`/`CanTpHandle` are different: they're thin
+gRPC wrappers around a *plugin's* own service (`PduService`/
+`CanTpService`), and the plugin holds its configuration (routes, N-SDU
+sessions) in the gateway process's memory. A gateway restart wipes that
+state along with the connection -- a node using either must re-run
+`configure_route()`/`configure()` on reconnect, not just retry the data
+call, or it'll keep silently talking to a route/session that no longer
+exists server-side. `nodes/pdu_cyclic_publisher.py` (`pdu_router` plugin)
+and `nodes/can_tp_echo_responder.py` (`can_tp` plugin) are the reference
+examples for this pattern -- each requires its plugin loaded via
+`BOAT_NODE_PLUGINS` (see their docstrings for the exact flag) and prints a
+clear "is the plugin loaded?" hint if `configure()`/`configure_route()`
+fails. One asymmetry worth knowing if writing a new one:
+`PduNode.configure_route()`/`send()` catch `grpc.RpcError` internally and
+return `False`; `CanTpHandle.configure()`/`send()`/`subscribe()`
+(`sdk/python/boat/can_tp.py`) do **not** -- they raise. A node built on
+`CanTpHandle` needs its own `try/except` around those calls (see
+`can_tp_echo_responder.py`'s reconnect loop) or a transient disconnect
+crashes it instead of retrying.
+
 ## UI services
 
 ```bash
@@ -238,7 +260,15 @@ allocate or ifaces/plugins of its own: it just needs `target_host` (sets
 `BOAT_HOST` in the spawned process's env) and `extra_args` (a plain list of
 CLI args, since each node script's own flags differ). No external-discovery
 equivalent for nodes (arbitrary Python scripts aren't reliably identifiable
-by process name the way `boat_gateway` is).
+by process name the way `boat_gateway` is). Node subprocesses are spawned
+with `PYTHONUNBUFFERED=1` -- without it, CPython fully block-buffers
+stdout whenever it isn't a tty (which a piped subprocess never is), so a
+node's ordinary `print()` output would sit invisibly in its own ~8KB libc
+buffer until it filled or the process exited; only `stderr` writes (always
+unbuffered in Python) showed up promptly. This was a real, previously
+unnoticed gap -- every node's live log in `admin_gui`/`control_panel` was
+effectively silent except for stderr warnings and the buffer's eventual
+flush.
 
 `GET /api/node-scripts` also carries each script's argument schema under
 `"args"`, when discoverable: `_introspect_node_args()` imports the script
