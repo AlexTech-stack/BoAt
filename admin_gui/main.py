@@ -417,7 +417,23 @@ class ListPicker(QWidget):
 class PluginListPicker(QWidget):
     """Same idea as ListPicker, but each entry is a discovered plugin .so
     path plus an optional JSON config (e.g. {"iface": "vcan0"}), stored
-    structured (not re-parsed from display text)."""
+    structured (not re-parsed from display text).
+
+    "Plugin config" builds one input field per key the selected plugin's
+    config schema declares (see GET /api/host/info's "plugins"[]
+    "config_schema", read from a <name>.schema.json sidecar file next to
+    the .so -- see cmake/BoAtPlugin.cmake -- since a compiled .so has
+    nothing to import/introspect the way a node script's build_parser()
+    does; this is that same per-argument-fields idea, just sourced from a
+    static file instead of live reflection). A plugin with no sidecar
+    schema just has an empty/hidden group here -- the flat JSON config
+    field below remains the only way to configure it, exactly like before
+    this feature existed. Field type per schema entry's "type": "bool" ->
+    QCheckBox, a "enum" list -> QComboBox of those choices, "array" -> a
+    comma-separated QLineEdit split into a JSON list (of "item_type",
+    default "string") on submit, everything else -> QLineEdit with an
+    "e.g. <default>" placeholder falling back to "help" text.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -433,8 +449,17 @@ class PluginListPicker(QWidget):
         path_row.addWidget(add_btn)
         layout.addLayout(path_row)
 
+        self.config_group = QGroupBox("Plugin config")
+        self.config_form = QFormLayout(self.config_group)
+        self.config_group.setVisible(False)
+        layout.addWidget(self.config_group)
+        self._config_widgets: dict = {}   # key -> QCheckBox | QComboBox | QLineEdit
+        self._config_specs: dict = {}     # key -> schema spec dict (type/item_type/enum)
+
         self.config_edit = QLineEdit()
-        self.config_edit.setPlaceholderText('optional config, e.g. {"iface": "vcan0"}')
+        self.config_edit.setPlaceholderText(
+            'anything not covered above, e.g. {"extra_key": 1}'
+        )
         layout.addWidget(self.config_edit)
 
         self.list_widget = QListWidget()
@@ -444,27 +469,137 @@ class PluginListPicker(QWidget):
         remove_btn.clicked.connect(self.remove_selected)
         layout.addWidget(remove_btn)
 
-    def set_choices(self, paths: list) -> None:
+        self.combo.currentIndexChanged.connect(self._rebuild_config_fields)
+
+    def set_choices(self, plugins: list) -> None:
+        """plugins: [{"path", "config_schema"}, ...] from GET
+        /api/host/info's "plugins" (see launcher_agent.py's
+        _discover_plugins())."""
         current = self.combo.currentText()
         self.combo.clear()
-        self.combo.addItems(paths)
+        for p in plugins:
+            self.combo.addItem(p["path"], p.get("config_schema") or {})
         self.combo.setCurrentText(current)
+        self._rebuild_config_fields()
+
+    def _rebuild_config_fields(self) -> None:
+        """Rebuilds the "Plugin config" group from the selected combo
+        item's schema -- called whenever the combo selection changes
+        (currentIndexChanged), and once after add_current() clears the
+        combo back to empty (so leftover fields from the just-added
+        plugin don't linger for the next one). NOT called from inside
+        add_current() itself before collecting values -- see that
+        method's comment for why that would be actively wrong here."""
+        while self.config_form.rowCount():
+            self.config_form.removeRow(0)
+        self._config_widgets = {}
+        self._config_specs = {}
+
+        idx = self.combo.currentIndex()
+        schema = self.combo.itemData(idx) if idx >= 0 else None
+        schema = schema or {}
+        for key, spec in schema.items():
+            typ = spec.get("type", "string")
+            help_text = spec.get("help") or ""
+            default = spec.get("default")
+            enum = spec.get("enum")
+            self._config_specs[key] = spec
+            if typ == "bool":
+                w = QCheckBox()
+                w.setChecked(bool(default))
+                if help_text:
+                    w.setToolTip(help_text)
+            elif enum:
+                w = QComboBox()
+                w.addItems([str(v) for v in enum])
+                if default is not None:
+                    found = w.findText(str(default))
+                    if found >= 0:
+                        w.setCurrentIndex(found)
+                if help_text:
+                    w.setToolTip(help_text)
+            else:
+                w = QLineEdit()
+                if typ == "array" and isinstance(default, list):
+                    example = ",".join(str(v) for v in default)
+                else:
+                    example = default
+                w.setPlaceholderText(f"e.g. {example}" if example not in (None, "") else help_text)
+                if help_text:
+                    w.setToolTip(help_text)
+            self.config_form.addRow(key, w)
+            self._config_widgets[key] = w
+
+        self.config_group.setVisible(bool(schema))
+
+    def _collect_config_from_fields(self) -> dict:
+        """Turns the current per-key field values into a config dict,
+        typed per each key's schema spec. Raises ValueError (with a
+        message naming the offending key) on a bad int/array entry --
+        add_current() turns that into a warning dialog rather than
+        silently sending garbage to the gateway."""
+        cfg: dict = {}
+        for key, w in self._config_widgets.items():
+            spec = self._config_specs.get(key, {})
+            typ = spec.get("type", "string")
+            if typ == "bool":
+                cfg[key] = w.isChecked()
+                continue
+            if isinstance(w, QComboBox):
+                cfg[key] = w.currentText()
+                continue
+            text = w.text().strip()
+            if not text:
+                continue  # left blank -- plugin's own default applies
+            if typ == "int":
+                try:
+                    cfg[key] = int(text, 0)
+                except ValueError:
+                    raise ValueError(f'"{key}" must be a whole number, got {text!r}')
+            elif typ == "array":
+                item_type = spec.get("item_type", "string")
+                items = [v.strip() for v in text.split(",") if v.strip()]
+                if item_type == "int":
+                    try:
+                        items = [int(v, 0) for v in items]
+                    except ValueError:
+                        raise ValueError(f'"{key}" items must all be whole numbers')
+                cfg[key] = items
+            else:
+                cfg[key] = text
+        return cfg
 
     def add_current(self) -> None:
         path = self.combo.currentText().strip()
         if not path:
             return
+        # No defensive _rebuild_config_fields() here, unlike NewNodeDialog's
+        # equivalent pattern -- unlike there, calling it here would destroy
+        # and recreate every field *before* reading it, silently discarding
+        # whatever the user just typed/checked. currentIndexChanged already
+        # keeps these fields in sync with the combo selection at all times;
+        # there's nothing to resync at submit time. (Caveat: typing a
+        # custom path that doesn't match any known plugin leaves whatever
+        # fields were last shown attached to it -- a pre-existing, minor
+        # edge case of combo.setEditable(True), not something this method
+        # should paper over by wiping real input.)
+        try:
+            cfg = self._collect_config_from_fields()
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid plugin config", str(e))
+            return
         cfg_text = self.config_edit.text().strip()
-        cfg = {}
         if cfg_text:
             try:
-                cfg = json.loads(cfg_text)
+                extra = json.loads(cfg_text)
             except json.JSONDecodeError as e:
                 QMessageBox.warning(self, "Invalid plugin config", f"Not valid JSON: {e}")
                 return
+            cfg.update(extra)
         self.add_value(path, cfg)
         self.combo.setCurrentText("")
         self.config_edit.clear()
+        self._rebuild_config_fields()
 
     def add_value(self, path: str, config: dict) -> None:
         """Programmatic add, bypassing the combo/config-field parsing --

@@ -1,0 +1,39 @@
+{
+  "iface": {
+    "type": "string",
+    "default": "vcan0",
+    "help": "CAN interface to probe"
+  },
+  "buses": {
+    "type": "array",
+    "item_type": "string",
+    "default": ["can"],
+    "help": "Bus types to probe, comma-separated, e.g. can"
+  },
+  "mode": {
+    "type": "string",
+    "enum": ["passive", "active", "both"],
+    "default": "both",
+    "help": "passive observes/classifies only; active also injects probes; both does both"
+  },
+  "probe_id": {
+    "type": "string",
+    "default": "0x7FF",
+    "help": "CAN ID used for active probe injection, hex (0x..) or decimal"
+  },
+  "probe_period_ticks": {
+    "type": "int",
+    "default": 1000,
+    "help": "Ticks between active probe injections"
+  },
+  "echo_timeout_ticks": {
+    "type": "int",
+    "default": 50,
+    "help": "Ticks to wait for a probe echo before considering it lost"
+  },
+  "report_period_ticks": {
+    "type": "int",
+    "default": 5000,
+    "help": "Ticks between periodic stderr summary reports"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "iface": {
+    "type": "string",
+    "default": "",
+    "help": "Raw CAN/network interface this TCP instance is attached to"
+  },
+  "retry_ms": {
+    "type": "int",
+    "default": 1000,
+    "help": "Retransmission timeout in milliseconds"
+  },
+  "max_retries": {
+    "type": "int",
+    "default": 5,
+    "help": "Maximum retransmission attempts before giving up"
+  },
+  "mss": {
+    "type": "int",
+    "default": 1460,
+    "help": "Maximum segment size in bytes"
+  },
+  "time_wait_ms": {
+    "type": "int",
+    "default": 120000,
+    "help": "TIME_WAIT duration in milliseconds (2*MSL)"
+  },
+  "rx_window": {
+    "type": "int",
+    "default": 65535,
+    "help": "Advertised receive window size in bytes"
+  },
+  "nagle": {
+    "type": "bool",
+    "default": true,
+    "help": "Enable Nagle's algorithm (batches small writes)"
+  },
+  "keepalive_idle_ms": {
+    "type": "int",
+    "default": 7200000,
+    "help": "Idle time before the first keepalive probe, in milliseconds"
+  },
+  "keepalive_interval_ms": {
+    "type": "int",
+    "default": 75000,
+    "help": "Interval between keepalive probes, in milliseconds"
+  },
+  "keepalive_retry_count": {
+    "type": "int",
+    "default": 9,
+    "help": "Keepalive probes sent before the connection is considered dead"
+  }
+}

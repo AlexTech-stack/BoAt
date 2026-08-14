@@ -1,0 +1,7 @@
+{
+  "sd_port": {
+    "type": "int",
+    "default": 30490,
+    "help": "UDP port for SOME/IP Service Discovery"
+  }
+}

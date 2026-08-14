@@ -228,6 +228,8 @@ curl -X DELETE localhost:8090/api/instances/<id>    # refused (409) while runnin
 curl localhost:8090/api/host/info                   # interfaces, gateway binaries, plugins found on this host
 ```
 
+`GET /api/host/info`'s `"plugins"` entries carry a `"config_schema"` alongside each `.so`'s `"path"`, read from an optional `<name>.schema.json` sidecar file next to it (`{"key": {"type","default","help",...}}`, written by the plugin's own author and copied there at build time by `add_boat_plugin()` -- `cmake/BoAtPlugin.cmake`). A compiled `.so` has nothing to import/introspect at runtime the way a node script's `build_parser()` does (see "Plugin-based node scripts" above), so this is a static, hand-maintained equivalent for the same purpose: `admin_gui`'s New/Edit Instance dialog builds one field per key from it. `can_tp.so`/`tcp.so`/`probe.so`/`someip.so` ship one; `pdu_router.so` takes no config and has none. A plugin with no sidecar just isn't offered per-key fields -- the dialog's flat JSON config field still works exactly as before.
+
 `PUT` takes the same body shape as `POST` and replaces the stopped
 instance's definition in place (same id) -- the same
 edit-refused-while-running pattern `CanTpService`'s re-run-`configure`

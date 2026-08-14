@@ -424,6 +424,87 @@ wiped it, reloaded -- confirmed `status: "stopped"`, `pid: null`, with
 every other field (`can_ifaces`, `grpc_port`, etc.) still matching the
 saved definition exactly.
 
+## Done (2026-08-14) — plugin config schema fields (New Instance dialog)
+
+User feedback, having just seen nodes get per-argument fields: "Is it
+reasonable and possible to create for plugins something similar?" Answer:
+yes, but a different mechanism was needed -- a node script's `argparse`
+metadata can be imported and introspected live (`_introspect_node_args()`
+in `ui/launcher_agent.py`); a compiled plugin `.so` has nothing equivalent
+to import at runtime. Checked all 5 real plugins' actual config parsing
+(`can_tp`, `pdu_router`, `tcp`, `probe`, `someip` -- all hand-parse a raw
+JSON string via `strstr`, no shared schema anywhere in the C++) before
+picking an approach.
+
+Presented two options and let the user choose: a static, hand-written
+`<name>.schema.json` sidecar file per plugin (no ABI change, ships today)
+vs. a new optional C ABI export each plugin implements to describe itself
+at runtime (self-describing, always in sync, but touches `plugin.h` and
+every plugin's `.cpp`, needs a full rebuild). User picked the sidecar
+file -- same practical result, far less risk for a plugin ecosystem this
+small right now.
+
+- **Plugins**: added `<name>.schema.json` next to `can_tp.cpp`/
+  `tcp.cpp`/`probe.cpp`/`someip.cpp` (`pdu_router` takes no config, no
+  schema needed) describing each plugin's actual accepted keys --
+  `{"key": {"type", "default", "help", ["enum"|"item_type"]}}`. Written by
+  hand to match each plugin's real `strstr`-based parsing (probe.cpp
+  already had a config-JSON doc comment; the others didn't, so those were
+  derived directly from the parsing code and its member defaults).
+- **Build**: `cmake/BoAtPlugin.cmake`'s `add_boat_plugin()` copies the
+  sidecar (if present) next to the built `.so` via a `POST_BUILD` custom
+  command, and installs it alongside for `cpack` too -- same journey the
+  `.so` itself takes, so `BOAT_NODE_PLUGINS` always finds it in the same
+  place.
+- **Agent**: `_introspect_plugin_config()` reads the sidecar (if any) next
+  to each discovered `.so`; `_discover_plugins()`'s `GET /api/host/info`
+  `"plugins"` entries changed shape from flat path strings to
+  `{"path", "config_schema"}` objects. Swallows any read/parse failure
+  into an empty schema -- same defensive pattern as node introspection, a
+  plugin without one (or a corrupt sidecar) never breaks discovery for
+  every other plugin.
+- **admin_gui**: `PluginListPicker` (New/Edit Instance dialog) grew a
+  "Plugin config" group rebuilt from the selected plugin's schema on
+  every combo selection change -- a checkbox per `bool` key, a dropdown
+  per `enum` key, a comma-separated field parsed into a JSON list per
+  `array` key, a text field with an `e.g. <default>` placeholder for
+  everything else. The existing flat JSON config field stays as the
+  escape hatch for anything not covered by a schema (or a plugin with
+  none at all) -- both are merged into one config dict on **+ Add**, flat
+  JSON's keys taking precedence on overlap.
+
+A first draft had a real bug caught during verification, not by inspection:
+`add_current()` called the same field-rebuild function used on selection
+change defensively right before reading field values, "just in case" --
+copied from `NewNodeDialog`'s analogous pattern without noticing the
+difference in *when* it runs there. Unlike there, calling it here
+destroyed and recreated every widget (wiping whatever was just typed/
+checked) immediately before harvesting them, so every add silently
+produced only default values regardless of what was actually entered. A
+driver script that set real values and asserted the resulting dict caught
+it immediately (`{"nagle": true}` came back despite explicitly unchecking
+it and setting two other fields, which the rebuild had silently erased).
+Fixed by removing that call -- `currentIndexChanged` already keeps the
+fields in sync with the combo selection at all relevant times; there was
+nothing to resync at submit time.
+
+Verified on real hardware (`agn-testcomputer`): rebuilt all plugins,
+confirmed each `.schema.json` landed next to its `.so` in the build
+output; a scratch agent instance's `/api/host/info` showed the correct
+schema per plugin via curl (`can_tp`'s single `iface` key, `tcp`'s ten
+keys with correct types, `probe`'s enum/array keys, `someip`'s `sd_port`,
+empty for `pdu_router` and every legacy/orphaned `.so` in the build
+directory with no current CMake target). A real Qt render (Xvfb + `xcb`,
+screenshotted via `QWidget.grab()`) against that same scratch agent
+confirmed: selecting `tcp.so` rendered all ten fields with correct
+placeholders; selecting `probe.so` rendered its `mode` enum as a real
+dropdown (pre-selected to its default, `"both"`) and its `buses` array
+field with a comma-separated placeholder; filling `tcp.so`'s `iface`/
+`retry_ms`/`nagle` fields and clicking **+ Add** produced exactly
+`{"iface": "veth0", "nagle": false, "retry_ms": 500}` in the resulting
+list entry (confirming the bug fix), with `retry_ms` correctly typed as a
+JSON integer, not a string.
+
 ## Next steps (not started)
 
 - Interface-creation UI / agent endpoints (still deliberately deferred, see

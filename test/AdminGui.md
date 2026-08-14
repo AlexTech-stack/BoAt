@@ -698,3 +698,65 @@ separately screenshotted but covered by `_rebuild_arg_fields()`'s
 `specs = specs or []` guard and `_introspect_node_args()`'s broad
 `except Exception: return []` on the agent side, already exercised
 in practice by every script that predates this feature.
+
+---
+
+### TC_AdminGui_017_plugin_config_schema_fields
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent whose plugin `.so`s (`can_tp`, `tcp`, `probe`,
+  `someip`) have been built with the `<name>.schema.json` sidecar
+  convention (`cmake/BoAtPlugin.cmake`)
+
+**TestSteps:**
+1. Open **New Instance…**; select `tcp.so` in the plugin picker's combo;
+   inspect the **Plugin config** group
+2. Select `probe.so`; inspect its fields, specifically `mode` (has an
+   `enum`) and `buses` (an `array`)
+3. Fill some of `tcp.so`'s fields, leave others blank, click **+ Add**;
+   inspect `plugin_picker.values()`
+4. Select `pdu_router.so` (no schema)
+
+**Expected:**
+- Step 1: one field per key `tcp.so`'s schema declares (`iface`,
+  `retry_ms`, `max_retries`, `mss`, `time_wait_ms`, `rx_window`, `nagle`,
+  `keepalive_idle_ms`, `keepalive_interval_ms`, `keepalive_retry_count`),
+  each with an `e.g. <default>` placeholder; `nagle` (`bool`) renders as a
+  checkbox
+- Step 2: `mode` renders as a dropdown of `passive`/`active`/`both`,
+  pre-selected to its default (`both`); `buses` renders as a text field
+  with a comma-separated example placeholder
+- Step 3: the added entry's `config` dict contains exactly the filled
+  fields, correctly typed (`retry_ms` a JSON integer, not a string;
+  `nagle` a JSON boolean) -- blank fields are omitted, not sent as empty
+  strings
+- Step 4: the Plugin config group is empty/hidden -- the flat JSON config
+  field remains the only way to configure it, unregressed
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware (`agn-testcomputer`) via a scratch agent
+instance (isolated from the reporting user's own live agent/gateway
+throughout, confirmed via `ps`/`ss` before and after) and a real Qt render
+(Xvfb + `xcb`, screenshotted via `QWidget.grab()`, not offscreen). Step 1:
+all ten `tcp.so` fields rendered with correct placeholders. Step 2:
+`mode` rendered as a real `QComboBox` pre-selected to `"both"`; `buses`
+showed `e.g. can`. Step 3: filling `iface="veth0"`, `retry_ms="500"`,
+unchecking `nagle`, then **+ Add** produced exactly `{"iface": "veth0",
+"nagle": false, "retry_ms": 500}` -- `retry_ms` a real JSON int. A first
+attempt at this step caught a real bug: `add_current()` was calling the
+same field-rebuild used on combo-selection-change defensively right
+before reading values, which destroyed and recreated every widget first,
+silently discarding whatever was just entered (`nagle` came back `true`
+-- the schema's own default -- despite explicitly unchecking it, and
+`iface`/`retry_ms` were missing entirely). Fixed by removing that call;
+re-running this exact step afterward produced the correct dict. Step 4:
+confirmed `pdu_router.so` (and every legacy `.so` with no current CMake
+target) shows an empty/hidden Plugin config group, per `/api/host/info`
+returning `"config_schema": {}` for them (`_introspect_plugin_config()`'s
+missing-sidecar-file path). Full account in
+`backlog/launcher_agent_backlog.md`'s "plugin config schema fields"
+entry.

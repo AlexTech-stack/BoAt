@@ -1,0 +1,7 @@
+{
+  "iface": {
+    "type": "string",
+    "default": "vcan0",
+    "help": "CAN interface this CanTp plugin instance handles"
+  }
+}

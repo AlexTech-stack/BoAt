@@ -70,10 +70,18 @@ either way it's the same `xcb` plugin doing the rendering).
    (interfaces it actually has, plugin `.so` files discovered under its
    `build/{debug,release}`), but stays editable — type anything not listed
    (e.g. an interface you're about to create) and **+ Add** still accepts
-   it. Plugins additionally take an optional JSON config
-   (`{"iface": "vcan0"}`) alongside the path. **Remove selected** drops an
-   already-added entry. Also: an optional explicit gRPC port (blank = auto-
-   allocated by that host's agent), and an optional gateway binary override.
+   it. Selecting a plugin also builds a **Plugin config** field per key its
+   config schema declares, if it has one — a `<name>.schema.json` sidecar
+   file next to its `.so` (see `cmake/BoAtPlugin.cmake`), since a compiled
+   `.so` has nothing to introspect at runtime the way a node script's
+   `build_parser()` does. Each field shows an `e.g. <default>` placeholder
+   (an enum key renders as a dropdown of its allowed values instead); a
+   plugin with no sidecar schema — or any key not covered by one — falls
+   back to the flat optional JSON config field alongside the path (e.g.
+   `{"iface": "vcan0"}`), same as before this existed. **Remove selected**
+   drops an already-added entry. Also: an optional explicit gRPC port
+   (blank = auto-allocated by that host's agent), and an optional gateway
+   binary override.
    At the top, **From command line** takes a pasted
    `BOAT_CAN_INTERFACES=... BOAT_NODE_PLUGINS=... ./boat_gateway` line
    (exactly what the "Equivalent command line" panel below produces) and

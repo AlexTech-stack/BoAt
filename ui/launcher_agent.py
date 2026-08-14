@@ -670,12 +670,38 @@ def _discover_gateway_bins() -> List[str]:
     return out
 
 
-def _discover_plugins() -> List[str]:
+def _introspect_plugin_config(so_path: Path) -> dict:
+    """Reads a plugin's optional config-schema sidecar file --
+    <name>.schema.json next to <name>.so, written by the plugin's own
+    author and copied there at build time by add_boat_plugin()
+    (cmake/BoAtPlugin.cmake) -- describing the JSON config a plugin
+    accepts (the ?{...} appended to its .so path) as
+    {"key": {"type", "default", "help", ...}, ...}.
+
+    Unlike node scripts, a compiled .so has nothing to import/introspect
+    at runtime the way build_parser() lets _introspect_node_args() work --
+    this is a static, hand-maintained equivalent instead. Swallows any
+    failure (no sidecar file, unreadable, invalid JSON) into an empty
+    dict, same reasoning as _introspect_node_args(): a plugin without one
+    just doesn't get per-key fields client-side, it never breaks discovery
+    for every other plugin."""
+    schema_path = so_path.with_suffix("").with_suffix(".schema.json")
+    try:
+        return json.loads(schema_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _discover_plugins() -> List[dict]:
     out = []
     for preset in ("debug", "release"):
         plugin_dir = _PROJECT_ROOT / "build" / preset / "src" / "plugins"
         if plugin_dir.is_dir():
-            out.extend(str(p) for p in sorted(plugin_dir.glob("*/*.so")))
+            for so_path in sorted(plugin_dir.glob("*/*.so")):
+                out.append({
+                    "path": str(so_path),
+                    "config_schema": _introspect_plugin_config(so_path),
+                })
     return out
 
 
