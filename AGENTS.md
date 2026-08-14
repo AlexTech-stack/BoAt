@@ -260,14 +260,18 @@ A second tab, **Nodes**, is the same shape (table, New/Edit/Start/Stop/
 Delete, log viewer, equivalent command line) driving the `/api/nodes`
 endpoints above instead. Its New/Edit dialog's **Script** dropdown is
 populated from the selected host's `GET /api/node-scripts` and shows each
-script's module docstring underneath; **Target gateway** is a dropdown of
-that same host's own `GET /api/instances` (gateway instances) rather than
-a free-text host/port field -- a node's process is spawned on the *same*
-machine as any gateway it's pointed at there, so `localhost:<port>` is
-always reachable and the host doesn't need spelling out again after the
-**Host** field above already picked it; typing a bare port normalizes to
-`localhost:<port>`, a full `host:port` is still accepted verbatim for
-pointing at a different machine. **Extra args** is a free-text field
+script's module docstring underneath; **Target gateway** is a dropdown
+spanning *every configured host's* `GET /api/instances`, not just the
+node's own -- same-host entries resolve to `localhost:<port>` (robust, no
+DNS), cross-host entries resolve to that other host's own address (parsed
+from its agent URL, tagged `[host-name]` in the label) since `localhost`
+from the node's point of view would mean itself, not the other machine.
+(A host added as `localhost:<agent-port>` rather than its real hostname/IP
+will produce a `localhost` cross-host entry too, which is only actually
+correct if the node's own host is that literal same box -- add hosts by
+real address to target them from nodes elsewhere.) Typing a bare port
+normalizes to `localhost:<port>`; typing a full `host:port` by hand always
+works too. **Extra args** is a free-text field
 (`shlex.split()` on submit) rather than a structured picker, since node
 scripts have arbitrary, script-specific CLI flags (unlike gateway plugin
 configs, there's no one shape to build a form around). Also has its own

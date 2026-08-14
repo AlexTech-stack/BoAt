@@ -589,3 +589,50 @@ a quoted `"AA BB"` arg, which correctly stayed one token) and a bare
 formatted command line and clicking **Parse && Fill** populated Target
 gateway/Script/Extra args exactly; creating a node from that payload via
 `create_node()` matched the original definition field-for-field.
+
+---
+
+### TC_AdminGui_015_node_target_gateway_spans_all_hosts
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- Two configured hosts (agents), each addressed by a genuinely distinct,
+  non-"localhost" string (real hostname/IP -- addressing one as
+  `localhost:<port>` would create a degenerate case, see Result), each
+  with a running gateway instance
+
+**TestSteps:**
+1. Open **New Node…** with Host set to the first agent; inspect the
+   Target gateway dropdown
+2. Switch Host to the second agent; inspect the dropdown again
+3. Pick the cross-host entry; inspect `result_payload()`
+
+**Expected:**
+- Step 1: first agent's own gateway appears untagged, resolving to
+  `localhost:<port>`; second agent's gateway appears tagged `[<name>]`,
+  resolving to that agent's own real address (not `localhost`)
+- Step 2: roles flip -- now the second agent's gateway is the untagged
+  `localhost` entry, the first agent's is the tagged cross-host one
+- Step 3: `target_host` in the payload is the real cross-host address
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware (`agn-testcomputer`): two agents on one physical
+box, deliberately addressed via a real IP (`10.10.7.175`) and the real
+hostname (`agn-testcomputer`) rather than `localhost`, specifically so the
+test could tell "genuinely resolved cross-host address" apart from "just
+happened to also say localhost." With Host = agent A: agent A's own
+gateway showed as `on-A — localhost:50051 (running)` (untagged); agent B's
+showed as `[host-B] on-B — agn-testcomputer:50052 (running)` (tagged, real
+hostname, not `localhost`). Switching Host to agent B flipped it exactly:
+agent B's gateway became the untagged `localhost:50052` entry, agent A's
+became `[host-A] on-A — 10.10.7.175:50051` (its real IP). Picking that
+cross-host entry produced `result_payload()["target_host"] ==
+"10.10.7.175:50051"` exactly. Bonus observation, not a bug: each agent's
+own external-gateway discovery also picked up the *other* agent's gateway
+process as an `(unmanaged)` entry (expected, since `/proc` scanning isn't
+scoped per-agent) -- these appeared in the dropdown too, which is correct:
+a real running gateway is a valid target regardless of which agent (if
+any) manages it.

@@ -182,6 +182,56 @@ the dialog's own **Parse && Fill** on a real formatted command line
 populated every field correctly, and creating a node from that
 parsed-and-filled payload matched exactly.
 
+## Done (2026-08-13, continued) — cross-host Target gateway dropdown
+
+User pushback on the first pass, worth recording verbatim since the
+reasoning matters: "Nodes are talking via gRPC to the gw. So there are
+three options: 1. node runs on the same ip as the gw and the ui. 2. Node
+runs on same ip as the ui but gw runs on different ip 3. gw, node and ui
+are all running on different ips. So where are the nodes from the dropdown
+menu currently located?"
+
+Answer that came out of thinking it through: a node's *process* always
+runs on whichever host's agent spawned it (the dialog's **Host** field) --
+never wherever `admin_gui` itself happens to be running, since the UI is a
+pure REST client and no gRPC traffic ever flows through it. But the
+*first* Target gateway dropdown only ever queried that same host's own
+`GET /api/instances`, so it only ever represented the "node + gateway, same
+machine" case (the user's option 1) -- options 2/3 (a node reaching a
+gateway on a genuinely different machine) were only possible by typing a
+raw `host:port` by hand, with the dropdown offering zero visibility into
+what's running elsewhere.
+
+Fixed: `_reload_target_hosts()` now queries *every configured host's*
+`GET /api/instances`, not just the node's own. Same-host entries still
+resolve to `localhost:<port>` (correct and DNS-free, since it really is
+the same machine). Cross-host entries resolve to that *other* host's own
+address instead -- parsed from its agent URL via `urlparse().hostname` --
+and are tagged `[host-name]` in the label, since from the spawned node's
+own point of view `localhost` would mean itself, not the other machine.
+Noted (not fixed, may not be fixable in general): a host added to this app
+as `localhost:<agent-port>` rather than its real hostname/IP will produce
+a `localhost` cross-host entry too, which is only actually correct if the
+node's own host happens to be that literal same physical box -- there's no
+way for the tool to know an agent's "real" externally-reachable address
+beyond the URL the user gave it.
+
+Verified on real hardware (`agn-testcomputer`) with two agents on one box,
+deliberately addressed via two genuinely distinct non-"localhost" strings
+(a real IP and the real hostname) so the test wasn't fooled by a
+degenerate same-machine case: created a gateway on each; confirmed the
+dropdown, with the dialog's Host set to the first agent, showed the first
+agent's own gateway as `localhost:<port>` untagged and the second agent's
+gateway as `<real-hostname>:<port>` tagged `[host-name]`; switched the
+dialog's Host to the second agent and confirmed the roles correctly
+flipped (now *that* agent's gateway is the untagged localhost entry, the
+first agent's is the tagged cross-host one at its real IP); picked the
+cross-host entry and confirmed `result_payload()`'s `target_host` matched
+exactly. Bonus, not a bug: externally-discovered (`managed: false`)
+gateways showed up in the dropdown too, on both sides -- a real running
+gateway is a valid node target regardless of which agent (if any) manages
+it, so no filtering was added to exclude them.
+
 ## Next steps (not started)
 
 - More node scripts as real needs surface -- the two here are deliberately

@@ -23,9 +23,9 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [Tools] | [Tools.md](Tools.md) | 18 | PDU Editor, Trace Analyzer, Trace Editor, Eth Analyzer, dbc2boatjson, offline operation |
 | [CLI] | [CLI.md](CLI.md) | 8 | Global flags, JSON mode, help accuracy, failure behavior, test runner, AI assistants, BOAT_HOST env var |
 | [LauncherAgent] | [LauncherAgent.md](LauncherAgent.md) | 9 | Multi-instance gateway lifecycle REST API: port auto-allocation, independent instances, duplicate-port rejection, delete-while-running rejection, host info, edit-in-place via PUT, invocation-independent path resolution, external (unmanaged) gateway discovery, node lifecycle |
-| [AdminGui] | [AdminGui.md](AdminGui.md) | 14 | PySide6 desktop client: host polling, create/start/stop via real UI actions, delete-refused-while-running dialog flow, multi-host aggregation, Interfaces/Plugins columns, New Instance dropdown pickers, Edit instance, equivalent command-line panel, paste-to-fill, Managed column + external-gateway guard, stale-selection-cleared-on-rebuild, session save/load, Nodes tab, Nodes target-gateway dropdown + paste-to-fill |
+| [AdminGui] | [AdminGui.md](AdminGui.md) | 15 | PySide6 desktop client: host polling, create/start/stop via real UI actions, delete-refused-while-running dialog flow, multi-host aggregation, Interfaces/Plugins columns, New Instance dropdown pickers, Edit instance, equivalent command-line panel, paste-to-fill, Managed column + external-gateway guard, stale-selection-cleared-on-rebuild, session save/load, Nodes tab, Nodes target-gateway dropdown + paste-to-fill, cross-host target-gateway resolution |
 
-**Total: 161 TestCases.**
+**Total: 162 TestCases.**
 
 ## Cross-cutting TestSets (no own file)
 

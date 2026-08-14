@@ -29,6 +29,7 @@ import os
 import shlex
 import sys
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 import yaml
 
@@ -643,6 +644,8 @@ class NewNodeDialog(QDialog):
     def __init__(self, hosts: list, parent=None, existing: Optional[dict] = None,
                  existing_host_url: Optional[str] = None):
         super().__init__(parent)
+        self._hosts = hosts  # kept for _reload_target_hosts() to query every
+                              # configured host, not just the selected one
         editing = existing is not None
         self.setWindowTitle("Edit Node" if editing else "New Node")
         self.resize(520, 360)
@@ -740,20 +743,34 @@ class NewNodeDialog(QDialog):
         self._update_doc_label()
 
     def _reload_target_hosts(self) -> None:
-        url = self.selected_host_url()
-        if not url:
-            return
-        try:
-            instances = AgentClient(url).list_instances()
-        except AgentError:
-            # Host unreachable right now -- leave the combo as-is; manual
-            # entry (it's editable) still works regardless.
-            return
+        """Populate from *every* configured host's gateway instances, not
+        just the one this node will run on -- a node can target a gateway
+        on a different machine, as long as it's network-reachable. A
+        same-host entry resolves to localhost:<port> (robust, no DNS
+        needed, and correct: the node and that gateway are the exact same
+        machine). A cross-host entry resolves to that *other* host's own
+        address instead, parsed from its agent URL -- localhost would be
+        wrong there, since from the node's point of view (running on this
+        dialog's selected Host) "localhost" means itself, not the other
+        machine."""
+        node_host_url = self.selected_host_url()
         current = self.target_host_combo.currentText()
         self.target_host_combo.clear()
-        for inst in instances:
-            addr = f"localhost:{inst['grpc_port']}"
-            self.target_host_combo.addItem(f"{inst['name']} — {addr} ({inst['status']})", addr)
+        for h in self._hosts:
+            try:
+                instances = AgentClient(h["url"]).list_instances()
+            except AgentError:
+                continue  # that host's agent unreachable right now -- skip it
+            same_host = (h["url"] == node_host_url)
+            if same_host:
+                addr_host = "localhost"
+                tag = ""
+            else:
+                addr_host = urlparse(h["url"]).hostname or h["url"]
+                tag = f"[{h['name']}] "
+            for inst in instances:
+                addr = f"{addr_host}:{inst['grpc_port']}"
+                self.target_host_combo.addItem(f"{tag}{inst['name']} — {addr} ({inst['status']})", addr)
         self.target_host_combo.setCurrentText(current)
 
     def _update_doc_label(self) -> None:

@@ -106,15 +106,22 @@ own:
   host's discovered `boat-platform/nodes/*.py` files, with each script's
   module docstring shown underneath once picked.
 - **Target gateway** is the `BOAT_HOST` value set in the spawned node's
-  environment -- a dropdown of that same host's own Gateway-tab instances
-  (`main — localhost:50051 (running)`, ...), since a node's process is
-  spawned on the *same* machine as any gateway it's pointed at there, so
-  the address is always reachable as `localhost:<port>` -- no need to
-  spell out a hostname/IP again after already picking the **Host** above.
-  Typing a bare port number (e.g. `50052`) normalizes to
-  `localhost:50052`; typing a full `host:port` is still respected verbatim
-  for the rarer case of pointing a node at a gateway on a *different*
-  machine.
+  environment -- a dropdown spanning *every configured host's* gateway
+  instances, not just the one the node itself will run on. Entries on the
+  **same** host as the node (`main — localhost:50051 (running)`) resolve
+  to `localhost:<port>` -- robust, no DNS involved, and correct, since
+  they're the literal same machine. Entries on a **different** host are
+  tagged and resolve to that host's own address instead (`[secondary-box]
+  main — secondary-box:50051 (running)`) -- taken from that host's agent
+  URL, since from the node's own point of view `localhost` would mean
+  itself, not the other machine. (If a host was added to this app as
+  `localhost:<agent-port>` rather than its real hostname/IP, cross-host
+  entries for *that* host will resolve to `localhost` too, which is only
+  correct if the node's own host happens to be that literal same box --
+  add hosts by their real address if you plan to target them from nodes
+  running elsewhere.) Typing a bare port number (e.g. `50052`) normalizes
+  to `localhost:50052`; typing a full `host:port` by hand is always
+  accepted too, for anything not in either list.
 - **Extra args** is a single free-text field (e.g. `--iface vcan0
   --can-id 0x300 --data AABBCCDD --cycle-ms 500`), parsed with
   `shlex.split()` on submit -- there's no structured picker here since
