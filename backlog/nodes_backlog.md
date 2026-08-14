@@ -132,6 +132,56 @@ rich Gateway instance (plugins, multiple interfaces) and a rich Node
 instance side by side, tab switching working, no regression to the
 existing Gateways tab.
 
+## Done (2026-08-13, continued) — Target gateway dropdown + paste-to-fill for nodes
+
+User feedback on the first Nodes-tab pass: **Target host** (free-text
+"host:port") was misleading -- the host/IP is already picked by the
+**Host** field above it, so retyping it (or getting it wrong) for Target
+host was redundant friction. Fixed by replacing it with **Target
+gateway**, an editable dropdown of the selected host's own
+`GET /api/instances` (gateway instances), each shown as `name —
+localhost:<port> (status)` and storing the plain `localhost:<port>` as
+that item's data -- since a node's process is spawned by the agent on the
+*same* machine as any gateway it's pointed at there, `localhost` is always
+correct and there's no separate hostname/IP to get right. Typing a bare
+port number (`50052`) still normalizes to `localhost:50052`; a full
+`host:port` is still accepted verbatim for the less common case of
+pointing a node at a different machine's gateway.
+
+Also added the Nodes-side equivalent of the Gateways tab's paste feature:
+**From command line** + **Parse && Fill**, parsing a pasted `BOAT_HOST=...
+python3 <script> <args>` line (`_parse_node_command_line()`) back into
+Target gateway/Script/Extra args. Uses `shlex` (not the Gateways dialog's
+brace-aware tokenizer) since node extra_args can contain quoted values
+with no JSON structure to protect -- e.g. `--message "hello world"` tokenizes
+correctly as one arg, which the brace/whitespace-only tokenizer would have
+split wrongly. `_format_node_command_line()`'s extra_args formatting was
+upgraded to `shlex.join()` too (was a plain space-join before), so a value
+containing a space round-trips correctly through the command-line panel
+and back through paste.
+
+Building the dropdown surfaced a real bug in the first draft: reading
+`target_host_combo.currentText()` directly returns whatever's in the
+editable combo's line edit -- for a *picked* item that's the full display
+label (`"main — localhost:50051 (running)"`), not the plain address stored
+as that item's data. Fixed by only trusting `currentData()` when the
+displayed text still matches the selected index's label exactly (i.e. the
+user picked it and didn't retype); otherwise the text is treated as
+free-form entry (bare port or explicit host:port). A test written before
+this fix caught it immediately (asserted the payload's `target_host`
+against the picked port, got the raw label back instead).
+
+Verified on real hardware (`agn-testcomputer`): dropdown correctly listed
+both a running and a stopped gateway instance with accurate labels;
+picking one resolved to the plain `localhost:<port>` (confirmed only after
+the fix above); a bare port normalized correctly; an explicit `host:port`
+passed through verbatim; `_parse_node_command_line()` correctly handled
+both the full `BOAT_HOST=... python3 <script> <args>` form and a bare
+`<script> <args>` form with no prefix, including a quoted multi-word arg;
+the dialog's own **Parse && Fill** on a real formatted command line
+populated every field correctly, and creating a node from that
+parsed-and-filled payload matched exactly.
+
 ## Next steps (not started)
 
 - More node scripts as real needs surface -- the two here are deliberately

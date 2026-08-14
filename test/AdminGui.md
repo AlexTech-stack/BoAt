@@ -541,3 +541,51 @@ Screenshots confirmed both the Nodes tab (rich node row: script, target
 host, extra args, live log showing the actual request/reply exchange) and
 the Gateways tab (rich gateway row: multiple interfaces, two plugins) with
 tab switching working and no regression to the existing Gateways tab.
+
+---
+
+### TC_AdminGui_014_node_target_gateway_dropdown_and_paste
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent with a running and a stopped gateway instance defined
+
+**TestSteps:**
+1. Open **New Node…**; inspect the **Target gateway** dropdown
+2. Pick a gateway from the dropdown; submit and inspect the payload
+3. Type a bare port number into the same field; submit and inspect
+4. Type a full `host:port`; submit and inspect
+5. Paste a `BOAT_HOST=... python3 <script> <args>` line into **From
+   command line**, click **Parse && Fill**; submit and inspect
+
+**Expected:**
+- Step 1: dropdown lists both instances as `<name> — localhost:<port>
+  (<status>)`
+- Step 2: payload's `target_host` is the plain `localhost:<port>`, not the
+  display label
+- Step 3: normalizes to `localhost:<port>`
+- Step 4: passed through unchanged (not mistaken for a bare port)
+- Step 5: Target gateway/Script/Extra args all populated correctly from
+  the parsed line; submitting creates a node matching it exactly
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware. Dropdown listed both a `running` and a
+`stopped` instance with correct labels. The **first** attempt at step 2
+caught a real bug: `result_payload()` read `target_host_combo.
+currentText()` directly, which for a picked item is the full label
+(`"main — localhost:50051 (running)"`), not the stored address -- the
+payload's `target_host` came back as that whole label. Fixed by only
+trusting `currentData()` when the displayed text still matches the
+selected index's own label (i.e. nothing was retyped after picking);
+re-verified and the payload then correctly held plain `localhost:50051`.
+Bare port `"50052"` normalized to `"localhost:50052"`; explicit
+`"otherhost:50099"` passed through unchanged. `_parse_node_command_line()`
+correctly handled both the full form (`BOAT_HOST=...` prefix + `python3` +
+a quoted `"AA BB"` arg, which correctly stayed one token) and a bare
+`<script> <args>` form with neither prefix present. Pasting a real
+formatted command line and clicking **Parse && Fill** populated Target
+gateway/Script/Extra args exactly; creating a node from that payload via
+`create_node()` matched the original definition field-for-field.

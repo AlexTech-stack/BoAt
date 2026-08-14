@@ -123,14 +123,52 @@ def _format_node_args(node: dict) -> str:
 def _format_node_command_line(node: dict) -> str:
     """The BOAT_HOST=... python3 <script> <args> invocation that reproduces
     this node from a shell -- same idea as _format_command_line() above, for
-    the Nodes tab."""
+    the Nodes tab. extra_args goes through shlex.join() (not a plain space
+    join) so an arg containing a space round-trips correctly when pasted
+    back via _parse_node_command_line()."""
     parts = []
     if node.get("target_host"):
         parts.append(f"BOAT_HOST={node['target_host']}")
     parts.append(f"python3 {node.get('script_path', '')}")
     if node.get("extra_args"):
-        parts.append(" ".join(node["extra_args"]))
+        parts.append(shlex.join(node["extra_args"]))
     return " ".join(parts)
+
+
+def _parse_node_command_line(text: str) -> dict:
+    """Reverse of _format_node_command_line() -- parse a pasted
+    BOAT_HOST=... python3 <script> <args> line back into New/Edit-Node-
+    dialog fields. Uses shlex (not the brace-aware tokenizer above) since
+    node extra_args can contain quoted, space-including values and have no
+    JSON-with-braces to protect the way gateway plugin configs do."""
+    try:
+        tokens = shlex.split(text.strip())
+    except ValueError as e:
+        raise ValueError(f"couldn't parse the command line: {e}") from e
+    if not tokens:
+        raise ValueError("empty command line")
+
+    target_host = ""
+    i = 0
+    while i < len(tokens) and "=" in tokens[i] and not tokens[i].startswith("-"):
+        key, _, value = tokens[i].partition("=")
+        if key == "BOAT_HOST":
+            target_host = value
+        i += 1
+    if i >= len(tokens):
+        raise ValueError("couldn't find the node script (expected after any BOAT_HOST=... prefix)")
+
+    # Skip a leading Python interpreter token if present (python3, python,
+    # python3.11, or a full/relative path to one of those).
+    stem = os.path.basename(tokens[i])
+    if stem.endswith(".exe"):
+        stem = stem[:-4]
+    if stem in ("python3", "python") or (stem.startswith("python3.") and stem[8:].isdigit()):
+        i += 1
+    if i >= len(tokens):
+        raise ValueError("couldn't find the node script path")
+
+    return {"target_host": target_host, "script_path": tokens[i], "extra_args": tokens[i + 1:]}
 
 
 _KNOWN_ENV_VARS = {
@@ -589,15 +627,37 @@ class NewNodeDialog(QDialog):
     script's module docstring below it; Extra Args is a free-text field
     parsed with shlex.split() on submit, since node scripts have wildly
     different CLI flags from each other (unlike gateway plugin configs,
-    there's no single structured shape to build a picker around)."""
+    there's no single structured shape to build a picker around).
+
+    Target gateway is a dropdown of that same host's own gateway instances
+    (from GET /api/instances) rather than a free-text "host:port" field --
+    a node's process is spawned by the agent on its *own* host, same as any
+    gateway instance it's pointed at there, so the address is always
+    reachable as localhost:<port>; the "Host:" field above already picked
+    which machine, spelling out an IP/hostname again in Target gateway was
+    redundant and easy to get wrong. Typing a bare port number normalizes
+    to localhost:<port> too; a full "host:port" is still accepted verbatim
+    for the rarer case of pointing a node at a gateway on a *different*
+    machine."""
 
     def __init__(self, hosts: list, parent=None, existing: Optional[dict] = None,
                  existing_host_url: Optional[str] = None):
         super().__init__(parent)
         editing = existing is not None
         self.setWindowTitle("Edit Node" if editing else "New Node")
-        self.resize(520, 320)
+        self.resize(520, 360)
         layout = QFormLayout(self)
+
+        paste_row = QHBoxLayout()
+        self.paste_edit = QLineEdit()
+        self.paste_edit.setPlaceholderText(
+            'Paste a BOAT_HOST=... python3 <script> <args> line here'
+        )
+        paste_row.addWidget(self.paste_edit, 1)
+        parse_btn = QPushButton("Parse && Fill")
+        parse_btn.clicked.connect(self._parse_and_fill)
+        paste_row.addWidget(parse_btn)
+        layout.addRow("From command line:", paste_row)
 
         self.host_combo = QComboBox()
         for h in hosts:
@@ -620,14 +680,15 @@ class NewNodeDialog(QDialog):
         self.script_doc_label.setStyleSheet("color: gray; font-size: 11px;")
         layout.addRow("", self.script_doc_label)
 
-        self.target_host_edit = QLineEdit(existing.get("target_host", "") if editing else "")
-        self.target_host_edit.setPlaceholderText(
-            "e.g. localhost:50051 -- which gateway this node talks to (sets BOAT_HOST)"
+        self.target_host_combo = QComboBox()
+        self.target_host_combo.setEditable(True)
+        self.target_host_combo.lineEdit().setPlaceholderText(
+            "pick a gateway below, or type its port (e.g. 50052)"
         )
-        layout.addRow("Target host:", self.target_host_edit)
+        layout.addRow("Target gateway:", self.target_host_combo)
 
         self.extra_args_edit = QLineEdit(
-            " ".join(existing.get("extra_args", [])) if editing else ""
+            shlex.join(existing.get("extra_args", [])) if editing else ""
         )
         self.extra_args_edit.setPlaceholderText(
             '--iface vcan0 --can-id 0x300 --data AABBCCDD --cycle-ms 500'
@@ -640,14 +701,17 @@ class NewNodeDialog(QDialog):
         layout.addRow(buttons)
 
         self.host_combo.currentIndexChanged.connect(self._reload_scripts)
+        self.host_combo.currentIndexChanged.connect(self._reload_target_hosts)
         self.script_combo.currentIndexChanged.connect(self._update_doc_label)
         self._reload_scripts()
+        self._reload_target_hosts()
 
         if editing:
             idx = self.script_combo.findData(existing.get("script_path", ""))
             if idx >= 0:
                 self.script_combo.setCurrentIndex(idx)
             self._update_doc_label()
+            self.target_host_combo.setCurrentText(existing.get("target_host", ""))
 
     def selected_host_url(self) -> str:
         return self.host_combo.currentData()
@@ -675,10 +739,51 @@ class NewNodeDialog(QDialog):
                 self.script_combo.setCurrentIndex(idx)
         self._update_doc_label()
 
+    def _reload_target_hosts(self) -> None:
+        url = self.selected_host_url()
+        if not url:
+            return
+        try:
+            instances = AgentClient(url).list_instances()
+        except AgentError:
+            # Host unreachable right now -- leave the combo as-is; manual
+            # entry (it's editable) still works regardless.
+            return
+        current = self.target_host_combo.currentText()
+        self.target_host_combo.clear()
+        for inst in instances:
+            addr = f"localhost:{inst['grpc_port']}"
+            self.target_host_combo.addItem(f"{inst['name']} — {addr} ({inst['status']})", addr)
+        self.target_host_combo.setCurrentText(current)
+
     def _update_doc_label(self) -> None:
         idx = self.script_combo.currentIndex()
         doc = self.script_combo.itemData(idx, Qt.UserRole + 1) if idx >= 0 else None
         self.script_doc_label.setText(doc or "")
+
+    def _parse_and_fill(self) -> None:
+        text = self.paste_edit.text().strip()
+        if not text:
+            return
+        try:
+            parsed = _parse_node_command_line(text)
+        except ValueError as e:
+            QMessageBox.warning(self, "Parse failed", str(e))
+            return
+        if parsed["target_host"]:
+            self.target_host_combo.setCurrentText(parsed["target_host"])
+        # Select the parsed script in the combo, adding it if it isn't
+        # among this host's currently-discovered ones (e.g. pasted before
+        # the host finished loading, or genuinely not under this host's
+        # boat-platform/nodes/).
+        idx = self.script_combo.findData(parsed["script_path"])
+        if idx < 0:
+            self.script_combo.addItem(os.path.basename(parsed["script_path"]), parsed["script_path"])
+            idx = self.script_combo.count() - 1
+        self.script_combo.setCurrentIndex(idx)
+        self._update_doc_label()
+        self.extra_args_edit.setText(shlex.join(parsed["extra_args"]))
+        self.paste_edit.clear()
 
     def result_payload(self) -> dict:
         script_path = self.script_combo.currentData()
@@ -688,10 +793,27 @@ class NewNodeDialog(QDialog):
             extra_args = shlex.split(self.extra_args_edit.text().strip())
         except ValueError as e:
             raise ValueError(f"invalid extra args: {e}") from e
+
+        # currentText() on an editable combo is whatever's in the line
+        # edit -- for a *picked* dropdown entry that's the full display
+        # label ("main — localhost:50051 (running)"), not the plain
+        # address stored as that item's data. Only trust currentData() when
+        # the displayed text still matches the selected item's label
+        # exactly (i.e. the user picked it and didn't then retype);
+        # otherwise treat the text as free-form entry.
+        target_text = self.target_host_combo.currentText().strip()
+        idx = self.target_host_combo.currentIndex()
+        if idx >= 0 and target_text == self.target_host_combo.itemText(idx):
+            target_host = self.target_host_combo.itemData(idx)
+        elif target_text.isdigit():
+            target_host = f"localhost:{target_text}"
+        else:
+            target_host = target_text
+
         return {
             "name": self.name_edit.text().strip(),
             "script_path": script_path,
-            "target_host": self.target_host_edit.text().strip(),
+            "target_host": target_host,
             "extra_args": extra_args,
         }
 

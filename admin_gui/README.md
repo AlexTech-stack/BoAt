@@ -94,6 +94,8 @@ either way it's the same `xcb` plugin doing the rendering).
 
 ![Nodes tab, showing a running node instance targeting a gateway](docs/nodes_tab.png)
 
+![New Node dialog, showing the Target gateway dropdown and paste field](docs/new_node_dialog.png)
+
 Same shape as the Gateways tab (table, New/Edit/Start/Stop/Delete, log
 viewer, equivalent command line), driving script processes under
 `boat-platform/nodes/` instead of `boat_gateway`. Differences from
@@ -103,15 +105,25 @@ own:
 - **New Node…**'s **Script** dropdown is populated from the selected
   host's discovered `boat-platform/nodes/*.py` files, with each script's
   module docstring shown underneath once picked.
-- **Target host** is the `BOAT_HOST` value set in the spawned node's
-  environment -- which gateway it should talk to (typically one of that
-  same host's own Gateway-tab instances, e.g. `localhost:50051`, but it can
-  point anywhere reachable).
+- **Target gateway** is the `BOAT_HOST` value set in the spawned node's
+  environment -- a dropdown of that same host's own Gateway-tab instances
+  (`main — localhost:50051 (running)`, ...), since a node's process is
+  spawned on the *same* machine as any gateway it's pointed at there, so
+  the address is always reachable as `localhost:<port>` -- no need to
+  spell out a hostname/IP again after already picking the **Host** above.
+  Typing a bare port number (e.g. `50052`) normalizes to
+  `localhost:50052`; typing a full `host:port` is still respected verbatim
+  for the rarer case of pointing a node at a gateway on a *different*
+  machine.
 - **Extra args** is a single free-text field (e.g. `--iface vcan0
   --can-id 0x300 --data AABBCCDD --cycle-ms 500`), parsed with
   `shlex.split()` on submit -- there's no structured picker here since
   every node script has its own, different CLI flags (check its docstring
-  or `--help`).
+  or `--help`). At the top, **From command line** takes a pasted
+  `BOAT_HOST=... python3 <script> <args>` line (exactly what the
+  "Equivalent command line" panel produces) and **Parse && Fill**
+  populates Target gateway/Script/Extra args from it in one shot -- same
+  idea as the Gateways tab's paste feature.
 - No **Managed** column or external-process discovery -- every row here is
   something this agent created; arbitrary Python scripts aren't reliably
   identifiable by process name the way `boat_gateway` is, so unmanaged node
