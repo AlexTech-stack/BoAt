@@ -232,6 +232,44 @@ gateways showed up in the dropdown too, on both sides -- a real running
 gateway is a valid node target regardless of which agent (if any) manages
 it, so no filtering was added to exclude them.
 
+## Done (2026-08-13, continued) — cyclic_can_sender.py's cycle timing was consistently 3-4ms slow
+
+User, running a node through the admin GUI they'd just set up, noticed via
+`candump -t d` that a `--cycle-ms 300` sender was actually landing frames
+303-304ms apart, and remembered a similarly-shaped bug being fixed earlier
+this session -- asked "wasn't that fixed some time ago?" It was, but in a
+different, unrelated piece of code: the CanTp plugin's C++ TX thread. This
+script (`boat-platform/nodes/cyclic_can_sender.py`) is new this session
+and had independently reintroduced the *same class* of bug in its own,
+much simpler Python sleep loop.
+
+Root cause: `deadline = time.monotonic() + cycle_s` was computed *after*
+`node.send_can()` returned, not before it was called -- `send_can()` is a
+synchronous gRPC call (protobuf serialization + a loopback round trip),
+consistently a few ms even locally, and computing the deadline afterward
+silently stretched every single cycle by that amount. Fixed by capturing
+`cycle_start = time.monotonic()` *before* the send and computing the
+deadline from that instead. Also tightened the wait loop itself: it used
+to always sleep a flat 50ms chunk regardless of how close the actual
+deadline was, which could round the final wait up by nearly 50ms in the
+worst case; now it sleeps `min(remaining, 0.05)` so the last wait is
+precise while still checking for shutdown at least every 50ms.
+
+Verified on real hardware (`agn-testcomputer`) with real `candump -t d`
+timing captures, not just "does it still send": before the fix, 12
+consecutive cycles measured 302.96-304.49ms (mean 303.94ms, ~1.3% slow)
+against a 300ms-configured cycle; after, 11 steady-state cycles measured
+299.98-300.33ms (mean ~300.14ms, within 0.05% of the target). The one
+low outlier (292ms on the very first cycle in the "after" run) is one-time
+gRPC channel/stub warm-up on the first call, not a steady-state issue.
+
+`boat-platform/demo/cyclic_sender_node.py` and `eth_cyclic_sender_node.py`
+(the older, demo-specific, deprecated-adjacent scripts -- not part of the
+active Nodes feature) have the identical bug pattern in their own cyclic
+loops. Left as-is: out of scope for this fix since nothing in the current
+Nodes/admin_gui path uses them, but noted here in case they're ever
+resurrected.
+
 ## Next steps (not started)
 
 - More node scripts as real needs surface -- the two here are deliberately

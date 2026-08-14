@@ -146,6 +146,25 @@ reply on the wire via `candump`: `0x7E0 [22 F1 90]` → `0x7E8 [50 01]`,
 `GET /api/nodes` showed `status: "stopped"`. `GET /api/nodes/.../log`
 showed the `[control-panel] started PID ...` line as expected.
 
+**Update (2026-08-13):** user reported `cyclic_can_sender.py` running
+consistently 3-4ms late per cycle (a 300ms-configured cycle measuring
+303-304ms via `candump -t d`). Root cause: the script's deadline was
+computed *after* `send_can()` (a synchronous gRPC call, a few ms even over
+loopback) returned, silently adding that call's own duration on top of
+every cycle -- the same class of bug the CanTp plugin's TX thread had
+before an earlier fix in this session moved its deadline computation to
+before the send. Fixed the same way here (deadline relative to cycle
+start, not post-send), plus tightened the wait loop to sleep the precise
+remaining time near the deadline instead of always rounding up to a full
+50ms poll chunk. Re-verified on real hardware: before the fix, 12
+consecutive cycles measured 302.96-304.49ms (mean 303.94ms) against a
+300ms-configured cycle; after, 11 steady-state cycles measured
+299.98-300.33ms (mean ~300.14ms, within 0.05% of the target -- the one
+low outlier, 292ms on the very first cycle, is one-time gRPC channel/stub
+warm-up, not a steady-state issue). Not marking this TestCase's own
+verdict down -- the start/stop/discovery behavior it actually covers was
+never wrong -- see `backlog/nodes_backlog.md` for the full account.
+
 ---
 
 ### TC_WebUIs_007_commander_raw_send

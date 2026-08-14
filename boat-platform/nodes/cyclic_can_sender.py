@@ -67,12 +67,27 @@ def main() -> None:
 
     print(f"[cyclic-can-sender] sending 0x{can_id:X} on {args.iface} every {args.cycle_ms} ms "
           f"(fd={args.fd}, brs={args.brs}, data={payload.hex(':') or '(empty)'})")
+    cycle_s = args.cycle_ms / 1000.0
     while not stop:
+        cycle_start = time.monotonic()
         node.send_can(args.iface, can_id, payload, is_fd=args.fd, flags=flags)
-        # Sleep in small increments so shutdown is responsive even for a long cycle.
-        deadline = time.monotonic() + args.cycle_ms / 1000.0
-        while not stop and time.monotonic() < deadline:
-            time.sleep(0.05)
+        # Deadline is relative to when THIS cycle started, not to when
+        # send_can() returned -- send_can() is a synchronous gRPC call
+        # (loopback round trip + protobuf serialization), a few ms even
+        # locally, and computing the deadline afterward silently stretches
+        # every cycle by that amount. Same class of bug the CanTp plugin's
+        # TX thread had before it was fixed earlier this session to use a
+        # deadline computed before the send, not after.
+        deadline = cycle_start + cycle_s
+        while not stop:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            # Sleep the precise remaining time (capped at 50ms so shutdown
+            # stays responsive) instead of always sleeping a full 50ms
+            # chunk -- that would round the final wait up by as much as
+            # 50ms on top of everything else.
+            time.sleep(min(remaining, 0.05))
 
     sys.exit(0)
 
