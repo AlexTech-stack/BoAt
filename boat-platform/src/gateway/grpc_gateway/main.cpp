@@ -183,10 +183,23 @@ int ResolveGrpcPort() {
  * grpc::ServerBuilder ever gets a chance to silently succeed. There is an
  * unavoidable small TOCTOU race between this probe's close() and the real
  * AddListeningPort() below -- acceptable for the "leftover process from an
- * earlier session" case this guards against, not a security boundary. */
+ * earlier session" case this guards against, not a security boundary.
+ *
+ * The probe socket sets SO_REUSEADDR (distinct from SO_REUSEPORT above --
+ * this does *not* reopen the door to two live gateways silently sharing a
+ * port). Without it, this probe's own bind() could fail against nothing more
+ * than a lingering TIME_WAIT entry from a just-closed client connection to a
+ * *previous* gateway on this same port -- observed on real hardware blocking
+ * a same-port restart for up to ~60s (backlog/gateway_backlog.md) even
+ * though nothing was actually listening. SO_REUSEADDR only relaxes the
+ * TIME_WAIT case; a genuinely live listener on the port still fails this
+ * bind() exactly as before. */
 void RefuseIfPortInUse(int port) {
   const int probe_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (probe_fd < 0) return;  // can't probe; let AddListeningPort() be the judge
+
+  const int reuse = 1;
+  setsockopt(probe_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;

@@ -107,37 +107,42 @@ exposes state and error counters, and error frames arrive in-band.
 
 ---
 
-## 🟡 Restarting a gateway on the same port can refuse to start for up to ~60s
+## ✅ RESOLVED (2026-08-14) — Restarting a gateway on the same port could refuse to start for up to ~60s
 
 Surfaced while reproducing a node-side bug (`backlog/nodes_backlog.md`'s
 "gateway restart left nodes stuck" entry): killing a `boat_gateway` that
 had active gRPC clients connected, then immediately starting a new one on
-the *same* `BOAT_GRPC_PORT`, hits the startup port-in-use refusal (see
-this file's "A second gateway binds the same port silently" entry above
-for why that check exists) even though nothing is actually listening —
-`ss -ltnp` shows no listener at all. `ss -tan` shows why: a lingering
-`[::1]:<port>` connection from a just-killed client sits in `TIME-WAIT`
-for the OS's usual ~60s, and without `SO_REUSEADDR` on the listening
-socket, that alone is enough to make a fresh `bind()` to the same port
-fail — the port-in-use check isn't being fooled by a phantom process, the
-underlying socket genuinely can't rebind yet.
+the *same* `BOAT_GRPC_PORT`, hit the startup port-in-use refusal (see this
+file's "A second gateway binds the same port silently" entry above for why
+that check exists) even though nothing was actually listening — `ss -ltnp`
+showed no listener at all. `ss -tan` showed why: a lingering
+`[::1]:<port>` connection from a just-killed client sat in `TIME-WAIT` for
+the OS's usual ~60s, and the probe socket in `RefuseIfPortInUse()`
+(`src/gateway/grpc_gateway/main.cpp`) didn't set `SO_REUSEADDR`, so its own
+`bind()` failed against that leftover `TIME-WAIT` entry alone — the
+port-in-use check wasn't being fooled by a phantom process, its own probe
+genuinely couldn't rebind yet, and reported that as "port already in use."
 
 **Impact.** A gateway that's stopped and restarted on the same port
 shortly after (exactly what a real gateway-restart workflow looks like,
-e.g. via admin_gui's Stop then Start on the same instance) can fail to
-start for up to a minute with the same "port already in use" message
-used for the genuine second-instance case above — misleading, since nothing
-else is actually running.
+e.g. via admin_gui's Stop then Start on the same instance) could fail to
+start for up to a minute with the same "port already in use" message used
+for the genuine second-instance case above — misleading, since nothing
+else was actually running.
 
-**Options.**
-- Set `SO_REUSEADDR` on the gateway's own listening socket (standard,
-  safe practice for TCP servers restarting on a fixed port — distinct
-  from `SO_REUSEPORT`, which is what the resolved issue above was
-  correctly getting rid of; `SO_REUSEADDR` does not reintroduce that
-  problem, it only allows rebinding through `TIME-WAIT`).
-- Or have the port-in-use check specifically distinguish "another live
-  process is listening" (genuine conflict, refuse) from "the port is
-  between binds because of `TIME-WAIT`" (should just wait/retry a short,
-  bounded amount rather than fail outright).
+**Fixed**: `RefuseIfPortInUse()`'s probe socket now sets `SO_REUSEADDR`
+before its `bind()` check — standard, safe practice for a TCP server
+restarting on a fixed port, and distinct from `SO_REUSEPORT` above (which
+this doesn't reintroduce: `SO_REUSEADDR` only relaxes the `TIME-WAIT`
+case, it does not let two live listeners silently share a port the way
+`SO_REUSEPORT` did). A genuinely live second gateway on the port is still
+correctly refused exactly as before -- only the "OS is still finishing
+cleanup from the last process" false positive is gone.
 
-**Effort:** Small (a socket option in the gateway's listen setup).
+Verified on real hardware (`agn-testcomputer`): rebuilt with the fix,
+started a gateway with a connected client, killed the gateway (leaving a
+confirmed `TIME-WAIT` entry via `ss -tan`), and immediately (no wait)
+started a new instance on the identical port -- it bound and started
+listening right away, no refusal, and the still-running client
+transparently re-established its connection and resumed sending traffic
+on the wire within its next retry cycle.

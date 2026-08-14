@@ -411,18 +411,17 @@ with zero manual intervention: `candump` showed the cyclic sender's
 300ms-cycle traffic resume on its own, and a fresh `cansend vcan0
 7E0#22F19000` got the expected `7E8 [50 01]` reply back in ~3.6ms.
 
-Side finding, not fixed (different component, out of scope here): while
+Side finding surfaced while reproducing this bug, originally left unfixed
+here as a different component (C++ gateway startup, not this SDK): while
 restarting the test gateway on the *same* port shortly after killing the
 previous instance, the C++ gateway's own "port already in use" startup
 check refused to start for up to ~60s even though nothing was actually
 listening (`ss -ltnp` showed no listener) -- `ss -tan` showed why: a
 lingering IPv6 `[::1]:<port>` connection in `TIME-WAIT` from a killed
-client connection was blocking the rebind, meaning the gateway's listening
-socket isn't using `SO_REUSEADDR`. Not touched as part of this fix (C++
-gateway startup code, unrelated component) -- noted here since it
-surfaced directly out of reproducing this bug and would make a real
-same-port gateway restart take up to a minute longer than necessary in
-practice. See `backlog/gateway_backlog.md` if/when this gets picked up.
+client connection was blocking the rebind, meaning the gateway's port-in-use
+probe wasn't using `SO_REUSEADDR`. Picked up and fixed the same day -- see
+`backlog/gateway_backlog.md`'s now-✅-RESOLVED entry for the fix and its
+own real-hardware verification.
 
 ## Next steps (not started)
 

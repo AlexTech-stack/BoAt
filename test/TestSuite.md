@@ -9,7 +9,7 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 
 | TestSet | File | Cases | Covers |
 |---|---|---:|---|
-| [Gateway] | [Gateway.md](Gateway.md) | 11 | Startup, interface registration, driver selection, plugin loading, tick config, shutdown, configurable/duplicate gRPC port |
+| [Gateway] | [Gateway.md](Gateway.md) | 12 | Startup, interface registration, driver selection, plugin loading, tick config, shutdown, configurable/duplicate gRPC port, same-port restart after active connection |
 | [CAN] | [CAN.md](CAN.md) | 10 | CAN / CAN FD / extended-ID send+receive, loopback flag, bus isolation, deprecated wrappers, burst |
 | [Ethernet] | [Ethernet.md](Ethernet.md) | 6 | Ethernet send/subscribe, veth + raw: physical NICs, capabilities, TCP-send rejection |
 | [Simulation] | [Simulation.md](Simulation.md) | 8 | Lifecycle (create/start/pause/step/stop/list/watch), determinism (seed reproducibility) |
@@ -25,7 +25,7 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [LauncherAgent] | [LauncherAgent.md](LauncherAgent.md) | 9 | Multi-instance gateway lifecycle REST API: port auto-allocation, independent instances, duplicate-port rejection, delete-while-running rejection, host info, edit-in-place via PUT, invocation-independent path resolution, external (unmanaged) gateway discovery, node lifecycle |
 | [AdminGui] | [AdminGui.md](AdminGui.md) | 15 | PySide6 desktop client: host polling, create/start/stop via real UI actions, delete-refused-while-running dialog flow, multi-host aggregation, Interfaces/Plugins columns, New Instance dropdown pickers, Edit instance, equivalent command-line panel, paste-to-fill, Managed column + external-gateway guard, stale-selection-cleared-on-rebuild, session save/load, Nodes tab, Nodes target-gateway dropdown + paste-to-fill, cross-host target-gateway resolution |
 
-**Total: 163 TestCases.**
+**Total: 164 TestCases.**
 
 ## Cross-cutting TestSets (no own file)
 
