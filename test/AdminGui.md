@@ -485,3 +485,59 @@ original definitions exactly under **different** ids than the originals
 explicitly changed per user request, re-verified separately that a loaded
 instance's `status` is `"stopped"` with `pid: null` immediately after
 `load_session()` returns, not automatically running.
+
+---
+
+### TC_AdminGui_013_nodes_tab
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent with discoverable node scripts and a running gateway
+  to target
+
+**TestSteps:**
+1. Switch to the **Nodes** tab; open **New Node…**, inspect the Script
+   dropdown and its docstring label
+2. Fill Name/Target host/Extra args, submit; select the created row
+3. Inspect the "Equivalent command line" panel; **Start**
+4. Confirm the node is genuinely functioning (not just "a process exists")
+5. **Edit…** while running (expect refusal); **Stop**; **Edit…** while
+   stopped (rename); confirm the change
+
+**Expected:**
+- Step 1: dropdown populated from `GET /api/node-scripts`; selecting an
+  entry shows its module docstring
+- Step 3: command-line panel reads `BOAT_HOST=<target> python3 <script>
+  <extra args>` exactly
+- Step 4: the started node has a real, observable effect on its target
+  gateway's bus
+- Step 5: edit-while-running refused via the agent's 409 (no client-side
+  guard blocks opening the dialog for nodes, unlike external gateway rows
+  -- the refusal surfaces after submit); edit-while-stopped applies
+  correctly
+
+**Verdict:** OK
+
+**Result:**
+Verified end-to-end on real hardware with real screenshots. New Node
+dialog's script dropdown listed `can_request_responder`/`cyclic_can_sender`;
+selecting `can_request_responder` showed its exact docstring first line.
+Filled `name=gui-responder`, `target_host=localhost:50057`, `extra_args`
+via the dialog's own fields, submitted through `result_payload()` →
+`create_node()`. Selected the new row via a real `node_table.selectRow()`
+click; `_selected_node` matched; the command-line panel read exactly
+`BOAT_HOST=localhost:50057 python3 .../can_request_responder.py --iface
+vcan0 --request-id 0x7E0 --response-id 0x7E8 --response-data 5001`.
+`start_node_selected()` started it; sending a CAN request to the target
+gateway produced the correct reply on the wire (`candump`), confirming the
+node was genuinely functioning, not merely "running". Calling
+`update_node()` directly while running returned 409 (mentioning "running");
+`stop_node_selected()` stopped it cleanly (`exit_code: 0`); the Edit
+dialog, reopened on the now-stopped node, pre-filled every field correctly
+(host combo disabled, name/target host/extra args all matching), and
+submitting a rename via its own `result_payload()` applied correctly.
+Screenshots confirmed both the Nodes tab (rich node row: script, target
+host, extra args, live log showing the actual request/reply exchange) and
+the Gateways tab (rich gateway row: multiple interfaces, two plugins) with
+tab switching working and no regression to the existing Gateways tab.

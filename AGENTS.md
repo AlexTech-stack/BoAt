@@ -32,7 +32,7 @@
   - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|replay|frame|can|eth|pdu|can-tp|plugin|...`)
   - `config/` — PDU database JSON files
   - `demo/` — Demo node scripts (not web UI; scenario-specific, e.g. `cyclic_sender_node.py`'s CAN-ID start/stop trigger)
-  - `nodes/` — General-purpose node scripts discovered/run by `ui/control_panel.py`'s "Nodes" web UI (any `.py` file not prefixed `_`, auto-listed with its module docstring's first line). Each accepts `--address` (default `None`, so `BOAT_HOST` decides when omitted) and its own behavior flags -- see `cyclic_can_sender.py` (configurable periodic CAN(FD) frame) and `can_request_responder.py` (replies to one CAN ID with a fixed response) for the pattern. `control_panel.py` always passes `--address <its gateway field>` explicitly, so both flows work: driven from that web UI, or from anything that just sets `BOAT_HOST` and omits `--address`.
+  - `nodes/` — General-purpose node scripts, discoverable/runnable two ways: `ui/control_panel.py`'s "Nodes" web UI (any `.py` file not prefixed `_`, auto-listed with its module docstring's first line), and `ui/launcher_agent.py`/`admin_gui`'s Nodes tab (same discovery, but as a tracked, multi-node, multi-host registry -- see "Launcher Agent"/"Admin GUI" below). Each script accepts `--address` (default `None`, so `BOAT_HOST` decides when omitted) and its own behavior flags -- see `cyclic_can_sender.py` (configurable periodic CAN(FD) frame) and `can_request_responder.py` (replies to one CAN ID with a fixed response) for the pattern. `control_panel.py` always passes `--address <its gateway field>` explicitly; `launcher_agent.py` sets `BOAT_HOST` in the spawned process's env instead -- both work since `--address` defaults to `None`.
 - **`ui/`** — 7 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, recorder:8083, control_panel, debug, system_dashboard)
 - **`tools/`** — 2 standalone tools (pdu_editor:8087, trace_analyzer:8088)
 - **`traces/`** — Trace output directory (gitignored)
@@ -217,6 +217,25 @@ with 400 (no stored definition to act on), and `log` returns a fixed
 Not yet built: instance persistence across an agent restart (v1 is
 in-memory only).
 
+**Nodes** (scripts under `boat-platform/nodes/`, see below) get a parallel
+but separate registry -- `GET /api/node-scripts` (discovery),
+`GET/POST /api/nodes`, `GET/PUT/DELETE /api/nodes/<id>`,
+`POST /api/nodes/<id>/start|stop`, `GET /api/nodes/<id>/log` -- same
+create/edit/start/stop/delete shape as instances, but a node has no port to
+allocate or ifaces/plugins of its own: it just needs `target_host` (sets
+`BOAT_HOST` in the spawned process's env) and `extra_args` (a plain list of
+CLI args, since each node script's own flags differ). No external-discovery
+equivalent for nodes (arbitrary Python scripts aren't reliably identifiable
+by process name the way `boat_gateway` is).
+
+```bash
+curl -X POST localhost:8090/api/nodes -H 'Content-Type: application/json' \
+  -d '{"name":"responder","script_path":".../nodes/can_request_responder.py",
+       "target_host":"localhost:50051","extra_args":["--iface","vcan0"]}'
+curl -X POST localhost:8090/api/nodes/<id>/start
+curl localhost:8090/api/node-scripts   # discovered boat-platform/nodes/*.py, with docstrings
+```
+
 ## Admin GUI (PySide6 client)
 
 `admin_gui/` is the desktop client for one or more launcher agents above —
@@ -236,6 +255,16 @@ recreates each one fresh (new id every time, never a resume) but leaves it
 **stopped** -- unlike `docker-compose up`, nothing auto-starts.
 `agent_client.py`/`host_store.py`/`session.py` have no Qt import, so
 they're usable/testable headlessly.
+
+A second tab, **Nodes**, is the same shape (table, New/Edit/Start/Stop/
+Delete, log viewer, equivalent command line) driving the `/api/nodes`
+endpoints above instead. Its New/Edit dialog's **Script** dropdown is
+populated from the selected host's `GET /api/node-scripts` and shows each
+script's module docstring underneath; **Extra args** is a free-text field
+(`shlex.split()` on submit) rather than a structured picker, since node
+scripts have arbitrary, script-specific CLI flags (unlike gateway plugin
+configs, there's no one shape to build a form around). Session save/load
+does not currently cover nodes -- see `backlog/nodes_backlog.md`.
 
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages

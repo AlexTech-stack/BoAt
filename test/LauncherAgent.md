@@ -248,3 +248,43 @@ the plugin's config correctly as `{"iface": "vcan0"}`. `start`/`delete`/
 single-`GET` each returned the expected 400; `log` returned the fixed
 "not captured" message; `stop` sent `SIGTERM` and the process was
 confirmed gone via `ps` and absent from the next `GET /api/instances`.
+
+---
+
+### TC_LauncherAgent_009_node_lifecycle
+
+**TestSets:** [LauncherAgent]
+
+**Preconditions:**
+- Common preconditions of this TestSet, plus at least one script under
+  `boat-platform/nodes/` and a running `boat_gateway`
+
+**TestSteps:**
+1. `GET /api/node-scripts`
+2. `POST /api/nodes` with a script, `target_host` pointing at the running
+   gateway, and `extra_args`; `POST .../start`
+3. `PUT`/`DELETE /api/nodes/<id>` while running (expect 409 each)
+4. `GET /api/nodes/<id>/log`
+5. `POST .../stop`; `PUT` while stopped (rename); `DELETE`
+
+**Expected:**
+- Step 1 lists discovered scripts with name/path/docstring/interactive
+- Step 2's node genuinely functions (its BOAT_HOST-driven behavior is
+  observable on the target gateway's bus), not just "a process exists"
+- Step 3 both refused with `409` and a message naming the running node
+- Step 5's edit-while-stopped applies cleanly; delete then succeeds
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware: `GET /api/node-scripts` listed
+`cyclic_can_sender`/`can_request_responder` with correct docstrings.
+Created a `can_request_responder` node with `target_host: "localhost:50056"`
+and matching `extra_args`; after `start`, sending a CAN request directly to
+that gateway produced the correct reply on the wire (`candump`:
+`0x7E0` → `0x7E8` with the configured payload) -- confirming the node's
+`BOAT_HOST` was genuinely set by the agent's own subprocess env, no
+`--address` flag involved anywhere in this path. `PUT`/`DELETE` while
+running both returned `409` naming the node id. `GET .../log` showed the
+`[agent] started PID ... (BOAT_HOST=localhost:50056)` line. After `stop`
+(`exit_code: 0`), `PUT` renamed it cleanly, and `DELETE` succeeded.

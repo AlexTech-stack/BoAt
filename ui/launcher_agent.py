@@ -13,6 +13,12 @@ agent's job is the multi-instance case: several BOAT_GRPC_PORT-distinct
 gateways, each with its own CAN/Ethernet interfaces and BOAT_NODE_PLUGINS set,
 tracked and controlled from one place.
 
+Also manages **node** processes -- scripts under `boat-platform/nodes/`
+(FrameNode-based senders/responders/simulated ECUs, see AGENTS.md) -- as a
+separate registry (`/api/nodes`, `/api/node-scripts`) alongside the gateway
+instance one, since a node has no port to allocate or ifaces/plugins of its
+own; it just needs a target gateway (BOAT_HOST) and its own CLI args.
+
 Usage:
     python3 ui/launcher_agent.py
     # REST API on http://0.0.0.0:8090
@@ -34,6 +40,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -60,6 +67,7 @@ _GW_BIN_DEFAULT = os.environ.get("BOAT_GATEWAY_BIN", _DEFAULT_GW_BIN)
 _AGENT_PORT     = int(os.environ.get("BOAT_AGENT_PORT", "8090"))
 _BASE_PORT      = int(os.environ.get("BOAT_AGENT_BASE_PORT", "50051"))
 _LOG_LINES      = 500
+_NODES_DIR      = _PROJECT_ROOT / "nodes"
 
 _SIM_STATE_NAMES = {0: "UNSPECIFIED", 1: "IDLE", 2: "RUNNING", 3: "PAUSED", 4: "STOPPED", 5: "ERROR"}
 
@@ -330,6 +338,221 @@ class InstanceRegistry:
 
 
 _registry = InstanceRegistry()
+
+
+# ── Node instances ───────────────────────────────────────────────────────────
+#
+# A "node" here is a script under boat-platform/nodes/ (see AGENTS.md) -- an
+# SDK-driven process (FrameNode-based sender/responder/simulated ECU), not a
+# boat_gateway. Deliberately a separate registry from GatewayInstance/
+# InstanceRegistry above rather than a generalization of it: the domains
+# genuinely differ (a node has no port to allocate, no CAN/Eth ifaces or
+# plugins of its own -- it has a target gateway to talk to, via BOAT_HOST, and
+# arbitrary script-specific CLI args). Same subprocess-lifecycle shape though.
+
+@dataclass
+class NodeInstance:
+    id: str
+    name: str
+    script_path: str
+    target_host: str = ""              # BOAT_HOST value set in the child's env
+    extra_args: List[str] = field(default_factory=list)  # appended to the command line as-is
+    created_at: float = field(default_factory=time.time)
+    started_at: Optional[float] = None
+    exit_code: Optional[int] = None
+    process: Optional[subprocess.Popen] = field(default=None, repr=False)
+    _log: deque = field(default_factory=lambda: deque(maxlen=_LOG_LINES), repr=False)
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    _log_thread: Optional[threading.Thread] = field(default=None, repr=False)
+
+    def append_log(self, line: str) -> None:
+        from datetime import datetime
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        with self._lock:
+            self._log.append({"ts": ts, "text": line.rstrip()})
+
+    def get_log(self) -> List[dict]:
+        with self._lock:
+            return list(self._log)
+
+    @property
+    def running(self) -> bool:
+        if self.process is None:
+            return False
+        return self.process.poll() is None
+
+    @property
+    def status(self) -> str:
+        if self.process is None:
+            return "stopped"
+        code = self.process.poll()
+        if code is None:
+            return "running"
+        return "stopped" if code == 0 else f"exited:{code}"
+
+    def pid(self) -> Optional[int]:
+        if self.running and self.process is not None:
+            return self.process.pid
+        return None
+
+    def uptime(self) -> Optional[float]:
+        if self.started_at is None or not self.running:
+            return None
+        return time.time() - self.started_at
+
+    def start(self) -> None:
+        with self._lock:
+            if self.running:
+                raise RuntimeError(f"node '{self.id}' is already running (PID {self.pid()})")
+            if not os.path.isfile(self.script_path):
+                raise FileNotFoundError(f"node script not found: {self.script_path}")
+            env = os.environ.copy()
+            if self.target_host:
+                env["BOAT_HOST"] = self.target_host
+            self.exit_code = None
+            self.started_at = time.time()
+            cmd = [sys.executable, self.script_path] + list(self.extra_args)
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                env=env,
+                text=True,
+                bufsize=1,
+            )
+            self.append_log(f"[agent] started PID {self.process.pid} "
+                             f"(BOAT_HOST={self.target_host or '(unset)'})")
+            self._log_thread = threading.Thread(target=self._drain_output, daemon=True, name=f"node-log-{self.id}")
+            self._log_thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        with self._lock:
+            if not self.running or self.process is None:
+                return
+            self.append_log("[agent] sending SIGTERM…")
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self.append_log("[agent] timeout — sending SIGKILL")
+                self.process.kill()
+                self.process.wait()
+            self.exit_code = self.process.returncode
+            self.append_log(f"[agent] exited with code {self.exit_code}")
+            self.process = None
+
+    def _drain_output(self) -> None:
+        assert self.process is not None
+        assert self.process.stdout is not None
+        try:
+            for line in self.process.stdout:
+                self.append_log(line)
+        except ValueError:
+            pass
+        with self._lock:
+            if self.process:
+                self.exit_code = self.process.wait()
+                self.process = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "script_path": self.script_path,
+            "target_host": self.target_host,
+            "extra_args": self.extra_args,
+            "status": self.status,
+            "pid": self.pid(),
+            "uptime_sec": self.uptime(),
+            "exit_code": self.exit_code,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+        }
+
+
+class NodeRegistry:
+    def __init__(self) -> None:
+        self._nodes: Dict[str, NodeInstance] = {}
+        self._lock = threading.RLock()
+
+    def create(self, name: str, script_path: str, target_host: str, extra_args: List[str]) -> NodeInstance:
+        with self._lock:
+            node_id = uuid.uuid4().hex[:8]
+            inst = NodeInstance(
+                id=node_id,
+                name=name or node_id,
+                script_path=script_path,
+                target_host=target_host or "",
+                extra_args=list(extra_args or []),
+            )
+            self._nodes[node_id] = inst
+            return inst
+
+    def get(self, node_id: str) -> NodeInstance:
+        with self._lock:
+            inst = self._nodes.get(node_id)
+            if inst is None:
+                raise KeyError(node_id)
+            return inst
+
+    def list(self) -> List[NodeInstance]:
+        with self._lock:
+            return list(self._nodes.values())
+
+    def delete(self, node_id: str) -> None:
+        with self._lock:
+            inst = self.get(node_id)
+            if inst.running:
+                raise RuntimeError(f"node '{node_id}' is running; stop it first")
+            del self._nodes[node_id]
+
+    def update(self, node_id: str, name: str, script_path: str, target_host: str, extra_args: List[str]) -> NodeInstance:
+        """Edit a stopped node's definition in place -- same
+        edit-refused-while-running pattern as InstanceRegistry.update()."""
+        with self._lock:
+            inst = self.get(node_id)
+            if inst.running:
+                raise RuntimeError(f"node '{node_id}' is running; stop it first")
+            inst.name = name or inst.name
+            inst.script_path = script_path or inst.script_path
+            inst.target_host = target_host if target_host is not None else inst.target_host
+            inst.extra_args = list(extra_args) if extra_args is not None else inst.extra_args
+            return inst
+
+
+_node_registry = NodeRegistry()
+
+
+def _discover_node_scripts() -> List[dict]:
+    """Mirrors ui/control_panel.py's node discovery: any *.py file directly
+    under boat-platform/nodes/, not prefixed with '_', with its module
+    docstring's first line and whether it uses input() (can't run headlessly,
+    so the client can grey out Start for it the same way control_panel.py
+    disables its own start button)."""
+    out: List[dict] = []
+    if not _NODES_DIR.is_dir():
+        return out
+    for py in sorted(_NODES_DIR.glob("*.py")):
+        if py.name.startswith("_"):
+            continue
+        try:
+            src = py.read_text(encoding="utf-8")
+        except OSError:
+            src = ""
+        docstring = ""
+        m = re.search(r'"""(.*?)"""', src, re.DOTALL)
+        if m:
+            lines = m.group(1).strip().splitlines()
+            if lines:
+                docstring = lines[0].strip()[:200]
+        out.append({
+            "name": py.stem,
+            "path": str(py.absolute()),
+            "docstring": docstring,
+            "interactive": "input(" in src,
+        })
+    return out
 
 
 # ── Host introspection ───────────────────────────────────────────────────────
@@ -701,6 +924,93 @@ def api_instance_sim_state(instance_id: str):
         }
     except Exception as e:
         return {"connected": False, "error": str(e)}
+
+
+# ── Node endpoints ────────────────────────────────────────────────────────────
+
+class CreateNodeRequest(BaseModel):
+    name: str = ""
+    script_path: str
+    target_host: str = ""
+    extra_args: List[str] = []
+
+
+@app.get("/api/node-scripts")
+def api_list_node_scripts():
+    return {"scripts": _discover_node_scripts()}
+
+
+@app.get("/api/nodes")
+def api_list_nodes():
+    return {"nodes": [n.to_dict() for n in _node_registry.list()]}
+
+
+@app.post("/api/nodes")
+def api_create_node(req: CreateNodeRequest):
+    n = _node_registry.create(req.name, req.script_path, req.target_host, req.extra_args)
+    return n.to_dict()
+
+
+@app.get("/api/nodes/{node_id}")
+def api_get_node(node_id: str):
+    try:
+        return _node_registry.get(node_id).to_dict()
+    except KeyError:
+        raise HTTPException(status_code=404, detail="node not found")
+
+
+@app.put("/api/nodes/{node_id}")
+def api_update_node(node_id: str, req: CreateNodeRequest):
+    try:
+        n = _node_registry.update(node_id, req.name, req.script_path, req.target_host, req.extra_args)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="node not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return n.to_dict()
+
+
+@app.post("/api/nodes/{node_id}/start")
+def api_start_node(node_id: str):
+    try:
+        n = _node_registry.get(node_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="node not found")
+    try:
+        n.start()
+    except (RuntimeError, FileNotFoundError) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return n.to_dict()
+
+
+@app.post("/api/nodes/{node_id}/stop")
+def api_stop_node(node_id: str):
+    try:
+        n = _node_registry.get(node_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="node not found")
+    n.stop()
+    return n.to_dict()
+
+
+@app.get("/api/nodes/{node_id}/log")
+def api_node_log(node_id: str):
+    try:
+        n = _node_registry.get(node_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="node not found")
+    return {"log": n.get_log()}
+
+
+@app.delete("/api/nodes/{node_id}")
+def api_delete_node(node_id: str):
+    try:
+        _node_registry.delete(node_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="node not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"ok": True}
 
 
 if __name__ == "__main__":

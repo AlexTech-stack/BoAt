@@ -5,9 +5,9 @@ process/instance management in `admin_gui/`) identified as worth adding a
 GUI for, alongside Scenarios/Simulations/Replays. See the `admin-gui-future-scope`
 memory note for the full context of how this fits the bigger picture.
 
-Status: `boat-platform/nodes/` now has real content and works end-to-end
-through the existing `ui/control_panel.py` "Nodes" web UI. Not yet
-integrated into `admin_gui`/`launcher_agent.py`.
+Status: `boat-platform/nodes/` has real content and works end-to-end both
+through the existing `ui/control_panel.py` "Nodes" web UI and, now, through
+`admin_gui`'s own Nodes tab (`ui/launcher_agent.py`'s `/api/nodes`).
 
 ---
 
@@ -85,17 +85,61 @@ Verified on real hardware (`agn-testcomputer`), after the git-sync fix:
   `POST .../stop` cleanly stopped it, confirmed via a subsequent
   `GET /api/nodes` showing `status: "stopped"`.
 
+## Done (2026-08-13) — node management in admin_gui/launcher_agent.py
+
+Integrated node management into the agent, per the "Next steps" item
+below. Deliberately a **separate** registry (`NodeInstance`/`NodeRegistry`)
+alongside `GatewayInstance`/`InstanceRegistry`, not a generalization of it
+-- the domains genuinely differ (no port to allocate, no ifaces/plugins of
+its own; a node needs a target gateway via `BOAT_HOST` and arbitrary
+script-specific CLI args, `extra_args`, since a plain list, not a
+structured shape).
+
+- **Agent**: `GET /api/node-scripts` (discovery, mirrors
+  `control_panel.py`'s), `GET/POST /api/nodes`, `GET/PUT/DELETE
+  /api/nodes/<id>` (edit/delete refused (409) while running, same pattern
+  as gateway instances), `POST /api/nodes/<id>/start|stop`, `GET
+  /api/nodes/<id>/log`. `NodeInstance.start()` sets `BOAT_HOST=<target_host>`
+  in the spawned process's env -- the actual point of the `BOAT_HOST` work
+  from earlier this session finally being exercised by something other than
+  a human typing it into a shell.
+- **admin_gui**: second tab, "Nodes", same shape as Gateways (table,
+  New/Edit/Start/Stop/Delete, log viewer, equivalent command line). New
+  Node dialog's Script dropdown pulls from `GET /api/node-scripts` and
+  shows the module docstring; Extra Args is free text (`shlex.split()` on
+  submit) since node scripts don't share one CLI shape the way gateway
+  plugin configs do. No Managed column / external-node discovery (arbitrary
+  Python scripts aren't reliably identifiable by process name).
+  `PollWorker` now polls both `/api/instances` and `/api/nodes` per host
+  per cycle; the node table got the stale-selection-clear fix
+  (`backlog/launcher_agent_backlog.md`'s TC_AdminGui_011 bug) applied
+  proactively from day one rather than discovered the hard way again.
+
+Verified end-to-end on real hardware (`agn-testcomputer`), agent API first
+via curl (discover scripts, create+start a node pointed at a real gateway,
+confirmed genuinely functioning via `candump` -- request/response round
+trip through a fully agent-managed node, no `--address` flag involved at
+all, purely `BOAT_HOST` set by the agent's own subprocess env -- edit/
+delete-while-running refused with 409, log, clean stop), then the full Qt
+flow with real screenshots: New Node dialog's script dropdown and docstring
+label populated from a live agent; created+started a node via the dialog's
+own `result_payload()`; selected it via a real table click; confirmed the
+"Equivalent command line" panel matched exactly; confirmed the started
+node was genuinely responding on the wire (not just "a process exists");
+edit-while-running refused server-side; Edit dialog correctly pre-filled
+from the existing node's definition; both tabs screenshotted showing a
+rich Gateway instance (plugins, multiple interfaces) and a rich Node
+instance side by side, tab switching working, no regression to the
+existing Gateways tab.
+
 ## Next steps (not started)
 
-- Integrate node management into `admin_gui`/`launcher_agent.py` itself
-  (the memory note's original framing) -- `InstanceRegistry`/
-  `GatewayInstance` generalizes almost directly to "manage arbitrary
-  script processes on a host," reusing `boat-platform/nodes/` as the
-  discovery source for consistency with `control_panel.py`. Would give
-  node management the same multi-host aggregation, Managed-column,
-  session-save/load treatment the gateway instances already have.
 - More node scripts as real needs surface -- the two here are deliberately
   minimal building blocks, not a complete ECU simulation library.
+- Session save/load doesn't cover Nodes yet -- only Gateway instances are
+  captured in a session file today.
+- Node instance persistence across an agent restart -- same in-memory-only
+  gap as gateway instances (`backlog/launcher_agent_backlog.md`).
 - Scenarios/Simulations/Replays panels are still a separate, unstarted
   architectural layer (direct gRPC to a `boat_gateway`, not through an
   agent) -- see the `admin-gui-future-scope` memory note.

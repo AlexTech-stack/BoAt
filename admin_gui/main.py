@@ -10,6 +10,13 @@ each as a host below) -- no SSH, this app never touches a remote machine
 directly, it only calls each host's own agent API. See
 backlog/launcher_agent_backlog.md and AGENTS.md's "Launcher Agent" section.
 
+Two tabs: Gateways (boat_gateway process lifecycle) and Nodes (script
+processes under boat-platform/nodes/ -- see AGENTS.md). Both are per-host
+agent-managed registries with the same create/edit/start/stop/delete shape,
+kept as separate tables/dialogs since the domains genuinely differ (a node
+has no port to allocate or ifaces/plugins of its own; it has a target
+gateway via BOAT_HOST and arbitrary script-specific CLI args).
+
 v1 scope: host list + aggregated instance table + start/stop/delete/create +
 a log viewer for the selected instance. No interface-creation UI yet (the
 agent doesn't expose that either -- see the backlog).
@@ -19,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import sys
 from typing import Optional, Tuple
 
@@ -45,6 +53,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -99,6 +108,28 @@ def _format_command_line(inst: dict) -> str:
     if inst.get("tick_us"):
         parts.append(f"BOAT_NODE_TICK_US={inst['tick_us']}")
     parts.append(inst.get("gateway_bin") or "./boat_gateway")
+    return " ".join(parts)
+
+
+def _format_node_script(node: dict) -> str:
+    return os.path.basename(node.get("script_path", "")) or "—"
+
+
+def _format_node_args(node: dict) -> str:
+    args = node.get("extra_args") or []
+    return " ".join(args) if args else "—"
+
+
+def _format_node_command_line(node: dict) -> str:
+    """The BOAT_HOST=... python3 <script> <args> invocation that reproduces
+    this node from a shell -- same idea as _format_command_line() above, for
+    the Nodes tab."""
+    parts = []
+    if node.get("target_host"):
+        parts.append(f"BOAT_HOST={node['target_host']}")
+    parts.append(f"python3 {node.get('script_path', '')}")
+    if node.get("extra_args"):
+        parts.append(" ".join(node["extra_args"]))
     return " ".join(parts)
 
 
@@ -221,17 +252,21 @@ def _parse_command_line(text: str) -> dict:
 
 
 class PollWorker(QThread):
-    """Background thread: polls every configured host's /api/instances (and
-    the selected instance's log, if any) on a fixed interval, emitting
-    results back to the UI thread via signals."""
+    """Background thread: polls every configured host's /api/instances and
+    /api/nodes (and the selected instance's/node's log, if any) on a fixed
+    interval, emitting results back to the UI thread via signals."""
 
-    snapshot_ready = Signal(dict)   # {host_url: {"name":..., "ok":bool, "instances":[...], "error":str|None}}
-    log_ready = Signal(str, list)   # (instance_id, log_lines)
+    snapshot_ready = Signal(dict)        # {host_url: {"name":..., "ok":bool, "instances":[...], "error":str|None}}
+    log_ready = Signal(str, list)        # (instance_id, log_lines)
+    node_snapshot_ready = Signal(dict)   # {host_url: {"name":..., "ok":bool, "nodes":[...], "error":str|None}}
+    node_log_ready = Signal(str, list)   # (node_id, log_lines)
 
-    def __init__(self, get_hosts, get_selected, interval: float = _POLL_INTERVAL_SEC, parent=None):
+    def __init__(self, get_hosts, get_selected, get_selected_node,
+                 interval: float = _POLL_INTERVAL_SEC, parent=None):
         super().__init__(parent)
         self._get_hosts = get_hosts
         self._get_selected = get_selected
+        self._get_selected_node = get_selected_node
         self._interval = interval
         self._running = True
 
@@ -241,6 +276,7 @@ class PollWorker(QThread):
     def run(self) -> None:
         while self._running:
             snapshot = {}
+            node_snapshot = {}
             for host in self._get_hosts():
                 client = AgentClient(host["url"])
                 try:
@@ -248,8 +284,14 @@ class PollWorker(QThread):
                     snapshot[host["url"]] = {"name": host["name"], "ok": True, "instances": instances, "error": None}
                 except AgentError as e:
                     snapshot[host["url"]] = {"name": host["name"], "ok": False, "instances": [], "error": str(e)}
+                try:
+                    nodes = client.list_nodes()
+                    node_snapshot[host["url"]] = {"name": host["name"], "ok": True, "nodes": nodes, "error": None}
+                except AgentError as e:
+                    node_snapshot[host["url"]] = {"name": host["name"], "ok": False, "nodes": [], "error": str(e)}
             if self._running:
                 self.snapshot_ready.emit(snapshot)
+                self.node_snapshot_ready.emit(node_snapshot)
 
             selected = self._get_selected()
             if selected and self._running:
@@ -257,6 +299,15 @@ class PollWorker(QThread):
                 try:
                     log = AgentClient(host_url).get_log(inst_id)
                     self.log_ready.emit(inst_id, log)
+                except AgentError:
+                    pass
+
+            selected_node = self._get_selected_node()
+            if selected_node and self._running:
+                host_url, node_id = selected_node
+                try:
+                    log = AgentClient(host_url).get_node_log(node_id)
+                    self.node_log_ready.emit(node_id, log)
                 except AgentError:
                     pass
 
@@ -531,6 +582,120 @@ class NewInstanceDialog(QDialog):
         }
 
 
+class NewNodeDialog(QDialog):
+    """New/Edit dialog for a node instance -- same doubles-as-Edit pattern as
+    NewInstanceDialog. The Script combo is populated from the selected
+    host's GET /api/node-scripts (boat-platform/nodes/*.py) and shows each
+    script's module docstring below it; Extra Args is a free-text field
+    parsed with shlex.split() on submit, since node scripts have wildly
+    different CLI flags from each other (unlike gateway plugin configs,
+    there's no single structured shape to build a picker around)."""
+
+    def __init__(self, hosts: list, parent=None, existing: Optional[dict] = None,
+                 existing_host_url: Optional[str] = None):
+        super().__init__(parent)
+        editing = existing is not None
+        self.setWindowTitle("Edit Node" if editing else "New Node")
+        self.resize(520, 320)
+        layout = QFormLayout(self)
+
+        self.host_combo = QComboBox()
+        for h in hosts:
+            self.host_combo.addItem(f"{h['name']} ({h['url']})", h["url"])
+        if editing and existing_host_url:
+            idx = self.host_combo.findData(existing_host_url)
+            if idx >= 0:
+                self.host_combo.setCurrentIndex(idx)
+            self.host_combo.setEnabled(False)
+        layout.addRow("Host:", self.host_combo)
+
+        self.name_edit = QLineEdit(existing.get("name", "") if editing else "")
+        layout.addRow("Name:", self.name_edit)
+
+        self.script_combo = QComboBox()
+        layout.addRow("Script:", self.script_combo)
+
+        self.script_doc_label = QLabel("")
+        self.script_doc_label.setWordWrap(True)
+        self.script_doc_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addRow("", self.script_doc_label)
+
+        self.target_host_edit = QLineEdit(existing.get("target_host", "") if editing else "")
+        self.target_host_edit.setPlaceholderText(
+            "e.g. localhost:50051 -- which gateway this node talks to (sets BOAT_HOST)"
+        )
+        layout.addRow("Target host:", self.target_host_edit)
+
+        self.extra_args_edit = QLineEdit(
+            " ".join(existing.get("extra_args", [])) if editing else ""
+        )
+        self.extra_args_edit.setPlaceholderText(
+            '--iface vcan0 --can-id 0x300 --data AABBCCDD --cycle-ms 500'
+        )
+        layout.addRow("Extra args:", self.extra_args_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+        self.host_combo.currentIndexChanged.connect(self._reload_scripts)
+        self.script_combo.currentIndexChanged.connect(self._update_doc_label)
+        self._reload_scripts()
+
+        if editing:
+            idx = self.script_combo.findData(existing.get("script_path", ""))
+            if idx >= 0:
+                self.script_combo.setCurrentIndex(idx)
+            self._update_doc_label()
+
+    def selected_host_url(self) -> str:
+        return self.host_combo.currentData()
+
+    def _reload_scripts(self) -> None:
+        url = self.selected_host_url()
+        if not url:
+            return
+        try:
+            scripts = AgentClient(url).list_node_scripts()
+        except AgentError:
+            # Host unreachable right now -- leave the combo as-is.
+            return
+        current = self.script_combo.currentData()
+        self.script_combo.clear()
+        for s in scripts:
+            label = s["name"]
+            if s.get("interactive"):
+                label += "  (interactive -- can't run headlessly)"
+            self.script_combo.addItem(label, s["path"])
+            self.script_combo.setItemData(self.script_combo.count() - 1, s.get("docstring", ""), Qt.UserRole + 1)
+        if current:
+            idx = self.script_combo.findData(current)
+            if idx >= 0:
+                self.script_combo.setCurrentIndex(idx)
+        self._update_doc_label()
+
+    def _update_doc_label(self) -> None:
+        idx = self.script_combo.currentIndex()
+        doc = self.script_combo.itemData(idx, Qt.UserRole + 1) if idx >= 0 else None
+        self.script_doc_label.setText(doc or "")
+
+    def result_payload(self) -> dict:
+        script_path = self.script_combo.currentData()
+        if not script_path:
+            raise ValueError("select a node script")
+        try:
+            extra_args = shlex.split(self.extra_args_edit.text().strip())
+        except ValueError as e:
+            raise ValueError(f"invalid extra args: {e}") from e
+        return {
+            "name": self.name_edit.text().strip(),
+            "script_path": script_path,
+            "target_host": self.target_host_edit.text().strip(),
+            "extra_args": extra_args,
+        }
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -540,12 +705,15 @@ class MainWindow(QMainWindow):
         self.host_store = HostStore()
         self._snapshot: dict = {}
         self._selected: Optional[Tuple[str, str]] = None  # (host_url, instance_id)
+        self._node_snapshot: dict = {}
+        self._selected_node: Optional[Tuple[str, str]] = None  # (host_url, node_id)
 
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        # ── Hosts ──
+        # ── Hosts (shared across both tabs -- one agent per host manages
+        # both gateway instances and node instances there) ──
         host_bar = QHBoxLayout()
         host_bar.addWidget(QLabel("Hosts:"))
         self.host_list = QListWidget()
@@ -568,6 +736,25 @@ class MainWindow(QMainWindow):
         host_bar.addLayout(host_btns)
         root.addLayout(host_bar)
 
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_gateways_tab(), "Gateways")
+        self.tabs.addTab(self._build_nodes_tab(), "Nodes")
+        root.addWidget(self.tabs, 1)
+
+        self.statusBar()
+        self.refresh_host_list()
+
+        self.worker = PollWorker(self.host_store.list, lambda: self._selected, lambda: self._selected_node)
+        self.worker.snapshot_ready.connect(self.on_snapshot)
+        self.worker.log_ready.connect(self.on_log)
+        self.worker.node_snapshot_ready.connect(self.on_node_snapshot)
+        self.worker.node_log_ready.connect(self.on_node_log)
+        self.worker.start()
+
+    def _build_gateways_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
         # ── Instance table ──
         self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
@@ -578,7 +765,7 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.itemSelectionChanged.connect(self.on_selection_changed)
-        root.addWidget(self.table, 2)
+        layout.addWidget(self.table, 2)
 
         # ── Actions ──
         actions = QHBoxLayout()
@@ -595,17 +782,17 @@ class MainWindow(QMainWindow):
         for b in (new_btn, edit_btn, start_btn, stop_btn, delete_btn):
             actions.addWidget(b)
         actions.addStretch(1)
-        root.addLayout(actions)
+        layout.addLayout(actions)
 
         # ── Log viewer ──
-        root.addWidget(QLabel("Log (selected instance):"))
+        layout.addWidget(QLabel("Log (selected instance):"))
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(2000)
-        root.addWidget(self.log_view, 1)
+        layout.addWidget(self.log_view, 1)
 
         # ── Equivalent command line ──
-        root.addWidget(QLabel("Equivalent command line (selected instance):"))
+        layout.addWidget(QLabel("Equivalent command line (selected instance):"))
         cmd_row = QHBoxLayout()
         self.cmdline_view = QLineEdit()
         self.cmdline_view.setReadOnly(True)
@@ -614,15 +801,63 @@ class MainWindow(QMainWindow):
         copy_btn = QPushButton("Copy")
         copy_btn.clicked.connect(self._copy_command_line)
         cmd_row.addWidget(copy_btn)
-        root.addLayout(cmd_row)
+        layout.addLayout(cmd_row)
 
-        self.statusBar()
-        self.refresh_host_list()
+        return tab
 
-        self.worker = PollWorker(self.host_store.list, lambda: self._selected)
-        self.worker.snapshot_ready.connect(self.on_snapshot)
-        self.worker.log_ready.connect(self.on_log)
-        self.worker.start()
+    def _build_nodes_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # ── Node table ──
+        self.node_table = QTableWidget(0, 9)
+        self.node_table.setHorizontalHeaderLabels(
+            ["Host", "Name", "ID", "Script", "Target Host", "Status", "PID", "Extra Args", "Uptime"]
+        )
+        self.node_table.horizontalHeader().setStretchLastSection(True)
+        self.node_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.node_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.node_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.node_table.itemSelectionChanged.connect(self.on_node_selection_changed)
+        layout.addWidget(self.node_table, 2)
+
+        # ── Actions ──
+        actions = QHBoxLayout()
+        new_btn = QPushButton("New Node…")
+        new_btn.clicked.connect(self.new_node)
+        edit_btn = QPushButton("Edit…")
+        edit_btn.clicked.connect(self.edit_node_selected)
+        start_btn = QPushButton("Start")
+        start_btn.clicked.connect(self.start_node_selected)
+        stop_btn = QPushButton("Stop")
+        stop_btn.clicked.connect(self.stop_node_selected)
+        delete_btn = QPushButton("Delete")
+        delete_btn.clicked.connect(self.delete_node_selected)
+        for b in (new_btn, edit_btn, start_btn, stop_btn, delete_btn):
+            actions.addWidget(b)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+
+        # ── Log viewer ──
+        layout.addWidget(QLabel("Log (selected node):"))
+        self.node_log_view = QPlainTextEdit()
+        self.node_log_view.setReadOnly(True)
+        self.node_log_view.setMaximumBlockCount(2000)
+        layout.addWidget(self.node_log_view, 1)
+
+        # ── Equivalent command line ──
+        layout.addWidget(QLabel("Equivalent command line (selected node):"))
+        cmd_row = QHBoxLayout()
+        self.node_cmdline_view = QLineEdit()
+        self.node_cmdline_view.setReadOnly(True)
+        self.node_cmdline_view.setPlaceholderText("Select a node to see the equivalent shell command")
+        cmd_row.addWidget(self.node_cmdline_view, 1)
+        copy_btn = QPushButton("Copy")
+        copy_btn.clicked.connect(self._copy_node_command_line)
+        cmd_row.addWidget(copy_btn)
+        layout.addLayout(cmd_row)
+
+        return tab
 
     def closeEvent(self, event) -> None:
         self.worker.stop()
@@ -913,6 +1148,175 @@ class MainWindow(QMainWindow):
         except AgentError as e:
             # Most commonly the agent's 409 if the instance was started in
             # the gap between opening this dialog and clicking OK.
+            QMessageBox.warning(self, "Edit failed", str(e))
+
+    # ── Node poll callbacks ──────────────────────────────────────────────
+
+    def on_node_snapshot(self, snapshot: dict) -> None:
+        self._node_snapshot = snapshot
+        self.rebuild_node_table()
+
+    def rebuild_node_table(self) -> None:
+        rows = []
+        for host_url, data in self._node_snapshot.items():
+            for node in data.get("nodes", []):
+                rows.append((host_url, data["name"], node))
+
+        self.node_table.blockSignals(True)
+        self.node_table.setRowCount(len(rows))
+        select_row = None
+        for r, (host_url, host_name, node) in enumerate(rows):
+            key = (host_url, node["id"])
+            if self._selected_node == key:
+                select_row = r
+            uptime = f"{node['uptime_sec']:.0f}s" if node.get("uptime_sec") is not None else "—"
+            values = [
+                host_name, node["name"], node["id"], _format_node_script(node),
+                node.get("target_host") or "—", node["status"], str(node["pid"] or "—"),
+                _format_node_args(node), uptime,
+            ]
+            for c, v in enumerate(values):
+                item = QTableWidgetItem(v)
+                item.setData(Qt.UserRole, key)
+                self.node_table.setItem(r, c, item)
+        if select_row is not None:
+            self.node_table.selectRow(select_row)
+        elif self._selected_node is not None:
+            # Same stale-selection hazard as rebuild_table() for the
+            # gateway table (see its comment) -- clear both the visual
+            # selection and the tracked id when the previously-selected
+            # node no longer appears in this snapshot, rather than letting
+            # a leftover row index silently point at different node's data.
+            self.node_table.clearSelection()
+            self._selected_node = None
+            self.node_log_view.clear()
+        self.node_table.blockSignals(False)
+        self.node_table.resizeColumnsToContents()
+        self._update_node_command_line()
+
+    def find_node(self, host_url: str, node_id: str) -> Optional[dict]:
+        data = self._node_snapshot.get(host_url)
+        if not data:
+            return None
+        for node in data.get("nodes", []):
+            if node["id"] == node_id:
+                return node
+        return None
+
+    def on_node_selection_changed(self) -> None:
+        items = self.node_table.selectedItems()
+        if not items:
+            self._selected_node = None
+            self._update_node_command_line()
+            return
+        key = items[0].data(Qt.UserRole)
+        if key != self._selected_node:
+            self.node_log_view.clear()
+        self._selected_node = key
+        self._update_node_command_line()
+
+    def _update_node_command_line(self) -> None:
+        if not self._selected_node:
+            self.node_cmdline_view.clear()
+            return
+        host_url, node_id = self._selected_node
+        node = self.find_node(host_url, node_id)
+        self.node_cmdline_view.setText(_format_node_command_line(node) if node else "")
+
+    def _copy_node_command_line(self) -> None:
+        text = self.node_cmdline_view.text()
+        if text:
+            QApplication.clipboard().setText(text)
+
+    def on_node_log(self, node_id: str, log_lines: list) -> None:
+        if not self._selected_node or self._selected_node[1] != node_id:
+            return
+        self.node_log_view.setPlainText("\n".join(f"{l['ts']}  {l['text']}" for l in log_lines))
+        sb = self.node_log_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    # ── Node actions ─────────────────────────────────────────────────────
+
+    def _selected_node_client_and_id(self):
+        if not self._selected_node:
+            QMessageBox.information(self, "No selection", "Select a node in the table first.")
+            return None
+        host_url, node_id = self._selected_node
+        return AgentClient(host_url), node_id
+
+    def start_node_selected(self) -> None:
+        res = self._selected_node_client_and_id()
+        if not res:
+            return
+        client, node_id = res
+        try:
+            client.start_node(node_id)
+        except AgentError as e:
+            QMessageBox.warning(self, "Start failed", str(e))
+
+    def stop_node_selected(self) -> None:
+        res = self._selected_node_client_and_id()
+        if not res:
+            return
+        client, node_id = res
+        try:
+            client.stop_node(node_id)
+        except AgentError as e:
+            QMessageBox.warning(self, "Stop failed", str(e))
+
+    def delete_node_selected(self) -> None:
+        res = self._selected_node_client_and_id()
+        if not res:
+            return
+        client, node_id = res
+        if QMessageBox.question(self, "Delete", "Delete this node definition?") != QMessageBox.Yes:
+            return
+        try:
+            client.delete_node(node_id)
+        except AgentError as e:
+            QMessageBox.warning(self, "Delete failed", str(e))
+
+    def new_node(self) -> None:
+        hosts = self.host_store.list()
+        if not hosts:
+            QMessageBox.information(self, "New Node", "Add a host first.")
+            return
+        dlg = NewNodeDialog(hosts, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        try:
+            payload = dlg.result_payload()
+        except ValueError as e:
+            QMessageBox.warning(self, "New Node", str(e))
+            return
+        client = AgentClient(dlg.selected_host_url())
+        try:
+            client.create_node(**payload)
+        except AgentError as e:
+            QMessageBox.warning(self, "Create failed", str(e))
+
+    def edit_node_selected(self) -> None:
+        if not self._selected_node:
+            QMessageBox.information(self, "No selection", "Select a node in the table first.")
+            return
+        host_url, node_id = self._selected_node
+        node = self.find_node(host_url, node_id)
+        if node is None:
+            QMessageBox.warning(self, "Edit", "Node not found (it may have just been removed).")
+            return
+        hosts = self.host_store.list()
+        dlg = NewNodeDialog(hosts, self, existing=node, existing_host_url=host_url)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        try:
+            payload = dlg.result_payload()
+        except ValueError as e:
+            QMessageBox.warning(self, "Edit", str(e))
+            return
+        client = AgentClient(host_url)
+        try:
+            client.update_node(node_id, **payload)
+        except AgentError as e:
             QMessageBox.warning(self, "Edit failed", str(e))
 
 

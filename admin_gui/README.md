@@ -2,7 +2,9 @@
 
 A PySide6 desktop client for one or more `ui/launcher_agent.py` instances.
 Add a host per machine that runs gateways; the app polls each host's REST API
-and shows one aggregated table of every gateway instance across all of them.
+and shows one aggregated table of every gateway instance across all of them,
+across two tabs: **Gateways** (`boat_gateway` processes) and **Nodes**
+(scripts under `boat-platform/nodes/`, see `AGENTS.md`).
 
 No SSH is involved anywhere in this app — it only ever calls each agent's own
 HTTP API, and each agent only ever touches processes on its own machine. See
@@ -88,6 +90,35 @@ either way it's the same `xcb` plugin doing the rendering).
    button included). Updates automatically as the selection or that
    instance's config changes.
 
+## Nodes tab
+
+![Nodes tab, showing a running node instance targeting a gateway](docs/nodes_tab.png)
+
+Same shape as the Gateways tab (table, New/Edit/Start/Stop/Delete, log
+viewer, equivalent command line), driving script processes under
+`boat-platform/nodes/` instead of `boat_gateway`. Differences from
+Gateways, since a node has no port to allocate or ifaces/plugins of its
+own:
+
+- **New Node…**'s **Script** dropdown is populated from the selected
+  host's discovered `boat-platform/nodes/*.py` files, with each script's
+  module docstring shown underneath once picked.
+- **Target host** is the `BOAT_HOST` value set in the spawned node's
+  environment -- which gateway it should talk to (typically one of that
+  same host's own Gateway-tab instances, e.g. `localhost:50051`, but it can
+  point anywhere reachable).
+- **Extra args** is a single free-text field (e.g. `--iface vcan0
+  --can-id 0x300 --data AABBCCDD --cycle-ms 500`), parsed with
+  `shlex.split()` on submit -- there's no structured picker here since
+  every node script has its own, different CLI flags (check its docstring
+  or `--help`).
+- No **Managed** column or external-process discovery -- every row here is
+  something this agent created; arbitrary Python scripts aren't reliably
+  identifiable by process name the way `boat_gateway` is, so unmanaged node
+  discovery isn't attempted.
+- **Save/Load Session** does not currently cover nodes -- only the
+  Gateways tab's instances are captured in a session file.
+
 ## Session files (save/load your whole setup)
 
 **Save Session…** writes every added host and its **agent-managed**
@@ -130,9 +161,10 @@ cleanly.
 - No interface-creation UI (create vcan/veth from this app) — the agent
   doesn't expose that yet either; use `ui/launcher.py`'s browser UI for
   interface setup on a given host for now.
-- No persistence for *instance definitions* on the agent side — an agent
-  restart forgets stopped instances (see the backlog doc). Session files
-  are the client-side answer to this (save before a restart, reload
-  after), but there's still no automatic recovery.
+- No persistence for *instance/node definitions* on the agent side — an
+  agent restart forgets stopped instances and nodes (see the backlog docs).
+  Session files are the client-side answer to this for Gateways (save
+  before a restart, reload after), but there's still no automatic recovery,
+  and session files don't cover Nodes yet.
 - No auth — same trust model as every other `ui/*.py`/`tools/*.py` service
   in this repo today (assumes a trusted lab network).

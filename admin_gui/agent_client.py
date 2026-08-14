@@ -122,3 +122,62 @@ class AgentClient:
 
     def sim_state(self, instance_id: str) -> dict:
         return self._request("GET", f"/api/instances/{instance_id}/sim-state")
+
+    # ── Node scripts/instances ───────────────────────────────────────────
+    # Same shape as the gateway-instance methods above, but for scripts
+    # under boat-platform/nodes/ (see ui/launcher_agent.py's "Node
+    # instances" section for why this is a separate registry server-side).
+
+    def list_node_scripts(self) -> List[dict]:
+        return self._request("GET", "/api/node-scripts")["scripts"]
+
+    def list_nodes(self) -> List[dict]:
+        return self._request("GET", "/api/nodes")["nodes"]
+
+    def get_node(self, node_id: str) -> dict:
+        return self._request("GET", f"/api/nodes/{node_id}")
+
+    def create_node(
+        self,
+        script_path: str,
+        name: str = "",
+        target_host: str = "",
+        extra_args: Optional[List[str]] = None,
+    ) -> dict:
+        body = {
+            "name": name,
+            "script_path": script_path,
+            "target_host": target_host,
+            "extra_args": extra_args or [],
+        }
+        return self._request("POST", "/api/nodes", json=body)
+
+    def update_node(
+        self,
+        node_id: str,
+        script_path: str,
+        name: str = "",
+        target_host: str = "",
+        extra_args: Optional[List[str]] = None,
+    ) -> dict:
+        """Edit a stopped node's definition in place -- refused (409) by the
+        agent while it's running."""
+        body = {
+            "name": name,
+            "script_path": script_path,
+            "target_host": target_host,
+            "extra_args": extra_args or [],
+        }
+        return self._request("PUT", f"/api/nodes/{node_id}", json=body)
+
+    def start_node(self, node_id: str) -> dict:
+        return self._request("POST", f"/api/nodes/{node_id}/start", timeout=_LIFECYCLE_TIMEOUT)
+
+    def stop_node(self, node_id: str) -> dict:
+        return self._request("POST", f"/api/nodes/{node_id}/stop", timeout=_LIFECYCLE_TIMEOUT)
+
+    def delete_node(self, node_id: str) -> None:
+        self._request("DELETE", f"/api/nodes/{node_id}")
+
+    def get_node_log(self, node_id: str) -> List[dict]:
+        return self._request("GET", f"/api/nodes/{node_id}/log")["log"]
