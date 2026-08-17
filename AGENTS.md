@@ -550,7 +550,21 @@ two whose expiry actually leaves a session stuck forever. `--n-bs-ms`/
 15765-4 uses 75/150). N_As/N_Ar have no analogue in this software transport
 (`frame_publish_fn` is synchronous — nothing to time out waiting for);
 N_Br/N_Cs are soft performance targets, not correctness bugs, and aren't
-enforced.
+enforced. The single `n_bs_ms` value (`kDefaultTimeoutMs` in
+`can_tp_plugin.cpp`, resolved from the `n_bs_ms=0` "use ISO default"
+sentinel by `resolve_timeout_ms()`) governs *every* wait for a Flow
+Control on a TX connection, not just the first one: the deadline
+(`tx_fc_deadline`) is (re)armed after sending the First Frame, again at
+every Block Size boundary once a full block of Consecutive Frames has
+gone out (still waiting for FC = still `TX_WAIT_FC`, ISO 15765-2 §9.8
+doesn't distinguish the two cases), and again on each FC(Wait) response
+(which *extends* the deadline rather than aborting — an unresponsive peer
+that keeps sending WT can hold a session open indefinitely; only genuine
+silence trips the watchdog). Relevant when hand-driving a session via
+`cansend` (`nodes/can_tp_trigger_sender.py`, see its docstring): you have
+~1000ms after the First Frame *and* after every subsequent block to get
+the next Flow Control frame out by hand before the plugin aborts the
+transfer.
 
 **Addressing modes** (`--addressing-mode {normal,extended,mixed}`, ISO
 15765-2 §10.3). `normal` (default) has no address byte — `source_addr`/

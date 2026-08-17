@@ -596,6 +596,45 @@ Full account, including the original design and why it didn't hold up,
 in the "plugin-based example node scripts" entry above (marked
 superseded) and `test/WebUIs.md`'s `TC_WebUIs_012`.
 
+## Done (2026-08-17, continued) — documented the N_Bs timeout window
+
+User question after trying `can_tp_trigger_sender.py` by hand: "So 1000ms
+while waiting for every FC? After a FC and also after the CF Block,
+right?" Confirmed against the plugin source (`can_tp_plugin.cpp`) rather
+than just asserting it: the same `n_bs_ms` deadline (`tx_fc_deadline`,
+default 1000ms, `kDefaultTimeoutMs`) is (re)armed in three places -- right
+after the First Frame goes out, again at every Block Size boundary once a
+full block of Consecutive Frames has been sent (still `TX_WAIT_FC`; ISO
+15765-2 §9.8 doesn't distinguish the two waits), and again on each
+FC(Wait) response (extends rather than resets-to-abort). User's own
+understanding was exactly right; decided no CLI flag was needed on this
+node ("I think this is fine without a flag, if needed it can be adapted
+in the plugin code. We just have to document it.") -- documentation-only
+follow-up, no functional change.
+
+Documented in two places: `AGENTS.md`'s existing "N_Bs/N_Cr watchdogs"
+section (under CanTp) got the block-boundary/FC(Wait) nuance added, with
+exact source references; `can_tp_trigger_sender.py`'s docstring got a
+worked Block Size > 0 example (BS=1, requiring a fresh Flow Control frame
+per Consecutive Frame) alongside the existing BS=0 one, plus the two
+ways to get more slack without touching this node's own code: reconfigure
+the running session in place via `boat can-tp configure --n-bs-ms
+<ms>` (re-configuring an already-configured `nsdu_id` overwrites its
+parameters live), or add `n_bs_ms=...` to this node's own `configure()`
+call directly.
+
+Verified all three worked examples on real hardware (`agn-testcomputer`),
+on a dedicated scratch `vcan9` interface created and torn down for this
+session specifically to avoid sharing a bus with the user's own live
+gateway (also on `vcan0`/`vcan1` at the time) -- both confirmed via
+`ps`/`ss` before and after, untouched throughout: the BS=1 example
+produced exactly the documented wire sequence (FF, FC, one CF, a second
+FC, the second CF); sending Flow Control 1.5s after the First Frame (past
+the 1000ms window) produced no Consecutive Frame at all -- the transfer
+had already been aborted by the watchdog before the late FC arrived,
+confirming the "miss it and it aborts" claim is accurate, not just
+theoretical.
+
 ## Next steps (not started)
 
 - More node scripts as real needs surface -- four now cover raw-CAN

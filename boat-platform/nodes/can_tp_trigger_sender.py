@@ -52,6 +52,34 @@ Example, matching this node's own defaults (trigger 0x111, sends as
     cansend vcan0 201#300000CCCCCCCCCC       # Flow Control: CTS, BS=0, STmin=0
     # wire: 0x200  21 06 07 08 09 CC CC CC  (Consecutive Frame 1, padded)
 
+Above, Flow Control's Block Size (the FC frame's 2nd byte) is 0 --
+unlimited, so the plugin sends every remaining Consecutive Frame back to
+back without waiting for another FC. Set BS to a small number (e.g. 1) to
+require a fresh Flow Control frame every N Consecutive Frames instead --
+useful for hand-driving a longer transfer one block at a time:
+    cansend vcan0 111#14                    # trigger: send 20 bytes
+    cansend vcan0 201#300100CCCCCCCCCC       # FC: CTS, BS=1, STmin=0
+    # wire: 0x200  21 06 07 08 09 0A 0B 0C  (CF1 -- one block, BS=1, then waits)
+    cansend vcan0 201#300100CCCCCCCCCC       # FC again -- needed for the next block
+    # wire: 0x200  22 0D 0E 0F 10 11 12 13  (CF2)
+
+You have N_Bs (1000ms, the ISO default -- this node doesn't override it)
+to get each Flow Control frame out by hand, and that window applies after
+the First Frame *and* again at every Block Size boundary (both are the
+plugin's TX_WAIT_FC state; ISO 15765-2 §9.8 doesn't distinguish them), not
+just once per transfer. Miss it and the plugin aborts the transfer
+(CANTP_N_TIMEOUT_BS) rather than hanging forever -- `boat can-tp
+subscribe-errors --nsdu-id <id>` shows it if you're watching. See
+AGENTS.md's "N_Bs/N_Cr watchdogs" for the full detail. Need more slack for
+slower manual testing? Two ways, no new flag on this node needed: run
+`boat can-tp configure --nsdu-id <id> --source-addr <src> --target-addr
+<tgt> --iface <iface> --n-bs-ms 5000` after this node has started --
+re-configuring an already-configured nsdu_id overwrites its parameters in
+place (this is generally how you edit a running session, not just create
+one), so it takes effect immediately without restarting the node -- or
+just add `n_bs_ms=...` to this node's own `can_tp.configure()` call in
+`ensure_configured()` below.
+
 Key lesson this node exists to demonstrate (same one pdu_cyclic_publisher.py
 makes for PDU routes): plugin state -- the configured N-SDU session here --
 lives in the *gateway process*, not the client. A gateway restart wipes it
