@@ -39,7 +39,13 @@ TEST_CASE("Virtual Ethernet HIL: frame send and receive via UDP multicast", "[hi
   REQUIRE(received.payload      == sent.payload);
   REQUIRE(received.src_mac[0]   == 0xAA);
   REQUIRE(received.src_mac[1]   == 0xBB);
-  REQUIRE(received.timestamp_ns  > 0);
+  // VirtualEthernetDriver::ReadFrame() deliberately leaves timestamp_ns at
+  // 0 -- "filled by the registry" per its own comment -- and this test
+  // calls it directly, bypassing EthernetBusRegistry entirely. Asserting
+  // > 0 here was testing a guarantee this call path never made; the
+  // registry's own fill-if-zero behavior has its own coverage below
+  // ("registry dispatches RX frame to subscriber").
+  REQUIRE(received.timestamp_ns == 0);
 
   tx->Close();
   rx->Close();

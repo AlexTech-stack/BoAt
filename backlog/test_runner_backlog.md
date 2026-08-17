@@ -36,22 +36,22 @@ software involvement) before building anything.
 
 ### New fixtures (`boat-platform/config/tests/`)
 
+The design below went through two revisions before landing here -- see
+"Latency methodology, resolved" and "Design simplified further" further
+down for the full story (both real, substantive changes driven by the
+user catching issues in the earlier versions, not polish).
+
 - **`env_can_loopback.json`** -- physical `can0`/`can1` environment,
   harness-spawned gateway on `localhost:50067` (a scratch port, to avoid
   colliding with anything else running).
-- **`can_loopback_routing_test.py`** -- the actual test: injects N
-  sequence-tagged frames via the gateway's `FrameService.SendFrame` on
-  `can0` (so the gateway's own API is genuinely exercised, not bypassed),
-  and measures routing time as `TS_message_on_can1 - TS_message_on_can0`
-  with **both** timestamps taken from raw SocketCAN reads (`python-can`)
-  -- `can0` has `CAN_RAW_LOOPBACK` enabled (verified with a real
-  `candump`/`cansend` round trip, not just assumed from the interface's
-  "ECHO" flag), so the gateway's own outbound write is independently
-  observable there with a genuine kernel timestamp too, deliberately
-  excluding the gRPC client call's own latency from the calculation
-  entirely -- see "Latency methodology, resolved" below for why. Checks
-  payload equality, routing time, and exactly-once delivery (no drops).
-  Exit code 0/1 matches `TestSuiteRunner`'s subprocess contract.
+- **`can_loopback_routing_test.py`** -- the actual test, final form: pure
+  gateway API, no raw sockets. Subscribes to both `can0` and `can1` via
+  one `FrameService.SubscribeFrames` call, injects N sequence-tagged
+  frames via `FrameService.SendFrame` on `can0`, matches sent/received
+  pairs by payload, and computes routing time directly from each `Frame`'s
+  own server-side `timestamp_ns` (`rx.timestamp_ns - tx.timestamp_ns`).
+  Checks payload equality, routing time, and exactly-once delivery (no
+  drops). Exit code 0/1 matches `TestSuiteRunner`'s subprocess contract.
 - **`manifest_can_loopback.json`** -- one test entry wiring the two
   together.
 
@@ -173,21 +173,50 @@ using an environment config with the test-framework's own 10ms
 `tick_ms` default (not even the gateway's 1ms default), empirically
 reconfirming the tick has no bearing on this path.
 
-Also worth noting for whoever picks this up next: the test as built only
-exercises *half* of the gateway's job -- accepting a `SendFrame` call and
-writing it to the physical wire. Because can0/can1 are bridged at the
-transceiver level, the receive side is observed via a raw SocketCAN read
-that never actually goes through the gateway's own `can1` RX thread →
-registry dispatch → `SubscribeFrames` path at all. A complete test would
-also cover that direction (inject a frame via raw `cansend`, observe it
-arrive via the gateway's own `SubscribeFrames`) -- not built yet, left as
-an open question below rather than assumed in scope.
+At this point the test only exercised *half* of the gateway's job --
+accepting a `SendFrame` call and writing it to the physical wire. Because
+can0/can1 are bridged at the transceiver level, the receive side was
+being observed via a raw SocketCAN read that never actually went through
+the gateway's own `can1` RX thread → registry dispatch → `SubscribeFrames`
+path at all.
+
+### Design simplified further, and a real bug fixed, per the user's own next suggestion
+
+User: "why not the following: boat frame subscribe to testmsg on can0,
+subscribe to testmsg on can1, boat frame send testmsg on can0 and compare
+the messages (including the Timestamps) from the receiving messages?" --
+strictly better on two counts: simpler (drops the `python-can` dependency
+entirely, one subscription mechanism instead of raw-socket-plus-gRPC),
+and it closes the exact gap just noted above, since subscribing on
+`can1` via the gateway's own `SubscribeFrames` genuinely exercises its RX
+thread → registry dispatch → gRPC stream path, unlike the raw-socket
+observer it replaces.
+
+Checking whether this would actually work surfaced the real bug just
+above (`timestamp_ns` always 0 for locally-sent frames) -- comparing
+"the messages (including the Timestamps)" as proposed would otherwise
+have produced a meaningless `TS_can1 - 0` on every frame. `timestamp_ns`
+being captured *server-side*, before a `Frame` is ever serialized for
+gRPC, also means the earlier "keep gRPC overhead out of the measurement"
+concern that motivated the raw-socket design in the first place was never
+actually a reason to avoid `SubscribeFrames` -- only *which* timestamp
+mechanism (the client-supplied one, always 0) needed fixing, not the
+transport used to observe it.
+
+`can_loopback_routing_test.py` rewritten accordingly: subscribes to both
+`--tx-iface` and `--rx-iface` via one `FrameNode.subscribe()`, injects via
+`send_can()`, matches sent/received pairs by payload, and computes routing
+time directly from each `Frame`'s own `timestamp_ns`. No raw sockets, no
+`python-can` dependency, and now genuinely exercises both halves of the
+gateway's job -- the "receive-direction not tested" gap above is closed.
+
+**Final result** (full `boat test run` pipeline, real hardware): 100/100
+received, zero drops, routing time **0.512-0.689ms** (mean 0.583ms) --
+consistent with every earlier measurement, now obtained through nothing
+but the real product API.
 
 ## Open questions for whoever continues this (not resolved, need the user's input)
 
-- Should the receive-direction (wire → gateway's own `SubscribeFrames`)
-  also be tested, per the gap noted above, for a genuinely complete
-  round-trip routing-time picture?
 - The admin_gui integration question this whole investigation was in
   service of is still open -- see the chat conversation (not restated
   here) for the three shapes considered (new "Test Runs" tab reusing the

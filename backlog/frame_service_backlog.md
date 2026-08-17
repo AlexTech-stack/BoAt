@@ -10,6 +10,81 @@ failure of one direction with no error anywhere.
 
 ---
 
+## ✅ RESOLVED (2026-08-17) — `timestamp_ns` was always 0 for locally-sent frames
+
+Found while building a real HIL test with the user: "boat frame subscribe
+to testmsg on can0, subscribe to testmsg on can1, boat frame send testmsg
+on can0 and compare the messages (including the Timestamps) from the
+receiving messages" -- a simpler, better replacement for an earlier
+version of the same test that read raw SocketCAN sockets instead
+specifically to avoid this gap (see `backlog/test_runner_backlog.md`).
+
+`Frame.timestamp_ns` is populated in exactly one place for CAN:
+`SocketCanDriver::ReadFrame()` (`src/hil/can/socket_can_driver.cpp:125`)
+calls `clock_gettime(CLOCK_REALTIME)` right after the blocking `read()`
+syscall returns -- i.e. only on genuine wire RX. Nothing on the *send*
+path ever set it: not `FrameService.SendFrame`, not `boat frame send`
+(checked `boat_cli/frame.py` directly), not `FrameNode.send_can()` (SDK) --
+all three construct a `Frame`/`SendFrameRequest` and never touch
+`timestamp_ns`, so it stays at protobuf's default, 0.
+`CanBusRegistry::SendFrame()`'s self-sent echo (`src/hil/
+can_bus_registry.cpp` -- tags `BOAT_CAN_FLAG_SELF_SENT` and dispatches a
+copy back to subscribers so a client can tell its own echo from wire RX,
+see the resolved `SELF_SENT` entry above for the flag's own history) just
+copied that same client-supplied `CanFrame` verbatim, `timestamp_ns` and
+all -- so every self-sent/outbound-observed frame was reliably stamped 0,
+permanently, regardless of when it was actually sent. `EthernetBusRegistry`
+had the identical gap in its `SendFrame`/`SendFrameAll` (its RX path
+already has a "stamp if zero" fallback for driver-supplied timestamps of
+0 -- `ethernet_bus_registry.cpp:35-40` -- but nothing analogous existed
+on the send side).
+
+**Impact.** Any client computing an elapsed time against a locally-sent
+frame's own `timestamp_ns` (exactly what the user's routing-time test
+needed) got nonsense -- a delta against literal 0, not a real duration.
+Anything else relying on a self-sent frame's timestamp being meaningful
+(trace recording, replay, plugin logic) would have silently gotten "the
+epoch" instead of "now" too, though this investigation didn't chase down
+whether anything currently depends on it.
+
+**Fixed**: `CanBusRegistry::SendFrame()`/`SendFrameAll()` and the
+equivalent `EthernetBusRegistry` methods now capture a fresh timestamp
+(`NowNs()`, a small helper added to each file -- `clock_gettime
+(CLOCK_REALTIME)` for CAN, `std::chrono::system_clock::now()` for
+Ethernet, matching each registry's own existing RX-side convention)
+immediately after the write, and stamp the self-sent echo with *that*
+instead of the client-supplied value. Symmetric with how RX already
+works: a real wall-clock capture taken as close as practical to the
+actual wire interaction, not a value passed through from somewhere else.
+
+Also found and fixed a related, pre-existing, unrelated-to-this-session
+test bug while verifying: `test_ethernet_hil.cpp`'s "frame send and
+receive via UDP multicast" test called `VirtualEthernetDriver::
+ReadFrame()` directly (bypassing `EthernetBusRegistry` entirely) and
+asserted `timestamp_ns > 0` -- but that driver's own `ReadFrame()`
+deliberately leaves it at 0 with the comment "filled by the registry",
+which this test never invokes. The assertion was simply checking a
+guarantee this call path never made. Fixed by asserting `== 0` instead,
+matching the driver's own documented contract; the registry's actual
+fill-if-zero behavior already has its own coverage in the next test case
+("registry dispatches RX frame to subscriber").
+
+Verified on real hardware (`agn-testcomputer`): a direct check (send one
+frame, subscribe for its self-sent echo, confirm `timestamp_ns` now falls
+strictly between wall-clock timestamps taken immediately before and after
+the send call) confirmed a real, correctly-ordered capture, not garbage.
+The user's own proposed test design -- `boat frame subscribe` on `can0`
+and `can1`, `boat frame send` on `can0`, compare `timestamp_ns` -- now
+produces a consistent, sensible routing time (0.45-0.69ms across several
+runs) using nothing but the real gateway API, no raw sockets at all. Full
+C++ test suite (160 tests, `ctest --test-dir build/debug`, including
+`BOAT_HIL_ENABLED=1` HIL tests on real interfaces) passes cleanly except
+22 pre-existing, unrelated `re2` third-party tests that don't build in
+this environment ("Not Run", not a real failure) -- confirmed via a
+`***Failed` grep that nothing else regressed.
+
+---
+
 ## 🔴 `SELF_SENT` identifies the transmitting process, not the originating client
 
 `CanBusRegistry::SendFrame` tags every locally transmitted frame with

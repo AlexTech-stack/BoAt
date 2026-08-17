@@ -2,9 +2,30 @@
 
 #include <boat/plugin.h>
 
+#include <ctime>
 #include <utility>
 
 namespace boat::hil {
+
+namespace {
+
+// Wall-clock nanoseconds since epoch, matching SocketCanDriver::ReadFrame()'s
+// own clock_gettime(CLOCK_REALTIME) call for RX (socket_can_driver.cpp) --
+// used below to stamp the self-sent echo with when the write actually
+// happened, not whatever the client's outbound frame carried (usually 0:
+// nothing on the send path -- gRPC clients, the CLI -- ever sets
+// timestamp_ns on a frame it's asking the gateway to transmit; blindly
+// reusing that value left every self-sent/outbound-observed frame
+// permanently stamped 0, which silently broke anything computing an
+// elapsed time against it, trace recording included).
+std::uint64_t NowNs() {
+  struct timespec ts {};
+  if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
+  return static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ULL +
+         static_cast<std::uint64_t>(ts.tv_nsec);
+}
+
+}  // namespace
 
 bool CanBusRegistry::Add(const std::string& iface, std::shared_ptr<IHalDriver> driver,
                          boat::core::EventBus& bus) {
@@ -40,8 +61,11 @@ bool CanBusRegistry::SendFrame(const std::string& iface, const CanFrame& frame) 
   }
   // Tag as self-sent so subscribers (especially plugins) can distinguish
   // internally-dispatched loopback from frames received from the wire.
+  // Timestamp is captured fresh here (right after the write), not copied
+  // from the client-supplied frame -- see NowNs()'s comment above.
   CanFrame self = frame;
   self.flags |= BOAT_CAN_FLAG_SELF_SENT;
+  self.timestamp_ns = NowNs();
   DispatchRx(self, iface);
   return true;
 }
@@ -58,6 +82,7 @@ void CanBusRegistry::SendFrameAll(const CanFrame& frame) {
   }
   CanFrame self = frame;
   self.flags |= BOAT_CAN_FLAG_SELF_SENT;
+  self.timestamp_ns = NowNs();
   for (const auto& iface : dispatched_ifaces) {
     DispatchRx(self, iface);
   }
