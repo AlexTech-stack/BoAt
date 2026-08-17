@@ -317,22 +317,35 @@ in ~3.6ms from the still-running responder process. Full account in
 
 **TestSteps:**
 1. Start `pdu_cyclic_publisher.py` against it; observe the wire via `candump`
-2. Start `can_tp_echo_responder.py` against it; send a short (<=7 byte)
-   single-frame ISO-TP request via `cansend`, observe the reply
-3. Send a >7 byte request via `isotpsend -D <len>` (or equivalent), forcing
-   real First-Frame/Flow-Control/Consecutive-Frame segmentation, and observe
-   the plugin's reassembly and re-segmented echo
-4. Start both nodes against a gateway *without* either plugin loaded
+2. Start `can_tp_trigger_sender.py` against it; send a short trigger frame
+   (payload byte <= 7) via `cansend`
+3. Send a trigger requesting > 7 bytes, then hand-send a Flow Control frame
+   via `cansend` on the node's `--target-addr`, forcing real
+   First-Frame/Flow-Control/Consecutive-Frame segmentation
+4. Send an empty-payload trigger frame; send a trigger with payload byte `00`
+5. Start both nodes against a gateway *without* either plugin loaded
+6. Kill and restart the gateway (plugins loaded again), then send a single
+   trigger with no prior "warm-up" trigger
 
 **Expected:**
 - Step 1: the configured PDU ID appears on the wire as a CAN frame with the
   configured payload, on the configured cycle
-- Step 2: the request is echoed back correctly on the reverse addressing
-- Step 3: the request reassembles correctly server-side (First Frame length
-  matches, Consecutive Frame data matches byte-for-byte), and the echo starts
-  going back out correctly segmented (matching First Frame)
-- Step 4: `configure()`/`configure_route()` fails cleanly with a clear
+- Step 2: a correctly-formed Single Frame goes out on `--source-addr` with
+  the requested number of incrementing bytes (`00 01 02 ...`)
+- Step 3: a First Frame goes out with the correct total length; after Flow
+  Control, the correct number of Consecutive Frames follow with the
+  incrementing sequence continuing correctly across frame boundaries, no
+  gaps/duplicates
+- Step 4: an empty payload falls back to `--default-length`; a `00` payload
+  byte sends nothing and logs a clear "0 bytes -- nothing to send" line
+  instead of attempting a degenerate send
+- Step 5: `configure()`/`configure_route()` fails cleanly with a clear
   "is the plugin loaded?" message -- no crash, no silent no-op
+- Step 6: the very first trigger after the gateway comes back still
+  succeeds -- the node detects the stale "configured" state from the
+  `FAILED_PRECONDITION` the plugin returns (its N-SDU session was wiped by
+  the restart), reconfigures, and retries that same trigger once, rather
+  than silently dropping it
 
 **Verdict:** OK
 
@@ -341,22 +354,60 @@ Verified on real hardware (`agn-testcomputer`) on an isolated test
 gateway/`vcan0` pair with both plugins loaded, the user's own live session
 confirmed untouched throughout. Step 1: `candump` showed CAN ID `0x100`
 with payload `01 02 03 04 05 06 07 08` on a 300ms cycle as configured.
-Step 2: `cansend vcan0 7E0#03112233` came back as
-`7E8#03112233CCCCCCCC` (`CC` = default pad byte) in ~4ms. Step 3:
-`isotpsend -s 7E0 -d 7E8 -D 20 vcan0` produced the full expected wire
-exchange -- First Frame (`10 14 01 02 03 04 05 06`, length 0x14=20),
-Flow Control (`30 00 00 ...`), two Consecutive Frames reconstructing the
-full 20-byte payload -- and the plugin's echo correctly began with a
-matching First Frame (`10 14 01 02 03 04 05 06`) before the capture
-window ended. Step 4 verified both nodes against a gateway with neither plugin loaded:
-`pdu_cyclic_publisher.py`'s `configure_route()` (`PduNode`, which catches
-`grpc.RpcError` internally) returned `False` cleanly, printed the expected
-hint, and kept retrying. `can_tp_echo_responder.py`'s `configure()`
-(`CanTpHandle`, which does **not** catch `grpc.RpcError` -- see this
-node's writeup in `backlog/nodes_backlog.md`) raised instead, caught by
-the node's own `try/except`; the exception's message turned out to be
-more specific than a generic "unreachable" guess would have been --
-`NOT_FOUND: "no CanTp plugin loaded for iface 'vcan0'"`, distinguishing
-"plugin not loaded" from "gateway unreachable" -- so the node's error
-message was rewritten to print that detail verbatim rather than assume a
-cause, confirmed by re-running this exact scenario after the change.
+
+This TestCase's node was reworked mid-verification: the original design
+(`can_tp_echo_responder.py`, reassembling and echoing back whatever ISO-TP
+message it received) turned out to be untestable by hand -- reported by
+the user after trying it via `cansend`: "It doesn't seem to echo the
+messages back. However it sends out flow control messages." Root cause:
+receiving a multi-frame message requires being a full ISO-TP *requester*
+yourself (send Consecutive Frames in response to the plugin's own Flow
+Control), which a single `cansend` can't do -- the plugin correctly
+emitted Flow Control and then waited forever for Consecutive Frames
+nobody was sending, so nothing ever reassembled and nothing was ever
+going to echo back. Replaced with `can_tp_trigger_sender.py` per the
+user's own design: a plain CAN trigger frame (`--trigger-id`, default
+`0x111`) whose payload's first byte is a length causes the node to
+`send()` a fresh incrementing-byte payload (`00 01 02 ...`) through the
+plugin's own segmentation -- a human only needs to supply Flow Control by
+hand to watch a real multi-frame exchange, which `cansend` *can* do.
+
+Step 2: `cansend vcan0 111#06` (using the node's default addressing,
+`--source-addr 0x200`) produced `0x200  06 00 01 02 03 04 05 CC` -- a
+correct Single Frame (6 bytes fits in one frame, so the plugin correctly
+skipped segmentation entirely). Step 3, matching the user's own worked
+example exactly: `cansend vcan0 111#0A` produced First Frame
+`0x200  10 0A 00 01 02 03 04 05` (length 10); `cansend vcan0
+201#300000CCCCCCCCCC` (Flow Control: CTS, BS=0, STmin=0) produced
+Consecutive Frame `0x200  21 06 07 08 09 CC CC CC` -- byte-for-byte what
+the user described. A 20-byte variant (`cansend vcan0 111#14`) produced a
+First Frame plus two Consecutive Frames (`21 06 07 08 09 0A 0B 0C` /
+`22 0D 0E 0F 10 11 12 13`), the full `00`-`13` sequence intact across both.
+Step 4: an empty/RTR trigger fell back to `--default-length` (8); a `00`
+payload byte logged the "0 bytes -- nothing to send" line and sent
+nothing, confirmed via a clean `candump` capture showing no frame.
+
+Step 5 (both nodes against a plugin-less gateway): `pdu_cyclic_publisher.py`'s
+`configure_route()` (`PduNode`, which catches `grpc.RpcError` internally)
+returned `False` cleanly, printed the expected hint, and kept retrying.
+`can_tp_trigger_sender.py`'s `configure()` (`CanTpHandle`, which does
+**not** catch `grpc.RpcError`) raised instead, caught by the node's own
+`ensure_configured()`; the exception's own message
+(`NOT_FOUND: "no CanTp plugin loaded for iface 'vcan0'"`) was printed
+verbatim, same reasoning as the earlier echo-responder's fix.
+
+Step 6 caught a second real bug, found only by testing the exact restart
+scenario end-to-end: the node's `state["configured"]` flag doesn't know
+the gateway restarted until an actual `configure()`/`send()` call fails --
+nothing else invalidates it -- so the *first* trigger after any restart
+hit `send()`'s `FAILED_PRECONDITION` ("no N-SDU connection configured"),
+got logged, and was silently dropped; only the *second* trigger actually
+went out. Fixed by retrying once within the same trigger: on a `send()`
+failure, reconfigure with a fresh `CanTpHandle` and immediately retry
+that same payload before giving up. Re-verified after the fix: killed the
+gateway, restarted it, waited for `FrameNode`'s own background stream to
+reconnect, then sent a *single* trigger with no warm-up -- both the
+short (Single Frame) and the 20-byte (First Frame + 2 Consecutive Frames)
+cases succeeded on that one trigger, confirmed via `candump` and a log
+showing the self-heal ("send() raised (...); reconfiguring and retrying
+this trigger once...") followed by no further error.

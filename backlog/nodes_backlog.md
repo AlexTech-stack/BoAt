@@ -425,6 +425,12 @@ own real-hardware verification.
 
 ## Done (2026-08-14, continued) — plugin-based example node scripts
 
+> **Superseded (2026-08-17):** `can_tp_echo_responder.py` described below
+> was replaced by `can_tp_trigger_sender.py` -- the echo design didn't
+> hold up to real manual testing. See the "can_tp_echo_responder.py ->
+> can_tp_trigger_sender.py" entry further down for why and what changed;
+> this entry is kept as the historical record of the original version.
+
 User feedback: "we need some more nodes. They shall work (of course) but
 they shall also be examples of how to create notes, especially how to use
 plugins." `cyclic_can_sender.py`/`can_request_responder.py` only ever
@@ -506,6 +512,89 @@ user's own live session confirmed untouched throughout:
   port -- both nodes recovered entirely on their own, `candump` showing
   the PDU publisher's traffic resume and a fresh single-frame request
   getting echoed correctly, no manual intervention.
+
+## Done (2026-08-17) — can_tp_echo_responder.py → can_tp_trigger_sender.py
+
+User feedback after manually testing the plugin-example nodes: "I quickly
+checked the nodes, all good except the can-tp_echo_responder. It seem not
+to echo the messages back (I sent via cansend). However it sends out flow
+control messages. I think we have to rework the functionality of the
+node. It makes no sense to let it just echo a whole tp message."
+
+Root cause of the reported symptom (not a bug in the plugin or the node
+as such -- an unworkable design for manual testing): the echo responder
+needed to first *receive* a complete multi-frame ISO-TP message before it
+could echo anything, and receiving one requires being a full ISO-TP
+*requester* -- send Consecutive Frames yourself, in response to the
+plugin's own Flow Control, at the right times. A single `cansend` of
+something that looks like a First Frame makes the plugin correctly emit
+Flow Control and then wait (up to its N_Bs timeout) for Consecutive
+Frames nobody is sending by hand -- nothing ever reassembles, so nothing
+was ever going to be echoed back. The "it sends out flow control
+messages" the user observed was the plugin behaving completely correctly
+in response to an incomplete manual request, not a malfunction.
+
+The user then specified the replacement design directly, worked example
+included: a trigger frame on a plain CAN ID (`0x111` in their example)
+whose payload is the desired message length (`0A` = 10 bytes) causes the
+node to send a fresh **incrementing-byte** payload (`00 01 02 ...`)
+through the plugin's own segmentation on a *different* address pair
+(`0x200` out, Flow Control expected on `0x201`) -- putting the plugin's
+automatic segmentation on the *send* side, where a human only needs to
+hand-craft one Flow Control frame (fixed format, no sequence tracking) to
+watch/drive a real multi-frame exchange from a terminal. Implemented
+exactly as specified in the new `can_tp_trigger_sender.py`, replacing
+`can_tp_echo_responder.py` outright (git `rm` + new file, not a rename --
+the whole interaction model changed): `FrameNode.subscribe()` listens for
+the plain trigger frame (no plugin involved for that side), and
+`CanTpHandle.send()` fires once per trigger with `bytes(i % 256 for i in
+range(length))`.
+
+Verified on real hardware (`agn-testcomputer`) on an isolated test
+gateway/`vcan0` pair, the user's own live session confirmed untouched
+throughout, matching the user's own example values as this node's
+defaults (`--trigger-id 0x111`, `--source-addr 0x200`,
+`--target-addr 0x201`) so it works out of the box with no flags:
+- `cansend vcan0 111#0A` -> `0x200  10 0A 00 01 02 03 04 05` (First
+  Frame, length 10) -- exactly the user's own worked example.
+- `cansend vcan0 201#300000CCCCCCCCCC` (Flow Control) ->
+  `0x200  21 06 07 08 09 CC CC CC` (Consecutive Frame) -- again exactly
+  matching the user's example byte-for-byte.
+- A 20-byte variant produced a First Frame plus two Consecutive Frames
+  with the full `00`-`13` sequence intact across both, confirming
+  multi-CF segmentation (not just the single-CF case above).
+- A length <= 7 (`cansend vcan0 111#06`) correctly produced a Single
+  Frame instead of segmenting -- the plugin choosing the right frame type
+  on its own, not something this node has to decide.
+- Empty/RTR trigger payload correctly fell back to `--default-length`
+  (8); an explicit `00` length byte correctly sent nothing and logged
+  "0 bytes -- nothing to send" instead of a degenerate send attempt.
+- Plugin-not-loaded case: `configure()` raised (`CanTpHandle` doesn't
+  catch `grpc.RpcError`, see below), caught by `ensure_configured()`,
+  printing the exception's own specific message rather than guessing.
+
+Testing the gateway-restart scenario end-to-end (not just "does it crash")
+surfaced a second real, closeable gap: `state["configured"]` has no way
+to know the gateway restarted (and wiped the plugin's N-SDU session)
+until an actual `configure()`/`send()` call fails -- nothing else
+invalidates it. Without a retry, the *first* trigger after any restart
+hit `send()`'s `FAILED_PRECONDITION` ("no N-SDU connection configured"),
+got logged as a failure, and was silently dropped -- only the *second*
+trigger would actually go out. Fixed by retrying once within the same
+trigger event: on a `send()` failure, discard the `CanTpHandle`
+(same reasoning as `FrameNode._reconnect()`), reconfigure, and retry that
+same payload immediately before giving up on it. Re-verified after the
+fix by killing and restarting the gateway, waiting only for `FrameNode`'s
+own background stream to reconnect (no other warm-up), then sending a
+*single* trigger cold -- both a short (Single Frame) and a 20-byte
+(First Frame + 2 CFs) case succeeded on that one trigger, confirmed on
+the wire and via a log showing the self-heal ("send() raised (...);
+reconfiguring and retrying this trigger once...") followed by no further
+error.
+
+Full account, including the original design and why it didn't hold up,
+in the "plugin-based example node scripts" entry above (marked
+superseded) and `test/WebUIs.md`'s `TC_WebUIs_012`.
 
 ## Next steps (not started)
 

@@ -32,7 +32,7 @@
   - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|replay|frame|can|eth|pdu|can-tp|plugin|...`)
   - `config/` — PDU database JSON files
   - `demo/` — Demo node scripts (not web UI; scenario-specific, e.g. `cyclic_sender_node.py`'s CAN-ID start/stop trigger)
-  - `nodes/` — General-purpose node scripts, discoverable/runnable two ways: `ui/control_panel.py`'s "Nodes" web UI (any `.py` file not prefixed `_`, auto-listed with its module docstring's first line), and `ui/launcher_agent.py`/`admin_gui`'s Nodes tab (same discovery, but as a tracked, multi-node, multi-host registry -- see "Launcher Agent"/"Admin GUI" below). Each script accepts `--address` (default `None`, so `BOAT_HOST` decides when omitted) and its own behavior flags -- see `cyclic_can_sender.py` (configurable periodic CAN(FD) frame) and `can_request_responder.py` (replies to one CAN ID with a fixed response) for the raw-CAN pattern, or `pdu_cyclic_publisher.py`/`can_tp_echo_responder.py` for the equivalent pattern **through a plugin** (`pdu_router`/`can_tp` respectively) instead of the gateway's core FrameSink -- see "Plugin-based node scripts" below. `control_panel.py` always passes `--address <its gateway field>` explicitly; `launcher_agent.py` sets `BOAT_HOST` in the spawned process's env instead -- both work since `--address` defaults to `None`.
+  - `nodes/` — General-purpose node scripts, discoverable/runnable two ways: `ui/control_panel.py`'s "Nodes" web UI (any `.py` file not prefixed `_`, auto-listed with its module docstring's first line), and `ui/launcher_agent.py`/`admin_gui`'s Nodes tab (same discovery, but as a tracked, multi-node, multi-host registry -- see "Launcher Agent"/"Admin GUI" below). Each script accepts `--address` (default `None`, so `BOAT_HOST` decides when omitted) and its own behavior flags -- see `cyclic_can_sender.py` (configurable periodic CAN(FD) frame) and `can_request_responder.py` (replies to one CAN ID with a fixed response) for the raw-CAN pattern, or `pdu_cyclic_publisher.py`/`can_tp_trigger_sender.py` for the equivalent pattern **through a plugin** (`pdu_router`/`can_tp` respectively) instead of the gateway's core FrameSink -- see "Plugin-based node scripts" below. `control_panel.py` always passes `--address <its gateway field>` explicitly; `launcher_agent.py` sets `BOAT_HOST` in the spawned process's env instead -- both work since `--address` defaults to `None`.
 - **`ui/`** — 7 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, recorder:8083, control_panel, debug, system_dashboard)
 - **`tools/`** — 2 standalone tools (pdu_editor:8087, trace_analyzer:8088)
 - **`traces/`** — Trace output directory (gitignored)
@@ -178,7 +178,7 @@ state along with the connection -- a node using either must re-run
 `configure_route()`/`configure()` on reconnect, not just retry the data
 call, or it'll keep silently talking to a route/session that no longer
 exists server-side. `nodes/pdu_cyclic_publisher.py` (`pdu_router` plugin)
-and `nodes/can_tp_echo_responder.py` (`can_tp` plugin) are the reference
+and `nodes/can_tp_trigger_sender.py` (`can_tp` plugin) are the reference
 examples for this pattern -- each requires its plugin loaded via
 `BOAT_NODE_PLUGINS` (see their docstrings for the exact flag) and prints a
 clear "is the plugin loaded?" hint if `configure()`/`configure_route()`
@@ -187,8 +187,20 @@ fails. One asymmetry worth knowing if writing a new one:
 return `False`; `CanTpHandle.configure()`/`send()`/`subscribe()`
 (`sdk/python/boat/can_tp.py`) do **not** -- they raise. A node built on
 `CanTpHandle` needs its own `try/except` around those calls (see
-`can_tp_echo_responder.py`'s reconnect loop) or a transient disconnect
-crashes it instead of retrying.
+`can_tp_trigger_sender.py`'s `ensure_configured()`) or a transient
+disconnect crashes it instead of retrying.
+
+`can_tp_trigger_sender.py` is a rework of an earlier version
+(`can_tp_echo_responder.py`) that tried to echo back whatever ISO-TP
+message it received -- discovered on real hardware to be untestable by
+hand: reassembling an incoming multi-frame message requires being a full
+ISO-TP *requester* yourself (send Consecutive Frames in response to the
+plugin's own Flow Control), not something a single `cansend` can do. The
+rework flips the direction: a plain CAN trigger frame (no plugin
+involved) causes the node to `send()` a fresh incrementing-byte payload
+through the plugin's own segmentation -- a human only needs to supply
+Flow Control by hand to watch a real multi-frame exchange, which
+`cansend` *can* do. See `backlog/nodes_backlog.md` for the full account.
 
 ## UI services
 
