@@ -445,25 +445,28 @@ steps above.
 **Preconditions:**
 - Two agent-managed instances running (one with a plugin config, an eth
   interface, and an explicit gRPC port) plus one externally-started
-  process on the same host
+  process on the same host; one node defined, targeting one of the
+  instances
 
 **TestSteps:**
 1. **Save Session…** to a file; inspect its contents
-2. Stop+delete both managed instances and kill the external process (wipe
-   the host clean)
+2. Stop+delete both managed instances, the node, and kill the external
+   process (wipe the host clean)
 3. In a **fresh** app instance with no hosts configured, **Load
    Session…** that file
-4. Inspect the resulting hosts and instances
+4. Inspect the resulting hosts, instances, and nodes
 
 **Expected:**
 - Step 1's file contains exactly the two agent-managed instances with
   every field (interfaces, plugin path+config, port, gateway binary)
-  matching what was actually running; the external process is absent
-- Step 3/4: the host is added, and both instances are defined again with
-  fields matching the saved definitions exactly, under **new** ids -- but
-  left **stopped** (unlike `docker-compose up`, Load Session does not
-  start anything automatically -- confirmed per user request after the
-  first pass of this feature auto-started them)
+  matching what was actually running, and the node with every field
+  (script path, target host, extra args) matching; the external process
+  is absent
+- Step 3/4: the host is added, and both instances plus the node are
+  defined again with fields matching the saved definitions exactly, under
+  **new** ids -- but left **stopped** (unlike `docker-compose up`, Load
+  Session does not start anything automatically -- confirmed per user
+  request after the first pass of this feature auto-started them)
 
 **Verdict:** OK
 
@@ -485,6 +488,26 @@ original definitions exactly under **different** ids than the originals
 explicitly changed per user request, re-verified separately that a loaded
 instance's `status` is `"stopped"` with `pid: null` immediately after
 `load_session()` returns, not automatically running.
+
+**Update (2026-08-17):** extended to cover the Nodes tab per user request
+("include the nodes in the save/load session"). Verified two ways on real
+hardware (`agn-testcomputer`), the user's own live session confirmed
+untouched throughout: (1) headless, calling `session.py` directly against
+a live agent -- created one instance and one node
+(`script_path=can_tp_trigger_sender.py`, `target_host=localhost:50051`,
+`extra_args=[--iface, vcan0]`), saved, deleted both originals, reloaded --
+both recreated with every field matching exactly, `status: "stopped"`; (2)
+through real Qt code (`QT_QPA_PLATFORM=offscreen`) driving
+`MainWindow.save_session()`/`load_session()` with `QFileDialog`'s static
+methods monkeypatched to a fixed path so the actual button-click call
+path runs unattended -- identical result, plus confirmed the confirmation
+dialog reports both counts ("1 instance(s) and 1 node(s) created"). A
+leftover duplicate `HostStore` entry from earlier testing this session
+(two names pointing at the same physical agent) caused a confusing first
+pass with doubled counts on both instances and nodes -- not a bug in this
+feature, correct behavior for two distinct host entries that both happen
+to alias the same agent; cleaned up and re-verified cleanly with one host
+entry.
 
 ---
 

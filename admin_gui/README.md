@@ -47,8 +47,8 @@ either way it's the same `xcb` plugin doing the rendering).
    `ui/launcher_agent.py` already running there (`python3 ui/launcher_agent.py`,
    default port 8090). Hosts persist across runs in `~/.boat/admin_hosts.json`.
    **Save Session…** / **Load Session…** capture/restore *all* hosts and
-   their agent-managed instance definitions at once, docker-compose-style
-   — see the dedicated section below.
+   their agent-managed instance and node definitions at once,
+   docker-compose-style — see the dedicated section below.
 2. The instance table (Host, Name, ID, Port, Status, PID, **Managed**,
    Interfaces, Plugins, Uptime) aggregates every instance from every added
    host, refreshing every 2 seconds. A host's dot in the host list is
@@ -160,17 +160,20 @@ own:
 - No **Managed** column or external-process discovery -- every row here is
   something this agent created; arbitrary Python scripts aren't reliably
   identifiable by process name the way `boat_gateway` is, so unmanaged node
-  discovery isn't attempted.
-- **Save/Load Session** does not currently cover nodes -- only the
-  Gateways tab's instances are captured in a session file.
+  discovery isn't attempted. (This also means every node -- not just
+  agent-managed ones -- is captured by **Save Session…**, unlike the
+  Gateways tab where only `Managed: Yes` rows are.)
 
 ## Session files (save/load your whole setup)
 
 **Save Session…** writes every added host and its **agent-managed**
 instance *definitions* (name, interfaces, plugins+configs, port, tick
-settings, gateway binary) to a YAML file, docker-compose-style — a recipe,
-not a live snapshot. Externally-discovered (`Managed: No`) rows are never
-included, since there's no owned definition to save for them.
+settings, gateway binary) **and every node definition** (name, script
+path, target gateway, extra args) to a YAML file, docker-compose-style —
+a recipe, not a live snapshot. Externally-discovered (`Managed: No`)
+gateway rows are never included, since there's no owned definition to
+save for them; every node is included, since every node is agent-created
+already (see the Nodes tab section above).
 
 ```yaml
 version: '1'
@@ -188,18 +191,29 @@ hosts:
     tick_ms: null
     tick_us: null
     gateway_bin: /home/.../boat_gateway
+  nodes:
+  - name: responder
+    script_path: /home/.../nodes/can_request_responder.py
+    target_host: localhost:50051
+    extra_args: [--iface, vcan0, --request-id, '0x7E0']
 ```
 
 **Load Session…** adds every host in the file (skipping ones already
-present) and, for every saved instance, creates a fresh one from that
-definition — left **stopped** (unlike `docker-compose up`, loading does
-not start anything automatically; review the table and hit Start on what
-you want). It's a recipe replay either way: a loaded instance never
-resumes the exact old process, it gets a new id every time. Loading the
-same file twice against a host that still has those instances *running*
-will hit a port conflict on the second load (the saved `grpc_port` is
-explicit, not auto-allocated) — stop/remove first if you want to reload
-cleanly.
+present) and, for every saved instance and node, creates a fresh one from
+that definition — left **stopped** (unlike `docker-compose up`, loading
+does not start anything automatically; review the tables and hit Start on
+what you want). It's a recipe replay either way: a loaded instance/node
+never resumes the exact old process, it gets a new id every time. A
+node's saved `target_host` is whatever concrete address it already
+resolved to (e.g. `localhost:50051`) — it just needs that address to be
+reachable after the load, not the *other* host to be in this same session
+file (a node can point at a gateway on a host this session doesn't even
+list). Loading the same file twice against a host that still has those
+instances *running* will hit a port conflict on the second load for
+instances (the saved `grpc_port` is explicit, not auto-allocated) — nodes
+have no such conflict (no port of their own) and will just create
+additional, separate node rows — stop/remove first if you want to reload
+cleanly either way.
 
 ## What's not here yet
 
@@ -208,8 +222,8 @@ cleanly.
   interface setup on a given host for now.
 - No persistence for *instance/node definitions* on the agent side — an
   agent restart forgets stopped instances and nodes (see the backlog docs).
-  Session files are the client-side answer to this for Gateways (save
-  before a restart, reload after), but there's still no automatic recovery,
-  and session files don't cover Nodes yet.
+  Session files are the client-side answer to this (save before a
+  restart, reload after — covers both Gateways and Nodes), but there's
+  still no automatic recovery.
 - No auth — same trust model as every other `ui/*.py`/`tools/*.py` service
   in this repo today (assumes a trusted lab network).

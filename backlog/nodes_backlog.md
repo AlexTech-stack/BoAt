@@ -635,14 +635,60 @@ had already been aborted by the watchdog before the late FC arrived,
 confirming the "miss it and it aborts" claim is accurate, not just
 theoretical.
 
+## Done (2026-08-17, continued) — Nodes included in Save/Load Session
+
+User feedback: "Now lets include the nodes in the save/load session" --
+`session.py` previously only captured Gateway instance definitions
+(`_INSTANCE_FIELDS`); nodes were entirely absent from a saved YAML file
+despite the Nodes tab existing since 2026-08-13.
+
+- `session.save_session()` gained a `node_snapshot` parameter (mirroring
+  the existing `snapshot` one -- same `{host_url: {"name", "nodes"/
+  "instances": [...]}}` shape `MainWindow` already tracks from its
+  poller) and writes a `nodes:` list alongside each host's `instances:`
+  list, capturing `_NODE_FIELDS = ("name", "script_path", "target_host",
+  "extra_args")`. Unlike instances, no `managed` filter is needed --
+  every node is agent-created already (no external-discovery concept for
+  nodes at all, see the Nodes tab's own docs).
+- `session.load_session()` now also calls `client.create_node(...)` for
+  every saved node, left **stopped** like everything else Load Session
+  creates. Return signature changed from `(hosts, count, errors)` to
+  `(hosts, instances_created, nodes_created, errors)` -- `MainWindow`'s
+  `save_session()`/`load_session()` updated to match (passes
+  `self._node_snapshot` through; unpacks and reports both counts in the
+  confirmation dialog).
+- A node's `target_host` round-trips as whatever concrete address it had
+  already resolved to (e.g. `localhost:50051`) -- no cross-referencing
+  logic needed, and deliberately so: it only needs that address to be
+  reachable after the load, not the gateway it points at to be listed in
+  the same session file, so a node can validly point at a host this
+  session doesn't even mention.
+
+Verified on real hardware (`agn-testcomputer`) two ways, the user's own
+live session confirmed untouched throughout (a leftover duplicate
+`HostStore` entry from earlier testing this session -- two names pointing
+at the same physical agent -- caused a confusing first pass with doubled
+node/instance counts; not a bug in this feature, just stale test-side
+host-list state, cleaned up before re-verifying cleanly):
+1. Headless, calling `session.py`'s functions directly against a live
+   agent (no Qt): created one instance + one node, saved, deleted both
+   originals, reloaded -- both recreated with every field matching
+   exactly (script path, target host, extra args byte-for-byte), status
+   `stopped`.
+2. Through real Qt code (`QT_QPA_PLATFORM=offscreen`), driving
+   `MainWindow.save_session()`/`load_session()` directly with
+   `QFileDialog`'s static methods monkeypatched to a fixed path (so the
+   actual button-click call path runs without a human at a native
+   dialog): identical result, plus confirmed the confirmation dialog's
+   text reports both counts correctly ("1 instance(s) and 1 node(s)
+   created").
+
 ## Next steps (not started)
 
 - More node scripts as real needs surface -- four now cover raw-CAN
   send/responder and PDU-route/CanTp-session plugin examples; still not a
   complete ECU simulation library (Ethernet/PDU-database/SOME-IP examples
   are still unwritten).
-- Session save/load doesn't cover Nodes yet -- only Gateway instances are
-  captured in a session file today.
 - Node instance persistence across an agent restart -- same in-memory-only
   gap as gateway instances (`backlog/launcher_agent_backlog.md`).
 - Scenarios/Simulations/Replays panels are still a separate, unstarted

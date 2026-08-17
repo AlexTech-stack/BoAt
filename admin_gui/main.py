@@ -1291,14 +1291,14 @@ class MainWindow(QMainWindow):
     # ── Session save/load ───────────────────────────────────────────────
 
     def save_session(self) -> None:
-        """Snapshots the current hosts + their agent-managed instance
-        *definitions* (not externally-discovered ones -- see session.py) to
-        a YAML file, docker-compose-style."""
+        """Snapshots the current hosts + their agent-managed instance and
+        node *definitions* (not externally-discovered instances -- see
+        session.py) to a YAML file, docker-compose-style."""
         path, _ = QFileDialog.getSaveFileName(self, "Save Session", "session.yaml", "YAML files (*.yaml *.yml)")
         if not path:
             return
         try:
-            session.save_session(path, self.host_store.list(), self._snapshot)
+            session.save_session(path, self.host_store.list(), self._snapshot, self._node_snapshot)
         except OSError as e:
             QMessageBox.warning(self, "Save Session", f"Failed to write file: {e}")
             return
@@ -1306,15 +1306,15 @@ class MainWindow(QMainWindow):
 
     def load_session(self) -> None:
         """Adds every host in the file (skipping ones already present) and
-        re-creates every saved instance definition, left **stopped** --
-        review the table and Start what you want. A recipe replay, not a
-        resume: each loaded instance gets a fresh id, not the one it had
-        when saved."""
+        re-creates every saved instance/node definition, left **stopped** --
+        review the tables and Start what you want. A recipe replay, not a
+        resume: each loaded instance/node gets a fresh id, not the one it
+        had when saved."""
         path, _ = QFileDialog.getOpenFileName(self, "Load Session", "", "YAML files (*.yaml *.yml)")
         if not path:
             return
         try:
-            hosts_to_add, created_count, errors = session.load_session(path)
+            hosts_to_add, instances_created, nodes_created, errors = session.load_session(path)
         except (OSError, yaml.YAMLError) as e:
             QMessageBox.warning(self, "Load Session", f"Failed to read file: {e}")
             return
@@ -1326,9 +1326,11 @@ class MainWindow(QMainWindow):
             except ValueError:
                 pass  # already present -- fine, reuse the existing entry
         self.refresh_host_list()
-        msg = f"Session loaded: {added} new host(s) added, {created_count} instance(s) created (stopped -- start them from the table)."
+        msg = (f"Session loaded: {added} new host(s) added, {instances_created} "
+               f"instance(s) and {nodes_created} node(s) created (stopped -- "
+               f"start them from the tables).")
         if errors:
-            msg += "\n\nSome instances failed:\n" + "\n".join(errors)
+            msg += "\n\nSome items failed:\n" + "\n".join(errors)
             QMessageBox.warning(self, "Load Session", msg)
         else:
             QMessageBox.information(self, "Load Session", msg)
