@@ -39,14 +39,19 @@ software involvement) before building anything.
 - **`env_can_loopback.json`** -- physical `can0`/`can1` environment,
   harness-spawned gateway on `localhost:50067` (a scratch port, to avoid
   colliding with anything else running).
-- **`can_loopback_routing_test.py`** -- the actual test: sends N
+- **`can_loopback_routing_test.py`** -- the actual test: injects N
   sequence-tagged frames via the gateway's `FrameService.SendFrame` on
-  `can0`, observes arrivals on `can1` via a *raw SocketCAN read*
-  (`python-can`), deliberately not a second gRPC round trip, so the
-  receive-side timestamp isn't itself inflated by gRPC/Python overhead.
-  Checks payload equality, per-frame latency, and exactly-once delivery
-  (no drops). Exit code 0/1 matches `TestSuiteRunner`'s subprocess
-  contract.
+  `can0` (so the gateway's own API is genuinely exercised, not bypassed),
+  and measures routing time as `TS_message_on_can1 - TS_message_on_can0`
+  with **both** timestamps taken from raw SocketCAN reads (`python-can`)
+  -- `can0` has `CAN_RAW_LOOPBACK` enabled (verified with a real
+  `candump`/`cansend` round trip, not just assumed from the interface's
+  "ECHO" flag), so the gateway's own outbound write is independently
+  observable there with a genuine kernel timestamp too, deliberately
+  excluding the gRPC client call's own latency from the calculation
+  entirely -- see "Latency methodology, resolved" below for why. Checks
+  payload equality, routing time, and exactly-once delivery (no drops).
+  Exit code 0/1 matches `TestSuiteRunner`'s subprocess contract.
 - **`manifest_can_loopback.json`** -- one test entry wiring the two
   together.
 
@@ -109,20 +114,64 @@ executed with a real timeout, and all four report formats generated
 in a per-test timestamped folder. Unit tests (`test_test_check.py`,
 `test_test_runner.py`) all pass, including the two new ones.
 
-**Test result**: 100/100 frames received, zero drops, every payload
-matched exactly -- both the "payload shall not change" and "no message
-drops" requirements are met cleanly. The "under 1ms" latency requirement
-was **not** met as measured: 1.24-32.7ms per frame (mean ~2.5ms,
-excluding one 32.7ms first-call outlier). Isolated the cause with a
-follow-up diagnostic (not committed, throwaway): calling `send_can()`
-alone in a tight loop, with no CAN reception involved at all, already
-costs 1.2-3.6ms per call (mean ~2.9ms) -- essentially the *entire*
-measured "routing time" is Python/gRPC client-side call overhead on the
-sending side, not the gateway's internal dispatch, which is architecturally
-event-driven (a dedicated blocking-read RX thread per CAN interface,
-`src/hil/hil_bridge.cpp`, dispatching to subscribers immediately -- not
-gated by the simulation tick) and was never a plausible bottleneck at
-this scale to begin with.
+**First result (v1 design, superseded)**: 100/100 frames received, zero
+drops, every payload matched exactly -- both the "payload shall not
+change" and "no message drops" requirements met cleanly from the start.
+The "under 1ms" requirement was **not** met as originally measured
+(`t_send = time.time()` immediately before the gRPC call, vs. the
+receive-side kernel timestamp): 1.24-32.7ms per frame (mean ~2.5ms).
+Isolated the cause with a follow-up diagnostic (throwaway, not
+committed): calling `send_can()` alone in a tight loop, with no CAN
+reception involved at all, already costs 1.2-3.6ms per call (mean
+~2.9ms) -- essentially the *entire* originally-measured "routing time"
+was Python/gRPC client-side call overhead on the sending side, not the
+gateway's internal dispatch.
+
+### Latency methodology, resolved
+
+Asked the user directly rather than guessing which was intended. Answer:
+"What we are testing is the routing time of our fictitious Gateway DUT,
+it routes everything from can0 to can1 and vice versa... `TS_Message_on_
+can1 - TS_Message_on_can0`[,] is it possible to remove the gRPC time from
+this calculation... the performance (of the boat gw) is not so relevant
+for this show test case[,] the latency can also be chosen bigger e.g. 5ms
+as long as the approach is correct." Also asked, sharply: "our default
+tick is 1ms so sub-1ms accuracy is not given here, right? Or does the
+tick not affect the sending/receiving from the bus?" -- worth verifying
+precisely rather than guessing, so traced the actual send/receive code
+paths before answering:
+- Send: `FrameService.SendFrame` → `FrameSink::Publish` →
+  `CanBusRegistry::SendFrame` → `HilBridge::SendFrame` →
+  `driver_->WriteFrame()` -- fully synchronous, inline in the gRPC
+  handler's own thread.
+- Receive: each CAN interface has its own dedicated blocking-read RX
+  thread (`src/hil/hil_bridge.cpp`), dispatching to subscribers
+  immediately on arrival.
+- Neither path touches the tick loop at all -- `BOAT_NODE_TICK_MS`
+  (confirmed default **1ms**, `main.cpp:427`, not the test-framework
+  config schema's own unrelated `tick_ms: 10` default) only drives plugin
+  `on_tick()` callbacks (e.g. CanTp's STmin pacing/N_Bs/N_Cr timeouts),
+  never raw `FrameService` CAN send/receive. So the user's instinct that
+  the tick *might* matter was reasonable to check, but for this specific
+  path it doesn't -- sub-tick, sub-millisecond measurement of the
+  gateway's own internal routing is architecturally sound.
+
+Rebuilt the test per the resolved design: inject via the gateway's real
+`SendFrame` (still genuinely exercising the DUT), but measure
+`TS_message_on_can1 - TS_message_on_can0` with **both** timestamps from
+raw SocketCAN reads -- `can0` has `CAN_RAW_LOOPBACK` enabled (verified
+empirically, not assumed), so the gateway's own outbound write is
+independently observable there with a real kernel timestamp, and the
+gRPC call's own latency (spent before the frame ever reaches the wire)
+drops out of the calculation entirely. Default bound relaxed to 5ms per
+the user ("performance ... not so relevant for this show test case").
+
+**Result after the fix**: 100/100 received, zero drops, routing time
+**0.370-0.645ms** (mean 0.426ms, p99 0.645ms) -- comfortably under even
+the *original* 1ms bar once gRPC overhead is correctly excluded, and
+using an environment config with the test-framework's own 10ms
+`tick_ms` default (not even the gateway's 1ms default), empirically
+reconfirming the tick has no bearing on this path.
 
 Also worth noting for whoever picks this up next: the test as built only
 exercises *half* of the gateway's job -- accepting a `SendFrame` call and
@@ -131,26 +180,18 @@ transceiver level, the receive side is observed via a raw SocketCAN read
 that never actually goes through the gateway's own `can1` RX thread →
 registry dispatch → `SubscribeFrames` path at all. A complete test would
 also cover that direction (inject a frame via raw `cansend`, observe it
-arrive via the gateway's own `SubscribeFrames`) -- not built yet, since
-the latency-methodology question below seemed worth resolving with the
-user first rather than doubling the scope on an unresolved premise.
+arrive via the gateway's own `SubscribeFrames`) -- not built yet, left as
+an open question below rather than assumed in scope.
 
 ## Open questions for whoever continues this (not resolved, need the user's input)
 
-- **Is the <1ms bar meant to include gRPC/Python client call overhead, or
-  only the gateway's own internal dispatch?** As measured (client-call-
-  inclusive), it isn't met and, per the diagnostic above, mechanically
-  can't be with a synchronous per-call Python/gRPC client in the loop --
-  the call overhead alone exceeds it. If the intent is "the gateway's own
-  internal latency," a different measurement approach is needed (e.g.
-  instrumenting the gateway itself, or a lower-overhead client) rather
-  than tightening anything in this test.
 - Should the receive-direction (wire → gateway's own `SubscribeFrames`)
-  also be tested, per the gap noted above?
+  also be tested, per the gap noted above, for a genuinely complete
+  round-trip routing-time picture?
 - The admin_gui integration question this whole investigation was in
   service of is still open -- see the chat conversation (not restated
   here) for the three shapes considered (new "Test Runs" tab reusing the
   Nodes plumbing; deeper `TestHarness`↔`launcher_agent` integration;
   view-only report browsing). Now that the underlying framework is
-  confirmed to actually work, this is unblocked whenever the user wants
-  to pick it up.
+  confirmed to actually work, and this specific real test passes cleanly,
+  this is unblocked whenever the user wants to pick it up.
