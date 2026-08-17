@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "name": "can-loopback-routing-suite",
+  "description": "Verifies the gateway's send-to-wire-to-receive CAN frame path on real hardware: payload integrity, per-frame latency (<1ms), and no drops -- using can0/can1 wired onto one shared physical bus as a DUT-free stand-in.",
+  "environment_config": "config/tests/env_can_loopback.json",
+  "tests": [
+    {
+      "id": "TC_CANLOOP_001",
+      "name": "can0->can1 routing: payload, latency, no drops",
+      "description": "100 sequence-tagged frames sent via the gateway on can0, observed arriving on can1 via raw SocketCAN.",
+      "file": "python3 config/tests/can_loopback_routing_test.py --address localhost:50067 --tx-iface can0 --rx-iface can1 --count 100 --max-latency-ms 1.0",
+      "timeout_s": 30
+    }
+  ]
+}

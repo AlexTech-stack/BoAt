@@ -40,6 +40,19 @@ class _GatewayManager:
             env = os.environ.copy()
             env["BOAT_CAN_INTERFACES"] = self._build_can_ifaces()
             env["BOAT_ETH_INTERFACES"] = self._build_eth_ifaces()
+            # Without these, the spawned gateway always starts on its
+            # hardcoded default port/tick regardless of what this
+            # environment config's gateway.address/tick_ms actually say --
+            # every example config under config/tests/ happens to use the
+            # default port (localhost:50051), which is exactly why this
+            # went unnoticed until a real run against a non-default port
+            # (localhost:50067) hung in _wait_for_ready() polling a port
+            # nothing was ever listening on.
+            port = self._address_port()
+            if port is not None:
+                env["BOAT_GRPC_PORT"] = str(port)
+            if self._config.tick_ms:
+                env["BOAT_NODE_TICK_MS"] = str(self._config.tick_ms)
 
             self._process = subprocess.Popen(
                 [binary],
@@ -49,6 +62,14 @@ class _GatewayManager:
             )
             self._wait_for_ready(timeout=15)
         return self._config.address
+
+    def _address_port(self) -> Optional[int]:
+        addr = self._config.address or ""
+        _, _, port_str = addr.rpartition(":")
+        try:
+            return int(port_str)
+        except ValueError:
+            return None
 
     def _build_can_ifaces(self) -> str:
         ifaces = [
@@ -68,6 +89,27 @@ class _GatewayManager:
         deadline = time.monotonic() + timeout
         last_err = ""
         while time.monotonic() < deadline:
+            if self._process is not None and self._process.poll() is not None:
+                # Exited already -- no point waiting out the rest of the
+                # timeout on a channel probe that was never going to
+                # succeed. The real reason is on stderr, not the generic
+                # "connection refused" a channel probe would eventually
+                # report; surface it directly instead of a plain timeout
+                # message that gives no hint what actually went wrong
+                # (found the hard way: manually reproducing the exact
+                # spawn was the only way to diagnose the BOAT_GRPC_PORT
+                # bug this same investigation also fixed).
+                stderr = ""
+                if self._process.stderr is not None:
+                    try:
+                        stderr = self._process.stderr.read().decode(errors="replace")[-2000:]
+                    except Exception:
+                        pass
+                raise TestGatewayError(
+                    f"Gateway process exited early (code {self._process.returncode}) "
+                    f"before becoming ready at {self._config.address}"
+                    + (f":\n{stderr}" if stderr else "")
+                )
             try:
                 channel = grpc.insecure_channel(self._config.address)
                 grpc.channel_ready_future(channel).result(timeout=3)

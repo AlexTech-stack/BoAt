@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "name": "can-loopback-routing",
+  "description": "Physical can0/can1 wired onto one shared bus -- a DUT-free HIL stand-in for verifying the gateway's own send-to-wire-to-receive frame path (not a PduRouter routing feature -- physical CAN buses are broadcast, so anything sent on either interface's transceiver is seen by both). Used by manifest_can_loopback.json's routing test: payload integrity, per-frame latency, and no drops/duplicates between can0 (send) and can1 (observe).",
+  "gateway": {
+    "binary": "./build/debug/src/gateway/grpc_gateway/boat_gateway",
+    "tick_ms": 10,
+    "address": "localhost:50067"
+  },
+  "buses": {
+    "can_tx": { "type": "physical", "interface": "can0" },
+    "can_rx": { "type": "physical", "interface": "can1" }
+  }
+}

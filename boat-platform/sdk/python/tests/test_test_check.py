@@ -47,3 +47,27 @@ class TestCheckEnvironment:
         )
         issues = check_environment(cfg)
         assert len(issues) == 0
+
+    def test_physical_can_with_bound_driver_is_clean(self) -> None:
+        # device/driver is a symlink to the driver's own sysfs directory
+        # (e.g. /sys/bus/usb/drivers/peak_usb), not a regular file --
+        # open(path).read() (what _read_sysfs does for plain attributes
+        # like operstate) always raises IsADirectoryError against it,
+        # regardless of whether a driver is genuinely bound. This is the
+        # real-hardware bug _read_driver_link() exists to fix: verified
+        # against a real PEAK-USB dongle on agn-testcomputer, where this
+        # path previously reported "no driver detected" unconditionally.
+        cfg = _make_config(bus_type="physical", iface="can0")
+        with patch("os.path.exists", return_value=True), \
+             patch("boat.test.check._read_sysfs", return_value="up"), \
+             patch("os.readlink", return_value="/sys/bus/usb/drivers/peak_usb"):
+            issues = check_environment(cfg)
+            assert len(issues) == 0, issues
+
+    def test_physical_can_with_no_driver_bound(self) -> None:
+        cfg = _make_config(bus_type="physical", iface="can0")
+        with patch("os.path.exists", return_value=True), \
+             patch("boat.test.check._read_sysfs", return_value="up"), \
+             patch("os.readlink", side_effect=OSError("no such file")):
+            issues = check_environment(cfg)
+            assert any("no driver detected" in i for i in issues)

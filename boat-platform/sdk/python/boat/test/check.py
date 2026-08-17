@@ -47,9 +47,7 @@ def _check_can_interfaces(config: EnvironmentConfig, issues: list[str]) -> None:
             operstate = _read_sysfs(f"{sys_path}/operstate") or "unknown"
             if operstate != "up":
                 issues.append(f"Physical CAN '{iface}' ({name}) state is '{operstate}', expected 'up'")
-            driver = _read_sysfs(f"{sys_path}/device/driver")
-            if driver:
-                driver = os.path.basename(driver)
+            driver = _read_driver_link(f"{sys_path}/device/driver")
             if not driver:
                 issues.append(f"Physical CAN '{iface}' ({name}): no driver detected")
 
@@ -93,5 +91,18 @@ def _read_sysfs(path: str) -> Optional[str]:
     try:
         with open(path) as f:
             return f.read().strip()
+    except OSError:
+        return None
+
+
+def _read_driver_link(path: str) -> Optional[str]:
+    """sysfs's <iface>/device/driver is a symlink to the driver's own
+    sysfs directory (e.g. /sys/bus/usb/drivers/peak_usb), not a regular
+    file -- open(path).read() (what _read_sysfs() does for plain
+    attributes like operstate) always raises IsADirectoryError against
+    it, silently returning None regardless of whether a driver is
+    actually bound. Resolve it as a symlink instead."""
+    try:
+        return os.path.basename(os.readlink(path))
     except OSError:
         return None

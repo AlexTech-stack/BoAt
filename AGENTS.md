@@ -123,6 +123,34 @@ Test binary naming: `boat_unit_*` (unit), `boat_integration_*`, `boat_hil_*`, `b
 
 Manual verification runbooks for specific feature areas live under `boat-platform/docs/testing/`, e.g. `cantp-plugin-manager-verification.md` (CanTp gRPC bridge, multi-instance `--iface`, `NodePluginService`/`boat plugin list`, PDU-bus dispatch).
 
+**Three distinct things are all called some variant of "test" in this
+repo -- worth being precise about which one is meant:**
+1. `ctest`/`pytest` above -- unit/integration tests of the codebase itself.
+2. `test/*.md` (`test/Structure.md`: TestSuite → TestSet → TestCase) --
+   the **manual**, hand-verified record used for release sign-off; every
+   TestCase's Verdict/Result was produced by an actual human/agent
+   running it against real hardware, not by any script. Never update
+   these verdicts programmatically.
+3. `boat test run <manifest.json>` (`boat_cli/test.py` +
+   `sdk/python/boat/test/`) -- a separate, **automated** CI-style HIL
+   suite runner: `EnvironmentConfig` (gateway/buses/DUT/plugins, JSON,
+   `config/tests/env_*.json`) + `ManifestConfig` (setup/teardown actions
+   + a list of test-file subprocesses to run, JSON) → `TestSuiteRunner`
+   spins up (or connects to, if `gateway.binary` is left unset) one
+   gateway per run, executes each test file with a timeout
+   (sequentially or `--parallel N`), and writes a JSON/JUnit/HTML/
+   optional-Allure report per test. `boat test list-environments/
+   show-config/validate-config/check-env/run`. As of 2026-08-17 this had
+   never actually been executed end-to-end in this repo -- verifying it
+   for real surfaced and fixed two genuine bugs (a preflight check that
+   always falsely reported "no driver detected" for any physical CAN
+   interface, and a spawned-gateway port/tick that silently ignored the
+   environment config). See `backlog/test_runner_backlog.md` for the
+   full account, the real HIL test built to verify it
+   (`config/tests/{env,manifest}_can_loopback.json` +
+   `can_loopback_routing_test.py`), and open questions before anything
+   builds further on top of this (e.g. surfacing it in `admin_gui`).
+
 ## Python SDK / CLI
 
 ```bash
