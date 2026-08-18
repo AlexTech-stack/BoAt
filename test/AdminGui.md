@@ -897,3 +897,52 @@ non-`None` `result` instead of the `"stopped"` status text, since a
 freshly-created run is also reported `"stopped"` before it's ever started.
 Full account: `backlog/test_runner_backlog.md`'s "admin_gui Test Runs
 tab" entry.
+
+---
+
+### TC_AdminGui_019_test_run_report_viewer
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent with a finished test run (`Result: PASS` or `FAIL`)
+  selected in the Test Runs table
+
+**TestSteps:**
+1. Click **View Report**; inspect the dialog before the run has been
+   started (report_dir empty) and again after it finishes
+2. Inspect the tree's rows and the detail pane for the selected test
+3. Click **Refresh**
+
+**Expected:**
+- Before start: a clear "no report directory yet" message, no crash
+- After finish: summary label shows `<report_dir> — N/M passed`; one tree
+  row per manifest test entry (id, verdict -- color-coded PASS/FAIL/ERROR,
+  duration, summary); selecting a row shows that test's description,
+  verdict, duration, and which artifact files (`report.html`/`.junit.xml`/
+  stdout/stderr) exist alongside it
+- Refresh re-fetches without needing to reopen the dialog
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware (`agn-testcomputer`), on an isolated test agent
+(port 8097, the user's own live agent confirmed on 8090 and never
+touched), two ways. First via `curl` directly against
+`GET /api/test-runs/{id}/report`: `{"exists": false, "tests": []}` before
+starting (empty `report_dir`); a real parsed `report.json` after
+finishing, with the environment snapshot, execution timing, and verdict
+all present and correctly shaped; a 404 for an unknown run id. Then
+through the real Qt code path (Xvfb + `xcb`, a throwaway driver script,
+not committed): created and started a real test run through the actual
+agent, constructed the real `TestReportDialog` class against it (same
+class the **View Report** button opens), and confirmed
+`summary_label.text()` read `reports/admin_gui/<id> — 1/1 passed`, the
+tree held exactly one row (`TC_CANLOOP_001`, `PASS`, `1361ms`), and the
+detail pane's text included the real test description, `Verdict: PASS`,
+and `Also on disk in this folder (agent's host): report.html,
+report.junit.xml, stdout.txt`. A screenshot confirmed the tree (PASS row
+rendered in green) and detail pane visually. All test artifacts (test
+run, `reports/admin_gui/`, the isolated agent process, Xvfb, driver
+script) cleaned up afterward. Full account: `backlog/test_runner_backlog.md`'s
+"test report content viewer" entry.

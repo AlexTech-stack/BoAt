@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 import yaml
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -54,9 +55,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -195,6 +199,67 @@ def _format_test_run_args(run: dict) -> str:
 def _format_test_run_result(run: dict) -> str:
     result = run.get("result")
     return result if result else "—"
+
+
+_VERDICT_COLORS = {
+    "PASS": QColor("#2e7d32"),
+    "FAIL": QColor("#c62828"),
+    "ERROR": QColor("#c62828"),
+    "RUNNING": QColor("#f9a825"),
+    "SKIPPED": QColor("#757575"),
+}
+
+
+def _format_test_report_entry(entry: dict) -> str:
+    """Human-readable rendering of one test's report.json content for the
+    TestReportDialog's detail pane -- steps and their assertions, plus
+    which raw artifact files exist alongside it (report.html/.junit.xml/
+    stdout/stderr -- not fetched here, just flagged as present, since
+    actually browsing those means reaching the agent's host some other
+    way, same situation as the Report directory field itself)."""
+    report = entry.get("report")
+    if report is None:
+        return f"Folder: {entry.get('folder', '?')}\n\n{entry.get('error', 'no report.json')}"
+
+    test = report.get("test") or {}
+    execu = report.get("execution") or {}
+    lines = [
+        f"Folder: {entry.get('folder', '?')}",
+        f"Test:   {test.get('id', '?')} — {test.get('name', '')}",
+    ]
+    if test.get("description"):
+        lines.append(f"        {test['description']}")
+    lines.append(f"Verdict: {report.get('verdict', '?')}")
+    if execu.get("duration_ms") is not None:
+        lines.append(f"Duration: {execu['duration_ms']}ms")
+    if report.get("summary"):
+        lines.append(f"Summary: {report['summary']}")
+    lines.append("")
+
+    steps = report.get("steps", [])
+    for step in steps:
+        lines.append(f"Step {step.get('id', '?')}: {step.get('name', '')} [{step.get('verdict', '?')}]")
+        assertions = step.get("assertions", [])
+        for a in assertions:
+            lines.append(f"    [{a.get('result', '?')}] {a.get('expression', '')}"
+                          f" — expected={a.get('expected', '')} actual={a.get('actual', '')}")
+        if not assertions:
+            lines.append("    (no assertions recorded)")
+        lines.append("")
+    if not steps:
+        lines.append("(no steps recorded)")
+        lines.append("")
+
+    artifacts = [name for name, present in (
+        ("report.html", entry.get("has_html")),
+        ("report.junit.xml", entry.get("has_junit")),
+        ("stdout.txt", entry.get("has_stdout")),
+        ("stderr.txt", entry.get("has_stderr")),
+    ) if present]
+    if artifacts:
+        lines.append(f"Also on disk in this folder (agent's host): {', '.join(artifacts)}")
+
+    return "\n".join(lines)
 
 
 _KNOWN_ENV_VARS = {
@@ -1313,6 +1378,123 @@ class NewTestRunDialog(QDialog):
         }
 
 
+class TestReportDialog(QDialog):
+    """Renders a test run's report.json content inline -- fetched from the
+    agent's GET /api/test-runs/{id}/report, which reads report.json off
+    its own disk (one per manifest test entry, under report_dir) and hands
+    back the parsed content directly. Deliberately not a filesystem
+    browser: the whole point is this works from any client regardless of
+    whether admin_gui happens to be running on the same host as the agent
+    -- the same federated-host situation the Report directory field's own
+    "no Open button" is about (see AGENTS.md's Launcher Agent section and
+    ui/launcher_agent.py's _read_test_run_report())."""
+
+    def __init__(self, client: AgentClient, run_id: str, run_name: str, parent=None):
+        super().__init__(parent)
+        self.client = client
+        self.run_id = run_id
+        self.setWindowTitle(f"Test Report — {run_name or run_id}")
+        self.resize(820, 560)
+
+        layout = QVBoxLayout(self)
+
+        self.summary_label = QLabel("Loading…")
+        layout.addWidget(self.summary_label)
+
+        splitter = QSplitter(Qt.Vertical)
+
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(["Test", "Verdict", "Duration", "Summary"])
+        self.tree.itemSelectionChanged.connect(self._on_selection_changed)
+        splitter.addWidget(self.tree)
+
+        self.detail_view = QPlainTextEdit()
+        self.detail_view.setReadOnly(True)
+        splitter.addWidget(self.detail_view)
+        splitter.setSizes([220, 340])
+        layout.addWidget(splitter, 1)
+
+        btns = QHBoxLayout()
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.reload)
+        btns.addWidget(refresh_btn)
+        btns.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
+
+        self._entries: list = []
+        self.reload()
+
+    def reload(self) -> None:
+        try:
+            data = self.client.get_test_run_report(self.run_id)
+        except AgentError as e:
+            self.summary_label.setText(f"Failed to load report: {e}")
+            self.tree.clear()
+            self.detail_view.clear()
+            self._entries = []
+            return
+
+        self._entries = data.get("tests", [])
+        self.tree.clear()
+
+        if not data.get("exists"):
+            self.summary_label.setText(
+                f"No report directory yet at {data.get('report_dir') or '(none)'} "
+                f"-- start the run first."
+            )
+            self.detail_view.clear()
+            return
+
+        passed = sum(1 for e in self._entries if (e.get("report") or {}).get("verdict") == "PASS")
+        total = len(self._entries)
+        self.summary_label.setText(
+            f"{data.get('report_dir')} — {passed}/{total} passed"
+            if total else f"{data.get('report_dir')} — no test folders yet"
+        )
+
+        for entry in self._entries:
+            report = entry.get("report")
+            if report is None:
+                item = QTreeWidgetItem([entry.get("folder", "?"), "?", "", entry.get("error", "")])
+                self.tree.addTopLevelItem(item)
+                continue
+            test = report.get("test") or {}
+            execu = report.get("execution") or {}
+            verdict = report.get("verdict", "?")
+            duration = execu.get("duration_ms")
+            item = QTreeWidgetItem([
+                test.get("id", entry.get("folder", "?")),
+                verdict,
+                f"{duration}ms" if duration is not None else "",
+                report.get("summary", ""),
+            ])
+            color = _VERDICT_COLORS.get(verdict)
+            if color:
+                for col in range(4):
+                    item.setForeground(col, color)
+            self.tree.addTopLevelItem(item)
+
+        for col in range(4):
+            self.tree.resizeColumnToContents(col)
+
+        if self._entries:
+            self.tree.setCurrentItem(self.tree.topLevelItem(0))
+        else:
+            self.detail_view.clear()
+
+    def _on_selection_changed(self) -> None:
+        current = self.tree.currentItem()
+        idx = self.tree.indexOfTopLevelItem(current) if current else -1
+        if idx < 0 or idx >= len(self._entries):
+            self.detail_view.clear()
+            return
+        self.detail_view.setPlainText(_format_test_report_entry(self._entries[idx]))
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -1508,9 +1690,11 @@ class MainWindow(QMainWindow):
         start_btn.clicked.connect(self.start_test_run_selected)
         stop_btn = QPushButton("Stop")
         stop_btn.clicked.connect(self.stop_test_run_selected)
+        report_btn = QPushButton("View Report")
+        report_btn.clicked.connect(self.view_test_run_report_selected)
         delete_btn = QPushButton("Delete")
         delete_btn.clicked.connect(self.delete_test_run_selected)
-        for b in (new_btn, edit_btn, start_btn, stop_btn, delete_btn):
+        for b in (new_btn, edit_btn, start_btn, stop_btn, report_btn, delete_btn):
             actions.addWidget(b)
         actions.addStretch(1)
         layout.addLayout(actions)
@@ -2130,6 +2314,17 @@ class MainWindow(QMainWindow):
             client.delete_test_run(run_id)
         except AgentError as e:
             QMessageBox.warning(self, "Delete failed", str(e))
+
+    def view_test_run_report_selected(self) -> None:
+        res = self._selected_test_run_client_and_id()
+        if not res:
+            return
+        client, run_id = res
+        host_url, _ = self._selected_test_run
+        run = self.find_test_run(host_url, run_id)
+        run_name = (run or {}).get("name", "")
+        dlg = TestReportDialog(client, run_id, run_name, self)
+        dlg.exec()
 
     def new_test_run(self) -> None:
         hosts = self.host_store.list()

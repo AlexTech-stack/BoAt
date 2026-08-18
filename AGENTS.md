@@ -419,9 +419,20 @@ installed there) and reports it back as `"boat_cli_bin"` in
 shows the run's `report_dir` (relative to `boat-platform/` on the *agent's*
 host) with a Copy button -- deliberately no "Open" button, since in the
 federated multi-host case admin_gui may not be running on that same
-machine. Test run definitions are also captured by **Save Session…**/
-**Load Session…**, same as instances and nodes (see above) -- wired in a
-later follow-up after this tab first landed.
+machine. A **View Report** button opens `TestReportDialog`, which instead
+fetches the actual report content over HTTP (`GET /api/test-runs/{id}/
+report`, reading back the per-test `report.json` files
+`TestSuiteRunner._run_single_test()` wrote under `report_dir` -- there's
+no single aggregate report file, one subfolder per manifest test entry)
+and renders a verdict-colored tree (one row per test: id, verdict,
+duration, summary) with a per-test detail pane (steps, assertions,
+description, which raw artifact files -- `report.html`/`.junit.xml`/
+stdout/stderr -- exist alongside it). This is what actually retires the
+Report directory field's own federated-host limitation for the report
+*content* specifically: the agent reads the file, the client never needs
+filesystem access to that host. Test run definitions are also captured by
+**Save Session…**/**Load Session…**, same as instances and nodes (see
+above) -- wired in a later follow-up after this tab first landed.
 
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages

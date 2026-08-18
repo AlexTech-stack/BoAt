@@ -356,3 +356,76 @@ touching anything, never interacted with), two ways:
    entry, session YAML files, driver scripts) cleaned up afterward; the
    user's own live agent/gateway/host entry confirmed untouched
    throughout.
+
+## Done (2026-08-18) — test report *content* viewer (not just the path)
+
+Follow-up asked after a "what haven't we included that might be useful"
+review of the whole admin_gui surface (hosts/gateways/plugins/nodes/test
+suite); user picked "Test report content viewer" specifically, out of a
+short list that also included Scenarios/Simulations/Replays (the original,
+still-open wishlist item -- see `admin-gui-future-scope` memory --
+deliberately not picked, since it's a different architectural layer:
+direct gRPC to a running gateway, not an agent-REST extension), a PDU
+routing tab, and an ad-hoc frame send/monitor panel.
+
+The Report directory field (added with the Test Runs tab itself) only
+ever showed the run's `report_dir` as text, deliberately with no "Open"
+button, since that path lives on the *agent's* host filesystem and in the
+federated multi-host case admin_gui may not be running there. That
+limitation is real for the raw filesystem, but not for the report
+*content* -- nothing stops the agent itself from reading the file and
+handing the content back over the same HTTP API it already uses for
+everything else.
+
+**Agent side** (`ui/launcher_agent.py`): new `_read_test_run_report()`
+helper and `GET /api/test-runs/{id}/report` endpoint. First discovery
+while writing it: there is no single aggregate report file for a run --
+`TestSuiteRunner._run_single_test()` (`sdk/python/boat/test/runner.py`)
+writes one `report.json`/`report.junit.xml`/`report.html`/`stdout.txt`
+per **manifest test entry**, each in its own timestamped subfolder under
+`report_dir`; the only aggregate summary ("Results: N/M passed") is
+printed to stderr and never persisted anywhere
+(`TestSuiteRunner._print_summary()`). So the endpoint walks `report_dir`'s
+subfolders, parses each `report.json` it finds (the
+`boat.test.report.TestReport` schema -- verdict, steps, assertions,
+environment snapshot, ...), and returns each one directly alongside
+which raw artifact files exist next to it, tolerating a missing/corrupt
+`report.json` per-folder (a run still in progress, an interrupted test)
+rather than failing the whole request.
+
+**Client side**: `agent_client.py` gained `get_test_run_report()`.
+`admin_gui/main.py` gained `TestReportDialog` -- a tree (Test/Verdict/
+Duration/Summary, verdict-colored) with a detail pane below showing the
+selected test's steps/assertions/description plus which artifact files
+(`report.html`/`.junit.xml`/stdout/stderr) exist in that folder (flagged,
+not fetched -- fetching arbitrary file content wasn't asked for and the
+report.json content already covers "render pass/fail results inline") --
+and a **Refresh** button, since a still-running multi-test manifest's
+report folders fill in incrementally, one per finished test, not all at
+once. A new **View Report** button on the Test Runs tab opens it for the
+selected run.
+
+**Verified on real hardware** (`agn-testcomputer`), on an isolated test
+agent (port 8097, confirmed the user's own live agent was on the usual
+8090 and never touched): first via `curl` directly -- confirmed
+`exists: false` before a run starts (empty `report_dir`), a real parsed
+`report.json` (environment snapshot, execution timing, verdict, all
+present and correctly shaped) once the run finished, and a 404 for an
+unknown run id. Then through the real Qt code path (Xvfb + `xcb`, a
+throwaway driver script, not committed): created and started a real test
+run through the actual agent, opened the real `TestReportDialog` class
+against it, and confirmed the summary label read "1/1 passed", the tree
+held exactly one correctly-colored `PASS` row for `TC_CANLOOP_001`, and
+the detail pane's text included the real test description, verdict,
+duration, and the artifact-presence footer (`report.html, report.junit.xml,
+stdout.txt`) -- a screenshot confirmed the rendered tree and detail pane
+visually. All test artifacts (test run, `reports/admin_gui/`, the isolated
+agent process, Xvfb, driver script) cleaned up afterward.
+
+Not done, out of scope for what was asked: no per-test raw stdout/HTML
+content fetch (only report.json's structured content), no cross-run
+comparison/diffing of two reports, no aggregate top-level report for
+manifests with more than one test (the product itself doesn't generate
+one -- see the "no single aggregate report file" discovery above; the
+dialog's tree already covers the multi-test case as a per-test list, just
+without a materialized aggregate file to point at).

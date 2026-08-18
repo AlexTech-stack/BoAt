@@ -200,6 +200,20 @@ and from ctest/pytest unit tests.
   button -- deliberately no "Open" button: in the federated multi-host
   case this app may not be running on that same machine, so
   `QDesktopServices.openUrl()` on that path would be unreliable or wrong.
+- **View Report** opens a dialog that fetches the actual report *content*
+  instead of just the path -- `GET /api/test-runs/{id}/report` reads back
+  every per-test `report.json` the run wrote under `report_dir` (one
+  subfolder per manifest test entry; there's no single aggregate report
+  file) and hands the parsed content straight to the client. A tree lists
+  each test (id, verdict -- color-coded, duration, summary); selecting one
+  shows its steps/assertions/description plus which raw artifact files
+  (`report.html`/`.junit.xml`/stdout/stderr) exist alongside it in that
+  folder, in a detail pane below. This is what actually solves the Report
+  directory field's federated-host limitation for the report content
+  specifically -- the agent does the file reading, so it works from any
+  client regardless of which host it's running on. **Refresh** re-fetches
+  (useful mid-run, since each test's `report.json` lands as soon as that
+  test finishes, not all at once at the end).
 - The agent locates the `boat` CLI itself (`BOAT_CLI_BIN` env override →
   `shutil.which("boat")` → literal `~/.local/bin/boat` fallback, since a
   non-interactively-started agent process may not have `~/.local/bin` on

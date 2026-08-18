@@ -244,3 +244,12 @@ class AgentClient:
 
     def get_test_run_log(self, run_id: str) -> List[dict]:
         return self._request("GET", f"/api/test-runs/{run_id}/log")["log"]
+
+    def get_test_run_report(self, run_id: str) -> dict:
+        """{"report_dir", "exists", "tests": [{"folder", "report": {...
+        boat.test.report.TestReport schema...}, "has_stdout", "has_html",
+        ...}, ...]} -- the agent reads report.json off its own disk and
+        hands back the content directly, so this works from any client
+        regardless of whether it's on the same host as the agent (see
+        ui/launcher_agent.py's docstring)."""
+        return self._request("GET", f"/api/test-runs/{run_id}/report")

@@ -27,7 +27,13 @@ hand-verified and never touched by this agent) -- as a third registry
 subprocess-lifecycle shape as a node: `boat test run` already owns its own
 gateway lifecycle (per whichever environment config it's pointed at) and
 its own report generation, so this agent just runs the command and tails
-its log, same as it does for a node.
+its log, same as it does for a node. `GET /api/test-runs/{id}/report`
+additionally reads back the per-test `report.json` files a finished run
+wrote under its `report_dir` and returns their content directly -- so a
+remote client can render pass/fail results without needing filesystem
+access to *this* host (report_dir is a path on the agent's own
+filesystem, same "not necessarily where the client runs" situation as
+everything else in this file).
 
 Usage:
     python3 ui/launcher_agent.py
@@ -929,6 +935,47 @@ def _discover_test_environments() -> List[dict]:
     return out
 
 
+def _read_test_run_report(report_dir: str) -> dict:
+    """Reads back what TestSuiteRunner._run_single_test() wrote for a
+    given run's report_dir: one subfolder per manifest test entry
+    (`<timestamp>_<test_id>/`), each with its own report.json (the
+    boat.test.report.TestReport schema -- verdict, steps, assertions,
+    ...), report.junit.xml, report.html, stdout.txt/stderr.txt. There is
+    no aggregate top-level report file (TestSuiteRunner's own summary is
+    stderr-only, never persisted -- see runner.py's _print_summary()), so
+    this walks the subfolders and returns each parsed report.json
+    directly -- letting a client (admin_gui's report viewer) render
+    pass/fail results without needing filesystem/SSH access to this
+    host, the same problem the Report directory field's own "no Open
+    button" comment describes for the raw path."""
+    if not report_dir:
+        return {"report_dir": report_dir, "exists": False, "tests": []}
+    abs_dir = _PROJECT_ROOT / report_dir
+    if not abs_dir.is_dir():
+        return {"report_dir": report_dir, "exists": False, "tests": []}
+    tests: List[dict] = []
+    for entry in sorted(abs_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        item: Dict[str, object] = {
+            "folder": entry.name,
+            "has_stdout": (entry / "stdout.txt").is_file(),
+            "has_stderr": (entry / "stderr.txt").is_file(),
+            "has_html": (entry / "report.html").is_file(),
+            "has_junit": (entry / "report.junit.xml").is_file(),
+        }
+        report_json = entry / "report.json"
+        if report_json.is_file():
+            try:
+                item["report"] = json.loads(report_json.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as e:
+                item["error"] = f"failed to parse report.json: {e}"
+        else:
+            item["error"] = "no report.json in this folder yet"
+        tests.append(item)
+    return {"report_dir": report_dir, "exists": True, "tests": tests}
+
+
 # ── Host introspection ───────────────────────────────────────────────────────
 
 def _list_interfaces() -> List[dict]:
@@ -1494,6 +1541,15 @@ def api_test_run_log(run_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail="test run not found")
     return {"log": r.get_log()}
+
+
+@app.get("/api/test-runs/{run_id}/report")
+def api_test_run_report(run_id: str):
+    try:
+        r = _test_run_registry.get(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="test run not found")
+    return _read_test_run_report(r.report_dir)
 
 
 @app.delete("/api/test-runs/{run_id}")
