@@ -1050,6 +1050,43 @@ def _ip_error_detail(e: subprocess.CalledProcessError) -> str:
     return (e.stderr or str(e)).strip()
 
 
+def _is_interface_up(name: str) -> bool:
+    return any(i["name"] == name and i["up"] for i in _list_interfaces())
+
+
+def _read_can_config(name: str) -> Optional[dict]:
+    """Current bitrate/data-bitrate/FD state for a real `type can` link
+    (physical hardware, never vcan -- vcan's own `linkinfo.info_kind` is
+    `"vcan"`, with no `bittiming` at all, matching its own real lack of a
+    bitrate concept), read from `ip -d -j link show <name>`'s structured
+    JSON (`linkinfo.info_data.bittiming.bitrate`, `.data_bittiming.
+    bitrate`, `.ctrlmode` containing `"FD"`). Returns None for anything
+    that isn't a real CAN link or that this parse doesn't recognize --
+    the caller falls back to fixed defaults rather than erroring, same
+    reasoning as every other best-effort introspection in this file."""
+    try:
+        raw = subprocess.run(["ip", "-d", "-j", "link", "show", name],
+                              capture_output=True, text=True, check=True)
+        data = json.loads(raw.stdout)
+    except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError):
+        return None
+    if not data:
+        return None
+    info = data[0].get("linkinfo", {})
+    if info.get("info_kind") != "can":
+        return None
+    info_data = info.get("info_data", {})
+    bittiming = info_data.get("bittiming", {})
+    if "bitrate" not in bittiming:
+        return None
+    data_bittiming = info_data.get("data_bittiming", {})
+    return {
+        "bitrate": bittiming["bitrate"],
+        "dbitrate": data_bittiming.get("bitrate"),
+        "fd": "FD" in info_data.get("ctrlmode", []),
+    }
+
+
 def _discover_gateway_bins() -> List[str]:
     out = []
     for preset in ("debug", "release"):
@@ -1712,26 +1749,59 @@ def api_interface_down(name: str):
     return {"ok": True, "name": name}
 
 
+@app.get("/api/interfaces/{name}/can-config")
+def api_get_can_config(name: str):
+    cfg = _read_can_config(name)
+    if cfg is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"'{name}' is not a real CAN interface, or its current "
+                   f"config couldn't be read (vcan has no bitrate to read back)",
+        )
+    return cfg
+
+
 @app.post("/api/interfaces/{name}/can-config")
 def api_can_config(name: str, req: CanConfigRequest):
-    """`ip link set <name> up type can bitrate <b> [dbitrate <d> fd on]` --
-    the exact reference commands in bus_setup_context.py's "Physical CAN"
-    section, for any type-can link (real hardware or vcan, though vcan
-    has no physical bitrate and the kernel will reject it -- that error
-    comes back to the caller same as any other, not special-cased here).
-    A bitrate change is rejected by the kernel while the link is up, so
-    this brings it down first (ignoring failure -- already-down is fine,
-    the up+bitrate command below is what actually matters and does raise
-    on failure)."""
+    """`ip link set <name> {up|down} type can bitrate <b> [dbitrate <d> fd
+    {on|off}]` -- the exact reference commands in bus_setup_context.py's
+    "Physical CAN" section, for any type-can link (real hardware or vcan,
+    though vcan has no physical bitrate and the kernel will reject it --
+    that error comes back to the caller same as any other, not
+    special-cased here).
+
+    Two real bugs, found on real hardware (a PEAK PCAN-USB Pro FD) and
+    fixed here:
+
+    1. `fd` is *always* passed explicitly now, `on` or `off` -- the CAN
+       netlink interface only updates the fields a `type can` message
+       actually includes; anything omitted keeps its *previous* value.
+       The original version only ever appended `fd on` (when requested)
+       and never `fd off`, so unchecking CAN FD against an
+       already-FD-enabled interface silently left FD (and its stale
+       `dbitrate`) untouched while the classic bitrate still applied --
+       confirmed directly: `bitrate` changed, `ctrlmode` kept `["FD"]`
+       and the old `data_bittiming.bitrate`.
+    2. The interface is restored to whatever up/down state it was in
+       *before* this call, instead of unconditionally ending up "up". A
+       bitrate change is rejected by the kernel while the link is up, so
+       this still has to bring it down first regardless -- but previously
+       it then always brought it back up, silently undoing a Down a
+       caller had just performed deliberately right before configuring."""
+    was_up = _is_interface_up(name)
     try:
         _sudo_ip(["link", "set", name, "down"], check=False)
-        args = ["link", "set", name, "up", "type", "can", "bitrate", str(req.bitrate)]
+        state = "up" if was_up else "down"
+        args = ["link", "set", name, state, "type", "can", "bitrate", str(req.bitrate)]
         if req.fd:
             args += ["dbitrate", str(req.dbitrate or req.bitrate), "fd", "on"]
+        else:
+            args += ["fd", "off"]
         _sudo_ip(args)
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=400, detail=_ip_error_detail(e))
-    return {"ok": True, "name": name, "bitrate": req.bitrate, "dbitrate": req.dbitrate, "fd": req.fd}
+    return {"ok": True, "name": name, "bitrate": req.bitrate, "dbitrate": req.dbitrate,
+            "fd": req.fd, "up": was_up}
 
 
 if __name__ == "__main__":

@@ -595,6 +595,95 @@ unexpected info/warning dialogs fired during the whole run (asserted
 explicitly). All test artifacts (test interfaces, the isolated agent
 process, Xvfb, driver script) cleaned up afterward.
 
+## Done (2026-08-18, continued) — "Configure CAN" found and fixed two real bugs on real CAN FD hardware
+
+The Interfaces tab above shipped with `can-config` verified only against
+`vcan0`'s negative path (bitrate rejected outright, since vcan has no
+real bitrate) -- the positive path needs real CAN hardware, and the
+box's live `can0`/`can1` were deliberately left untouched during that
+first pass. The user then exercised it for real, on `can0` (a PEAK
+PCAN-USB Pro FD already running CAN FD at 500000/2000000), and reported
+back precisely what happened at each step -- this is that report,
+verbatim: "I tried to change the baudrate on can0. I selected can0 and
+pressed Down button. Network went down (OK), Then i pressed on Configure
+CAN..., it showed me a config with 500kbaud no CANFD. This is NOK,
+actual state is CANFD with 500kbaud & 2000kbaud. I changed to CAN with
+250kbaud. Was not applied (NOK), interface can0 is imeadeatly started
+(went from down to up) (NOK)." -- with `ip -details link show can0`
+output before and after confirming exactly what the interface actually
+did (bitrate went 500000 → 250000, but `<FD>` and `dbitrate 2000000`
+stayed).
+
+Investigating (`ip -d -j link show can0`, structured JSON, before
+touching anything further) confirmed two distinct, real bugs -- not one:
+
+1. **The dialog never reflected the interface's actual state.**
+   `CanConfigDialog` always opened with hardcoded defaults (500000,
+   unchecked, 2000000) regardless of what the interface was actually
+   doing -- so it looked like "the current config" when it was just a
+   placeholder. `ip -d -j link show <name>`'s `linkinfo.info_data`
+   (`bittiming.bitrate`, `data_bittiming.bitrate`, `ctrlmode` containing
+   `"FD"`) turned out to be exactly what was needed to read this back
+   reliably (confirmed `vcan*`'s `linkinfo.info_kind` is `"vcan"`, not
+   `"can"`, with no `bittiming` at all -- correctly falls through to
+   "unknown" rather than a wrong prefill).
+2. **Unchecking CAN FD didn't turn CAN FD off.** The CAN netlink
+   interface only updates the fields a `type can` message actually
+   *includes* -- anything omitted keeps its previous value. The original
+   `POST .../can-config` only ever appended `fd on` (when requested) and
+   never `fd off`, so reconfiguring an already-FD-enabled interface with
+   FD unchecked left FD (and its stale `dbitrate`) completely untouched
+   while the classic `bitrate` field still changed underneath it --
+   exactly the "bitrate changed, everything else didn't" result the user
+   saw. Fixed by always sending `fd on`/`fd off` explicitly, never
+   omitting it.
+3. **A confirmed design gap, not initially flagged as a bug but agreed
+   as one via a direct question to the user:** the endpoint always
+   brought the interface back `up` after configuring, silently undoing
+   the explicit **Down** the user had just pressed. Fixed by recording
+   the interface's up/down state *before* the call (still has to bring
+   it down first to apply a bitrate change at all, same as before) and
+   restoring that same state afterward, instead of unconditionally `up`.
+
+**Fix**: `_read_can_config()` (agent-side helper, parses `ip -d -j link
+show`) + `GET /api/interfaces/{name}/can-config` (new endpoint) +
+`agent_client.get_can_config()` (returns `None` on 404/anything not a
+real CAN link, a normal "nothing to prefill with" result, not
+exceptional) + `CanConfigDialog` now takes an optional `current` dict and
+pre-fills Bitrate/CAN FD/Data bitrate from it, with a "Current: ..." label
+showing the real state (or a clear "unknown" message when `None`).
+`POST .../can-config` now always sends `fd on`/`fd off` explicitly and
+restores the interface's prior up/down state instead of forcing `up`.
+
+**Verified on real hardware** (`agn-testcomputer`, `can0` itself -- an
+isolated test agent on port 8098, since interface endpoints act on the
+shared host's network namespace regardless of which agent port issues
+the call, so this didn't need the user's own live agent on 8090 touched
+or restarted), against ground truth (`ip -d -j link show`/`ip -details
+link show` run directly over ssh, bypassing the agent's own responses
+entirely, not just trusting what the API said back): (1) `GET
+.../can-config` on `can0` in its broken post-incident state returned
+exactly `{"bitrate": 250000, "dbitrate": 2000000, "fd": true}`, matching
+`ip -d -j link show` precisely; (2) brought it down explicitly, then
+`POST .../can-config` with `fd: false` -- the raw `ip -d -j` output
+afterward showed `ctrlmode` and `data_bittiming` gone entirely (FD
+genuinely off, not just hidden) and `flags` with no `UP` (state correctly
+preserved as down), confirming both bugs 2 and 3 fixed at once; (3)
+brought it back up, then `POST .../can-config` with the original
+`bitrate: 500000, dbitrate: 2000000, fd: true` -- final `ip -details link
+show can0` matched the *very first* output in the user's report
+character-for-character (`<NOARP,UP,LOWER_UP,ECHO>`, `bitrate 500000`,
+`dbitrate 2000000`, `<FD>`), restoring the box's real hardware to exactly
+where it was before any of this started. `CanConfigDialog`'s pre-fill
+itself verified separately with three direct widget-construction cases
+(offscreen, no live hardware needed for this part since the data-fetching
+correctness was already proven above): real FD state (500000/2000000/FD
+checked, Data bitrate field enabled), classic CAN state (250000/unchecked,
+Data bitrate field disabled), and no current state available (falls back
+to the original fixed defaults) -- all three matched exactly. Test agent,
+its process, and the driver script all cleaned up afterward; the user's
+own live agent/gateway on port 8090 confirmed untouched throughout.
+
 ## Next steps (not started)
 
 - Decide instance persistence approach once the "agent restart loses

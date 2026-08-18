@@ -1577,14 +1577,22 @@ class NewInterfaceDialog(QDialog):
 
 class CanConfigDialog(QDialog):
     """Bitrate (+ optional CAN FD data-bitrate) for an existing type-can
-    link -- `ip link set <name> up type can bitrate <b> [dbitrate <d> fd
-    on]`, the exact commands boat_cli/bus_setup_context.py's "Physical
-    CAN" section documents. Works on any type-can interface, virtual or
-    physical -- vcan has no real bitrate and the kernel will reject it;
-    that failure surfaces the same way any other configure error does,
-    not special-cased here."""
+    link -- `ip link set <name> {up|down} type can bitrate <b> [dbitrate
+    <d> fd {on|off}]`, the exact commands boat_cli/bus_setup_context.py's
+    "Physical CAN" section documents. Works on any type-can interface,
+    virtual or physical -- vcan has no real bitrate and the kernel will
+    reject it; that failure surfaces the same way any other configure
+    error does, not special-cased here.
 
-    def __init__(self, host_name: str, iface_name: str, parent=None):
+    `current`, when available (GET /api/interfaces/{name}/can-config --
+    None for vcan or anything that isn't a real CAN link), pre-fills every
+    field with the interface's *actual* current state instead of fixed
+    defaults -- found missing the hard way: a real PEAK PCAN-USB Pro FD
+    already running CAN FD at 500000/2000000 showed this dialog with CAN
+    FD unchecked and 500000/2000000 as if those were just placeholder
+    defaults, not what the hardware was actually doing."""
+
+    def __init__(self, host_name: str, iface_name: str, current: Optional[dict] = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Configure CAN — {iface_name}")
         layout = QFormLayout(self)
@@ -1592,14 +1600,27 @@ class CanConfigDialog(QDialog):
         layout.addRow("Host:", QLabel(host_name))
         layout.addRow("Interface:", QLabel(iface_name))
 
-        self.bitrate_edit = QLineEdit("500000")
+        if current is not None:
+            current_text = f"Current: {current['bitrate']} bps"
+            current_text += (f", FD data bitrate {current['dbitrate']} bps" if current.get("fd")
+                              else " (classic CAN, no FD)")
+        else:
+            current_text = "Current config unknown (not a real CAN interface, or couldn't be read)"
+        current_label = QLabel(current_text)
+        current_label.setWordWrap(True)
+        current_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addRow("", current_label)
+
+        self.bitrate_edit = QLineEdit(str(current["bitrate"]) if current else "500000")
         layout.addRow("Bitrate:", self.bitrate_edit)
 
         self.fd_check = QCheckBox("CAN FD")
+        self.fd_check.setChecked(bool(current and current.get("fd")))
         layout.addRow("", self.fd_check)
 
-        self.dbitrate_edit = QLineEdit("2000000")
-        self.dbitrate_edit.setEnabled(False)
+        default_dbitrate = current.get("dbitrate") if current else None
+        self.dbitrate_edit = QLineEdit(str(default_dbitrate) if default_dbitrate else "2000000")
+        self.dbitrate_edit.setEnabled(self.fd_check.isChecked())
         layout.addRow("Data bitrate (FD):", self.dbitrate_edit)
         self.fd_check.toggled.connect(self.dbitrate_edit.setEnabled)
 
@@ -2682,7 +2703,8 @@ class MainWindow(QMainWindow):
         client, name = res
         host_url, _ = self._selected_iface
         host_name = self._iface_snapshot.get(host_url, {}).get("name", host_url)
-        dlg = CanConfigDialog(host_name, name, self)
+        current = client.get_can_config(name)  # None for vcan/unreadable -- dialog falls back to defaults
+        dlg = CanConfigDialog(host_name, name, current, self)
         if dlg.exec() != QDialog.Accepted:
             return
         try:

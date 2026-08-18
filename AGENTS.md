@@ -461,6 +461,24 @@ server-side, with a clear message either way instead of `ip`'s own
 cryptic `"name" not a valid ifname` -- found by hitting exactly that
 during this feature's own real-hardware verification.
 
+**Configure CAN…** pre-fills from the interface's *actual* current state
+(`GET /api/interfaces/{name}/can-config`, parsing `ip -d -j link show`'s
+structured `linkinfo.info_data` -- `bittiming.bitrate`,
+`data_bittiming.bitrate`, and whether `ctrlmode` contains `"FD"`; `None`
+for vcan or anything not a real CAN link, which the dialog falls back to
+fixed defaults for) rather than always showing fixed placeholder values.
+The `POST` side had two real bugs, both found on real hardware (a PEAK
+PCAN-USB Pro FD) by the user directly and now fixed: (1) the CAN netlink
+interface only updates fields a `type can` message actually includes, so
+`fd` is now always sent explicitly (`on` or `off`) -- previously omitting
+it when unchecked silently left an already-FD-enabled interface's FD mode
+and stale data-bitrate untouched even though the classic bitrate field
+did change; (2) the interface is now restored to whatever up/down state
+it was in *before* the call (still has to come down first to apply a
+bitrate change, same as always) instead of unconditionally ending up
+`up` -- previously this silently undid an explicit **Down** the user had
+just pressed.
+
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages
 sudo apt install libxcb-cursor0             # Linux only -- system dep Qt6's xcb plugin needs

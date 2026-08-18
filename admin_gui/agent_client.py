@@ -284,3 +284,15 @@ class AgentClient:
                        dbitrate: Optional[int] = None, fd: bool = False) -> dict:
         body = {"bitrate": bitrate, "dbitrate": dbitrate, "fd": fd}
         return self._request("POST", f"/api/interfaces/{name}/can-config", json=body)
+
+    def get_can_config(self, name: str) -> Optional[dict]:
+        """Current {"bitrate", "dbitrate", "fd"} for a real CAN interface,
+        or None for anything that isn't one (vcan, non-CAN types, or a
+        404 from the agent for any other reason) -- callers use this to
+        pre-fill Configure CAN with the interface's actual state instead
+        of fixed defaults, so None is a normal "nothing to prefill with"
+        result, not exceptional."""
+        try:
+            return self._request("GET", f"/api/interfaces/{name}/can-config")
+        except AgentError:
+            return None

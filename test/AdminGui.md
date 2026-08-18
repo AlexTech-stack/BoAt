@@ -969,6 +969,11 @@ script) cleaned up afterward. Full account: `backlog/test_runner_backlog.md`'s
    attempt **Delete**
 6. **New veth…** with a valid name; confirm both ends appear; **Delete**
    one end
+7. On a real CAN FD interface already running (e.g. `can0` at
+   500000/2000000 FD): **Down**, then **Configure CAN…**; inspect the
+   dialog's pre-filled values and "Current: ..." label; change the
+   bitrate and uncheck CAN FD; submit; inspect the interface's real state
+   and up/down state afterward
 
 **Expected:**
 - Step 1: columns are Host, Name, Type, Up, Operstate, MAC; physical
@@ -986,6 +991,12 @@ script) cleaned up afterward. Full account: `backlog/test_runner_backlog.md`'s
   the interface is untouched
 - Step 6: both veth ends appear as separate rows; deleting either end
   removes both
+- Step 7: the dialog shows the interface's *actual* current
+  bitrate/FD/data-bitrate, not fixed placeholders; after submitting,
+  `ip -d -j link show` confirms the new bitrate applied, CAN FD genuinely
+  disabled (no stale data-bitrate left behind), and the interface left in
+  the same up/down state it was in before the dialog was opened (down, in
+  this case, since Down was pressed first)
 
 **Verdict:** OK
 
@@ -1021,3 +1032,36 @@ confirmed the table renders correctly, including real physical
 interfaces. No unexpected info/warning dialogs fired during the run
 (asserted explicitly). All test artifacts cleaned up afterward. Full
 account: `backlog/launcher_agent_backlog.md`'s "Interfaces tab" entry.
+
+**Update (2026-08-18):** step 7 added and exercised for real by the user
+directly, on their own live `can0` (a PEAK PCAN-USB Pro FD already
+running CAN FD at 500000/2000000) -- Down, Configure CAN…, change
+bitrate, uncheck CAN FD, submit. This found two real bugs on the first
+real attempt: the dialog showed 500000/no-FD as if that were the current
+config (it was hardcoded placeholders, unrelated to the interface's
+actual FD/500000/2000000 state), and after submitting a 250000/no-FD
+change, `ip -details link show can0` showed `bitrate 250000` correctly
+applied but `<FD>` and `dbitrate 2000000` still present, and the
+interface back `up` despite Down having just been pressed. Root-caused
+(`ip -d -j link show`, structured JSON) to: (1) `CanConfigDialog` never
+fetched real interface state at all; (2) the CAN netlink interface only
+updates fields a `type can` message explicitly includes, and the
+original endpoint never sent `fd off`, only ever `fd on` when requested,
+so unchecking FD against an already-FD interface left FD genuinely
+untouched; (3) the endpoint always forced the interface back `up`
+regardless of its state beforehand. All three fixed (`GET
+/api/interfaces/{name}/can-config` for real prefill, `fd` always sent
+explicitly, prior up/down state restored instead of forced `up`) and
+re-verified directly against `can0` itself (the same interface used to
+find the bugs, since the positive path fundamentally needs real CAN
+hardware): brought it down, applied `fd: false`, confirmed via `ip -d -j
+link show` (ground truth, not the agent's own response) that `ctrlmode`
+and `data_bittiming` were both gone entirely and the interface stayed
+down; then restored the original `500000/2000000/fd: true` config with
+the interface brought back up first, confirming the final `ip -details
+link show can0` matched the user's own original (pre-incident) output
+character-for-character. `CanConfigDialog`'s pre-fill logic itself
+verified separately with three widget-construction cases (real FD state,
+classic CAN state, no current state available) -- all three correct.
+Full account: `backlog/launcher_agent_backlog.md`'s "Configure CAN found
+and fixed two real bugs on real CAN FD hardware" entry.

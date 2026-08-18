@@ -245,11 +245,22 @@ against the same host and neither owns exclusive control.
   agent) instead of `ip`'s own cryptic `"name" not a valid ifname`.
 - **Configure CAN…** opens a small dialog (Bitrate, a CAN FD checkbox,
   Data bitrate enabled only when FD is checked) for the selected
-  interface -- `ip link set <name> up type can bitrate <b> [dbitrate <d>
-  fd on]`, the exact commands `boat_cli/bus_setup_context.py`'s "Physical
-  CAN" section documents. Works on any type-can interface; a vcan has no
-  real bitrate and the kernel rejects the change, which surfaces as a
-  normal error, not a special case.
+  interface -- `ip link set <name> {up|down} type can bitrate <b>
+  [dbitrate <d> fd {on|off}]`, the exact commands `boat_cli/
+  bus_setup_context.py`'s "Physical CAN" section documents. Works on any
+  type-can interface; a vcan has no real bitrate and the kernel rejects
+  the change, which surfaces as a normal error, not a special case. The
+  dialog pre-fills every field from the interface's *actual* current
+  state (a small "Current: ..." line at the top; `None`/unreadable falls
+  back to fixed defaults, e.g. for a vcan) instead of always showing
+  placeholder values -- and applying leaves the interface in whatever
+  up/down state it was in *before* you opened the dialog, not
+  unconditionally `up` (both found and fixed after real testing on a PEAK
+  PCAN-USB Pro FD surfaced the gap: the dialog showed 500000/no-FD for an
+  interface that was actually running CAN FD at 500000/2000000, and
+  unchecking CAN FD against that same interface didn't actually turn FD
+  off -- see `backlog/launcher_agent_backlog.md`'s "Configure CAN" entry
+  for the full account).
 - **Up** / **Down** act on the selected interface, whatever it is --
   including physical hardware. **Down** asks for confirmation first,
   since bringing down an interface a running gateway is actively using
