@@ -19,6 +19,16 @@ separate registry (`/api/nodes`, `/api/node-scripts`) alongside the gateway
 instance one, since a node has no port to allocate or ifaces/plugins of its
 own; it just needs a target gateway (BOAT_HOST) and its own CLI args.
 
+Also manages **test runs** -- `boat test run <manifest.json>` invocations
+(the automated CI-style HIL suite runner, `boat_cli/test.py` +
+`sdk/python/boat/test/`; not the manual `test/*.md` TestSuite, which is
+hand-verified and never touched by this agent) -- as a third registry
+(`/api/test-runs`, `/api/test-manifests`, `/api/test-environments`), same
+subprocess-lifecycle shape as a node: `boat test run` already owns its own
+gateway lifecycle (per whichever environment config it's pointed at) and
+its own report generation, so this agent just runs the command and tails
+its log, same as it does for a node.
+
 Usage:
     python3 ui/launcher_agent.py
     # REST API on http://0.0.0.0:8090
@@ -28,6 +38,8 @@ Environment:
     BOAT_AGENT_BASE_PORT  — first gRPC port to try when auto-allocating
                             (default 50051, matches boat_gateway's own default)
     BOAT_GATEWAY_BIN      — path to boat_gateway binary (default build/debug)
+    BOAT_CLI_BIN          — path to the `boat` console script, for test runs
+                            (default: discovered via PATH, then ~/.local/bin/boat)
 
 v1 scope: in-memory instance registry only (an agent restart forgets
 definitions of stopped instances; running processes are unaffected but
@@ -41,6 +53,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -68,6 +81,8 @@ _AGENT_PORT     = int(os.environ.get("BOAT_AGENT_PORT", "8090"))
 _BASE_PORT      = int(os.environ.get("BOAT_AGENT_BASE_PORT", "50051"))
 _LOG_LINES      = 500
 _NODES_DIR      = _PROJECT_ROOT / "nodes"
+_TESTS_DIR      = _PROJECT_ROOT / "config" / "tests"
+_REPORTS_DIR    = _PROJECT_ROOT / "reports" / "admin_gui"
 
 _SIM_STATE_NAMES = {0: "UNSPECIFIED", 1: "IDLE", 2: "RUNNING", 3: "PAUSED", 4: "STOPPED", 5: "ERROR"}
 
@@ -618,6 +633,302 @@ def _discover_node_scripts() -> List[dict]:
     return out
 
 
+# ── Test runs ─────────────────────────────────────────────────────────────────
+#
+# A "test run" is one invocation of `boat test run <manifest.json>` -- the
+# automated, CI-style HIL suite runner (boat_cli/test.py + sdk/python/boat/
+# test/). Not to be confused with this repo's manual test/*.md TestSuite
+# (hand-verified, release-oriented, never touched by anything here) or the
+# C++/pytest unit tests -- see AGENTS.md's "Three distinct things..." note.
+# Tracked the same way as a node: a subprocess this agent spawns and tails
+# the log of. `boat test run` already owns its own gateway lifecycle (per
+# its --config environment) and its own report generation, so this agent's
+# job is the same as it is for a node -- run the command, somewhere, and
+# let a client watch it -- not to re-implement any of that.
+
+def _discover_boat_cli() -> Optional[str]:
+    """Locates the `boat` console script -- a pip-installed entry point
+    (`pip install -e ./boat-platform/cli`), not something under
+    build/{debug,release} like the gateway binary. shutil.which() alone
+    isn't fully reliable here: an agent started from a non-interactive
+    context (a service manager, a plain `python3 ui/launcher_agent.py`
+    from a script) may not have ~/.local/bin on PATH even though `boat`
+    is installed there -- the common case for a per-user pip install.
+    BOAT_CLI_BIN overrides both, for anything this doesn't find."""
+    override = os.environ.get("BOAT_CLI_BIN")
+    if override and os.path.isfile(override):
+        return override
+    found = shutil.which("boat")
+    if found:
+        return found
+    candidate = Path.home() / ".local" / "bin" / "boat"
+    if candidate.is_file():
+        return str(candidate)
+    return None
+
+
+_BOAT_CLI_BIN = _discover_boat_cli()
+
+
+@dataclass
+class TestRunInstance:
+    id: str
+    name: str
+    manifest_path: str                 # relative to boat-platform/, e.g. "config/tests/manifest_x.json"
+    env_config_path: str = ""          # "" = let the manifest's own environment_config decide
+    extra_args: List[str] = field(default_factory=list)  # e.g. --stop-on-failure, --parallel 2
+    report_dir: str = ""               # auto-assigned (relative to boat-platform/) on first start()
+    created_at: float = field(default_factory=time.time)
+    started_at: Optional[float] = None
+    exit_code: Optional[int] = None
+    process: Optional[subprocess.Popen] = field(default=None, repr=False)
+    _log: deque = field(default_factory=lambda: deque(maxlen=_LOG_LINES), repr=False)
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    _log_thread: Optional[threading.Thread] = field(default=None, repr=False)
+
+    def append_log(self, line: str) -> None:
+        from datetime import datetime
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        with self._lock:
+            self._log.append({"ts": ts, "text": line.rstrip()})
+
+    def get_log(self) -> List[dict]:
+        with self._lock:
+            return list(self._log)
+
+    @property
+    def running(self) -> bool:
+        if self.process is None:
+            return False
+        return self.process.poll() is None
+
+    @property
+    def status(self) -> str:
+        if self.process is None:
+            return "stopped"
+        code = self.process.poll()
+        if code is None:
+            return "running"
+        return "stopped" if code == 0 else f"exited:{code}"
+
+    @property
+    def result(self) -> Optional[str]:
+        """Friendlier than status/exit_code for a UI badge: None until
+        this run has actually finished at least once, then PASS/FAIL
+        matching TestSuiteRunner.run()'s own exit-code contract (0 =
+        every test in the manifest passed, matching every test file's
+        own subprocess-returncode convention -- see runner.py)."""
+        if self.exit_code is None:
+            return None
+        return "PASS" if self.exit_code == 0 else "FAIL"
+
+    def pid(self) -> Optional[int]:
+        if self.running and self.process is not None:
+            return self.process.pid
+        return None
+
+    def uptime(self) -> Optional[float]:
+        if self.started_at is None or not self.running:
+            return None
+        return time.time() - self.started_at
+
+    def start(self) -> None:
+        with self._lock:
+            if self.running:
+                raise RuntimeError(f"test run '{self.id}' is already running (PID {self.pid()})")
+            if _BOAT_CLI_BIN is None:
+                raise FileNotFoundError(
+                    "'boat' CLI not found on this host -- install it "
+                    "(pip install -e ./boat-platform/cli) or set BOAT_CLI_BIN")
+            manifest_abs = _PROJECT_ROOT / self.manifest_path
+            if not manifest_abs.is_file():
+                raise FileNotFoundError(f"manifest not found: {self.manifest_path}")
+            if not self.report_dir:
+                # Relative (like manifest_path/env_config_path) so it's
+                # meaningful from either this process's cwd or the
+                # subprocess's -- both are _PROJECT_ROOT, see cwd= below.
+                self.report_dir = str(Path("reports") / "admin_gui" / self.id)
+            cmd = [_BOAT_CLI_BIN, "test", "run", self.manifest_path,
+                   "--report-dir", self.report_dir]
+            if self.env_config_path:
+                cmd += ["--config", self.env_config_path]
+            cmd += list(self.extra_args)
+            env = os.environ.copy()
+            # Same reasoning as NodeInstance.start(): CPython block-buffers
+            # stdout whenever it isn't a tty, which a piped subprocess
+            # never is -- without this, boat test run's own progress
+            # output (and everything the test files under it print) sits
+            # invisibly in the child's own libc buffer until it fills or
+            # the process exits.
+            env["PYTHONUNBUFFERED"] = "1"
+            self.exit_code = None
+            self.started_at = time.time()
+            self.process = subprocess.Popen(
+                cmd,
+                cwd=str(_PROJECT_ROOT),  # manifest/env/report paths are relative to boat-platform/
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                env=env,
+                text=True,
+                bufsize=1,
+            )
+            self.append_log(f"[agent] started PID {self.process.pid} ({' '.join(cmd)})")
+            self._log_thread = threading.Thread(target=self._drain_output, daemon=True,
+                                                 name=f"testrun-log-{self.id}")
+            self._log_thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        with self._lock:
+            if not self.running or self.process is None:
+                return
+            self.append_log("[agent] sending SIGTERM…")
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self.append_log("[agent] timeout — sending SIGKILL")
+                self.process.kill()
+                self.process.wait()
+            self.exit_code = self.process.returncode
+            self.append_log(f"[agent] exited with code {self.exit_code}")
+            self.process = None
+
+    def _drain_output(self) -> None:
+        assert self.process is not None
+        assert self.process.stdout is not None
+        try:
+            for line in self.process.stdout:
+                self.append_log(line)
+        except ValueError:
+            pass
+        with self._lock:
+            if self.process:
+                self.exit_code = self.process.wait()
+                self.process = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "manifest_path": self.manifest_path,
+            "env_config_path": self.env_config_path,
+            "extra_args": self.extra_args,
+            "report_dir": self.report_dir,
+            "status": self.status,
+            "result": self.result,
+            "pid": self.pid(),
+            "uptime_sec": self.uptime(),
+            "exit_code": self.exit_code,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+        }
+
+
+class TestRunRegistry:
+    def __init__(self) -> None:
+        self._runs: Dict[str, TestRunInstance] = {}
+        self._lock = threading.RLock()
+
+    def create(self, name: str, manifest_path: str, env_config_path: str,
+               extra_args: List[str]) -> TestRunInstance:
+        with self._lock:
+            run_id = uuid.uuid4().hex[:8]
+            inst = TestRunInstance(
+                id=run_id,
+                name=name or run_id,
+                manifest_path=manifest_path,
+                env_config_path=env_config_path or "",
+                extra_args=list(extra_args or []),
+            )
+            self._runs[run_id] = inst
+            return inst
+
+    def get(self, run_id: str) -> TestRunInstance:
+        with self._lock:
+            inst = self._runs.get(run_id)
+            if inst is None:
+                raise KeyError(run_id)
+            return inst
+
+    def list(self) -> List[TestRunInstance]:
+        with self._lock:
+            return list(self._runs.values())
+
+    def delete(self, run_id: str) -> None:
+        with self._lock:
+            inst = self.get(run_id)
+            if inst.running:
+                raise RuntimeError(f"test run '{run_id}' is running; stop it first")
+            del self._runs[run_id]
+
+    def update(self, run_id: str, name: str, manifest_path: str, env_config_path: str,
+               extra_args: List[str]) -> TestRunInstance:
+        """Edit a stopped test run's definition in place -- same
+        edit-refused-while-running pattern as NodeRegistry.update()."""
+        with self._lock:
+            inst = self.get(run_id)
+            if inst.running:
+                raise RuntimeError(f"test run '{run_id}' is running; stop it first")
+            inst.name = name or inst.name
+            inst.manifest_path = manifest_path or inst.manifest_path
+            inst.env_config_path = env_config_path if env_config_path is not None else inst.env_config_path
+            inst.extra_args = list(extra_args) if extra_args is not None else inst.extra_args
+            return inst
+
+
+_test_run_registry = TestRunRegistry()
+
+
+def _discover_test_manifests() -> List[dict]:
+    """Scans boat-platform/config/tests/ for manifest_*.json files -- the
+    naming convention every manifest in this repo follows (see
+    manifest_can_loopback.json). Each entry carries enough to populate a
+    picker without a client needing to fetch and parse the file itself.
+    Swallows any read/parse failure into skipping that file, same
+    defensive reasoning as _discover_node_scripts()."""
+    out: List[dict] = []
+    if not _TESTS_DIR.is_dir():
+        return out
+    for f in sorted(_TESTS_DIR.glob("manifest_*.json")):
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        out.append({
+            "path": str(f.relative_to(_PROJECT_ROOT)).replace("\\", "/"),
+            "name": doc.get("name", f.stem),
+            "description": doc.get("description", ""),
+            "environment_config": doc.get("environment_config", ""),
+            "test_count": len(doc.get("tests", [])),
+        })
+    return out
+
+
+def _discover_test_environments() -> List[dict]:
+    """Scans boat-platform/config/tests/ for env_*.json files -- disjoint
+    from manifest_*.json and *.schema.json by naming convention alone, no
+    extra filtering needed."""
+    out: List[dict] = []
+    if not _TESTS_DIR.is_dir():
+        return out
+    for f in sorted(_TESTS_DIR.glob("env_*.json")):
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        gw = doc.get("gateway", {})
+        buses = doc.get("buses", {})
+        out.append({
+            "path": str(f.relative_to(_PROJECT_ROOT)).replace("\\", "/"),
+            "name": doc.get("name", f.stem),
+            "description": doc.get("description", ""),
+            "gateway_address": gw.get("address", ""),
+            "buses": {bus_name: b.get("interface", "") for bus_name, b in buses.items()},
+        })
+    return out
+
+
 # ── Host introspection ───────────────────────────────────────────────────────
 
 def _list_interfaces() -> List[dict]:
@@ -853,6 +1164,7 @@ def api_host_info():
         "interfaces": _list_interfaces(),
         "gateway_bins": _discover_gateway_bins(),
         "plugins": _discover_plugins(),
+        "boat_cli_bin": _BOAT_CLI_BIN,  # None = 'boat' not found on this host; New Test Run should grey out
     }
 
 
@@ -1097,6 +1409,99 @@ def api_delete_node(node_id: str):
         _node_registry.delete(node_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="node not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"ok": True}
+
+
+# ── Test run endpoints ───────────────────────────────────────────────────────
+
+class CreateTestRunRequest(BaseModel):
+    name: str = ""
+    manifest_path: str
+    env_config_path: str = ""
+    extra_args: List[str] = []
+
+
+@app.get("/api/test-manifests")
+def api_list_test_manifests():
+    return {"manifests": _discover_test_manifests()}
+
+
+@app.get("/api/test-environments")
+def api_list_test_environments():
+    return {"environments": _discover_test_environments()}
+
+
+@app.get("/api/test-runs")
+def api_list_test_runs():
+    return {"runs": [r.to_dict() for r in _test_run_registry.list()]}
+
+
+@app.post("/api/test-runs")
+def api_create_test_run(req: CreateTestRunRequest):
+    r = _test_run_registry.create(req.name, req.manifest_path, req.env_config_path, req.extra_args)
+    return r.to_dict()
+
+
+@app.get("/api/test-runs/{run_id}")
+def api_get_test_run(run_id: str):
+    try:
+        return _test_run_registry.get(run_id).to_dict()
+    except KeyError:
+        raise HTTPException(status_code=404, detail="test run not found")
+
+
+@app.put("/api/test-runs/{run_id}")
+def api_update_test_run(run_id: str, req: CreateTestRunRequest):
+    try:
+        r = _test_run_registry.update(run_id, req.name, req.manifest_path,
+                                       req.env_config_path, req.extra_args)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="test run not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return r.to_dict()
+
+
+@app.post("/api/test-runs/{run_id}/start")
+def api_start_test_run(run_id: str):
+    try:
+        r = _test_run_registry.get(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="test run not found")
+    try:
+        r.start()
+    except (RuntimeError, FileNotFoundError) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return r.to_dict()
+
+
+@app.post("/api/test-runs/{run_id}/stop")
+def api_stop_test_run(run_id: str):
+    try:
+        r = _test_run_registry.get(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="test run not found")
+    r.stop()
+    return r.to_dict()
+
+
+@app.get("/api/test-runs/{run_id}/log")
+def api_test_run_log(run_id: str):
+    try:
+        r = _test_run_registry.get(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="test run not found")
+    return {"log": r.get_log()}
+
+
+@app.delete("/api/test-runs/{run_id}")
+def api_delete_test_run(run_id: str):
+    try:
+        _test_run_registry.delete(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="test run not found")
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return {"ok": True}

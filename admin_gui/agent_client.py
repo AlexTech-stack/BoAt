@@ -181,3 +181,66 @@ class AgentClient:
 
     def get_node_log(self, node_id: str) -> List[dict]:
         return self._request("GET", f"/api/nodes/{node_id}/log")["log"]
+
+    # ── Test runs ─────────────────────────────────────────────────────────
+    # `boat test run <manifest.json>` invocations -- the automated CI-style
+    # HIL suite runner, a different thing from the manual test/*.md
+    # TestSuite (see ui/launcher_agent.py's "Test runs" section). Same
+    # subprocess-lifecycle shape as nodes above.
+
+    def list_test_manifests(self) -> List[dict]:
+        return self._request("GET", "/api/test-manifests")["manifests"]
+
+    def list_test_environments(self) -> List[dict]:
+        return self._request("GET", "/api/test-environments")["environments"]
+
+    def list_test_runs(self) -> List[dict]:
+        return self._request("GET", "/api/test-runs")["runs"]
+
+    def get_test_run(self, run_id: str) -> dict:
+        return self._request("GET", f"/api/test-runs/{run_id}")
+
+    def create_test_run(
+        self,
+        manifest_path: str,
+        name: str = "",
+        env_config_path: str = "",
+        extra_args: Optional[List[str]] = None,
+    ) -> dict:
+        body = {
+            "name": name,
+            "manifest_path": manifest_path,
+            "env_config_path": env_config_path,
+            "extra_args": extra_args or [],
+        }
+        return self._request("POST", "/api/test-runs", json=body)
+
+    def update_test_run(
+        self,
+        run_id: str,
+        manifest_path: str,
+        name: str = "",
+        env_config_path: str = "",
+        extra_args: Optional[List[str]] = None,
+    ) -> dict:
+        """Edit a stopped test run's definition in place -- refused (409)
+        by the agent while it's running."""
+        body = {
+            "name": name,
+            "manifest_path": manifest_path,
+            "env_config_path": env_config_path,
+            "extra_args": extra_args or [],
+        }
+        return self._request("PUT", f"/api/test-runs/{run_id}", json=body)
+
+    def start_test_run(self, run_id: str) -> dict:
+        return self._request("POST", f"/api/test-runs/{run_id}/start", timeout=_LIFECYCLE_TIMEOUT)
+
+    def stop_test_run(self, run_id: str) -> dict:
+        return self._request("POST", f"/api/test-runs/{run_id}/stop", timeout=_LIFECYCLE_TIMEOUT)
+
+    def delete_test_run(self, run_id: str) -> None:
+        self._request("DELETE", f"/api/test-runs/{run_id}")
+
+    def get_test_run_log(self, run_id: str) -> List[dict]:
+        return self._request("GET", f"/api/test-runs/{run_id}/log")["log"]

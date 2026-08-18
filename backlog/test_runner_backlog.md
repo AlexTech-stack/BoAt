@@ -215,12 +215,72 @@ received, zero drops, routing time **0.512-0.689ms** (mean 0.583ms) --
 consistent with every earlier measurement, now obtained through nothing
 but the real product API.
 
-## Open questions for whoever continues this (not resolved, need the user's input)
+## Done (2026-08-18) — admin_gui "Test Runs" tab (Option A: reuse the Nodes plumbing)
 
-- The admin_gui integration question this whole investigation was in
-  service of is still open -- see the chat conversation (not restated
-  here) for the three shapes considered (new "Test Runs" tab reusing the
-  Nodes plumbing; deeper `TestHarness`↔`launcher_agent` integration;
-  view-only report browsing). Now that the underlying framework is
-  confirmed to actually work, and this specific real test passes cleanly,
-  this is unblocked whenever the user wants to pick it up.
+Of the three shapes considered above, built the first: a new **Test
+Runs** tab in `admin_gui` treating one `boat test run <manifest.json>`
+invocation as a third kind of agent-managed process, on the exact same
+subprocess-lifecycle plumbing already built for Nodes -- Popen +
+`PYTHONUNBUFFERED=1` + threaded log drain + status/exit_code tracking.
+Deliberately did *not* re-implement anything `TestSuiteRunner`/
+`TestHarness` already do (gateway lifecycle, report generation) -- the
+agent just runs the real CLI command and lets a client watch it.
+
+**Agent side** (`ui/launcher_agent.py`): new `TestRunInstance`/
+`TestRunRegistry` (own registry, not folded into `NodeRegistry`,
+mirroring how Nodes and Gateway instances are already kept separate).
+`_discover_test_manifests()`/`_discover_test_environments()` scan
+`config/tests/manifest_*.json` / `env_*.json` by naming convention (same
+discovery-by-convention pattern as `_discover_node_scripts()`).
+`_discover_boat_cli()` locates the `boat` console script (`BOAT_CLI_BIN`
+env override → `shutil.which("boat")` → literal `~/.local/bin/boat`
+fallback) -- needed because a non-interactively-started agent process may
+not have `~/.local/bin` on `PATH` even when `boat` is installed there
+(this exact gap was hit empirically: `shutil.which` alone failed on
+`agn-testcomputer` until the literal-path fallback was added). Resolved
+path surfaced as `"boat_cli_bin"` in `GET /api/host/info`. New REST
+surface: `GET /api/test-manifests`, `GET /api/test-environments`,
+`GET|POST /api/test-runs`, `GET|PUT /api/test-runs/{id}`,
+`POST /api/test-runs/{id}/start|stop`, `GET /api/test-runs/{id}/log`,
+`DELETE /api/test-runs/{id}` -- same 404/409 error-mapping conventions as
+the node endpoints.
+
+**Client side**: `agent_client.py` gained the matching
+`list_test_manifests`/`list_test_environments`/`*_test_run` methods
+(no Qt dependency, same as the rest of the file). `admin_gui/main.py`
+added a third tab: table (Host, Name, ID, Manifest, Environment, Result,
+Status, PID, Uptime), `NewTestRunDialog` (Manifest/Environment dropdowns
+populated from the selected host, manifest selection auto-pre-selects its
+own declared `environment_config` in the Environment dropdown while
+staying overridable -- mirrors `boat test run --config`'s own override
+semantics), a log viewer, and a read-only **Report directory** field +
+Copy button (deliberately no "Open" button: `report_dir` is a path on the
+*agent's* host filesystem, which in this federated architecture may not
+be the machine `admin_gui` itself runs on). `PollWorker` extended to poll
+test runs + the selected run's log alongside instances/nodes, same 2s
+cadence. Full details: `AGENTS.md`'s "Admin GUI" section and
+`admin_gui/README.md`'s "Test Runs tab" section.
+
+**Verified end-to-end on real hardware** (`agn-testcomputer`), twice:
+first via raw `curl` against the agent (manifest/environment discovery,
+create, start, watched `status`→`stopped`/`result`→`PASS`, confirmed real
+`report.json`/`report.junit.xml`/`report.html`/`stdout.txt` on disk,
+`extra_args` correctly reaching the invocation, delete), then again
+through the **actual Qt code path** (`PySide6.QtWidgets`, Xvfb + `xcb`, a
+throwaway driver script -- not committed): constructed a real
+`MainWindow`, confirmed the Test Runs tab's 9 columns, opened
+`NewTestRunDialog` non-modally and confirmed the manifest dropdown showed
+`can-loopback-routing-suite` with selecting it auto-pre-selecting
+`can-loopback-routing` in the Environment dropdown, submitted via the same
+`result_payload()`/`create_test_run()` call path `new_test_run()` uses,
+selected the resulting row, clicked the real **Start** button
+(`start_test_run_selected()`), and polled until the table showed
+`Result: PASS` with a populated real HIL log
+(`TC_CANLOOP_001: PASS (1334ms)`) and report-dir field. Screenshots
+confirmed the dialog and the passing tab render correctly. All test
+artifacts (test runs, `reports/admin_gui/`, the test agent process, Xvfb,
+the driver script) cleaned up afterward.
+
+Not yet done, flagged as a natural follow-up rather than in scope here:
+wiring test runs into `session.py`'s Save/Load Session (Nodes got that in
+a separate, later pass after their own tab first landed).

@@ -3,8 +3,10 @@
 A PySide6 desktop client for one or more `ui/launcher_agent.py` instances.
 Add a host per machine that runs gateways; the app polls each host's REST API
 and shows one aggregated table of every gateway instance across all of them,
-across two tabs: **Gateways** (`boat_gateway` processes) and **Nodes**
-(scripts under `boat-platform/nodes/`, see `AGENTS.md`).
+across three tabs: **Gateways** (`boat_gateway` processes), **Nodes**
+(scripts under `boat-platform/nodes/`, see `AGENTS.md`), and **Test Runs**
+(`boat test run <manifest.json>` invocations, the automated CI-style HIL
+suite runner).
 
 No SSH is involved anywhere in this app — it only ever calls each agent's own
 HTTP API, and each agent only ever touches processes on its own machine. See
@@ -164,6 +166,49 @@ own:
   agent-managed ones -- is captured by **Save Session…**, unlike the
   Gateways tab where only `Managed: Yes` rows are.)
 
+## Test Runs tab
+
+Treats one `boat test run <manifest.json>` invocation as a third kind of
+agent-managed process, reusing the same subprocess lifecycle as the Nodes
+tab (its own registry server-side, `TestRunInstance`/`TestRunRegistry` --
+deliberately separate from `NodeRegistry`). This is the automated,
+CI-style HIL suite runner (`boat_cli/test.py` + `sdk/python/boat/test/`)
+-- a different thing from the manual, hand-verified `test/*.md` TestSuite
+and from ctest/pytest unit tests.
+
+- Table columns: Host, Name, ID, Manifest, Environment, Result
+  (`PASS`/`FAIL`/`—` while still running or never started), Status, PID,
+  Uptime.
+- **New Test Run…**'s **Manifest** dropdown is populated from the selected
+  host's discovered `boat-platform/config/tests/manifest_*.json` files
+  (name + test count + description shown underneath), and **Environment**
+  from its `env_*.json` files -- both are local files read by `boat test
+  run` on that same host, so unlike a node's Target gateway there's no
+  cross-host resolution to do here. Picking a manifest pre-selects its own
+  declared `environment_config` in the Environment dropdown (still
+  overridable) -- mirrors `boat test run <manifest> --config <override>`'s
+  own semantics: the manifest's own choice is the default, an explicit
+  override wins.
+- **Extra args** is a flat free-text field (`shlex.split()` on submit,
+  e.g. `--stop-on-failure --parallel 2 --preflight -v`) rather than one
+  field per flag -- the `boat test run` flag surface is small and fixed
+  regardless of which manifest is picked, so there's no per-manifest
+  argument schema to introspect the way node scripts have.
+- Below the log viewer, a **Report directory** field shows the run's
+  `report_dir` (where `report.json`/`report.junit.xml`/`report.html` land,
+  relative to `boat-platform/` **on the agent's own host**) with a Copy
+  button -- deliberately no "Open" button: in the federated multi-host
+  case this app may not be running on that same machine, so
+  `QDesktopServices.openUrl()` on that path would be unreliable or wrong.
+- The agent locates the `boat` CLI itself (`BOAT_CLI_BIN` env override →
+  `shutil.which("boat")` → literal `~/.local/bin/boat` fallback, since a
+  non-interactively-started agent process may not have `~/.local/bin` on
+  `PATH` even when `boat` is installed there) and reports the resolved
+  path back as `boat_cli_bin` in `GET /api/host/info`.
+- Not yet included in **Save Session…**/**Load Session…** (Nodes gained
+  that in a later, separate pass after their own tab landed -- see "What's
+  not here yet" below).
+
 ## Session files (save/load your whole setup)
 
 **Save Session…** writes every added host and its **agent-managed**
@@ -224,6 +269,7 @@ cleanly either way.
   agent restart forgets stopped instances and nodes (see the backlog docs).
   Session files are the client-side answer to this (save before a
   restart, reload after — covers both Gateways and Nodes), but there's
-  still no automatic recovery.
+  still no automatic recovery. Test runs have the same gap and aren't in
+  session files at all yet (see the Test Runs tab section above).
 - No auth — same trust model as every other `ui/*.py`/`tools/*.py` service
   in this repo today (assumes a trusted lab network).

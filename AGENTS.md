@@ -386,6 +386,40 @@ shlex-based -- not the brace-aware tokenizer the Gateways one uses, since
 node args can contain quoted values with no JSON to protect), which does
 the same recognized/leftover split.
 
+A third tab, **Test Runs**, treats one `boat test run <manifest.json>`
+invocation (the automated CI-style HIL suite runner -- `boat_cli/test.py`,
+distinct from the manual, hand-verified `test/*.md` TestSuite and from
+ctest/pytest unit tests) as a third kind of agent-managed process, reusing
+the exact subprocess-lifecycle plumbing built for Nodes (`TestRunInstance`/
+`TestRunRegistry` in `launcher_agent.py`, its own registry -- deliberately
+not folded into `NodeRegistry`). Table columns: Host, Name, ID, Manifest,
+Environment, Result (PASS/FAIL/— once it's exited), Status, PID, Uptime.
+The New/Edit dialog's **Manifest** dropdown is populated from the selected
+host's `GET /api/test-manifests` (scans `boat-platform/config/tests/
+manifest_*.json`) and **Environment** from `GET /api/test-environments`
+(scans `env_*.json`) -- unlike a node's Target gateway, an environment
+config is a local file read by `boat test run` on the same host, so there's
+no cross-host resolution here. Selecting a manifest pre-selects its own
+declared `environment_config` in the Environment dropdown (still
+overridable), mirroring `boat test run <manifest> --config <override>`'s
+own semantics: the manifest's own choice is the default, an explicit
+override wins. **Extra args** is a flat free-text field (`shlex.split()` on
+submit, e.g. `--stop-on-failure --parallel 2 -v`) rather than one field per
+flag -- the `boat test run` flag surface is small and fixed regardless of
+manifest, so there's no per-manifest schema to build fields from the way
+node scripts have. The agent locates the `boat` CLI itself via
+`_discover_boat_cli()` (`BOAT_CLI_BIN` env override → `shutil.which("boat")`
+→ literal `~/.local/bin/boat` fallback, since a non-interactively-started
+agent process may not have `~/.local/bin` on `PATH` even when `boat` is
+installed there) and reports it back as `"boat_cli_bin"` in
+`GET /api/host/info`. A **Report directory** field under the log viewer
+shows the run's `report_dir` (relative to `boat-platform/` on the *agent's*
+host) with a Copy button -- deliberately no "Open" button, since in the
+federated multi-host case admin_gui may not be running on that same
+machine. Not yet wired into Save/Load Session (Nodes got that in a
+separate follow-up after their own tab landed; Test Runs would be a
+natural next step, not done here).
+
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages
 sudo apt install libxcb-cursor0             # Linux only -- system dep Qt6's xcb plugin needs

@@ -783,3 +783,76 @@ returning `"config_schema": {}` for them (`_introspect_plugin_config()`'s
 missing-sidecar-file path). Full account in
 `backlog/launcher_agent_backlog.md`'s "plugin config schema fields"
 entry.
+
+---
+
+### TC_AdminGui_018_test_runs_tab
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent with `boat` installed (`pip install -e
+  ./boat-platform/cli`), a discoverable manifest/environment pair under
+  `boat-platform/config/tests/` (`manifest_can_loopback.json` +
+  `env_can_loopback.json`), and the hardware that manifest needs
+  (physical `can0`/`can1` bridged at the transceiver level)
+
+**TestSteps:**
+1. Switch to the **Test Runs** tab; inspect the table's columns
+2. Open **New Test Run…**; inspect the Manifest dropdown, then select
+   `can-loopback-routing-suite` and inspect the Environment dropdown
+3. Fill Name + Extra args (`--verbose`), submit; select the created row
+4. Click **Start**; watch the table and log viewer until the run finishes
+5. Inspect the Report directory field
+
+**Expected:**
+- Step 1: columns are Host, Name, ID, Manifest, Environment, Result,
+  Status, PID, Uptime
+- Step 2: Manifest dropdown populated from `GET /api/test-manifests`
+  (shows test count); selecting the manifest auto-pre-selects its own
+  declared `environment_config` in the Environment dropdown (still
+  overridable) -- mirrors `boat test run --config`'s own override
+  semantics
+- Step 4: `Status` goes to `running` with a real PID, then back to
+  `stopped`; `Result` becomes `PASS`; the log viewer shows the real `boat
+  test run` output including the `--verbose` lines and the test case's
+  own pass line
+- Step 5: shows the run's real `report_dir`, relative to `boat-platform/`
+  on the agent's host
+
+**Verdict:** OK
+
+**Result:**
+Verified twice on real hardware (`agn-testcomputer`), on an isolated
+scratch agent (port 8090) + Xvfb (`:44`), confirmed via `ps`/`ss` not to
+disturb the user's own live agent/gateway throughout. First via raw
+`curl` against the agent directly (manifest/environment discovery,
+create, start, watched `status`→`stopped`/`result`→`PASS`, confirmed real
+`report.json`/`report.junit.xml`/`report.html`/`stdout.txt` written to
+disk, `extra_args` reaching the invocation, delete) before touching Qt at
+all. Then through the actual Qt code path (`QT_QPA_PLATFORM=xcb`, a
+throwaway driver script, not committed): constructed a real `MainWindow`,
+confirmed the Test Runs tab's 9 columns exactly. Opened `NewTestRunDialog`
+non-modally -- Manifest dropdown showed `can-loopback-routing-suite  (1
+test(s))`; selecting it auto-selected `can-loopback-routing
+(localhost:50067)` in the Environment dropdown, `currentData()` correctly
+ending in `env_can_loopback.json`. Submitted via the same
+`result_payload()` → `AgentClient.create_test_run()` call path
+`new_test_run()` itself makes, selected the resulting row via a real
+`test_run_table.selectRow()`, and called the real
+`start_test_run_selected()` method. Polled (2s cadence, same
+`PollWorker`) until the table showed `Result: PASS`/`Status: stopped`
+(~3s later): real HIL log content in the viewer (`[test] Gateway at
+localhost:50067`, `TC_CANLOOP_001: PASS (1334ms)`, `Results: 1/1 passed,
+0 failed`), report-dir field showing `reports/admin_gui/<id>`.
+Screenshots confirmed both the populated dialog (manifest/environment doc
+labels rendering correctly underneath each dropdown) and the passing tab
+row. All test artifacts (test runs, `reports/admin_gui/`, the scratch
+agent process, Xvfb, the driver script) cleaned up afterward. One test-script
+bug caught and fixed along the way, not a product bug: the driver's first
+pass treated the run's initial (never-started) `status: "stopped"` as
+"finished," racing ahead of the real completion -- fixed by waiting for a
+non-`None` `result` instead of the `"stopped"` status text, since a
+freshly-created run is also reported `"stopped"` before it's ever started.
+Full account: `backlog/test_runner_backlog.md`'s "admin_gui Test Runs
+tab" entry.

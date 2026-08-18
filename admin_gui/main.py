@@ -174,6 +174,29 @@ def _parse_node_command_line(text: str) -> dict:
     return {"target_host": target_host, "script_path": tokens[i], "extra_args": tokens[i + 1:]}
 
 
+def _format_test_run_manifest(run: dict) -> str:
+    return os.path.basename(run.get("manifest_path", "")) or "—"
+
+
+def _format_test_run_env(run: dict) -> str:
+    """The env_config_path override, or "(default)" when the run just
+    uses whatever environment_config its manifest itself points at --
+    distinguishing "explicitly this one" from "manifest's own choice" is
+    the point, not just showing a blank cell."""
+    path = run.get("env_config_path")
+    return os.path.basename(path) if path else "(default)"
+
+
+def _format_test_run_args(run: dict) -> str:
+    args = run.get("extra_args") or []
+    return " ".join(args) if args else "—"
+
+
+def _format_test_run_result(run: dict) -> str:
+    result = run.get("result")
+    return result if result else "—"
+
+
 _KNOWN_ENV_VARS = {
     "BOAT_CAN_INTERFACES", "BOAT_ETH_INTERFACES", "BOAT_GRPC_PORT",
     "BOAT_NODE_PLUGINS", "BOAT_NODE_TICK_MS", "BOAT_NODE_TICK_US",
@@ -293,21 +316,25 @@ def _parse_command_line(text: str) -> dict:
 
 
 class PollWorker(QThread):
-    """Background thread: polls every configured host's /api/instances and
-    /api/nodes (and the selected instance's/node's log, if any) on a fixed
-    interval, emitting results back to the UI thread via signals."""
+    """Background thread: polls every configured host's /api/instances,
+    /api/nodes and /api/test-runs (and the selected instance's/node's/test
+    run's log, if any) on a fixed interval, emitting results back to the UI
+    thread via signals."""
 
     snapshot_ready = Signal(dict)        # {host_url: {"name":..., "ok":bool, "instances":[...], "error":str|None}}
     log_ready = Signal(str, list)        # (instance_id, log_lines)
     node_snapshot_ready = Signal(dict)   # {host_url: {"name":..., "ok":bool, "nodes":[...], "error":str|None}}
     node_log_ready = Signal(str, list)   # (node_id, log_lines)
+    test_run_snapshot_ready = Signal(dict)  # {host_url: {"name":..., "ok":bool, "runs":[...], "error":str|None}}
+    test_run_log_ready = Signal(str, list)  # (run_id, log_lines)
 
-    def __init__(self, get_hosts, get_selected, get_selected_node,
+    def __init__(self, get_hosts, get_selected, get_selected_node, get_selected_test_run,
                  interval: float = _POLL_INTERVAL_SEC, parent=None):
         super().__init__(parent)
         self._get_hosts = get_hosts
         self._get_selected = get_selected
         self._get_selected_node = get_selected_node
+        self._get_selected_test_run = get_selected_test_run
         self._interval = interval
         self._running = True
 
@@ -318,6 +345,7 @@ class PollWorker(QThread):
         while self._running:
             snapshot = {}
             node_snapshot = {}
+            test_run_snapshot = {}
             for host in self._get_hosts():
                 client = AgentClient(host["url"])
                 try:
@@ -330,9 +358,15 @@ class PollWorker(QThread):
                     node_snapshot[host["url"]] = {"name": host["name"], "ok": True, "nodes": nodes, "error": None}
                 except AgentError as e:
                     node_snapshot[host["url"]] = {"name": host["name"], "ok": False, "nodes": [], "error": str(e)}
+                try:
+                    runs = client.list_test_runs()
+                    test_run_snapshot[host["url"]] = {"name": host["name"], "ok": True, "runs": runs, "error": None}
+                except AgentError as e:
+                    test_run_snapshot[host["url"]] = {"name": host["name"], "ok": False, "runs": [], "error": str(e)}
             if self._running:
                 self.snapshot_ready.emit(snapshot)
                 self.node_snapshot_ready.emit(node_snapshot)
+                self.test_run_snapshot_ready.emit(test_run_snapshot)
 
             selected = self._get_selected()
             if selected and self._running:
@@ -349,6 +383,15 @@ class PollWorker(QThread):
                 try:
                     log = AgentClient(host_url).get_node_log(node_id)
                     self.node_log_ready.emit(node_id, log)
+                except AgentError:
+                    pass
+
+            selected_test_run = self._get_selected_test_run()
+            if selected_test_run and self._running:
+                host_url, run_id = selected_test_run
+                try:
+                    log = AgentClient(host_url).get_test_run_log(run_id)
+                    self.test_run_log_ready.emit(run_id, log)
                 except AgentError:
                     pass
 
@@ -1090,6 +1133,186 @@ class NewNodeDialog(QDialog):
         }
 
 
+class NewTestRunDialog(QDialog):
+    """New/Edit dialog for a test run -- one invocation of `boat test run
+    <manifest.json>` (the automated CI-style HIL suite runner, not the
+    manual test/*.md TestSuite). Same doubles-as-Edit pattern as
+    NewInstanceDialog/NewNodeDialog.
+
+    Manifest and Environment dropdowns are both populated from the
+    selected host's GET /api/test-manifests / /api/test-environments
+    (both discovered by scanning boat-platform/config/tests/ on that
+    host) -- unlike a node's Target gateway, an environment config is a
+    *local file* read by `boat test run` on the same host, so there's no
+    cross-host resolution to do here the way Nodes' Target gateway
+    dropdown needs.
+
+    Selecting a manifest pre-selects its own declared environment_config
+    in the Environment dropdown (still overridable) -- mirrors `boat test
+    run <manifest> --config <override>`'s own semantics: the manifest's
+    environment_config is the default, an explicit --config overrides it.
+
+    Extra args is a free-text field (shlex-split on submit) for anything
+    else `boat test run` accepts (--stop-on-failure, --parallel N,
+    --preflight, --no-html, --allure DIR, --trace-format, --recorder-url,
+    -v/--verbose) -- deliberately flat rather than one field per flag,
+    matching Nodes' Extra Args: the flag surface here is modest and fixed
+    (it's the same `boat test run` CLI regardless of which manifest is
+    picked), so there's no per-manifest argument schema to introspect and
+    build fields from the way node scripts have."""
+
+    def __init__(self, hosts: list, parent=None, existing: Optional[dict] = None,
+                 existing_host_url: Optional[str] = None):
+        super().__init__(parent)
+        editing = existing is not None
+        self.setWindowTitle("Edit Test Run" if editing else "New Test Run")
+        self.resize(560, 420)
+        layout = QFormLayout(self)
+
+        self.host_combo = QComboBox()
+        for h in hosts:
+            self.host_combo.addItem(f"{h['name']} ({h['url']})", h["url"])
+        if editing and existing_host_url:
+            idx = self.host_combo.findData(existing_host_url)
+            if idx >= 0:
+                self.host_combo.setCurrentIndex(idx)
+            self.host_combo.setEnabled(False)
+        layout.addRow("Host:", self.host_combo)
+
+        self.name_edit = QLineEdit(existing.get("name", "") if editing else "")
+        layout.addRow("Name:", self.name_edit)
+
+        self.manifest_combo = QComboBox()
+        layout.addRow("Manifest:", self.manifest_combo)
+
+        self.manifest_doc_label = QLabel("")
+        self.manifest_doc_label.setWordWrap(True)
+        self.manifest_doc_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addRow("", self.manifest_doc_label)
+
+        self.env_combo = QComboBox()
+        layout.addRow("Environment:", self.env_combo)
+
+        self.env_doc_label = QLabel("")
+        self.env_doc_label.setWordWrap(True)
+        self.env_doc_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addRow("", self.env_doc_label)
+
+        self.extra_args_edit = QLineEdit(
+            shlex.join(existing.get("extra_args", [])) if editing else ""
+        )
+        self.extra_args_edit.setPlaceholderText(
+            '--stop-on-failure --parallel 2 --preflight -v'
+        )
+        layout.addRow("Extra args:", self.extra_args_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+        self.host_combo.currentIndexChanged.connect(self._reload_manifests_and_envs)
+        self.manifest_combo.currentIndexChanged.connect(self._on_manifest_changed)
+        self.env_combo.currentIndexChanged.connect(self._update_env_doc_label)
+        self._reload_manifests_and_envs()
+
+        if editing:
+            idx = self.manifest_combo.findData(existing.get("manifest_path", ""))
+            if idx >= 0:
+                self.manifest_combo.setCurrentIndex(idx)
+            self._on_manifest_changed()  # defensive re-run -- see NewNodeDialog's
+                                          # equivalent comment on why this matters
+                                          # even when setCurrentIndex() didn't change
+                                          # anything (index already matched)
+            env_path = existing.get("env_config_path", "")
+            if env_path:
+                idx = self.env_combo.findData(env_path)
+                if idx >= 0:
+                    self.env_combo.setCurrentIndex(idx)  # overrides the manifest-driven default
+            self._update_env_doc_label()
+
+    def selected_host_url(self) -> str:
+        return self.host_combo.currentData()
+
+    def _reload_manifests_and_envs(self) -> None:
+        url = self.selected_host_url()
+        if not url:
+            return
+        try:
+            client = AgentClient(url)
+            manifests = client.list_test_manifests()
+            environments = client.list_test_environments()
+        except AgentError:
+            return  # host unreachable right now -- leave the combos as-is
+
+        current_manifest = self.manifest_combo.currentData()
+        self.manifest_combo.clear()
+        for m in manifests:
+            label = f"{m['name']}  ({m.get('test_count', 0)} test(s))"
+            self.manifest_combo.addItem(label, m["path"])
+            idx = self.manifest_combo.count() - 1
+            self.manifest_combo.setItemData(idx, m.get("description", ""), Qt.UserRole + 1)
+            self.manifest_combo.setItemData(idx, m.get("environment_config", ""), Qt.UserRole + 2)
+        if current_manifest:
+            idx = self.manifest_combo.findData(current_manifest)
+            if idx >= 0:
+                self.manifest_combo.setCurrentIndex(idx)
+
+        current_env = self.env_combo.currentData()
+        self.env_combo.clear()
+        self.env_combo.addItem("(manifest default)", "")
+        for e in environments:
+            self.env_combo.addItem(f"{e['name']}  ({e.get('gateway_address', '?')})", e["path"])
+            self.env_combo.setItemData(self.env_combo.count() - 1, e.get("description", ""), Qt.UserRole + 1)
+        if current_env:
+            idx = self.env_combo.findData(current_env)
+            if idx >= 0:
+                self.env_combo.setCurrentIndex(idx)
+
+        self._on_manifest_changed()
+
+    def _on_manifest_changed(self) -> None:
+        """Selecting a manifest pre-selects its own declared
+        environment_config in the Environment dropdown, if that config is
+        one this host actually discovered -- still overridable afterward,
+        matching `boat test run`'s own --config semantics (the manifest's
+        environment_config is the default, an explicit override wins)."""
+        self._update_manifest_doc_label()
+        idx = self.manifest_combo.currentIndex()
+        default_env = self.manifest_combo.itemData(idx, Qt.UserRole + 2) if idx >= 0 else None
+        if default_env:
+            env_idx = self.env_combo.findData(default_env)
+            if env_idx >= 0:
+                self.env_combo.setCurrentIndex(env_idx)
+        self._update_env_doc_label()
+
+    def _update_manifest_doc_label(self) -> None:
+        idx = self.manifest_combo.currentIndex()
+        doc = self.manifest_combo.itemData(idx, Qt.UserRole + 1) if idx >= 0 else None
+        self.manifest_doc_label.setText(doc or "")
+
+    def _update_env_doc_label(self) -> None:
+        idx = self.env_combo.currentIndex()
+        doc = self.env_combo.itemData(idx, Qt.UserRole + 1) if idx >= 0 else None
+        self.env_doc_label.setText(doc or "")
+
+    def result_payload(self) -> dict:
+        manifest_path = self.manifest_combo.currentData()
+        if not manifest_path:
+            raise ValueError("select a manifest")
+        env_config_path = self.env_combo.currentData() or ""
+        try:
+            extra_args = shlex.split(self.extra_args_edit.text().strip())
+        except ValueError as e:
+            raise ValueError(f"invalid extra args: {e}") from e
+        return {
+            "name": self.name_edit.text().strip(),
+            "manifest_path": manifest_path,
+            "env_config_path": env_config_path,
+            "extra_args": extra_args,
+        }
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -1101,6 +1324,8 @@ class MainWindow(QMainWindow):
         self._selected: Optional[Tuple[str, str]] = None  # (host_url, instance_id)
         self._node_snapshot: dict = {}
         self._selected_node: Optional[Tuple[str, str]] = None  # (host_url, node_id)
+        self._test_run_snapshot: dict = {}
+        self._selected_test_run: Optional[Tuple[str, str]] = None  # (host_url, run_id)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -1133,16 +1358,20 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_gateways_tab(), "Gateways")
         self.tabs.addTab(self._build_nodes_tab(), "Nodes")
+        self.tabs.addTab(self._build_test_runs_tab(), "Test Runs")
         root.addWidget(self.tabs, 1)
 
         self.statusBar()
         self.refresh_host_list()
 
-        self.worker = PollWorker(self.host_store.list, lambda: self._selected, lambda: self._selected_node)
+        self.worker = PollWorker(self.host_store.list, lambda: self._selected,
+                                  lambda: self._selected_node, lambda: self._selected_test_run)
         self.worker.snapshot_ready.connect(self.on_snapshot)
         self.worker.log_ready.connect(self.on_log)
         self.worker.node_snapshot_ready.connect(self.on_node_snapshot)
         self.worker.node_log_ready.connect(self.on_node_log)
+        self.worker.test_run_snapshot_ready.connect(self.on_test_run_snapshot)
+        self.worker.test_run_log_ready.connect(self.on_test_run_log)
         self.worker.start()
 
     def _build_gateways_tab(self) -> QWidget:
@@ -1250,6 +1479,68 @@ class MainWindow(QMainWindow):
         copy_btn.clicked.connect(self._copy_node_command_line)
         cmd_row.addWidget(copy_btn)
         layout.addLayout(cmd_row)
+
+        return tab
+
+    def _build_test_runs_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # ── Test run table ──
+        self.test_run_table = QTableWidget(0, 9)
+        self.test_run_table.setHorizontalHeaderLabels(
+            ["Host", "Name", "ID", "Manifest", "Environment", "Result", "Status", "PID", "Uptime"]
+        )
+        self.test_run_table.horizontalHeader().setStretchLastSection(True)
+        self.test_run_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.test_run_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.test_run_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.test_run_table.itemSelectionChanged.connect(self.on_test_run_selection_changed)
+        layout.addWidget(self.test_run_table, 2)
+
+        # ── Actions ──
+        actions = QHBoxLayout()
+        new_btn = QPushButton("New Test Run…")
+        new_btn.clicked.connect(self.new_test_run)
+        edit_btn = QPushButton("Edit…")
+        edit_btn.clicked.connect(self.edit_test_run_selected)
+        start_btn = QPushButton("Start")
+        start_btn.clicked.connect(self.start_test_run_selected)
+        stop_btn = QPushButton("Stop")
+        stop_btn.clicked.connect(self.stop_test_run_selected)
+        delete_btn = QPushButton("Delete")
+        delete_btn.clicked.connect(self.delete_test_run_selected)
+        for b in (new_btn, edit_btn, start_btn, stop_btn, delete_btn):
+            actions.addWidget(b)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+
+        # ── Log viewer ──
+        layout.addWidget(QLabel("Log (selected test run):"))
+        self.test_run_log_view = QPlainTextEdit()
+        self.test_run_log_view.setReadOnly(True)
+        self.test_run_log_view.setMaximumBlockCount(2000)
+        layout.addWidget(self.test_run_log_view, 1)
+
+        # ── Report directory ──
+        # Just the path, not an "Open" button: report_dir is a path on the
+        # *agent's* host filesystem, which in the general federated case
+        # (see AGENTS.md's Launcher Agent section) isn't the machine this
+        # app is running on -- QDesktopServices.openUrl() on it would try
+        # to open a local path that may not exist here at all. Showing it
+        # as selectable/copyable text is honest about what's actually
+        # reachable from a remote client; browse it however this host is
+        # otherwise reached (ssh, a shared mount, ...).
+        layout.addWidget(QLabel("Report directory (selected test run, relative to boat-platform/ on that host):"))
+        report_row = QHBoxLayout()
+        self.test_run_report_view = QLineEdit()
+        self.test_run_report_view.setReadOnly(True)
+        self.test_run_report_view.setPlaceholderText("Select a test run to see where its reports are written")
+        report_row.addWidget(self.test_run_report_view, 1)
+        copy_report_btn = QPushButton("Copy")
+        copy_report_btn.clicked.connect(self._copy_test_run_report_dir)
+        report_row.addWidget(copy_report_btn)
+        layout.addLayout(report_row)
 
         return tab
 
@@ -1712,6 +2003,173 @@ class MainWindow(QMainWindow):
         client = AgentClient(host_url)
         try:
             client.update_node(node_id, **payload)
+        except AgentError as e:
+            QMessageBox.warning(self, "Edit failed", str(e))
+
+    # ── Test runs ────────────────────────────────────────────────────────
+
+    def on_test_run_snapshot(self, snapshot: dict) -> None:
+        self._test_run_snapshot = snapshot
+        self.rebuild_test_run_table()
+
+    def rebuild_test_run_table(self) -> None:
+        rows = []
+        for host_url, data in self._test_run_snapshot.items():
+            for run in data.get("runs", []):
+                rows.append((host_url, data["name"], run))
+
+        self.test_run_table.blockSignals(True)
+        self.test_run_table.setRowCount(len(rows))
+        select_row = None
+        for r, (host_url, host_name, run) in enumerate(rows):
+            key = (host_url, run["id"])
+            if self._selected_test_run == key:
+                select_row = r
+            uptime = f"{run['uptime_sec']:.0f}s" if run.get("uptime_sec") is not None else "—"
+            values = [
+                host_name, run["name"], run["id"], _format_test_run_manifest(run),
+                _format_test_run_env(run), _format_test_run_result(run), run["status"],
+                str(run["pid"] or "—"), uptime,
+            ]
+            for c, v in enumerate(values):
+                item = QTableWidgetItem(v)
+                item.setData(Qt.UserRole, key)
+                self.test_run_table.setItem(r, c, item)
+        if select_row is not None:
+            self.test_run_table.selectRow(select_row)
+        elif self._selected_test_run is not None:
+            # Same stale-selection hazard as rebuild_table()/rebuild_node_table()
+            # -- clear both the visual selection and the tracked id when the
+            # previously-selected run no longer appears in this snapshot.
+            self.test_run_table.clearSelection()
+            self._selected_test_run = None
+            self.test_run_log_view.clear()
+        self.test_run_table.blockSignals(False)
+        self.test_run_table.resizeColumnsToContents()
+        self._update_test_run_report_dir()
+
+    def find_test_run(self, host_url: str, run_id: str) -> Optional[dict]:
+        data = self._test_run_snapshot.get(host_url)
+        if not data:
+            return None
+        for run in data.get("runs", []):
+            if run["id"] == run_id:
+                return run
+        return None
+
+    def on_test_run_selection_changed(self) -> None:
+        items = self.test_run_table.selectedItems()
+        if not items:
+            self._selected_test_run = None
+            self._update_test_run_report_dir()
+            return
+        key = items[0].data(Qt.UserRole)
+        if key != self._selected_test_run:
+            self.test_run_log_view.clear()
+        self._selected_test_run = key
+        self._update_test_run_report_dir()
+
+    def _update_test_run_report_dir(self) -> None:
+        if not self._selected_test_run:
+            self.test_run_report_view.clear()
+            return
+        host_url, run_id = self._selected_test_run
+        run = self.find_test_run(host_url, run_id)
+        self.test_run_report_view.setText((run or {}).get("report_dir", ""))
+
+    def _copy_test_run_report_dir(self) -> None:
+        text = self.test_run_report_view.text()
+        if text:
+            QApplication.clipboard().setText(text)
+
+    def on_test_run_log(self, run_id: str, log_lines: list) -> None:
+        if not self._selected_test_run or self._selected_test_run[1] != run_id:
+            return
+        self.test_run_log_view.setPlainText("\n".join(f"{l['ts']}  {l['text']}" for l in log_lines))
+        sb = self.test_run_log_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    # ── Test run actions ─────────────────────────────────────────────────
+
+    def _selected_test_run_client_and_id(self):
+        if not self._selected_test_run:
+            QMessageBox.information(self, "No selection", "Select a test run in the table first.")
+            return None
+        host_url, run_id = self._selected_test_run
+        return AgentClient(host_url), run_id
+
+    def start_test_run_selected(self) -> None:
+        res = self._selected_test_run_client_and_id()
+        if not res:
+            return
+        client, run_id = res
+        try:
+            client.start_test_run(run_id)
+        except AgentError as e:
+            QMessageBox.warning(self, "Start failed", str(e))
+
+    def stop_test_run_selected(self) -> None:
+        res = self._selected_test_run_client_and_id()
+        if not res:
+            return
+        client, run_id = res
+        try:
+            client.stop_test_run(run_id)
+        except AgentError as e:
+            QMessageBox.warning(self, "Stop failed", str(e))
+
+    def delete_test_run_selected(self) -> None:
+        res = self._selected_test_run_client_and_id()
+        if not res:
+            return
+        client, run_id = res
+        if QMessageBox.question(self, "Delete", "Delete this test run definition?") != QMessageBox.Yes:
+            return
+        try:
+            client.delete_test_run(run_id)
+        except AgentError as e:
+            QMessageBox.warning(self, "Delete failed", str(e))
+
+    def new_test_run(self) -> None:
+        hosts = self.host_store.list()
+        if not hosts:
+            QMessageBox.information(self, "New Test Run", "Add a host first.")
+            return
+        dlg = NewTestRunDialog(hosts, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        try:
+            payload = dlg.result_payload()
+        except ValueError as e:
+            QMessageBox.warning(self, "New Test Run", str(e))
+            return
+        client = AgentClient(dlg.selected_host_url())
+        try:
+            client.create_test_run(**payload)
+        except AgentError as e:
+            QMessageBox.warning(self, "Create failed", str(e))
+
+    def edit_test_run_selected(self) -> None:
+        if not self._selected_test_run:
+            QMessageBox.information(self, "No selection", "Select a test run in the table first.")
+            return
+        host_url, run_id = self._selected_test_run
+        run = self.find_test_run(host_url, run_id)
+        if run is None:
+            QMessageBox.warning(self, "Edit", "Test run not found (it may have just been removed).")
+            return
+        hosts = self.host_store.list()
+        dlg = NewTestRunDialog(hosts, self, existing=run, existing_host_url=host_url)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        try:
+            payload = dlg.result_payload()
+        except ValueError as e:
+            QMessageBox.warning(self, "Edit", str(e))
+            return
+        client = AgentClient(host_url)
+        try:
+            client.update_test_run(run_id, **payload)
         except AgentError as e:
             QMessageBox.warning(self, "Edit failed", str(e))
 
