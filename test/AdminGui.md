@@ -446,27 +446,29 @@ steps above.
 - Two agent-managed instances running (one with a plugin config, an eth
   interface, and an explicit gRPC port) plus one externally-started
   process on the same host; one node defined, targeting one of the
-  instances
+  instances; one test run defined (see the 2026-08-18 update below)
 
 **TestSteps:**
 1. **Save Session…** to a file; inspect its contents
-2. Stop+delete both managed instances, the node, and kill the external
-   process (wipe the host clean)
+2. Stop+delete both managed instances, the node, the test run, and kill
+   the external process (wipe the host clean)
 3. In a **fresh** app instance with no hosts configured, **Load
    Session…** that file
-4. Inspect the resulting hosts, instances, and nodes
+4. Inspect the resulting hosts, instances, nodes, and test runs
 
 **Expected:**
 - Step 1's file contains exactly the two agent-managed instances with
   every field (interfaces, plugin path+config, port, gateway binary)
-  matching what was actually running, and the node with every field
-  (script path, target host, extra args) matching; the external process
-  is absent
-- Step 3/4: the host is added, and both instances plus the node are
-  defined again with fields matching the saved definitions exactly, under
-  **new** ids -- but left **stopped** (unlike `docker-compose up`, Load
-  Session does not start anything automatically -- confirmed per user
-  request after the first pass of this feature auto-started them)
+  matching what was actually running, the node with every field (script
+  path, target host, extra args) matching, and the test run with every
+  field (manifest path, environment config path, extra args) matching;
+  the external process is absent
+- Step 3/4: the host is added, and both instances plus the node and the
+  test run are defined again with fields matching the saved definitions
+  exactly, under **new** ids -- but left **stopped** (unlike
+  `docker-compose up`, Load Session does not start anything automatically
+  -- confirmed per user request after the first pass of this feature
+  auto-started them)
 
 **Verdict:** OK
 
@@ -508,6 +510,45 @@ pass with doubled counts on both instances and nodes -- not a bug in this
 feature, correct behavior for two distinct host entries that both happen
 to alias the same agent; cleaned up and re-verified cleanly with one host
 entry.
+
+**Update (2026-08-18):** extended to cover the Test Runs tab per user
+request ("Now wire it in so the tests can also be saved and loaded").
+`session.py`'s `load_session()` return tuple grew a `test_runs_created`
+count (a breaking signature change, its one call site in
+`MainWindow.load_session()` updated to match). Verified two ways on real
+hardware (`agn-testcomputer`), on an **isolated test agent (port 8097)**
+-- deliberately not the usual 8090, since the user's own live agent was
+already running there; confirmed via `ps`/`ss` before starting anything,
+and confirmed untouched throughout: (1) headless, calling `session.py`
+directly -- created one instance, one node, and one test run
+(`manifest_path=config/tests/manifest_can_loopback.json`,
+`env_config_path=config/tests/env_can_loopback.json`,
+`extra_args=[--verbose]`), saved, wiped all three, reloaded -- all three
+recreated with every field matching exactly, `test_runs_created == 1`,
+`status: "stopped"`; (2) through real Qt code (`QT_QPA_PLATFORM=offscreen`)
+driving the real `MainWindow.save_session()`/`load_session()` handlers
+(`QFileDialog` statics monkeypatched to a fixed path). The real,
+unmodified save correctly also captured the user's own live host's own
+real definitions (including their own pre-existing test run) in the same
+file, since `save_session()` saves every configured host and that step is
+read-only; before exercising the real `load_session()`, the saved YAML
+was trimmed to just this test's isolated host entry first (so the load
+call -- itself untouched -- couldn't try to recreate the user's own
+managed definitions a second time against their live agent). Confirmed
+the captured info-dialog text read exactly "Session loaded: 0 new
+host(s) added, 1 instance(s), 1 node(s), and 1 test run(s) created", all
+three recreated under fresh ids, and the reloaded run visible in the real
+`test_run_table` widget. One real hang caught and fixed in the driver
+script (not a product bug): `save_session()`/`load_session()` end with a
+modal `QMessageBox.information()`/`.warning()` whose `.exec()` genuinely
+blocks the calling thread until dismissed -- true even under
+`QT_QPA_PLATFORM=offscreen` -- so with no user to click OK the first
+attempt hung indefinitely; fixed by monkeypatching `QMessageBox.
+information`/`.warning` to capture the message text instead of showing
+it. All test artifacts (instances, nodes, test runs, the isolated agent
+process, its host-store entry, session files) cleaned up afterward. Full
+account: `backlog/test_runner_backlog.md`'s "wired test runs into
+Save/Load Session" entry.
 
 ---
 

@@ -205,20 +205,21 @@ and from ctest/pytest unit tests.
   non-interactively-started agent process may not have `~/.local/bin` on
   `PATH` even when `boat` is installed there) and reports the resolved
   path back as `boat_cli_bin` in `GET /api/host/info`.
-- Not yet included in **Save Session…**/**Load Session…** (Nodes gained
-  that in a later, separate pass after their own tab landed -- see "What's
-  not here yet" below).
+- Included in **Save Session…**/**Load Session…**, same as instances and
+  nodes -- see "Session files" below.
 
 ## Session files (save/load your whole setup)
 
 **Save Session…** writes every added host and its **agent-managed**
 instance *definitions* (name, interfaces, plugins+configs, port, tick
-settings, gateway binary) **and every node definition** (name, script
-path, target gateway, extra args) to a YAML file, docker-compose-style —
-a recipe, not a live snapshot. Externally-discovered (`Managed: No`)
-gateway rows are never included, since there's no owned definition to
-save for them; every node is included, since every node is agent-created
-already (see the Nodes tab section above).
+settings, gateway binary), **every node definition** (name, script path,
+target gateway, extra args), **and every test-run definition** (name,
+manifest path, environment config path, extra args) to a YAML file,
+docker-compose-style — a recipe, not a live snapshot. Externally-discovered
+(`Managed: No`) gateway rows are never included, since there's no owned
+definition to save for them; every node and every test run is included,
+since both are agent-created already (see the Nodes/Test Runs tab
+sections above).
 
 ```yaml
 version: '1'
@@ -241,35 +242,42 @@ hosts:
     script_path: /home/.../nodes/can_request_responder.py
     target_host: localhost:50051
     extra_args: [--iface, vcan0, --request-id, '0x7E0']
+  test_runs:
+  - name: routing-check
+    manifest_path: config/tests/manifest_can_loopback.json
+    env_config_path: config/tests/env_can_loopback.json
+    extra_args: [--verbose]
 ```
 
 **Load Session…** adds every host in the file (skipping ones already
-present) and, for every saved instance and node, creates a fresh one from
-that definition — left **stopped** (unlike `docker-compose up`, loading
-does not start anything automatically; review the tables and hit Start on
-what you want). It's a recipe replay either way: a loaded instance/node
-never resumes the exact old process, it gets a new id every time. A
-node's saved `target_host` is whatever concrete address it already
-resolved to (e.g. `localhost:50051`) — it just needs that address to be
-reachable after the load, not the *other* host to be in this same session
-file (a node can point at a gateway on a host this session doesn't even
-list). Loading the same file twice against a host that still has those
-instances *running* will hit a port conflict on the second load for
-instances (the saved `grpc_port` is explicit, not auto-allocated) — nodes
-have no such conflict (no port of their own) and will just create
-additional, separate node rows — stop/remove first if you want to reload
-cleanly either way.
+present) and, for every saved instance, node, and test run, creates a
+fresh one from that definition — left **stopped** (unlike `docker-compose
+up`, loading does not start anything automatically; review the tables and
+hit Start on what you want). It's a recipe replay either way: a loaded
+instance/node/test run never resumes the exact old process, it gets a new
+id every time. A node's saved `target_host` is whatever concrete address
+it already resolved to (e.g. `localhost:50051`) — it just needs that
+address to be reachable after the load, not the *other* host to be in
+this same session file (a node can point at a gateway on a host this
+session doesn't even list). A test run's saved `manifest_path`/
+`env_config_path` are the relative paths the agent itself reported
+(relative to `boat-platform/` on that host) — it just needs those files
+to still exist on that host. Loading the same file twice against a host
+that still has those instances *running* will hit a port conflict on the
+second load for instances (the saved `grpc_port` is explicit, not
+auto-allocated) — nodes and test runs have no such conflict (no port of
+their own) and will just create additional, separate rows — stop/remove
+first if you want to reload cleanly either way.
 
 ## What's not here yet
 
 - No interface-creation UI (create vcan/veth from this app) — the agent
   doesn't expose that yet either; use `ui/launcher.py`'s browser UI for
   interface setup on a given host for now.
-- No persistence for *instance/node definitions* on the agent side — an
-  agent restart forgets stopped instances and nodes (see the backlog docs).
-  Session files are the client-side answer to this (save before a
-  restart, reload after — covers both Gateways and Nodes), but there's
-  still no automatic recovery. Test runs have the same gap and aren't in
-  session files at all yet (see the Test Runs tab section above).
+- No persistence for *instance/node/test-run definitions* on the agent
+  side — an agent restart forgets stopped instances, nodes, and test runs
+  (see the backlog docs). Session files are the client-side answer to
+  this (save before a restart, reload after — covers Gateways, Nodes, and
+  Test Runs alike), but there's still no automatic recovery.
 - No auth — same trust model as every other `ui/*.py`/`tools/*.py` service
   in this repo today (assumes a trusted lab network).

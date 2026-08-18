@@ -346,14 +346,17 @@ every field from it. **Save Session…**/**Load Session…** write/read a
 docker-compose-style YAML file (`session.py`, using `PyYAML`) capturing
 every host plus its agent-managed instance definitions (never
 `managed: false` rows -- nothing owned to save for those) *and* every
-node definition (every node is agent-created already, so all of them are
-saved); loading recreates each one fresh (new id every time, never a
-resume) but leaves it **stopped** -- unlike `docker-compose up`, nothing
-auto-starts. A node's saved `target_host` is the concrete address it had
-already resolved to, so it round-trips regardless of whether the gateway
-it points at is even in the same session file. `agent_client.py`/
-`host_store.py`/`session.py` have no Qt import, so they're usable/
-testable headlessly.
+node *and* test-run definition (every node and every test run is
+agent-created already, so all of them are saved); loading recreates each
+one fresh (new id every time, never a resume) but leaves it **stopped**
+-- unlike `docker-compose up`, nothing auto-starts. A node's saved
+`target_host` is the concrete address it had already resolved to, so it
+round-trips regardless of whether the gateway it points at is even in the
+same session file; a test run's saved `manifest_path`/`env_config_path`
+are the relative paths the agent itself reported (relative to
+`boat-platform/` on that host), so a load just needs the same files to
+still exist on that host. `agent_client.py`/`host_store.py`/`session.py`
+have no Qt import, so they're usable/testable headlessly.
 
 A second tab, **Nodes**, is the same shape (table, New/Edit/Start/Stop/
 Delete, log viewer, equivalent command line) driving the `/api/nodes`
@@ -416,9 +419,9 @@ installed there) and reports it back as `"boat_cli_bin"` in
 shows the run's `report_dir` (relative to `boat-platform/` on the *agent's*
 host) with a Copy button -- deliberately no "Open" button, since in the
 federated multi-host case admin_gui may not be running on that same
-machine. Not yet wired into Save/Load Session (Nodes got that in a
-separate follow-up after their own tab landed; Test Runs would be a
-natural next step, not done here).
+machine. Test run definitions are also captured by **Save Session…**/
+**Load Session…**, same as instances and nodes (see above) -- wired in a
+later follow-up after this tab first landed.
 
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages

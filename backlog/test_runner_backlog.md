@@ -284,3 +284,75 @@ the driver script) cleaned up afterward.
 Not yet done, flagged as a natural follow-up rather than in scope here:
 wiring test runs into `session.py`'s Save/Load Session (Nodes got that in
 a separate, later pass after their own tab first landed).
+
+## Done (2026-08-18) — wired test runs into Save/Load Session
+
+Follow-up to the entry above, user: "very good. Now wire it in so the
+tests can also be saved and loaded." Test-run definitions (name,
+`manifest_path`, `env_config_path`, `extra_args`) are now captured by
+**Save Session…**/**Load Session…**, the same docker-compose-style YAML
+mechanism instances and nodes already use -- mirrors exactly how Nodes
+gained this in their own earlier follow-up.
+
+`session.py`: `_TEST_RUN_FIELDS`, a `test_runs:` list per host in the
+saved YAML, `save_session()` gained a `test_run_snapshot` parameter
+(defaults to `{}`, so any other caller that doesn't pass it keeps
+working), and `load_session()` now also calls `create_test_run()` per
+saved entry and returns an added `test_runs_created` count --
+**a breaking change to its return tuple shape** (5-tuple now, was
+4-tuple), the one call site (`MainWindow.load_session()`) updated to
+match. `admin_gui/main.py`'s `save_session()`/`load_session()` handlers
+pass/unpack the new value and the load summary message now reports all
+three counts.
+
+**Verified on real hardware** (`agn-testcomputer`), on an isolated test
+agent (port 8097, chosen specifically because the user's own live agent
+was already running on the usual 8090 -- confirmed via `ps`/`ss` before
+touching anything, never interacted with), two ways:
+
+1. Headless, calling `session.py` directly (no Qt import needed) against
+   the live isolated agent: created one instance, one node, one test run;
+   `save_session()`'s YAML contained a correct `test_runs:` entry
+   (manifest/env paths, name, extra_args all matching); wiped all three;
+   `load_session()` recreated all three with matching fields under fresh
+   ids, `test_runs_created == 1`, `errors == []`. One test-script
+   assertion bug caught and fixed along the way (not a product bug):
+   `list_instances()` also always includes an externally-discovered
+   (`managed: false`) row for the user's own live `boat_gateway`, since
+   `/proc` scanning isn't scoped per-agent (documented behavior, see
+   TC_AdminGui_015) -- an assertion expecting an empty list after wipe
+   needed to filter to this test's own created row instead.
+
+2. Through the real Qt code path (`QT_QPA_PLATFORM=offscreen`, a
+   throwaway driver script, not committed): constructed a real
+   `MainWindow`, added the isolated host, created one instance/node/test
+   run against it via the real agent, called the actual
+   `mw.save_session()` button handler (`QFileDialog.getSaveFileName`
+   monkeypatched to a fixed path). This exercised the *real* save path
+   unmodified, which -- correctly -- also serialized the user's own live
+   host's own real definitions (including their own pre-existing
+   `test_test` test run) into the same file, since `save_session()` saves
+   every configured host and this is read-only. Before exercising
+   `load_session()`, the saved YAML was trimmed down to just this test's
+   own isolated host entry -- `load_session()` itself untouched, only the
+   file handed to it scoped down -- specifically so the real load call
+   couldn't try to recreate the user's own managed definitions a second
+   time against their live agent. Wiped the isolated host's three
+   originals, called the real `mw.load_session()` handler, confirmed
+   `Session loaded: 0 new host(s) added, 1 instance(s), 1 node(s), and 1
+   test run(s) created` in the real captured info-dialog text, all three
+   recreated with matching fields under fresh ids, and the reloaded test
+   run visible in the real `test_run_table` widget. One real hang caught
+   and fixed along the way: `save_session()`/`load_session()` end with a
+   modal `QMessageBox.information()`/`.warning()` whose `.exec()` blocks
+   the calling thread until dismissed -- true even under
+   `QT_QPA_PLATFORM=offscreen` (still runs a real modal event loop, just
+   doesn't render pixels) -- and with no user to click OK the first driver
+   run hung indefinitely; fixed by monkeypatching `QMessageBox.
+   information`/`.warning` to capture the message text instead of
+   displaying it, matching how this session's other headless drivers
+   handle unavoidable modals. All test artifacts (instances, nodes, test
+   runs, the isolated agent process, its `~/.boat/admin_hosts.json`
+   entry, session YAML files, driver scripts) cleaned up afterward; the
+   user's own live agent/gateway/host entry confirmed untouched
+   throughout.
