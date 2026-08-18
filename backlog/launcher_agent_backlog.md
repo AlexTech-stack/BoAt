@@ -41,11 +41,6 @@ both headlessly and with a real render pass (screenshot) on a real machine.
   stop/inspect it via the API — only `pkill`/manual intervention finds it
   again. No persistence (JSON file, SQLite) added yet. Add if agent
   restarts during real use turn out to be common enough to be painful.
-- **No interface creation.** `GET /api/host/info` lists existing interfaces
-  (read-only) for populating a client's dropdowns; creating vcan/veth pairs
-  is still only in `ui/launcher.py`. Deliberately not duplicated yet —
-  revisit if the admin tool needs to be a one-stop shop rather than assuming
-  interfaces already exist.
 - **No auth / no TLS.** The agent's REST API is plain HTTP with no
   authentication — anyone who can reach the port can start/stop/delete
   gateway instances on that host. Fine for a trusted lab network (matches
@@ -505,10 +500,103 @@ field with a comma-separated placeholder; filling `tcp.so`'s `iface`/
 list entry (confirming the bug fix), with `retry_ms` correctly typed as a
 JSON integer, not a string.
 
+## Done (2026-08-18) — Interfaces tab (create/configure/up/down)
+
+Picked up the "Interface-creation UI / agent endpoints" item from "Next
+steps" below, after user: "actually while we are on it. can we also
+configure, create, up/down interfaces?" -- said in the context of
+considering the Test Runs work (tab, Save/Load Session, report viewer)
+complete, and this the natural last piece of "the environment" (hosts/
+gateways/plugins/nodes/test suite/interfaces), distinct from Scenarios/
+Simulations/Replays and ad-hoc frame send/receive, which the user
+explicitly characterized as "more like the actual use of a gw, not so
+much a part of the environment."
+
+**Agent side** (`ui/launcher_agent.py`): a new "Interface endpoints"
+section -- `GET /api/interfaces` (previously only reachable indirectly
+via `/api/host/info`), `POST`/`DELETE /api/interfaces/vcan`,
+`POST`/`DELETE /api/interfaces/veth`, `POST /api/interfaces/{name}/up`,
+`POST /api/interfaces/{name}/down`, and `POST /api/interfaces/{name}/
+can-config` (bitrate + optional CAN FD data-bitrate, for any type-can
+link, virtual or physical -- the exact `ip link set ... up type can
+bitrate ... [dbitrate ... fd on]` commands `boat_cli/
+bus_setup_context.py`'s "Physical CAN" section already documents).
+vcan/veth create+delete mirror `ui/launcher.py`'s own equivalent
+endpoints exactly (same `ip`/`modprobe` commands, same passwordless-sudo
+prerequisite) -- either tool works against the same host, this isn't a
+replacement. Deliberately no delete for anything but vcan/veth: a real
+network device isn't something this agent should be able to remove, only
+reconfigure or toggle up/down. `_list_interfaces()` gained `operstate`/
+`lower_up` fields (previously agent-only; `ui/launcher.py`'s own version
+already had them).
+
+**A real bug found and fixed during this feature's own verification**:
+Linux caps interface names at 15 characters (`IFNAMSIZ`). Testing veth
+creation with a plausible-looking test name (`veth_admintest0`, 15 chars)
+failed with `ip`'s own cryptic `"name" not a valid ifname` -- the
+auto-generated peer name (`veth_admintest0_peer`, 20 chars) silently
+exceeded the limit with no indication why. Neither this agent's new
+endpoint nor `ui/launcher.py`'s pre-existing identical one validated
+this beforehand. Fixed with a `_check_ifname()` helper (agent-side,
+clear 400 with the actual limit) and matching live client-side
+validation in `NewInterfaceDialog` (a red warning under the Name field,
+updating as you type, specifically because the peer suffix is what most
+often pushes a plausible name over the limit) -- caught before the
+network round trip, not just after it.
+
+**Client side**: `agent_client.py` gained the matching methods.
+`admin_gui/main.py` gained a fourth tab, **Interfaces** (table: Host,
+Name, Type, Up, Operstate, MAC, aggregated across hosts on the same 2s
+poll cycle as everything else), `NewInterfaceDialog` (shared for vcan
+and veth, since the two only differ in default name and the veth-only
+peer label), and `CanConfigDialog` (Bitrate, CAN FD checkbox, Data
+bitrate field enabled only when FD is checked). **Down** guards with a
+confirmation dialog specifically -- unlike every other destructive action
+in this app, bringing an interface down can disrupt a *different*
+process (a running gateway actively using that CAN bus) that this tool
+has no record of and no way to warn about more specifically. **Delete**
+is refused client-side too for anything but a vcan/veth row. Not
+included in Save/Load Session -- interfaces are host-level system state,
+not a process definition this tool owns the way an instance/node/test
+run is.
+
+**Verified on real hardware** (`agn-testcomputer`), on an isolated test
+agent (port 8098 -- the user's own live agent was on the usual 8090 and
+their own gateway was actively using real `can0`/`can1`, both confirmed
+via `ps`/`ss` and never touched; all test interfaces used clearly
+test-scoped names and were cleaned up immediately after each check), two
+ways. First via `curl` directly: confirmed `operstate`/`lower_up` in the
+listing; created/brought down/brought up/deleted a test vcan; confirmed
+`can-config` against that vcan failed cleanly (`RTNETLINK answers:
+Operation not supported`, the real, expected kernel rejection for a
+virtual interface -- exercising the negative path deliberately, since
+the positive path needs real CAN hardware and touching the box's live
+`can0`/`can1` was explicitly avoided); hit the real 20-char peer-name bug
+above, then re-verified the fix produced a clean 400 with the actual
+character counts, followed by a real veth pair (`vethtest0`/
+`vethtest0_peer`) created, confirmed, and deleted (both ends gone
+together, as `ip`'s own behavior guarantees). Then through the real Qt
+code path (Xvfb + `xcb`, a throwaway driver script, not committed):
+confirmed the table's 6 columns; drove the real `NewInterfaceDialog` and
+confirmed its live peer-name warning appears/disappears correctly as the
+name changes and that `result_name()` raises client-side for a too-long
+name; created a real vcan through the same call path `new_vcan()` makes,
+confirmed it in the table, toggled it **down** then **up** through the
+real handlers (`QMessageBox.question` monkeypatched to auto-confirm,
+matching this session's established pattern for otherwise-blocking
+modals in a headless driver) and confirmed the Up column updated each
+time via the real poll cycle; opened the real `CanConfigDialog`,
+confirmed its payload, and confirmed the same negative-path rejection;
+created and deleted a real veth pair through the dialog and confirmed
+both rows appeared and disappeared together. A screenshot confirmed the
+table renders correctly, including real physical `can0`/`can1` shown
+read-only alongside virtual interfaces, untouched throughout. No
+unexpected info/warning dialogs fired during the whole run (asserted
+explicitly). All test artifacts (test interfaces, the isolated agent
+process, Xvfb, driver script) cleaned up afterward.
+
 ## Next steps (not started)
 
-- Interface-creation UI / agent endpoints (still deliberately deferred, see
-  above).
 - Decide instance persistence approach once the "agent restart loses
   everything" gap actually costs someone time.
 - Possible future extension: an "Adopt" action turning a discovered

@@ -946,3 +946,78 @@ rendered in green) and detail pane visually. All test artifacts (test
 run, `reports/admin_gui/`, the isolated agent process, Xvfb, driver
 script) cleaned up afterward. Full account: `backlog/test_runner_backlog.md`'s
 "test report content viewer" entry.
+
+---
+
+### TC_AdminGui_020_interfaces_tab
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent with passwordless sudo for `ip`/`modprobe` (same
+  prerequisite `ui/launcher.py`'s own interface endpoints already need)
+
+**TestSteps:**
+1. Switch to the **Interfaces** tab; inspect the table's columns and
+   contents (should include real physical interfaces, e.g. `can0`, not
+   just virtual ones)
+2. **New veth…** with a name whose auto-derived `<name>_peer` would
+   exceed 15 characters; inspect the live warning and attempt to submit
+3. **New vcan…** with a valid name; select it; **Down**, then **Up**
+4. **Configure CAN…** on that vcan with a bitrate
+5. **Delete** the vcan; select a physical interface (e.g. `can0`) and
+   attempt **Delete**
+6. **New veth…** with a valid name; confirm both ends appear; **Delete**
+   one end
+
+**Expected:**
+- Step 1: columns are Host, Name, Type, Up, Operstate, MAC; physical
+  hardware appears read-only alongside virtual interfaces
+- Step 2: a red warning shows the actual peer name and character count
+  before submit; submitting is rejected client-side with a clear message
+  (no network round trip)
+- Step 3: the vcan appears in the table (`up`); Down/Up toggle the Up
+  column correctly on the next poll
+- Step 4: a vcan has no real bitrate -- the kernel rejects the change and
+  the dialog surfaces a clear error, not a crash
+- Step 5: the vcan deletes and disappears from the table; deleting the
+  physical interface is refused client-side ("only vcan/veth interfaces
+  created by this tool can be deleted here"), no network round trip, and
+  the interface is untouched
+- Step 6: both veth ends appear as separate rows; deleting either end
+  removes both
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware (`agn-testcomputer`), on an isolated test agent
+(port 8098 -- the user's own live agent was on the usual 8090 and their
+own gateway was actively using real `can0`/`can1`, both confirmed via
+`ps`/`ss` and never touched throughout), two ways. First via `curl`
+directly: confirmed `operstate`/`lower_up` fields present; created,
+brought down, brought up, and deleted a test vcan; confirmed CAN config
+against it failed cleanly (`RTNETLINK answers: Operation not supported`
+-- exercising the negative path deliberately, since the positive path
+needs real hardware and the box's live `can0`/`can1` were off-limits).
+This surfaced a real bug: a 15-character veth name's auto-generated
+`_peer` suffix produced a 20-character name, over Linux's `IFNAMSIZ`
+limit, previously failing with `ip`'s own cryptic `"name" not a valid
+ifname` -- fixed with server-side + live client-side validation (see
+`backlog/launcher_agent_backlog.md`'s "Interfaces tab" entry), re-verified
+after the fix with both a rejected too-long name and a real, valid veth
+pair created/confirmed/deleted (both ends removed together). Then through
+the real Qt code path (Xvfb + `xcb`, a throwaway driver script, not
+committed): confirmed the table's 6 columns; drove the real
+`NewInterfaceDialog` and confirmed its live peer-name warning text and
+`result_name()`'s client-side rejection; created a real vcan through the
+same call path `new_vcan()` makes, toggled it down/up through the real
+handlers (`QMessageBox.question` monkeypatched to auto-confirm) with the
+Up column updating correctly each time via the real poll cycle; opened
+the real `CanConfigDialog` and confirmed the same negative-path
+rejection; created and deleted a real veth pair through the dialog,
+confirming both rows appeared and disappeared together. A screenshot
+confirmed the table renders correctly, including real physical
+`can0`/`can1` shown read-only and unmodified alongside virtual
+interfaces. No unexpected info/warning dialogs fired during the run
+(asserted explicitly). All test artifacts cleaned up afterward. Full
+account: `backlog/launcher_agent_backlog.md`'s "Interfaces tab" entry.

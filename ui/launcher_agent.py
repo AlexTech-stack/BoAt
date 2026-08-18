@@ -35,6 +35,17 @@ access to *this* host (report_dir is a path on the agent's own
 filesystem, same "not necessarily where the client runs" situation as
 everything else in this file).
 
+Also manages **network interfaces** on this host -- create/delete vcan and
+veth pairs, bring any interface up/down, and configure a `type can` link's
+bitrate (virtual or physical -- the exact `ip link set ... type can
+bitrate ...` commands documented in `boat_cli/bus_setup_context.py`'s
+"Physical CAN" section). Requires passwordless sudo for `ip`/`modprobe`,
+same prerequisite `ui/launcher.py`'s own equivalent endpoints already
+document -- either tool works against the same host, they shell out to
+the same commands. Deliberately no delete for anything but vcan/veth: a
+real network device isn't something this agent should be able to remove,
+only reconfigure or toggle up/down.
+
 Usage:
     python3 ui/launcher_agent.py
     # REST API on http://0.0.0.0:8090
@@ -47,11 +58,13 @@ Environment:
     BOAT_CLI_BIN          — path to the `boat` console script, for test runs
                             (default: discovered via PATH, then ~/.local/bin/boat)
 
+Requires passwordless sudo for `modprobe vcan` and `ip link add/del/set`
+(interface management endpoints only -- everything else needs no
+elevated privileges).
+
 v1 scope: in-memory instance registry only (an agent restart forgets
 definitions of stopped instances; running processes are unaffected but
-become unmanaged). Interface creation (vcan/veth) stays in ui/launcher.py
-for now -- this agent only lists what's on the host, for populating a
-client's dropdowns. Extend both as real needs surface.
+become unmanaged). Extend as real needs surface.
 """
 
 from __future__ import annotations
@@ -979,9 +992,11 @@ def _read_test_run_report(report_dir: str) -> dict:
 # ── Host introspection ───────────────────────────────────────────────────────
 
 def _list_interfaces() -> List[dict]:
-    """Read-only interface listing, mirroring ui/launcher.py's version.
-    Interface *creation* stays in launcher.py for now -- this is purely for
-    populating a client's CAN/Eth dropdowns."""
+    """Interface listing, mirroring (and now a superset of) ui/launcher.py's
+    version -- that tool's own vcan/veth create/delete endpoints are
+    unaffected by this agent also having equivalents; either can be used
+    against the same host, they just both shell out to the same `ip`
+    commands."""
     try:
         raw = subprocess.run(["ip", "-j", "link", "show"], capture_output=True, text=True, check=True)
         all_ifaces: list = json.loads(raw.stdout)
@@ -997,6 +1012,7 @@ def _list_interfaces() -> List[dict]:
         out = []
         for iface in all_ifaces:
             name = iface["ifname"]
+            flags = iface.get("flags", [])
             link_type = iface.get("link_type", "")
             if name in vcan_names:
                 iface_type = "vcan"
@@ -1007,16 +1023,31 @@ def _list_interfaces() -> List[dict]:
             elif link_type == "loopback":
                 iface_type = "loopback"
             else:
-                iface_type = link_type or "other"
+                iface_type = link_type or "other"  # physical CAN ("can") lands here
             out.append({
                 "name": name,
                 "type": iface_type,
-                "up": "UP" in iface.get("flags", []),
+                "up": "UP" in flags,
+                "lower_up": "LOWER_UP" in flags,
+                "operstate": iface.get("operstate", "UNKNOWN"),
                 "mac": iface.get("address", ""),
             })
         return out
     except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError) as e:
         raise HTTPException(status_code=500, detail=f"Failed to list interfaces: {e}")
+
+
+def _sudo_ip(args: List[str], check: bool = True) -> subprocess.CompletedProcess:
+    """`sudo -n ip <args>` -- non-interactive (-n), so this fails cleanly
+    with a permission error instead of hanging on a password prompt if
+    passwordless sudo isn't set up for `ip`/`modprobe` on this host (same
+    prerequisite ui/launcher.py's own interface endpoints already
+    document)."""
+    return subprocess.run(["sudo", "-n", "ip"] + args, capture_output=True, text=True, check=check)
+
+
+def _ip_error_detail(e: subprocess.CalledProcessError) -> str:
+    return (e.stderr or str(e)).strip()
 
 
 def _discover_gateway_bins() -> List[str]:
@@ -1561,6 +1592,146 @@ def api_delete_test_run(run_id: str):
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return {"ok": True}
+
+
+# ── Interface endpoints ──────────────────────────────────────────────────────
+# Create/configure/up/down for network interfaces on this host -- vcan/veth
+# creation mirrors ui/launcher.py's own equivalent endpoints exactly (same
+# `ip`/`modprobe` commands; either tool can be used against the same host).
+# CAN bitrate configuration is new here -- it applies to any `type can` link
+# (virtual or physical), matching the reference commands in
+# boat_cli/bus_setup_context.py's "Physical CAN" section. Deliberately no
+# *delete* for anything but vcan/veth: a real network device isn't something
+# this tool should be able to remove, only bring up/down or reconfigure.
+
+@app.get("/api/interfaces")
+def api_list_interfaces():
+    return {"interfaces": _list_interfaces()}
+
+
+class CreateVcanRequest(BaseModel):
+    name: str = "vcan0"
+
+
+class CreateVethRequest(BaseModel):
+    name: str = "veth0"
+
+
+class CanConfigRequest(BaseModel):
+    bitrate: int
+    dbitrate: Optional[int] = None
+    fd: bool = False
+
+
+_MAX_IFNAME_LEN = 15  # Linux IFNAMSIZ - 1 -- a kernel-enforced hard limit on
+                      # any interface name, not a convention. Checked here so
+                      # a too-long name fails with a clear message instead of
+                      # `ip`'s own cryptic '"name" not a valid ifname' --
+                      # found by hitting exactly this with a 20-char veth
+                      # peer name during this feature's own verification.
+
+
+def _check_ifname(name: str) -> None:
+    if not name or len(name) > _MAX_IFNAME_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{name}' is not a valid interface name -- Linux interface "
+                   f"names must be 1-{_MAX_IFNAME_LEN} characters",
+        )
+
+
+@app.post("/api/interfaces/vcan")
+def api_create_vcan(req: CreateVcanRequest):
+    _check_ifname(req.name)
+    try:
+        subprocess.run(["sudo", "-n", "modprobe", "vcan"], capture_output=True, check=False)
+        _sudo_ip(["link", "add", req.name, "type", "vcan"])
+        _sudo_ip(["link", "set", req.name, "up"])
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=400, detail=_ip_error_detail(e))
+    return {"ok": True, "name": req.name}
+
+
+@app.delete("/api/interfaces/vcan/{name}")
+def api_delete_vcan(name: str):
+    try:
+        _sudo_ip(["link", "delete", name])
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=400, detail=_ip_error_detail(e))
+    return {"ok": True, "name": name}
+
+
+@app.post("/api/interfaces/veth")
+def api_create_veth(req: CreateVethRequest):
+    _check_ifname(req.name)
+    peer = f"{req.name}_peer"
+    if len(peer) > _MAX_IFNAME_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{req.name}' is too long for a veth pair -- the "
+                   f"auto-generated peer name '{peer}' would be {len(peer)} "
+                   f"characters, over Linux's {_MAX_IFNAME_LEN}-character "
+                   f"interface name limit. Use a name of "
+                   f"{_MAX_IFNAME_LEN - len('_peer')} characters or fewer.",
+        )
+    try:
+        _sudo_ip(["link", "add", req.name, "type", "veth", "peer", "name", peer])
+        _sudo_ip(["link", "set", req.name, "up"])
+        _sudo_ip(["link", "set", peer, "up"])
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=400, detail=_ip_error_detail(e))
+    return {"ok": True, "interfaces": [req.name, peer]}
+
+
+@app.delete("/api/interfaces/veth/{name}")
+def api_delete_veth(name: str):
+    # Deleting either end of a veth pair removes both -- ip's own behavior,
+    # not something this endpoint needs to special-case.
+    try:
+        _sudo_ip(["link", "delete", name])
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=400, detail=_ip_error_detail(e))
+    return {"ok": True, "name": name}
+
+
+@app.post("/api/interfaces/{name}/up")
+def api_interface_up(name: str):
+    try:
+        _sudo_ip(["link", "set", name, "up"])
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=400, detail=_ip_error_detail(e))
+    return {"ok": True, "name": name}
+
+
+@app.post("/api/interfaces/{name}/down")
+def api_interface_down(name: str):
+    try:
+        _sudo_ip(["link", "set", name, "down"])
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=400, detail=_ip_error_detail(e))
+    return {"ok": True, "name": name}
+
+
+@app.post("/api/interfaces/{name}/can-config")
+def api_can_config(name: str, req: CanConfigRequest):
+    """`ip link set <name> up type can bitrate <b> [dbitrate <d> fd on]` --
+    the exact reference commands in bus_setup_context.py's "Physical CAN"
+    section, for any type-can link (real hardware or vcan, though vcan
+    has no physical bitrate and the kernel will reject it -- that error
+    comes back to the caller same as any other, not special-cased here).
+    A bitrate change is rejected by the kernel while the link is up, so
+    this brings it down first (ignoring failure -- already-down is fine,
+    the up+bitrate command below is what actually matters and does raise
+    on failure)."""
+    try:
+        _sudo_ip(["link", "set", name, "down"], check=False)
+        args = ["link", "set", name, "up", "type", "can", "bitrate", str(req.bitrate)]
+        if req.fd:
+            args += ["dbitrate", str(req.dbitrate or req.bitrate), "fd", "on"]
+        _sudo_ip(args)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=400, detail=_ip_error_detail(e))
+    return {"ok": True, "name": name, "bitrate": req.bitrate, "dbitrate": req.dbitrate, "fd": req.fd}
 
 
 if __name__ == "__main__":

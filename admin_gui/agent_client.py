@@ -253,3 +253,34 @@ class AgentClient:
         regardless of whether it's on the same host as the agent (see
         ui/launcher_agent.py's docstring)."""
         return self._request("GET", f"/api/test-runs/{run_id}/report")
+
+    # ── Interfaces ────────────────────────────────────────────────────────
+    # vcan/veth create+delete, generic up/down, and CAN bitrate config for
+    # any type-can link (virtual or physical). No delete for anything but
+    # vcan/veth -- see ui/launcher_agent.py's "Interface endpoints" section.
+
+    def list_interfaces(self) -> List[dict]:
+        return self._request("GET", "/api/interfaces")["interfaces"]
+
+    def create_vcan(self, name: str) -> dict:
+        return self._request("POST", "/api/interfaces/vcan", json={"name": name})
+
+    def delete_vcan(self, name: str) -> None:
+        self._request("DELETE", f"/api/interfaces/vcan/{name}")
+
+    def create_veth(self, name: str) -> dict:
+        return self._request("POST", "/api/interfaces/veth", json={"name": name})
+
+    def delete_veth(self, name: str) -> None:
+        self._request("DELETE", f"/api/interfaces/veth/{name}")
+
+    def interface_up(self, name: str) -> dict:
+        return self._request("POST", f"/api/interfaces/{name}/up")
+
+    def interface_down(self, name: str) -> dict:
+        return self._request("POST", f"/api/interfaces/{name}/down")
+
+    def configure_can(self, name: str, bitrate: int,
+                       dbitrate: Optional[int] = None, fd: bool = False) -> dict:
+        body = {"bitrate": bitrate, "dbitrate": dbitrate, "fd": fd}
+        return self._request("POST", f"/api/interfaces/{name}/can-config", json=body)

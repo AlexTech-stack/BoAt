@@ -382,9 +382,9 @@ def _parse_command_line(text: str) -> dict:
 
 class PollWorker(QThread):
     """Background thread: polls every configured host's /api/instances,
-    /api/nodes and /api/test-runs (and the selected instance's/node's/test
-    run's log, if any) on a fixed interval, emitting results back to the UI
-    thread via signals."""
+    /api/nodes, /api/test-runs, and /api/interfaces (and the selected
+    instance's/node's/test run's log, if any) on a fixed interval, emitting
+    results back to the UI thread via signals."""
 
     snapshot_ready = Signal(dict)        # {host_url: {"name":..., "ok":bool, "instances":[...], "error":str|None}}
     log_ready = Signal(str, list)        # (instance_id, log_lines)
@@ -392,6 +392,7 @@ class PollWorker(QThread):
     node_log_ready = Signal(str, list)   # (node_id, log_lines)
     test_run_snapshot_ready = Signal(dict)  # {host_url: {"name":..., "ok":bool, "runs":[...], "error":str|None}}
     test_run_log_ready = Signal(str, list)  # (run_id, log_lines)
+    interfaces_ready = Signal(dict)      # {host_url: {"name":..., "ok":bool, "interfaces":[...], "error":str|None}}
 
     def __init__(self, get_hosts, get_selected, get_selected_node, get_selected_test_run,
                  interval: float = _POLL_INTERVAL_SEC, parent=None):
@@ -411,6 +412,7 @@ class PollWorker(QThread):
             snapshot = {}
             node_snapshot = {}
             test_run_snapshot = {}
+            iface_snapshot = {}
             for host in self._get_hosts():
                 client = AgentClient(host["url"])
                 try:
@@ -428,10 +430,16 @@ class PollWorker(QThread):
                     test_run_snapshot[host["url"]] = {"name": host["name"], "ok": True, "runs": runs, "error": None}
                 except AgentError as e:
                     test_run_snapshot[host["url"]] = {"name": host["name"], "ok": False, "runs": [], "error": str(e)}
+                try:
+                    interfaces = client.list_interfaces()
+                    iface_snapshot[host["url"]] = {"name": host["name"], "ok": True, "interfaces": interfaces, "error": None}
+                except AgentError as e:
+                    iface_snapshot[host["url"]] = {"name": host["name"], "ok": False, "interfaces": [], "error": str(e)}
             if self._running:
                 self.snapshot_ready.emit(snapshot)
                 self.node_snapshot_ready.emit(node_snapshot)
                 self.test_run_snapshot_ready.emit(test_run_snapshot)
+                self.interfaces_ready.emit(iface_snapshot)
 
             selected = self._get_selected()
             if selected and self._running:
@@ -1495,6 +1503,126 @@ class TestReportDialog(QDialog):
         self.detail_view.setPlainText(_format_test_report_entry(self._entries[idx]))
 
 
+_MAX_IFNAME_LEN = 15  # Linux IFNAMSIZ - 1, a kernel-enforced hard limit --
+                      # mirrors the same constant in ui/launcher_agent.py.
+                      # Checked here too so a too-long name (especially a
+                      # veth name whose auto-generated "_peer" suffix pushes
+                      # it over) gets a clear message before the network
+                      # round trip, not just after the agent's own 400.
+
+
+class NewInterfaceDialog(QDialog):
+    """New vcan or veth interface -- picks a host + a name, exercising the
+    agent's POST /api/interfaces/vcan|veth (the same `ip link add`/
+    `modprobe vcan` commands ui/launcher.py's own equivalent endpoints
+    run)."""
+
+    def __init__(self, kind: str, hosts: list, parent=None):
+        super().__init__(parent)
+        assert kind in ("vcan", "veth")
+        self.kind = kind
+        self.setWindowTitle(f"New {kind} interface")
+        layout = QFormLayout(self)
+
+        self.host_combo = QComboBox()
+        for h in hosts:
+            self.host_combo.addItem(f"{h['name']} ({h['url']})", h["url"])
+        layout.addRow("Host:", self.host_combo)
+
+        self.name_edit = QLineEdit(f"{kind}0")
+        layout.addRow("Name:", self.name_edit)
+
+        if kind == "veth":
+            self.peer_label = QLabel("")
+            self.peer_label.setStyleSheet("color: gray; font-size: 11px;")
+            layout.addRow("", self.peer_label)
+            self.name_edit.textChanged.connect(self._update_peer_label)
+            self._update_peer_label()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def _update_peer_label(self) -> None:
+        name = self.name_edit.text().strip() or "veth0"
+        peer = f"{name}_peer"
+        if len(peer) > _MAX_IFNAME_LEN:
+            self.peer_label.setText(
+                f"Peer end would be '{peer}' ({len(peer)} chars) -- over Linux's "
+                f"{_MAX_IFNAME_LEN}-char interface name limit. Use "
+                f"{_MAX_IFNAME_LEN - len('_peer')} characters or fewer."
+            )
+            self.peer_label.setStyleSheet("color: #c62828; font-size: 11px;")
+        else:
+            self.peer_label.setText(f"Peer end will be created as: {peer}")
+            self.peer_label.setStyleSheet("color: gray; font-size: 11px;")
+
+    def selected_host_url(self) -> str:
+        return self.host_combo.currentData()
+
+    def result_name(self) -> str:
+        name = self.name_edit.text().strip()
+        if not name:
+            raise ValueError("enter an interface name")
+        max_len = _MAX_IFNAME_LEN - len("_peer") if self.kind == "veth" else _MAX_IFNAME_LEN
+        if len(name) > max_len:
+            raise ValueError(
+                f"'{name}' is too long ({len(name)} chars) -- Linux interface "
+                f"names are capped at {_MAX_IFNAME_LEN} characters"
+                + (f", and a veth peer name gets '_peer' appended" if self.kind == "veth" else "")
+            )
+        return name
+
+
+class CanConfigDialog(QDialog):
+    """Bitrate (+ optional CAN FD data-bitrate) for an existing type-can
+    link -- `ip link set <name> up type can bitrate <b> [dbitrate <d> fd
+    on]`, the exact commands boat_cli/bus_setup_context.py's "Physical
+    CAN" section documents. Works on any type-can interface, virtual or
+    physical -- vcan has no real bitrate and the kernel will reject it;
+    that failure surfaces the same way any other configure error does,
+    not special-cased here."""
+
+    def __init__(self, host_name: str, iface_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Configure CAN — {iface_name}")
+        layout = QFormLayout(self)
+
+        layout.addRow("Host:", QLabel(host_name))
+        layout.addRow("Interface:", QLabel(iface_name))
+
+        self.bitrate_edit = QLineEdit("500000")
+        layout.addRow("Bitrate:", self.bitrate_edit)
+
+        self.fd_check = QCheckBox("CAN FD")
+        layout.addRow("", self.fd_check)
+
+        self.dbitrate_edit = QLineEdit("2000000")
+        self.dbitrate_edit.setEnabled(False)
+        layout.addRow("Data bitrate (FD):", self.dbitrate_edit)
+        self.fd_check.toggled.connect(self.dbitrate_edit.setEnabled)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def result_payload(self) -> tuple:
+        try:
+            bitrate = int(self.bitrate_edit.text().strip())
+        except ValueError as e:
+            raise ValueError(f"invalid bitrate: {self.bitrate_edit.text()!r}") from e
+        fd = self.fd_check.isChecked()
+        dbitrate = None
+        if fd:
+            try:
+                dbitrate = int(self.dbitrate_edit.text().strip())
+            except ValueError as e:
+                raise ValueError(f"invalid data bitrate: {self.dbitrate_edit.text()!r}") from e
+        return bitrate, dbitrate, fd
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -1508,6 +1636,8 @@ class MainWindow(QMainWindow):
         self._selected_node: Optional[Tuple[str, str]] = None  # (host_url, node_id)
         self._test_run_snapshot: dict = {}
         self._selected_test_run: Optional[Tuple[str, str]] = None  # (host_url, run_id)
+        self._iface_snapshot: dict = {}
+        self._selected_iface: Optional[Tuple[str, str]] = None  # (host_url, iface_name)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -1541,6 +1671,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_gateways_tab(), "Gateways")
         self.tabs.addTab(self._build_nodes_tab(), "Nodes")
         self.tabs.addTab(self._build_test_runs_tab(), "Test Runs")
+        self.tabs.addTab(self._build_interfaces_tab(), "Interfaces")
         root.addWidget(self.tabs, 1)
 
         self.statusBar()
@@ -1554,6 +1685,7 @@ class MainWindow(QMainWindow):
         self.worker.node_log_ready.connect(self.on_node_log)
         self.worker.test_run_snapshot_ready.connect(self.on_test_run_snapshot)
         self.worker.test_run_log_ready.connect(self.on_test_run_log)
+        self.worker.interfaces_ready.connect(self.on_interfaces_snapshot)
         self.worker.start()
 
     def _build_gateways_tab(self) -> QWidget:
@@ -1725,6 +1857,54 @@ class MainWindow(QMainWindow):
         copy_report_btn.clicked.connect(self._copy_test_run_report_dir)
         report_row.addWidget(copy_report_btn)
         layout.addLayout(report_row)
+
+        return tab
+
+    def _build_interfaces_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # ── Interface table ──
+        self.iface_table = QTableWidget(0, 6)
+        self.iface_table.setHorizontalHeaderLabels(
+            ["Host", "Name", "Type", "Up", "Operstate", "MAC"]
+        )
+        self.iface_table.horizontalHeader().setStretchLastSection(True)
+        self.iface_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.iface_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.iface_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.iface_table.itemSelectionChanged.connect(self.on_iface_selection_changed)
+        layout.addWidget(self.iface_table, 1)
+
+        # ── Actions ──
+        actions = QHBoxLayout()
+        new_vcan_btn = QPushButton("New vcan…")
+        new_vcan_btn.clicked.connect(self.new_vcan)
+        new_veth_btn = QPushButton("New veth…")
+        new_veth_btn.clicked.connect(self.new_veth)
+        can_config_btn = QPushButton("Configure CAN…")
+        can_config_btn.clicked.connect(self.configure_can_selected)
+        up_btn = QPushButton("Up")
+        up_btn.clicked.connect(self.interface_up_selected)
+        down_btn = QPushButton("Down")
+        down_btn.clicked.connect(self.interface_down_selected)
+        delete_btn = QPushButton("Delete")
+        delete_btn.clicked.connect(self.delete_interface_selected)
+        for b in (new_vcan_btn, new_veth_btn, can_config_btn, up_btn, down_btn, delete_btn):
+            actions.addWidget(b)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+
+        note = QLabel(
+            "Delete only applies to vcan/veth -- the interfaces this tool can "
+            "create. Up/Down and Configure CAN act on any interface, "
+            "including physical hardware -- double-check the selection and "
+            "host before using them, especially on a box with a gateway "
+            "actively using a real CAN interface."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(note)
 
         return tab
 
@@ -2368,6 +2548,177 @@ class MainWindow(QMainWindow):
             client.update_test_run(run_id, **payload)
         except AgentError as e:
             QMessageBox.warning(self, "Edit failed", str(e))
+
+    # ── Interfaces ────────────────────────────────────────────────────────
+
+    def on_interfaces_snapshot(self, snapshot: dict) -> None:
+        self._iface_snapshot = snapshot
+        self.rebuild_iface_table()
+
+    def rebuild_iface_table(self) -> None:
+        rows = []
+        for host_url, data in self._iface_snapshot.items():
+            for iface in data.get("interfaces", []):
+                rows.append((host_url, data["name"], iface))
+
+        self.iface_table.blockSignals(True)
+        self.iface_table.setRowCount(len(rows))
+        select_row = None
+        for r, (host_url, host_name, iface) in enumerate(rows):
+            key = (host_url, iface["name"])
+            if self._selected_iface == key:
+                select_row = r
+            values = [
+                host_name, iface["name"], iface.get("type", "?"),
+                "up" if iface.get("up") else "down",
+                iface.get("operstate", "?"), iface.get("mac", ""),
+            ]
+            for c, v in enumerate(values):
+                item = QTableWidgetItem(v)
+                item.setData(Qt.UserRole, key)
+                self.iface_table.setItem(r, c, item)
+        if select_row is not None:
+            self.iface_table.selectRow(select_row)
+        elif self._selected_iface is not None:
+            # Same stale-selection hazard as rebuild_table()/rebuild_node_table()/
+            # rebuild_test_run_table() -- clear both the visual selection and
+            # the tracked key when the previously-selected interface no
+            # longer appears in this snapshot (e.g. it was just deleted).
+            self.iface_table.clearSelection()
+            self._selected_iface = None
+        self.iface_table.blockSignals(False)
+        self.iface_table.resizeColumnsToContents()
+
+    def find_interface(self, host_url: str, name: str) -> Optional[dict]:
+        data = self._iface_snapshot.get(host_url)
+        if not data:
+            return None
+        for iface in data.get("interfaces", []):
+            if iface["name"] == name:
+                return iface
+        return None
+
+    def on_iface_selection_changed(self) -> None:
+        items = self.iface_table.selectedItems()
+        self._selected_iface = items[0].data(Qt.UserRole) if items else None
+
+    # ── Interface actions ────────────────────────────────────────────────
+
+    def _selected_iface_client_and_name(self):
+        if not self._selected_iface:
+            QMessageBox.information(self, "No selection", "Select an interface in the table first.")
+            return None
+        host_url, name = self._selected_iface
+        return AgentClient(host_url), name
+
+    def new_vcan(self) -> None:
+        hosts = self.host_store.list()
+        if not hosts:
+            QMessageBox.information(self, "New vcan", "Add a host first.")
+            return
+        dlg = NewInterfaceDialog("vcan", hosts, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        try:
+            name = dlg.result_name()
+        except ValueError as e:
+            QMessageBox.warning(self, "New vcan", str(e))
+            return
+        client = AgentClient(dlg.selected_host_url())
+        try:
+            client.create_vcan(name)
+        except AgentError as e:
+            QMessageBox.warning(self, "Create failed", str(e))
+
+    def new_veth(self) -> None:
+        hosts = self.host_store.list()
+        if not hosts:
+            QMessageBox.information(self, "New veth", "Add a host first.")
+            return
+        dlg = NewInterfaceDialog("veth", hosts, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        try:
+            name = dlg.result_name()
+        except ValueError as e:
+            QMessageBox.warning(self, "New veth", str(e))
+            return
+        client = AgentClient(dlg.selected_host_url())
+        try:
+            client.create_veth(name)
+        except AgentError as e:
+            QMessageBox.warning(self, "Create failed", str(e))
+
+    def interface_up_selected(self) -> None:
+        res = self._selected_iface_client_and_name()
+        if not res:
+            return
+        client, name = res
+        try:
+            client.interface_up(name)
+        except AgentError as e:
+            QMessageBox.warning(self, "Up failed", str(e))
+
+    def interface_down_selected(self) -> None:
+        res = self._selected_iface_client_and_name()
+        if not res:
+            return
+        client, name = res
+        if QMessageBox.question(
+            self, "Bring interface down",
+            f"Bring '{name}' down? If this is a physical interface in "
+            f"active use (e.g. by a running gateway), this will disrupt it.",
+        ) != QMessageBox.Yes:
+            return
+        try:
+            client.interface_down(name)
+        except AgentError as e:
+            QMessageBox.warning(self, "Down failed", str(e))
+
+    def configure_can_selected(self) -> None:
+        res = self._selected_iface_client_and_name()
+        if not res:
+            return
+        client, name = res
+        host_url, _ = self._selected_iface
+        host_name = self._iface_snapshot.get(host_url, {}).get("name", host_url)
+        dlg = CanConfigDialog(host_name, name, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        try:
+            bitrate, dbitrate, fd = dlg.result_payload()
+        except ValueError as e:
+            QMessageBox.warning(self, "Configure CAN", str(e))
+            return
+        try:
+            client.configure_can(name, bitrate, dbitrate, fd)
+        except AgentError as e:
+            QMessageBox.warning(self, "Configure failed", str(e))
+
+    def delete_interface_selected(self) -> None:
+        res = self._selected_iface_client_and_name()
+        if not res:
+            return
+        client, name = res
+        host_url, _ = self._selected_iface
+        iface = self.find_interface(host_url, name)
+        kind = (iface or {}).get("type")
+        if kind not in ("vcan", "veth"):
+            QMessageBox.information(
+                self, "Delete",
+                f"'{name}' is a {kind or 'unknown'} interface -- only vcan/veth "
+                f"interfaces created by this tool can be deleted here.",
+            )
+            return
+        if QMessageBox.question(self, "Delete", f"Delete {kind} interface '{name}'?") != QMessageBox.Yes:
+            return
+        try:
+            if kind == "vcan":
+                client.delete_vcan(name)
+            else:
+                client.delete_veth(name)
+        except AgentError as e:
+            QMessageBox.warning(self, "Delete failed", str(e))
 
 
 def main() -> None:

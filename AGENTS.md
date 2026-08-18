@@ -434,6 +434,33 @@ filesystem access to that host. Test run definitions are also captured by
 **Save Session…**/**Load Session…**, same as instances and nodes (see
 above) -- wired in a later follow-up after this tab first landed.
 
+A fourth tab, **Interfaces**, manages network interfaces on a host --
+create/delete vcan and veth pairs, bring any interface up/down, and
+configure a `type can` link's bitrate (virtual or physical -- the exact
+`ip link set ... type can bitrate ...` commands `boat_cli/
+bus_setup_context.py`'s "Physical CAN" section documents). Table columns:
+Host, Name, Type, Up, Operstate, MAC -- one row per host per interface,
+aggregating `GET /api/interfaces` across every configured host on the
+same 2s poll cycle as the other tabs, so it reflects real system state
+including physical hardware and interfaces created by any other means
+(`ip` by hand, `ui/launcher.py`'s own equivalent endpoints -- either tool
+shells out to the same commands against the same host). **New vcan…**/
+**New veth…** pick a host + name (veth auto-derives a `<name>_peer` for
+the pair's other end, live-validated in the dialog -- see the ifname
+length note below); **Configure CAN…** opens a small dialog for bitrate
++ optional CAN FD data-bitrate against the selected interface; **Up**/
+**Down** act on any selected interface, including physical hardware
+(a confirmation guards **Down** specifically, since bringing down an
+interface a running gateway is actively using will disrupt it); **Delete**
+is refused for anything but a vcan/veth row -- a real network device isn't
+something this tool should be able to remove, only reconfigure or toggle.
+Interface names are capped at 15 characters by the kernel (`IFNAMSIZ`),
+checked both client-side (live in the New veth… dialog, since the
+`_peer` suffix is what most often pushes a name over the limit) and
+server-side, with a clear message either way instead of `ip`'s own
+cryptic `"name" not a valid ifname` -- found by hitting exactly that
+during this feature's own real-hardware verification.
+
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages
 sudo apt install libxcb-cursor0             # Linux only -- system dep Qt6's xcb plugin needs

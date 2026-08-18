@@ -3,10 +3,11 @@
 A PySide6 desktop client for one or more `ui/launcher_agent.py` instances.
 Add a host per machine that runs gateways; the app polls each host's REST API
 and shows one aggregated table of every gateway instance across all of them,
-across three tabs: **Gateways** (`boat_gateway` processes), **Nodes**
-(scripts under `boat-platform/nodes/`, see `AGENTS.md`), and **Test Runs**
+across four tabs: **Gateways** (`boat_gateway` processes), **Nodes**
+(scripts under `boat-platform/nodes/`, see `AGENTS.md`), **Test Runs**
 (`boat test run <manifest.json>` invocations, the automated CI-style HIL
-suite runner).
+suite runner), and **Interfaces** (create/configure/up/down for vcan,
+veth, and physical network interfaces on a host).
 
 No SSH is involved anywhere in this app — it only ever calls each agent's own
 HTTP API, and each agent only ever touches processes on its own machine. See
@@ -222,6 +223,46 @@ and from ctest/pytest unit tests.
 - Included in **Save Session…**/**Load Session…**, same as instances and
   nodes -- see "Session files" below.
 
+## Interfaces tab
+
+Manages network interfaces on a host directly -- create/delete vcan and
+veth pairs, bring any interface up/down, and configure a `type can`
+link's bitrate (virtual or physical). This is the same job
+`ui/launcher.py`'s browser UI already does; the agent's endpoints shell
+out to the identical `ip`/`modprobe` commands, so either tool works
+against the same host and neither owns exclusive control.
+
+- Table columns: Host, Name, Type, Up, Operstate, MAC -- one row per
+  host per interface, aggregated from `GET /api/interfaces` on the same
+  2s poll cycle as every other tab. Shows *everything* on the host, not
+  just what this tool created: physical CAN (`can0`, ...), physical
+  Ethernet, and anything set up by hand or by `ui/launcher.py`.
+- **New vcan…** / **New veth…** pick a host + name. A veth's peer end is
+  auto-derived as `<name>_peer`, shown live as you type; Linux caps
+  interface names at 15 characters (`IFNAMSIZ`), so a name close to the
+  limit gets a red warning in the dialog *before* you submit, and a clear
+  rejection either way (client-side in the dialog, server-side in the
+  agent) instead of `ip`'s own cryptic `"name" not a valid ifname`.
+- **Configure CAN…** opens a small dialog (Bitrate, a CAN FD checkbox,
+  Data bitrate enabled only when FD is checked) for the selected
+  interface -- `ip link set <name> up type can bitrate <b> [dbitrate <d>
+  fd on]`, the exact commands `boat_cli/bus_setup_context.py`'s "Physical
+  CAN" section documents. Works on any type-can interface; a vcan has no
+  real bitrate and the kernel rejects the change, which surfaces as a
+  normal error, not a special case.
+- **Up** / **Down** act on the selected interface, whatever it is --
+  including physical hardware. **Down** asks for confirmation first,
+  since bringing down an interface a running gateway is actively using
+  will disrupt it; double-check the selected host and name before
+  confirming.
+- **Delete** only works on a vcan/veth row (refused with a clear message
+  otherwise) -- a real network device isn't something this tool should be
+  able to remove, only reconfigure or toggle up/down. Deleting either end
+  of a veth pair removes both (the kernel's own behavior).
+- Included in neither Save Session nor Load Session -- interfaces are
+  host-level system state, not a process definition this tool owns the
+  way an instance/node/test-run is.
+
 ## Session files (save/load your whole setup)
 
 **Save Session…** writes every added host and its **agent-managed**
@@ -285,9 +326,6 @@ first if you want to reload cleanly either way.
 
 ## What's not here yet
 
-- No interface-creation UI (create vcan/veth from this app) — the agent
-  doesn't expose that yet either; use `ui/launcher.py`'s browser UI for
-  interface setup on a given host for now.
 - No persistence for *instance/node/test-run definitions* on the agent
   side — an agent restart forgets stopped instances, nodes, and test runs
   (see the backlog docs). Session files are the client-side answer to
