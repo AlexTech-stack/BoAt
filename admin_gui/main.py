@@ -1942,7 +1942,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         sidebar_layout.setSpacing(0)
 
-        title = QLabel("⚓  BoAt Admin")
+        title = QLabel("⛵  BoAt Admin")
         title.setObjectName("AppTitle")
         sidebar_layout.addWidget(title)
 
@@ -1960,11 +1960,11 @@ class MainWindow(QMainWindow):
         root.addWidget(content, 1)
 
         pages = [
-            ("Gateway", "▤", self._build_gateways_tab()),
-            ("Nodes", "◈", self._build_nodes_tab()),
-            ("Test Runs", "✓", self._build_test_runs_tab()),
-            ("Interfaces", "⇄", self._build_interfaces_tab()),
-            ("Settings", "⚙", self._build_settings_tab()),
+            ("Gateway", "♕", self._build_gateways_tab()),
+            ("Nodes", "♘", self._build_nodes_tab()),
+            ("Test Runs", "♗", self._build_test_runs_tab()),
+            ("Interfaces", "♖", self._build_interfaces_tab()),
+            ("Settings", "♙", self._build_settings_tab()),
         ]
         for label, icon, widget in pages:
             self.nav_list.addItem(QListWidgetItem(f"   {icon}   {label}"))
@@ -1989,6 +1989,31 @@ class MainWindow(QMainWindow):
     def _build_gateways_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
+
+        # ── Hosts (shared setup the rest of this page's data depends on --
+        # lives here rather than on its own Settings page; see add_host()/
+        # remove_host()/refresh_host_list() below) ──
+        host_bar = QHBoxLayout()
+        host_bar.addWidget(QLabel("Hosts:"))
+        self.host_list = QListWidget()
+        self.host_list.setFixedHeight(80)
+        self.host_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        host_bar.addWidget(self.host_list, 1)
+        host_btns = QVBoxLayout()
+        add_host_btn = QPushButton("+ Add Host")
+        add_host_btn.clicked.connect(self.add_host)
+        remove_host_btn = QPushButton("Remove Host")
+        remove_host_btn.clicked.connect(self.remove_host)
+        save_session_btn = QPushButton("Save Session…")
+        save_session_btn.clicked.connect(self.save_session)
+        load_session_btn = QPushButton("Load Session…")
+        load_session_btn.clicked.connect(self.load_session)
+        host_btns.addWidget(add_host_btn)
+        host_btns.addWidget(remove_host_btn)
+        host_btns.addWidget(save_session_btn)
+        host_btns.addWidget(load_session_btn)
+        host_bar.addLayout(host_btns)
+        layout.addLayout(host_bar)
 
         # ── Instance table ──
         self.table = QTableWidget(0, 10)
@@ -2207,46 +2232,11 @@ class MainWindow(QMainWindow):
         return tab
 
     def _build_settings_tab(self) -> QWidget:
-        """Host management -- Add/Remove Host, Save/Load Session. Lives on
-        its own page rather than pinned above every other page (where it
-        used to be): these are host *definitions*, shared setup every
-        other page's data depends on, not something you touch as often as
-        the per-kind tables themselves."""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-
-        layout.addWidget(QLabel("Hosts"))
-        host_bar = QHBoxLayout()
-        self.host_list = QListWidget()
-        self.host_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        host_bar.addWidget(self.host_list, 1)
-        host_btns = QVBoxLayout()
-        add_host_btn = QPushButton("+ Add Host")
-        add_host_btn.clicked.connect(self.add_host)
-        remove_host_btn = QPushButton("Remove Host")
-        remove_host_btn.clicked.connect(self.remove_host)
-        save_session_btn = QPushButton("Save Session…")
-        save_session_btn.clicked.connect(self.save_session)
-        load_session_btn = QPushButton("Load Session…")
-        load_session_btn.clicked.connect(self.load_session)
-        host_btns.addWidget(add_host_btn)
-        host_btns.addWidget(remove_host_btn)
-        host_btns.addWidget(save_session_btn)
-        host_btns.addWidget(load_session_btn)
-        host_btns.addStretch(1)
-        host_bar.addLayout(host_btns)
-        layout.addLayout(host_bar, 1)
-
-        note = QLabel(
-            "● reachable, ○ unreachable (checked every 2s). Removing a host "
-            "here only forgets it locally -- it doesn't stop or affect "
-            "anything running on that machine."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet("color: gray; font-size: 11px;")
-        layout.addWidget(note)
-
-        return tab
+        """Empty for now, by request -- host management (Add/Remove Host,
+        Save/Load Session) moved back to the Gateway page (see
+        _build_gateways_tab()), reverting the earlier move that pulled it
+        out onto its own page."""
+        return QWidget()
 
     def closeEvent(self, event) -> None:
         self.worker.stop()

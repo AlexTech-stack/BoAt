@@ -1141,3 +1141,14 @@ no light-mode popup. Screenshots also used to regenerate
 were from the old light-mode/tab-bar layout, now stale). All test
 artifacts (screenshots not meant for the repo, Xvfb, driver scripts)
 cleaned up afterward.
+
+**Update (2026-08-19):** after trying it, user asked for host management
+(Add/Remove Host, Save/Load Session) to move from Settings back to the
+top of the Gateway page, with Settings left genuinely empty for now.
+Verified on real hardware (`agn-testcomputer`), read-only: a throwaway Qt
+driver script confirmed the Gateway page's host list shows real data (1
+configured host) with both button rows present at the top, and the
+Settings page renders as a blank page with no widgets. `screenshot.png`
+regenerated again to match; the dialog and Nodes-page screenshots were
+unaffected by this move. Full account: `backlog/launcher_agent_backlog.md`'s
+dark-theme entry, "continued" update.

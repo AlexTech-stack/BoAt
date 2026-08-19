@@ -737,6 +737,26 @@ artifacts (Xvfb, driver scripts, screenshots not meant for the repo)
 cleaned up afterward. Full account: `test/AdminGui.md`'s
 `TC_AdminGui_021_dark_theme_sidebar_redesign`.
 
+**Update (2026-08-19, continued):** after trying the real redesign, user:
+"Please move the buttons add host, remove host save session, load
+session back to the gateway tab. The settings tab shall stay empty for
+now." Host management (host list, Add/Remove Host, Save/Load Session)
+moved from its brief stay on the Settings page back to the top of the
+**Gateway** page -- `_build_gateways_tab()` regained the host bar it
+originally had before the redesign, `_build_settings_tab()` now just
+`return QWidget()`. (The user had also swapped a couple of icon glyphs
+themselves in the meantime -- the app-title mark back from anchor to
+sailboat, and the sidebar's page icons to chess pieces -- both left
+exactly as they set them; only the requested structural move was made.)
+Verified on real hardware (`agn-testcomputer`), read-only, the same way
+as the redesign itself: a throwaway Qt driver script (Xvfb + `xcb`, not
+committed) confirmed the Gateway page now shows the real host list (1
+entry) and both host-management buttons rows correctly at the top, and
+the Settings page renders genuinely empty. `admin_gui/docs/screenshot.png`
+regenerated again to match (the other three doc screenshots -- dialogs
+and the Nodes page -- were unaffected by this move and didn't need
+regenerating). All test artifacts cleaned up afterward.
+
 ## Next steps (not started)
 
 - Decide instance persistence approach once the "agent restart loses

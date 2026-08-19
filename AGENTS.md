@@ -349,18 +349,17 @@ N≠0, muted gray for "stopped"/"No"). Adapted from a mockup the user
 provided; approximated the exact palette from the image rather than
 guessing blind.
 
-**Settings** holds host management -- host list (persisted to
-`~/.boat/admin_hosts.json`), **+ Add Host**/**Remove Host**, and
-**Save Session…**/**Load Session…** -- moved off the always-visible top
-bar it used to occupy (pinned above every page) since these are host
-*definitions*, shared setup the other pages' data depends on, not
-something touched as often as the per-page tables themselves. Every
-other page shows the aggregated instance table (with a **Managed**
-column, `Yes`/`No` per the `external:` discovery above), polled every 2s
-on a background `QThread` → create/**edit**/start/stop/delete, plus a log
-viewer and an **equivalent command line** panel (the `BOAT_*=...
-./boat_gateway` form of whatever instance is selected, with a Copy
-button -- for pasting into a script) for the selected instance.
+Host management -- host list (persisted to `~/.boat/admin_hosts.json`),
+**+ Add Host**/**Remove Host**, and **Save Session…**/**Load Session…**
+-- lives at the top of the **Gateway** page (briefly moved to a separate
+Settings page, then moved back by request). **Settings** is currently
+empty, reserved for future app-wide config. The **Gateway** page shows
+the aggregated instance table (with a **Managed** column, `Yes`/`No` per
+the `external:` discovery above), polled every 2s on a background
+`QThread` → create/**edit**/start/stop/delete, plus a log viewer and an
+**equivalent command line** panel (the `BOAT_*=... ./boat_gateway` form
+of whatever instance is selected, with a Copy button -- for pasting into
+a script) for the selected instance.
 The New/Edit Instance dialog also runs the *reverse* direction: paste a
 command line into **From command line** and **Parse && Fill** populates
 every field from it. **Save Session…**/**Load Session…** write/read a

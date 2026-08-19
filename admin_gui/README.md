@@ -3,12 +3,13 @@
 A PySide6 desktop client for one or more `ui/launcher_agent.py` instances.
 Add a host per machine that runs gateways; the app polls each host's REST API
 and shows one aggregated table of every gateway instance across all of them.
-A dark sidebar navigates five pages: **Gateway** (`boat_gateway` processes),
-**Nodes** (scripts under `boat-platform/nodes/`, see `AGENTS.md`),
-**Test Runs** (`boat test run <manifest.json>` invocations, the automated
-CI-style HIL suite runner), **Interfaces** (create/configure/up/down for
-vcan, veth, and physical network interfaces on a host), and **Settings**
-(host management -- see below).
+A dark sidebar navigates five pages: **Gateway** (`boat_gateway` processes
+-- also where host management lives, see below), **Nodes** (scripts under
+`boat-platform/nodes/`, see `AGENTS.md`), **Test Runs** (`boat test run
+<manifest.json>` invocations, the automated CI-style HIL suite runner),
+**Interfaces** (create/configure/up/down for vcan, veth, and physical
+network interfaces on a host), and **Settings** (currently empty,
+reserved for future app-wide config).
 
 No SSH is involved anywhere in this app — it only ever calls each agent's own
 HTTP API, and each agent only ever touches processes on its own machine. See
@@ -50,9 +51,9 @@ reference for any future visual changes.
 
 ## Usage
 
-1. On the **Settings** page: **Add Host** — display name + agent URL (e.g.
-   `agn-testcomputer:8090`; `http://` is added automatically if omitted).
-   Each host needs `ui/launcher_agent.py` already running there
+1. At the top of the **Gateway** page: **Add Host** — display name + agent
+   URL (e.g. `agn-testcomputer:8090`; `http://` is added automatically if
+   omitted). Each host needs `ui/launcher_agent.py` already running there
    (`python3 ui/launcher_agent.py`, default port 8090). Hosts persist
    across runs in `~/.boat/admin_hosts.json`. A host's dot in the list is
    filled (●) when reachable, hollow (○) when not (checked every 2s, same
@@ -60,7 +61,7 @@ reference for any future visual changes.
    also live here — capture/restore *all* hosts and their agent-managed
    instance/node/test-run definitions at once, docker-compose-style — see
    the dedicated section below.
-2. Back on **Gateway**: the instance table (Host, Name, ID, Port, Status, PID, **Managed**,
+2. Below that: the instance table (Host, Name, ID, Port, Status, PID, **Managed**,
    Interfaces, Plugins, Uptime) aggregates every instance from every added
    host, refreshing every 2 seconds. **Plugins** shows each
    plugin's `.so` basename, with the interface it's bound to in brackets
@@ -283,12 +284,11 @@ against the same host and neither owns exclusive control.
 
 ## Settings tab
 
-Host management -- **+ Add Host**, **Remove Host**, **Save Session…**,
-**Load Session…** -- lives here rather than pinned above every other
-page the way it used to be, since these are host *definitions*, shared
-setup every other page's data depends on, not something touched as often
-as the per-page tables themselves. See step 1 under Usage above for the
-Add/Remove Host flow and "Session files" below for Save/Load.
+Currently empty -- reserved for future app-wide config. Host management
+(**+ Add Host**, **Remove Host**, **Save Session…**, **Load Session…**)
+briefly lived here, then moved back to the top of the **Gateway** page by
+request. See step 1 under Usage above for the Add/Remove Host flow and
+"Session files" below for Save/Load.
 
 ## Session files (save/load your whole setup)
 
