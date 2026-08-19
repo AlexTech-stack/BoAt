@@ -56,9 +56,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -70,6 +70,233 @@ from host_store import HostStore
 import session
 
 _POLL_INTERVAL_SEC = 2.0
+
+
+def _mark(btn: QPushButton, css_class: str) -> QPushButton:
+    """Tags a button with a dynamic `class` property the dark stylesheet's
+    `QPushButton[class="..."]` selectors key off of -- "primary" for the
+    main affirmative action in a row (Start), "danger" for anything
+    destructive/disruptive (Stop, Down, Delete). Must be called before the
+    widget is first shown (property is read when Qt computes its style,
+    not on every change), which every call site here already satisfies --
+    all buttons are built inside MainWindow.__init__(), before .show()."""
+    btn.setProperty("class", css_class)
+    return btn
+
+
+# Dark theme, approximated from a mockup the user provided (sidebar nav +
+# dark navy/charcoal app, blue "primary" accent, red "danger" accent, green
+# for good status) -- applied once, app-wide, via QApplication.setStyleSheet()
+# in main(). Uses Qt dynamic properties (`[class="primary"]`/`[class="danger"]`,
+# set via _mark() above) rather than per-widget stylesheets, so every button/
+# dialog picks it up automatically without needing to touch each call site's
+# styling individually.
+_DARK_STYLESHEET = """
+QMainWindow, QWidget {
+    background-color: #1b1d27;
+    color: #e7e8ee;
+    font-size: 13px;
+}
+
+QWidget#Sidebar {
+    background-color: #14151d;
+    border-right: 1px solid #2a2c38;
+}
+
+QLabel#AppTitle {
+    color: #e7e8ee;
+    font-size: 16px;
+    font-weight: 600;
+    padding: 18px 16px 14px 16px;
+}
+
+QListWidget#NavList {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    padding: 4px 8px;
+}
+QListWidget#NavList::item {
+    color: #a9acc0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin: 2px 4px;
+}
+QListWidget#NavList::item:selected {
+    background-color: #2b3a63;
+    color: #ffffff;
+}
+QListWidget#NavList::item:hover:!selected {
+    background-color: #1e2029;
+}
+
+QLabel[class="muted"] {
+    color: #8a8da3;
+    font-size: 11px;
+}
+
+QPushButton {
+    background-color: #262837;
+    color: #e7e8ee;
+    border: 1px solid #383b4d;
+    border-radius: 6px;
+    padding: 6px 14px;
+}
+QPushButton:hover {
+    background-color: #2e3142;
+}
+QPushButton:pressed {
+    background-color: #20222e;
+}
+QPushButton:disabled {
+    color: #5c5f70;
+    background-color: #1e2029;
+    border-color: #262837;
+}
+QPushButton[class="primary"] {
+    background-color: #3d6fe0;
+    border-color: #3d6fe0;
+    color: #ffffff;
+    font-weight: 600;
+}
+QPushButton[class="primary"]:hover {
+    background-color: #4d7ff0;
+}
+QPushButton[class="primary"]:pressed {
+    background-color: #3459b8;
+}
+QPushButton[class="danger"] {
+    background-color: #e0524f;
+    border-color: #e0524f;
+    color: #ffffff;
+    font-weight: 600;
+}
+QPushButton[class="danger"]:hover {
+    background-color: #ec6663;
+}
+QPushButton[class="danger"]:pressed {
+    background-color: #bd4340;
+}
+
+QLineEdit, QComboBox, QPlainTextEdit, QTextEdit {
+    background-color: #262837;
+    color: #e7e8ee;
+    border: 1px solid #383b4d;
+    border-radius: 6px;
+    padding: 4px 6px;
+    selection-background-color: #3d6fe0;
+}
+QLineEdit:disabled, QComboBox:disabled {
+    color: #6a6d80;
+    background-color: #1e2029;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 20px;
+}
+QComboBox QAbstractItemView {
+    background-color: #262837;
+    color: #e7e8ee;
+    selection-background-color: #3d6fe0;
+    outline: none;
+}
+
+QCheckBox {
+    color: #e7e8ee;
+    spacing: 6px;
+}
+
+QListWidget, QTreeWidget {
+    background-color: #20222d;
+    color: #e7e8ee;
+    border: 1px solid #2a2c3a;
+    border-radius: 8px;
+    selection-background-color: #2b3a63;
+}
+QTreeWidget::item {
+    padding: 3px 2px;
+}
+
+QTableWidget {
+    background-color: #20222d;
+    alternate-background-color: #252732;
+    gridline-color: #2a2c3a;
+    border: 1px solid #2a2c3a;
+    border-radius: 8px;
+    color: #e7e8ee;
+}
+QTableWidget::item {
+    padding: 3px 6px;
+}
+QTableWidget::item:selected {
+    background-color: #2b3a63;
+    color: #ffffff;
+}
+QHeaderView::section {
+    background-color: #14151d;
+    color: #a9acc0;
+    padding: 6px;
+    border: none;
+    border-bottom: 1px solid #2a2c3a;
+    font-weight: 600;
+}
+QTableCornerButton::section {
+    background-color: #14151d;
+    border: none;
+}
+
+QTabWidget::pane {
+    border: 1px solid #2a2c3a;
+    border-radius: 8px;
+}
+QTabBar::tab {
+    background: #1b1d27;
+    color: #a9acc0;
+    padding: 8px 14px;
+}
+QTabBar::tab:selected {
+    background: #262837;
+    color: #ffffff;
+}
+
+QDialog {
+    background-color: #1b1d27;
+}
+
+QGroupBox {
+    border: 1px solid #2a2c3a;
+    border-radius: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    color: #e7e8ee;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: #a9acc0;
+}
+
+QMessageBox {
+    background-color: #1b1d27;
+}
+
+QScrollBar:vertical, QScrollBar:horizontal {
+    background: #1b1d27;
+    border: none;
+}
+QScrollBar::handle {
+    background: #383b4d;
+    border-radius: 4px;
+}
+QScrollBar::handle:hover {
+    background: #454862;
+}
+QScrollBar::add-line, QScrollBar::sub-line {
+    height: 0px;
+    width: 0px;
+}
+"""
 
 
 def _format_interfaces(inst: dict) -> str:
@@ -202,12 +429,40 @@ def _format_test_run_result(run: dict) -> str:
 
 
 _VERDICT_COLORS = {
-    "PASS": QColor("#2e7d32"),
-    "FAIL": QColor("#c62828"),
-    "ERROR": QColor("#c62828"),
-    "RUNNING": QColor("#f9a825"),
-    "SKIPPED": QColor("#757575"),
+    "PASS": QColor("#46b285"),
+    "FAIL": QColor("#e0524f"),
+    "ERROR": QColor("#e0524f"),
+    "RUNNING": QColor("#e0a83d"),
+    "SKIPPED": QColor("#8a8da3"),
 }
+
+_STATUS_GOOD = QColor("#46b285")
+_STATUS_MUTED = QColor("#8a8da3")
+_STATUS_BAD = QColor("#e0524f")
+
+
+def _process_status_color(status: str) -> Optional[QColor]:
+    """Color for a gateway/node/test-run process-lifecycle status cell --
+    shared across all three tables since they use the same status string
+    shape ("running"/"stopped"/"exited:N", see NodeInstance/GatewayInstance/
+    TestRunInstance.status in launcher_agent.py). None for "stopped" (or
+    anything unrecognized) -- default text color, not a badge-worthy
+    state, matching how the mockup only badges the notable states."""
+    if status == "running":
+        return _STATUS_GOOD
+    if status.startswith("exited:"):
+        code = status.split(":", 1)[1]
+        return _STATUS_GOOD if code == "0" else _STATUS_BAD
+    return None
+
+
+def _bool_color(text: str) -> Optional[QColor]:
+    """Color for a rendered "Yes"/"No" cell (the Managed column)."""
+    if text == "Yes":
+        return _STATUS_GOOD
+    if text == "No":
+        return _STATUS_MUTED
+    return None
 
 
 def _format_test_report_entry(entry: dict) -> str:
@@ -794,6 +1049,7 @@ class NewInstanceDialog(QDialog):
         layout.addRow("Gateway binary:", self.gw_bin_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        _mark(buttons.button(QDialogButtonBox.Ok), "primary")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
@@ -979,6 +1235,7 @@ class NewNodeDialog(QDialog):
         layout.addRow("Extra args:", self.extra_args_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        _mark(buttons.button(QDialogButtonBox.Ok), "primary")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
@@ -1280,6 +1537,7 @@ class NewTestRunDialog(QDialog):
         layout.addRow("Extra args:", self.extra_args_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        _mark(buttons.button(QDialogButtonBox.Ok), "primary")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
@@ -1540,6 +1798,7 @@ class NewInterfaceDialog(QDialog):
             self._update_peer_label()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        _mark(buttons.button(QDialogButtonBox.Ok), "primary")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
@@ -1625,6 +1884,7 @@ class CanConfigDialog(QDialog):
         self.fd_check.toggled.connect(self.dbitrate_edit.setEnabled)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        _mark(buttons.button(QDialogButtonBox.Ok), "primary")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
@@ -1648,7 +1908,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("BoAt Admin")
-        self.resize(1100, 700)
+        self.resize(1200, 760)
 
         self.host_store = HostStore()
         self._snapshot: dict = {}
@@ -1662,38 +1922,55 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # ── Hosts (shared across both tabs -- one agent per host manages
-        # both gateway instances and node instances there) ──
-        host_bar = QHBoxLayout()
-        host_bar.addWidget(QLabel("Hosts:"))
-        self.host_list = QListWidget()
-        self.host_list.setFixedHeight(80)
-        self.host_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        host_bar.addWidget(self.host_list, 1)
-        host_btns = QVBoxLayout()
-        add_host_btn = QPushButton("+ Add Host")
-        add_host_btn.clicked.connect(self.add_host)
-        remove_host_btn = QPushButton("Remove Host")
-        remove_host_btn.clicked.connect(self.remove_host)
-        save_session_btn = QPushButton("Save Session…")
-        save_session_btn.clicked.connect(self.save_session)
-        load_session_btn = QPushButton("Load Session…")
-        load_session_btn.clicked.connect(self.load_session)
-        host_btns.addWidget(add_host_btn)
-        host_btns.addWidget(remove_host_btn)
-        host_btns.addWidget(save_session_btn)
-        host_btns.addWidget(load_session_btn)
-        host_bar.addLayout(host_btns)
-        root.addLayout(host_bar)
+        # ── Sidebar navigation -- one page per "kind of thing" the agent
+        # manages (gateway instances, nodes, test runs, interfaces), plus
+        # Settings for host management (Add/Remove Host, Save/Load Session
+        # -- host *definitions*, not any one page's own data, so they live
+        # apart from the per-kind pages rather than pinned above all of
+        # them the way they used to be). A QListWidget + QStackedWidget
+        # pair rather than QTabWidget: gives full control over the
+        # sidebar's look (icons, selected-item pill highlight) that
+        # QTabBar's own styling can't easily reach. ──
+        sidebar = QWidget()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(200)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
 
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_gateways_tab(), "Gateways")
-        self.tabs.addTab(self._build_nodes_tab(), "Nodes")
-        self.tabs.addTab(self._build_test_runs_tab(), "Test Runs")
-        self.tabs.addTab(self._build_interfaces_tab(), "Interfaces")
-        root.addWidget(self.tabs, 1)
+        title = QLabel("⚓  BoAt Admin")
+        title.setObjectName("AppTitle")
+        sidebar_layout.addWidget(title)
+
+        self.nav_list = QListWidget()
+        self.nav_list.setObjectName("NavList")
+        self.nav_list.setFocusPolicy(Qt.NoFocus)
+        sidebar_layout.addWidget(self.nav_list, 1)
+        root.addWidget(sidebar)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(16, 16, 16, 16)
+        self.stack = QStackedWidget()
+        content_layout.addWidget(self.stack)
+        root.addWidget(content, 1)
+
+        pages = [
+            ("Gateway", "▤", self._build_gateways_tab()),
+            ("Nodes", "◈", self._build_nodes_tab()),
+            ("Test Runs", "✓", self._build_test_runs_tab()),
+            ("Interfaces", "⇄", self._build_interfaces_tab()),
+            ("Settings", "⚙", self._build_settings_tab()),
+        ]
+        for label, icon, widget in pages:
+            self.nav_list.addItem(QListWidgetItem(f"   {icon}   {label}"))
+            self.stack.addWidget(widget)
+        self.nav_list.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.nav_list.setCurrentRow(0)
 
         self.statusBar()
         self.refresh_host_list()
@@ -1731,11 +2008,11 @@ class MainWindow(QMainWindow):
         new_btn.clicked.connect(self.new_instance)
         edit_btn = QPushButton("Edit…")
         edit_btn.clicked.connect(self.edit_selected)
-        start_btn = QPushButton("Start")
+        start_btn = _mark(QPushButton("Start"), "primary")
         start_btn.clicked.connect(self.start_selected)
-        stop_btn = QPushButton("Stop")
+        stop_btn = _mark(QPushButton("Stop"), "danger")
         stop_btn.clicked.connect(self.stop_selected)
-        delete_btn = QPushButton("Delete")
+        delete_btn = _mark(QPushButton("Delete"), "danger")
         delete_btn.clicked.connect(self.delete_selected)
         for b in (new_btn, edit_btn, start_btn, stop_btn, delete_btn):
             actions.addWidget(b)
@@ -1785,11 +2062,11 @@ class MainWindow(QMainWindow):
         new_btn.clicked.connect(self.new_node)
         edit_btn = QPushButton("Edit…")
         edit_btn.clicked.connect(self.edit_node_selected)
-        start_btn = QPushButton("Start")
+        start_btn = _mark(QPushButton("Start"), "primary")
         start_btn.clicked.connect(self.start_node_selected)
-        stop_btn = QPushButton("Stop")
+        stop_btn = _mark(QPushButton("Stop"), "danger")
         stop_btn.clicked.connect(self.stop_node_selected)
-        delete_btn = QPushButton("Delete")
+        delete_btn = _mark(QPushButton("Delete"), "danger")
         delete_btn.clicked.connect(self.delete_node_selected)
         for b in (new_btn, edit_btn, start_btn, stop_btn, delete_btn):
             actions.addWidget(b)
@@ -1839,13 +2116,13 @@ class MainWindow(QMainWindow):
         new_btn.clicked.connect(self.new_test_run)
         edit_btn = QPushButton("Edit…")
         edit_btn.clicked.connect(self.edit_test_run_selected)
-        start_btn = QPushButton("Start")
+        start_btn = _mark(QPushButton("Start"), "primary")
         start_btn.clicked.connect(self.start_test_run_selected)
-        stop_btn = QPushButton("Stop")
+        stop_btn = _mark(QPushButton("Stop"), "danger")
         stop_btn.clicked.connect(self.stop_test_run_selected)
         report_btn = QPushButton("View Report")
         report_btn.clicked.connect(self.view_test_run_report_selected)
-        delete_btn = QPushButton("Delete")
+        delete_btn = _mark(QPushButton("Delete"), "danger")
         delete_btn.clicked.connect(self.delete_test_run_selected)
         for b in (new_btn, edit_btn, start_btn, stop_btn, report_btn, delete_btn):
             actions.addWidget(b)
@@ -1905,11 +2182,11 @@ class MainWindow(QMainWindow):
         new_veth_btn.clicked.connect(self.new_veth)
         can_config_btn = QPushButton("Configure CAN…")
         can_config_btn.clicked.connect(self.configure_can_selected)
-        up_btn = QPushButton("Up")
+        up_btn = _mark(QPushButton("Up"), "primary")
         up_btn.clicked.connect(self.interface_up_selected)
-        down_btn = QPushButton("Down")
+        down_btn = _mark(QPushButton("Down"), "danger")
         down_btn.clicked.connect(self.interface_down_selected)
-        delete_btn = QPushButton("Delete")
+        delete_btn = _mark(QPushButton("Delete"), "danger")
         delete_btn.clicked.connect(self.delete_interface_selected)
         for b in (new_vcan_btn, new_veth_btn, can_config_btn, up_btn, down_btn, delete_btn):
             actions.addWidget(b)
@@ -1922,6 +2199,48 @@ class MainWindow(QMainWindow):
             "including physical hardware -- double-check the selection and "
             "host before using them, especially on a box with a gateway "
             "actively using a real CAN interface."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(note)
+
+        return tab
+
+    def _build_settings_tab(self) -> QWidget:
+        """Host management -- Add/Remove Host, Save/Load Session. Lives on
+        its own page rather than pinned above every other page (where it
+        used to be): these are host *definitions*, shared setup every
+        other page's data depends on, not something you touch as often as
+        the per-kind tables themselves."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        layout.addWidget(QLabel("Hosts"))
+        host_bar = QHBoxLayout()
+        self.host_list = QListWidget()
+        self.host_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        host_bar.addWidget(self.host_list, 1)
+        host_btns = QVBoxLayout()
+        add_host_btn = QPushButton("+ Add Host")
+        add_host_btn.clicked.connect(self.add_host)
+        remove_host_btn = QPushButton("Remove Host")
+        remove_host_btn.clicked.connect(self.remove_host)
+        save_session_btn = QPushButton("Save Session…")
+        save_session_btn.clicked.connect(self.save_session)
+        load_session_btn = QPushButton("Load Session…")
+        load_session_btn.clicked.connect(self.load_session)
+        host_btns.addWidget(add_host_btn)
+        host_btns.addWidget(remove_host_btn)
+        host_btns.addWidget(save_session_btn)
+        host_btns.addWidget(load_session_btn)
+        host_btns.addStretch(1)
+        host_bar.addLayout(host_btns)
+        layout.addLayout(host_bar, 1)
+
+        note = QLabel(
+            "● reachable, ○ unreachable (checked every 2s). Removing a host "
+            "here only forgets it locally -- it doesn't stop or affect "
+            "anything running on that machine."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray; font-size: 11px;")
@@ -2046,6 +2365,14 @@ class MainWindow(QMainWindow):
             for c, v in enumerate(values):
                 item = QTableWidgetItem(v)
                 item.setData(Qt.UserRole, key)
+                if c == 4:  # Status
+                    color = _process_status_color(v)
+                elif c == 6:  # Managed
+                    color = _bool_color(v)
+                else:
+                    color = None
+                if color:
+                    item.setForeground(color)
                 self.table.setItem(r, c, item)
         if select_row is not None:
             self.table.selectRow(select_row)
@@ -2251,6 +2578,10 @@ class MainWindow(QMainWindow):
             for c, v in enumerate(values):
                 item = QTableWidgetItem(v)
                 item.setData(Qt.UserRole, key)
+                if c == 5:  # Status
+                    color = _process_status_color(v)
+                    if color:
+                        item.setForeground(color)
                 self.node_table.setItem(r, c, item)
         if select_row is not None:
             self.node_table.selectRow(select_row)
@@ -2420,6 +2751,14 @@ class MainWindow(QMainWindow):
             for c, v in enumerate(values):
                 item = QTableWidgetItem(v)
                 item.setData(Qt.UserRole, key)
+                if c == 5:  # Result
+                    color = _VERDICT_COLORS.get(v)
+                elif c == 6:  # Status
+                    color = _process_status_color(v)
+                else:
+                    color = None
+                if color:
+                    item.setForeground(color)
                 self.test_run_table.setItem(r, c, item)
         if select_row is not None:
             self.test_run_table.selectRow(select_row)
@@ -2597,6 +2936,9 @@ class MainWindow(QMainWindow):
             for c, v in enumerate(values):
                 item = QTableWidgetItem(v)
                 item.setData(Qt.UserRole, key)
+                if c == 3:  # Up
+                    color = _STATUS_GOOD if v == "up" else _STATUS_MUTED
+                    item.setForeground(color)
                 self.iface_table.setItem(r, c, item)
         if select_row is not None:
             self.iface_table.selectRow(select_row)
@@ -2745,6 +3087,7 @@ class MainWindow(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    app.setStyleSheet(_DARK_STYLESHEET)
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

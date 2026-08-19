@@ -333,13 +333,34 @@ curl localhost:8090/api/node-scripts   # discovered boat-platform/nodes/*.py, wi
 
 ## Admin GUI (PySide6 client)
 
-`admin_gui/` is the desktop client for one or more launcher agents above —
-host list (persisted to `~/.boat/admin_hosts.json`) → aggregated instance
-table (with a **Managed** column, `Yes`/`No` per the `external:` discovery
-above), polled every 2s on a background `QThread` → create/**edit**/start/
-stop/delete, plus a log viewer and an **equivalent command line** panel
-(the `BOAT_*=... ./boat_gateway` form of whatever instance is selected,
-with a Copy button -- for pasting into a script) for the selected instance.
+`admin_gui/` is the desktop client for one or more launcher agents above.
+A dark-themed sidebar (`QListWidget` + `QStackedWidget`, not a literal
+`QTabWidget` -- gives full control over the selected-item highlight and
+icons a plain tab bar's own styling can't easily reach) navigates five
+pages: **Gateway**, **Nodes**, **Test Runs**, **Interfaces**, and
+**Settings**. The dark theme (`_DARK_STYLESHEET` in `main.py`, applied
+once app-wide via `QApplication.setStyleSheet()`) covers every page and
+every dialog -- buttons tagged `primary` (blue, the main affirmative
+action in a row -- Start, a dialog's OK) or `danger` (red -- Stop, Down,
+Delete) via a `_mark()` helper setting a Qt dynamic `class` property the
+stylesheet's `QPushButton[class="..."]` selectors key off of, plus a few
+colorized status cells (green "Yes"/"running"/"PASS", red "exited:N" for
+N≠0, muted gray for "stopped"/"No"). Adapted from a mockup the user
+provided; approximated the exact palette from the image rather than
+guessing blind.
+
+**Settings** holds host management -- host list (persisted to
+`~/.boat/admin_hosts.json`), **+ Add Host**/**Remove Host**, and
+**Save Session…**/**Load Session…** -- moved off the always-visible top
+bar it used to occupy (pinned above every page) since these are host
+*definitions*, shared setup the other pages' data depends on, not
+something touched as often as the per-page tables themselves. Every
+other page shows the aggregated instance table (with a **Managed**
+column, `Yes`/`No` per the `external:` discovery above), polled every 2s
+on a background `QThread` → create/**edit**/start/stop/delete, plus a log
+viewer and an **equivalent command line** panel (the `BOAT_*=...
+./boat_gateway` form of whatever instance is selected, with a Copy
+button -- for pasting into a script) for the selected instance.
 The New/Edit Instance dialog also runs the *reverse* direction: paste a
 command line into **From command line** and **Parse && Fill** populates
 every field from it. **Save Session…**/**Load Session…** write/read a

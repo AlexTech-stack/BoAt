@@ -1065,3 +1065,79 @@ verified separately with three widget-construction cases (real FD state,
 classic CAN state, no current state available) -- all three correct.
 Full account: `backlog/launcher_agent_backlog.md`'s "Configure CAN found
 and fixed two real bugs on real CAN FD hardware" entry.
+
+---
+
+### TC_AdminGui_021_dark_theme_sidebar_redesign
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- None specific -- a visual/layout check, works with any host configuration
+
+**TestSteps:**
+1. Launch the app; inspect the sidebar (icons, app title, selected-item
+   highlight) and confirm five pages: Gateway, Nodes, Test Runs,
+   Interfaces, Settings
+2. Click through each page; inspect table styling (rounded card,
+   alternating rows), button colors (Start/OK blue, Stop/Down/Delete red),
+   and colorized status cells (Managed Yes green, running/PASS green,
+   exited nonzero red)
+3. Open a dialog (e.g. New Instance…) and inspect its styling
+4. On Settings, confirm host management (Add/Remove Host, Save/Load
+   Session) is present and functions the same as before the redesign
+
+**Expected:**
+- Sidebar renders with legible icons (no missing-glyph boxes), the
+  active page highlighted with a rounded pill, dark theme consistent
+  across the whole window
+- Every page's table/buttons/status cells follow the dark theme and
+  color conventions described above
+- Dialogs match the dark theme (no jarring light-mode popup on a dark
+  main window)
+- Settings' host management works identically to the old top-bar version
+  it replaced -- moving it didn't change its behavior, only its location
+
+**Verdict:** OK
+
+**Result:**
+User provided a mockup image (sidebar nav, dark navy theme, blue/red
+accent buttons, colored status badges) and asked for the UI to be
+adapted to match it. Clarified scope first (three questions, all
+answered with the recommended option): Settings holds host management
+(moved off the always-visible top bar it used to occupy); the dark theme
+applies everywhere (all pages + all dialogs), not just the shell shown in
+the mockup; colors approximated directly from the mockup image rather
+than guessing.
+
+Implementation: `QListWidget`+`QStackedWidget` sidebar replacing
+`QTabWidget` (full control over icon/selected-item styling a tab bar
+can't easily reach); a single `_DARK_STYLESHEET` applied once via
+`QApplication.setStyleSheet()`; a `_mark()` helper tagging buttons with a
+`primary`/`danger` Qt dynamic property the stylesheet's
+`QPushButton[class="..."]` selectors key off of, applied to every
+Start/OK (blue) and Stop/Down/Delete (red) button across all four
+data pages and all five dialogs; colorized Managed/Status/Result/Up
+cells via small helper functions (`_process_status_color()`,
+`_bool_color()`, reusing the existing `_VERDICT_COLORS` dict from the
+Test Report dialog, itself re-tuned to the new dark palette). Host
+management (host list, Add/Remove Host, Save/Load Session) moved from
+the old always-visible top bar into a new Settings page.
+
+Verified on real hardware (`agn-testcomputer`), on the user's own
+configured host (read-only -- never created/modified/deleted anything):
+a throwaway Qt driver script (Xvfb + `xcb`, not committed) constructed a
+real `MainWindow`, clicked through all five sidebar pages, and
+screenshotted each one plus a real dialog (`NewInstanceDialog`). All
+five nav labels/icons render correctly with no missing-glyph boxes
+(`▤ Gateway`, `◈ Nodes`, `✓ Test Runs`, `⇄ Interfaces`, `⚙ Settings`);
+real data (real gateway instances, nodes, test runs, and interfaces
+including physical `can0`/`can1`, untouched) rendered correctly styled
+in every table; Start/OK buttons blue, Stop/Down/Delete buttons red,
+Managed "Yes" green; the dialog matched the dark theme throughout with
+no light-mode popup. Screenshots also used to regenerate
+`admin_gui/docs/screenshot.png`, `new_instance_dialog.png`,
+`nodes_tab.png`, `new_node_dialog.png` (the previously-committed ones
+were from the old light-mode/tab-bar layout, now stale). All test
+artifacts (screenshots not meant for the repo, Xvfb, driver scripts)
+cleaned up afterward.

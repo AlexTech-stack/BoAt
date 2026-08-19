@@ -684,6 +684,59 @@ to the original fixed defaults) -- all three matched exactly. Test agent,
 its process, and the driver script all cleaned up afterward; the user's
 own live agent/gateway on port 8090 confirmed untouched throughout.
 
+## Done (2026-08-19) — dark theme + sidebar redesign
+
+User provided a mockup image and asked for the UI to be adapted to match
+it: sidebar navigation, dark navy theme, blue "primary"/red "danger"
+accent buttons, colored status badges. Three scoping questions asked
+first (all answered with the recommended option): Settings holds host
+management (moved off the always-visible top bar); dark theme applies
+everywhere (all pages + all dialogs, not just the shell shown in the
+mockup); colors approximated from the mockup image itself.
+
+`QListWidget`+`QStackedWidget` sidebar (five pages: Gateway, Nodes, Test
+Runs, Interfaces, Settings) replaces the old `QTabWidget` -- gives full
+control over the selected-item pill highlight and per-item icons that
+`QTabBar`'s own styling can't easily reach. A single `_DARK_STYLESHEET`
+(approximated palette: `#1b1d27` app background, `#14151d` sidebar,
+`#3d6fe0` primary/accent blue, `#e0524f` danger red, `#46b285` good-status
+green) applied once via `QApplication.setStyleSheet()`, covering every
+page and every dialog. A `_mark()` helper tags buttons with a Qt dynamic
+`class` property (`primary`/`danger`) the stylesheet's
+`QPushButton[class="..."]` selectors key off of -- applied to every
+Start/OK button (blue) and every Stop/Down/Delete button (red) across all
+four data pages and all five dialogs. Status-ish table cells get small
+color helpers: `_process_status_color()` (green "running", red
+"exited:N" for N≠0, default for "stopped" -- shared across the
+Gateway/Nodes/Test-Runs tables, which all use the same status-string
+shape) and `_bool_color()` (green "Yes"/muted "No" for Managed); the Test
+Report dialog's existing `_VERDICT_COLORS` reused for the Test Runs
+table's Result column and re-tuned from its original light-background
+colors to the new dark palette. Host management (host list, Add/Remove
+Host, Save/Load Session) moved out of the old always-visible top bar into
+a new Settings page -- these are host *definitions*, shared setup every
+other page's data depends on, not something touched as often as the
+per-page tables themselves.
+
+Verified on real hardware (`agn-testcomputer`), read-only against the
+user's own configured host (never created/modified/deleted anything): a
+throwaway Qt driver script (Xvfb + `xcb`, not committed) constructed a
+real `MainWindow`, clicked through all five sidebar pages, and
+screenshotted each one plus a real dialog (`NewInstanceDialog`). All five
+nav icons render correctly with no missing-glyph boxes (`▤` Gateway, `◈`
+Nodes, `✓` Test Runs, `⇄` Interfaces, `⚙` Settings); real data (gateway
+instances, nodes, test runs, and interfaces including physical
+`can0`/`can1`, untouched) rendered correctly styled in every table;
+Start/OK buttons blue, Stop/Down/Delete buttons red, Managed "Yes" green;
+the dialog matched the dark theme throughout, no light-mode popup on a
+dark main window. The same screenshots were then used to regenerate
+`admin_gui/docs/screenshot.png`, `new_instance_dialog.png`,
+`nodes_tab.png`, `new_node_dialog.png` -- the previously-committed ones
+were from the old light-mode/tab-bar layout and had gone stale. All test
+artifacts (Xvfb, driver scripts, screenshots not meant for the repo)
+cleaned up afterward. Full account: `test/AdminGui.md`'s
+`TC_AdminGui_021_dark_theme_sidebar_redesign`.
+
 ## Next steps (not started)
 
 - Decide instance persistence approach once the "agent restart loses
