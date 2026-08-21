@@ -827,6 +827,79 @@ the user's own live processes (two gateways, `launcher_agent`, four
 `ui/*.py` services) confirmed still running under the same PIDs
 afterward.
 
+## Done (2026-08-20, continued) — audited the gateway's full env var surface, added Node tick fields
+
+User: "figure out how many env variables the gateway can use. I know
+there are the can and eth interfaces, the ticktime and the port. have i
+forgott anything?" A full source grep (not a doc reread) of everything
+`boat_gateway` actually calls `getenv()` on -- `main.cpp` +
+`replay_engine.cpp` (same binary; loaded plugins take config only via
+their own `?{json}` query string, confirmed zero `getenv()` calls
+anywhere under `src/plugins/`) -- found 9 total: the 4 the user named
+(`BOAT_CAN_INTERFACES`, `BOAT_ETH_INTERFACES`, `BOAT_GRPC_PORT`,
+`BOAT_NODE_TICK_MS`/`_US`), `BOAT_NODE_PLUGINS`, and three genuinely
+undocumented ones -- `BOAT_TLS_CERT`/`BOAT_TLS_KEY`/`BOAT_TLS_CLIENT_CA`
+(opt-in server-side TLS, confirmed absent from `AGENTS.md`, `README.md`,
+and admin_gui, present only in the source). Also flagged `BOAT_HIL_ENABLED`/
+`BOAT_VCAN_IFACE` as a likely point of confusion -- real `BOAT_*` env
+vars, but read by the ctest HIL test binaries, not by `boat_gateway`
+itself.
+
+User: TLS isn't needed for now (Google-requires-it-for-something-else,
+not for regular connections) -- skip it. Follow-up: "please add a field
+for the BOAT_NODE_TICK_NS and BOAT_NODE_TICK_MS to the New Instance /
+Edit window with default BOAT_NODE_TICK_MS = 1 with a comment that
+BOAT_NODE_TICK_NS will override BOAT_NODE_TICK_MS when both are set."
+Corrected in passing: the real env var is `BOAT_NODE_TICK_US`
+(microseconds), not `_NS` (nanoseconds) -- confirmed against the exact
+`getenv()` call in `main.cpp` found during the audit above; implemented
+using the real name, since a `_NS` field would silently do nothing (the
+gateway never reads it).
+
+Found while implementing: `create_instance()`/`update_instance()`
+(`agent_client.py`) already accepted `tick_ms`/`tick_us`, and
+`_format_command_line()`/`_parse_command_line()` (the Equivalent Command
+Line panel and its own paste-and-fill) already handled both -- the *only*
+gap was `NewInstanceDialog` itself never having input fields for them,
+so `result_payload()` never included them and a pasted
+`BOAT_NODE_TICK_MS=...` line's parsed value was silently dropped instead
+of landing anywhere.
+
+**Fix**: two new fields, **Node tick (ms)** (pre-filled `"1"`, the
+gateway's own compiled-in default -- literal text, not a placeholder, so
+it's visibly what's about to be sent, not just implied) and **Node tick
+(µs)** (blank, placeholder "leave blank unless you need sub-ms
+precision"), plus a small note underneath: "BOAT_NODE_TICK_US overrides
+BOAT_NODE_TICK_MS when both are set. This is the minimum achievable
+PDU/node-plugin cycle time, not a per-message rate." Edit mode overrides
+the `"1"` default only when the instance has its own explicit
+`tick_ms` saved (mirroring the existing gRPC-port pre-fill pattern);
+`_parse_and_fill()` now also populates both fields from a pasted line
+(previously silently ignored parsed tick values); `result_payload()`
+includes both, parsed as `int` when non-blank else `None`.
+
+**Verified on real hardware** (`agn-testcomputer`), on an isolated test
+agent (a fresh port -- the box had `launcher_agent` and four other
+`ui/*.py` services running at the time, confirmed via `ps`/`ss` and left
+untouched, no gateway processes were running so nothing else needed
+avoiding): a throwaway Qt driver script (Xvfb + `xcb`, not committed)
+confirmed a fresh dialog's `tick_ms`/`tick_us` fields read `"1"`/`""`
+and `result_payload()` returned `{"tick_ms": 1, "tick_us": None}`;
+created a real instance through the isolated agent with that payload and
+confirmed the stored instance came back with `tick_ms: 1, tick_us:
+None`; reopened it in Edit mode and confirmed the dialog correctly
+pre-filled `"1"`/`""` from the *saved* instance (not just the
+constructor default); changed `tick_us` to `500` and confirmed the real
+`update_instance()` call persisted `tick_us: 500`; pasted a line
+containing `BOAT_NODE_TICK_MS=5` into a fresh dialog and confirmed
+**Parse && Fill** populated `tick_ms_edit` with `"5"` (previously this
+field didn't exist at all, so this exact input silently did nothing). A
+screenshot confirmed the fields and note render correctly, and was also
+used to regenerate the stale `admin_gui/docs/new_instance_dialog.png`.
+Test instance and all test artifacts cleaned up afterward; every one of
+the user's own live processes confirmed running under the same PIDs
+afterward.
+
 ## Next steps (not started)
 
 - Decide instance persistence approach once the "agent restart loses

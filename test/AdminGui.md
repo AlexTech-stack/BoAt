@@ -1209,3 +1209,71 @@ correctly across every interface type present. All test artifacts
 cleaned up afterward; every one of the user's own live processes
 confirmed running under the same PIDs afterward. Full account:
 `backlog/launcher_agent_backlog.md`'s "CAN Config column" entry.
+
+---
+
+### TC_AdminGui_023_node_tick_fields
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent
+
+**TestSteps:**
+1. Open **New Instance…**; inspect the Node tick (ms)/(µs) fields and
+   the note beneath them
+2. Fill in a CAN interface and create the instance
+3. **Edit…** the created instance; inspect the tick fields
+4. Change **Node tick (µs)** and save
+5. Paste a command line containing `BOAT_NODE_TICK_MS=<n>` (no `_US`)
+   into **From command line** and click **Parse && Fill**
+
+**Expected:**
+- Step 1: **Node tick (ms)** starts pre-filled with `1`; **Node tick
+  (µs)** is blank with a "leave blank unless you need sub-ms precision"
+  placeholder; the note states `BOAT_NODE_TICK_US` overrides
+  `BOAT_NODE_TICK_MS` when both are set
+- Step 2: the created instance's stored `tick_ms` is `1`, `tick_us` is
+  `None`
+- Step 3: the dialog re-opens with `1`/blank pre-filled from the saved
+  instance
+- Step 4: the update persists the new `tick_us` value
+- Step 5: **Node tick (ms)** updates to the pasted value, **Node tick
+  (µs)** stays blank
+
+**Verdict:** OK
+
+**Result:**
+Followed a request to audit the gateway's full environment-variable
+surface first (a source grep of every `getenv()` call in `main.cpp` +
+`replay_engine.cpp`, confirming 9 total including three genuinely
+undocumented TLS vars the user then said weren't needed for now) --
+this test case covers the follow-up: adding dedicated Node tick fields
+to the New/Edit Instance dialog, previously only reachable via a paste
+that silently dropped the value (no field existed to hold it, and
+`result_payload()` never included it, even though the agent-side
+`create_instance()`/`update_instance()` already accepted it). Also
+corrected a naming mix-up in the request itself: the real variable is
+`BOAT_NODE_TICK_US` (microseconds), not `_NS` (nanoseconds) -- confirmed
+against the actual `getenv()` call, and implemented with the real name.
+
+Verified on real hardware (`agn-testcomputer`), on an isolated test
+agent (the box had `launcher_agent` and four other `ui/*.py` services
+running at the time, confirmed via `ps`/`ss` and left untouched; no
+gateway processes were running, so nothing else needed avoiding): a
+throwaway Qt driver script (Xvfb + `xcb`, not committed) confirmed a
+fresh dialog's fields read `"1"`/`""` and `result_payload()` returned
+`{"tick_ms": 1, "tick_us": None}`; created a real instance through the
+isolated agent and confirmed the stored `tick_ms`/`tick_us` matched;
+reopened it in Edit mode and confirmed `"1"`/`""` pre-filled from the
+*saved* instance, not just the constructor default; changed `tick_us`
+to `500` and confirmed the real update persisted it; pasted a line with
+`BOAT_NODE_TICK_MS=5` and confirmed **Parse && Fill** populated the
+`ms` field with `"5"` (previously silently dropped, since the field
+didn't exist). A screenshot confirmed the fields and note render
+correctly, and was used to regenerate the stale
+`admin_gui/docs/new_instance_dialog.png`. Test instance and all test
+artifacts cleaned up afterward; every one of the user's own live
+processes confirmed running under the same PIDs afterward. Full
+account: `backlog/launcher_agent_backlog.md`'s "audited the gateway's
+full env var surface, added Node tick fields" entry.

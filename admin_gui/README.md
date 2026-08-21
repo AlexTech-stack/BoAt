@@ -91,8 +91,12 @@ reference for any future visual changes.
    back to the flat optional JSON config field alongside the path (e.g.
    `{"iface": "vcan0"}`), same as before this existed. **Remove selected**
    drops an already-added entry. Also: an optional explicit gRPC port
-   (blank = auto-allocated by that host's agent), and an optional gateway
-   binary override.
+   (blank = auto-allocated by that host's agent); **Node tick (ms)** /
+   **Node tick (µs)** (`BOAT_NODE_TICK_MS`/`_US` -- the minimum
+   achievable PDU/node-plugin cycle time, not a per-message rate; **Node
+   tick (ms)** starts pre-filled with `1`, the gateway's own compiled-in
+   default, and a note under both fields states `_US` overrides `_MS`
+   when both are set); and an optional gateway binary override.
    At the top, **From command line** takes a pasted
    `BOAT_CAN_INTERFACES=... BOAT_NODE_PLUGINS=... ./boat_gateway` line
    (exactly what the "Equivalent command line" panel below produces) and

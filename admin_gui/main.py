@@ -1104,6 +1104,22 @@ class NewInstanceDialog(QDialog):
         self.port_edit.setPlaceholderText("auto")
         layout.addRow("gRPC port:", self.port_edit)
 
+        self.tick_ms_edit = QLineEdit("1")
+        layout.addRow("Node tick (ms):", self.tick_ms_edit)
+
+        self.tick_us_edit = QLineEdit()
+        self.tick_us_edit.setPlaceholderText("leave blank unless you need sub-ms precision")
+        layout.addRow("Node tick (µs):", self.tick_us_edit)
+
+        tick_note = QLabel(
+            "BOAT_NODE_TICK_US overrides BOAT_NODE_TICK_MS when both are set. "
+            "This is the minimum achievable PDU/node-plugin cycle time, not a "
+            "per-message rate."
+        )
+        tick_note.setWordWrap(True)
+        tick_note.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addRow("", tick_note)
+
         self.gw_bin_edit = QLineEdit()
         self.gw_bin_edit.setPlaceholderText("default build/debug path on that host")
         layout.addRow("Gateway binary:", self.gw_bin_edit)
@@ -1131,6 +1147,13 @@ class NewInstanceDialog(QDialog):
             # own current port from its collision check.
             if existing.get("grpc_port"):
                 self.port_edit.setText(str(existing["grpc_port"]))
+            # tick_ms_edit already defaults to "1" (the gateway's own
+            # compiled-in default) -- only override it when this instance
+            # has its own explicit value saved.
+            if existing.get("tick_ms"):
+                self.tick_ms_edit.setText(str(existing["tick_ms"]))
+            if existing.get("tick_us"):
+                self.tick_us_edit.setText(str(existing["tick_us"]))
             if existing.get("gateway_bin"):
                 self.gw_bin_edit.setText(existing["gateway_bin"])
 
@@ -1158,6 +1181,8 @@ class NewInstanceDialog(QDialog):
         for p in parsed["node_plugins"]:
             self.plugin_picker.add_value(p["path"], p["config"])
         self.port_edit.setText(str(parsed["grpc_port"]) if parsed["grpc_port"] is not None else "")
+        self.tick_ms_edit.setText(str(parsed["tick_ms"]) if parsed["tick_ms"] is not None else "")
+        self.tick_us_edit.setText(str(parsed["tick_us"]) if parsed["tick_us"] is not None else "")
         self.gw_bin_edit.setText(parsed["gateway_bin"] or "")
         self.paste_edit.clear()
 
@@ -1180,12 +1205,16 @@ class NewInstanceDialog(QDialog):
 
     def result_payload(self) -> dict:
         port_text = self.port_edit.text().strip()
+        tick_ms_text = self.tick_ms_edit.text().strip()
+        tick_us_text = self.tick_us_edit.text().strip()
         return {
             "name": self.name_edit.text().strip(),
             "can_ifaces": self.can_picker.values(),
             "eth_ifaces": self.eth_picker.values(),
             "node_plugins": self.plugin_picker.values(),
             "grpc_port": int(port_text) if port_text else None,
+            "tick_ms": int(tick_ms_text) if tick_ms_text else None,
+            "tick_us": int(tick_us_text) if tick_us_text else None,
             "gateway_bin": self.gw_bin_edit.text().strip() or None,
         }
 

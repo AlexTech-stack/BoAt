@@ -359,10 +359,18 @@ the `external:` discovery above), polled every 2s on a background
 `QThread` → create/**edit**/start/stop/delete, plus a log viewer and an
 **equivalent command line** panel (the `BOAT_*=... ./boat_gateway` form
 of whatever instance is selected, with a Copy button -- for pasting into
-a script) for the selected instance.
+a script) for the selected instance. The New/Edit Instance dialog has
+dedicated **Node tick (ms)**/**Node tick (µs)** fields (`BOAT_NODE_TICK_MS`/
+`_US` -- the gateway's own compiled-in default is 1ms, which **Node tick
+(ms)** starts pre-filled with; a note under both fields states `_US`
+overrides `_MS` when both are set, matching `main.cpp`'s own precedence)
+-- previously only reachable via **From command line** paste, with no
+dedicated fields and no round-trip through `result_payload()` at all, so
+a pasted tick value was silently dropped even though the agent-side
+`create_instance`/`update_instance` calls already accepted it.
 The New/Edit Instance dialog also runs the *reverse* direction: paste a
 command line into **From command line** and **Parse && Fill** populates
-every field from it. **Save Session…**/**Load Session…** write/read a
+every field from it (now including these two). **Save Session…**/**Load Session…** write/read a
 docker-compose-style YAML file (`session.py`, using `PyYAML`) capturing
 every host plus its agent-managed instance definitions (never
 `managed: false` rows -- nothing owned to save for those) *and* every
