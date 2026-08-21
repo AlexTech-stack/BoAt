@@ -191,9 +191,30 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 - The frame is dispatched to the pdu_router plugin (not written to a wire directly)
   and the routed result appears on the target bus
 
-**Verdict:** NOT_TESTED
+**Verdict:** OK
 
 **Result:**
+
+Regression carried over from v0.1.3-alpha ("Doesn't work at all"): `pdu_router`'s
+`declared_buses()` only reported `["can","eth"]`, so `PluginManager::DispatchFrame()`'s
+pre-filter (`src/core/plugin/plugin_manager.cpp`) never called the plugin's `on_frame`
+for `bus_type=PDU`, and `on_frame` had no PDU-handling branch anyway. Fixed by adding
+`"pdu"` to `declared_buses()` and a branch in `pdu_router_on_frame()` that forwards
+the frame's `pdu_id`/payload to the existing `PduRouter::SendPdu()` (the same path
+`boat pdu send` uses).
+
+Verified on real hardware (isolated gateway, fresh port, `BOAT_CAN_INTERFACES=vcan0`,
+`BOAT_NODE_PLUGINS=pdu_router.so`, route `0x100 -> vcan0`):
+
+```
+testuser@testcomputer:~$ boat --host 0.0.0.0:50071 frame send --bus-type PDU --pdu-id 0x100 --data DEADBEEF
+Frame sent: bus_type=PDU iface=auto
+
+# candump vcan0, concurrently:
+  vcan0  100   [4]  DE AD BE EF
+```
+
+`ctest -R pdu` (8/8) and `-R 'PluginManager|Frame'` (24/24) still pass, no regressions.
 
 ---
 

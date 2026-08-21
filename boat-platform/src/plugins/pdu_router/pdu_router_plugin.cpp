@@ -60,11 +60,20 @@ void pdu_router_on_frame(void* ctx, const BoatFrame* frame) {
     if (frame->payload && frame->payload_len > 0)
       ef.payload.assign(frame->payload, frame->payload + frame->payload_len);
     p->router.OnEthernetFrame(ef, frame->iface ? frame->iface : "");
+  } else if (frame->bus_type == BOAT_BUS_PDU) {
+    // Inbound dispatch from FrameService::SendFrame(bus_type=PDU) -- the
+    // frame carries a PDU id + payload to route/transmit, not wire bytes to
+    // decode. Forward it through the same SendPdu() path `boat pdu send`
+    // uses, so a route (or container) configured for this pdu_id fires.
+    std::vector<uint8_t> payload;
+    if (frame->payload && frame->payload_len > 0)
+      payload.assign(frame->payload, frame->payload + frame->payload_len);
+    p->router.SendPdu(frame->meta.pdu.pdu_id, payload);
   }
 }
 
 const char* pdu_router_declared_buses(void* /*ctx*/) {
-  return "[\"can\",\"eth\"]";
+  return "[\"can\",\"eth\",\"pdu\"]";
 }
 
 BoatPluginVTable gVTable = [] {
