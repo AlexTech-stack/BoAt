@@ -465,6 +465,66 @@ def _bool_color(text: str) -> Optional[QColor]:
     return None
 
 
+def _format_can_phase(phase: dict) -> str:
+    """One bittiming phase (see ui/launcher_agent.py's _parse_can_phase())
+    as `<bitrate> bps, <sample point>% SP`."""
+    text = f"{phase['bitrate']} bps"
+    if "sample_point_pct" in phase:
+        text += f", {phase['sample_point_pct']}% SP"
+    return text
+
+
+def _format_can_config_cell(iface: dict) -> str:
+    """The Interfaces table's CAN Config column -- "virtual" for vcan
+    (which has no real bitrate/FD to report, and shouldn't be presented
+    as if it did -- see CanConfigDialog's own guard for the same reasoning
+    on the write side), "<bitrate> bps[, SP%][ / FD <dbitrate> bps[, SP%]]"
+    for a real, already-configured CAN link, "—" for anything else
+    (ether/veth/loopback/other, or a CAN link that's never been
+    configured at all)."""
+    if iface.get("type") == "vcan":
+        return "virtual"
+    cfg = iface.get("can_config")
+    nominal = (cfg or {}).get("nominal")
+    if not nominal:
+        return "—"
+    text = _format_can_phase(nominal)
+    if cfg.get("fd"):
+        data = cfg.get("data")
+        text += f" / FD {_format_can_phase(data)}" if data else " / FD"
+    return text
+
+
+def _format_can_config_tooltip(iface: dict) -> str:
+    """Full detail (prop_seg/phase_seg1/phase_seg2/sjw for each phase) for
+    the CAN Config cell's tooltip -- the compact cell text above covers
+    bitrate/sample-point/FD, which is what fits without cluttering the
+    table; this is for "and/or seg1 seg2 and sjw etc." on hover instead."""
+    if iface.get("type") == "vcan":
+        return "Virtual CAN -- no bitrate or CAN FD configuration (the kernel has nothing to set)."
+    cfg = iface.get("can_config")
+    nominal = (cfg or {}).get("nominal")
+    if not nominal:
+        return ""
+
+    def _phase_line(label: str, phase: dict) -> str:
+        parts = [f"{label}: {phase['bitrate']} bps"]
+        if "sample_point_pct" in phase:
+            parts.append(f"sample point {phase['sample_point_pct']}%")
+        segs = [f"{k}={phase[key]}" for key, k in (
+            ("prop_seg", "prop_seg"), ("phase_seg1", "seg1"),
+            ("phase_seg2", "seg2"), ("sjw", "sjw"),
+        ) if key in phase]
+        if segs:
+            parts.append(", ".join(segs))
+        return " — ".join(parts)
+
+    lines = [_phase_line("Nominal", nominal)]
+    if cfg.get("fd") and cfg.get("data"):
+        lines.append(_phase_line("Data (FD)", cfg["data"]))
+    return "\n".join(lines)
+
+
 def _format_test_report_entry(entry: dict) -> str:
     """Human-readable rendering of one test's report.json content for the
     TestReportDialog's detail pane -- steps and their assertions, plus
@@ -2188,9 +2248,9 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(tab)
 
         # ── Interface table ──
-        self.iface_table = QTableWidget(0, 6)
+        self.iface_table = QTableWidget(0, 7)
         self.iface_table.setHorizontalHeaderLabels(
-            ["Host", "Name", "Type", "Up", "Operstate", "MAC"]
+            ["Host", "Name", "Type", "CAN Config", "Up", "Operstate", "MAC"]
         )
         self.iface_table.horizontalHeader().setStretchLastSection(True)
         self.iface_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -2920,15 +2980,20 @@ class MainWindow(QMainWindow):
                 select_row = r
             values = [
                 host_name, iface["name"], iface.get("type", "?"),
+                _format_can_config_cell(iface),
                 "up" if iface.get("up") else "down",
                 iface.get("operstate", "?"), iface.get("mac", ""),
             ]
             for c, v in enumerate(values):
                 item = QTableWidgetItem(v)
                 item.setData(Qt.UserRole, key)
-                if c == 3:  # Up
+                if c == 4:  # Up
                     color = _STATUS_GOOD if v == "up" else _STATUS_MUTED
                     item.setForeground(color)
+                elif c == 3:  # CAN Config
+                    tooltip = _format_can_config_tooltip(iface)
+                    if tooltip:
+                        item.setToolTip(tooltip)
                 self.iface_table.setItem(r, c, item)
         if select_row is not None:
             self.iface_table.selectRow(select_row)
@@ -3034,8 +3099,31 @@ class MainWindow(QMainWindow):
             return
         client, name = res
         host_url, _ = self._selected_iface
+        iface = self.find_interface(host_url, name)
+        kind = (iface or {}).get("type")
+        if kind == "vcan":
+            # vcan genuinely has no bitrate/CAN FD to configure -- the
+            # kernel has nothing to set (the same "RTNETLINK answers:
+            # Operation not supported" a POST here used to surface
+            # confusingly). Refuse client-side with a clear message
+            # instead of opening a dialog pre-filled with fixed defaults
+            # that look like real config but aren't -- this was reported
+            # directly: "a virtual can shall not show any [baudrate], as
+            # it does now when clicking on configure can."
+            QMessageBox.information(
+                self, "Configure CAN",
+                f"'{name}' is a virtual CAN interface -- it has no real "
+                f"bitrate or CAN FD configuration to set.",
+            )
+            return
+        if kind != "can":
+            QMessageBox.information(
+                self, "Configure CAN",
+                f"'{name}' is a {kind or 'unknown'} interface, not CAN -- nothing to configure here.",
+            )
+            return
         host_name = self._iface_snapshot.get(host_url, {}).get("name", host_url)
-        current = client.get_can_config(name)  # None for vcan/unreadable -- dialog falls back to defaults
+        current = client.get_can_config(name)  # None if unreadable -- dialog falls back to defaults
         dlg = CanConfigDialog(host_name, name, current, self)
         if dlg.exec() != QDialog.Accepted:
             return

@@ -240,11 +240,21 @@ link's bitrate (virtual or physical). This is the same job
 out to the identical `ip`/`modprobe` commands, so either tool works
 against the same host and neither owns exclusive control.
 
-- Table columns: Host, Name, Type, Up, Operstate, MAC -- one row per
-  host per interface, aggregated from `GET /api/interfaces` on the same
-  2s poll cycle as every other tab. Shows *everything* on the host, not
-  just what this tool created: physical CAN (`can0`, ...), physical
-  Ethernet, and anything set up by hand or by `ui/launcher.py`.
+- Table columns: Host, Name, Type, CAN Config, Up, Operstate, MAC -- one
+  row per host per interface, aggregated from `GET /api/interfaces` on
+  the same 2s poll cycle as every other tab. Shows *everything* on the
+  host, not just what this tool created: physical CAN (`can0`, ...),
+  physical Ethernet, and anything set up by hand or by `ui/launcher.py`.
+- **CAN Config** shows `virtual` for a vcan (it has no real bitrate or
+  CAN FD to report -- see below), `<bitrate> bps, <sample point>% SP`
+  for a real, already-configured CAN link (` / FD <data bitrate> bps,
+  <sample point>% SP` appended when CAN FD is active), or `—` for
+  anything else (Ethernet, loopback, or a CAN link that's never been
+  configured). Hover a CAN cell for the full detail (`prop_seg`/
+  `phase_seg1`/`phase_seg2`/`sjw` for each phase) that doesn't fit in
+  the cell itself. Read from `ip -d -j link show`'s structured
+  `linkinfo.info_data` -- one `ip` call for the whole table, not one per
+  row.
 - **New vcan…** / **New veth…** pick a host + name. A veth's peer end is
   auto-derived as `<name>_peer`, shown live as you type; Linux caps
   interface names at 15 characters (`IFNAMSIZ`), so a name close to the
@@ -255,20 +265,21 @@ against the same host and neither owns exclusive control.
   Data bitrate enabled only when FD is checked) for the selected
   interface -- `ip link set <name> {up|down} type can bitrate <b>
   [dbitrate <d> fd {on|off}]`, the exact commands `boat_cli/
-  bus_setup_context.py`'s "Physical CAN" section documents. Works on any
-  type-can interface; a vcan has no real bitrate and the kernel rejects
-  the change, which surfaces as a normal error, not a special case. The
-  dialog pre-fills every field from the interface's *actual* current
-  state (a small "Current: ..." line at the top; `None`/unreadable falls
-  back to fixed defaults, e.g. for a vcan) instead of always showing
-  placeholder values -- and applying leaves the interface in whatever
-  up/down state it was in *before* you opened the dialog, not
-  unconditionally `up` (both found and fixed after real testing on a PEAK
-  PCAN-USB Pro FD surfaced the gap: the dialog showed 500000/no-FD for an
-  interface that was actually running CAN FD at 500000/2000000, and
-  unchecking CAN FD against that same interface didn't actually turn FD
-  off -- see `backlog/launcher_agent_backlog.md`'s "Configure CAN" entry
-  for the full account).
+  bus_setup_context.py`'s "Physical CAN" section documents. Only opens
+  for a real `can`-type interface -- selecting a vcan (or anything else
+  that isn't CAN) shows a clear message instead ("has no real bitrate or
+  CAN FD configuration to set") rather than a dialog pre-filled with
+  fixed defaults that look like real config but aren't; a vcan genuinely
+  has no bitrate/FD for the kernel to report or apply (the same
+  `RTNETLINK answers: Operation not supported` a POST here used to
+  surface confusingly instead). For a real CAN interface, the dialog
+  pre-fills every field from its *actual* current state (a small
+  "Current: ..." line at the top) instead of showing placeholder values
+  -- and applying leaves the interface in whatever up/down state it was
+  in *before* you opened the dialog, not unconditionally `up` (found and
+  fixed after real testing on a PEAK PCAN-USB Pro FD surfaced both this
+  and the FD gap below -- see `backlog/launcher_agent_backlog.md`'s
+  "Configure CAN" entry for the full account).
 - **Up** / **Down** act on the selected interface, whatever it is --
   including physical hardware. **Down** asks for confirmation first,
   since bringing down an interface a running gateway is actively using

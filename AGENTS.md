@@ -459,7 +459,7 @@ create/delete vcan and veth pairs, bring any interface up/down, and
 configure a `type can` link's bitrate (virtual or physical -- the exact
 `ip link set ... type can bitrate ...` commands `boat_cli/
 bus_setup_context.py`'s "Physical CAN" section documents). Table columns:
-Host, Name, Type, Up, Operstate, MAC -- one row per host per interface,
+Host, Name, Type, **CAN Config**, Up, Operstate, MAC -- one row per host per interface,
 aggregating `GET /api/interfaces` across every configured host on the
 same 2s poll cycle as the other tabs, so it reflects real system state
 including physical hardware and interfaces created by any other means
@@ -498,6 +498,25 @@ it was in *before* the call (still has to come down first to apply a
 bitrate change, same as always) instead of unconditionally ending up
 `up` -- previously this silently undid an explicit **Down** the user had
 just pressed.
+
+The **CAN Config** column shows `virtual` for a vcan row (it has no real
+bitrate/FD for the kernel to report), a compact `<bitrate> bps, <sample
+point>% SP[ / FD <dbitrate> bps, <sample point>% SP]` for a real,
+already-configured `can`-type link, or `—` otherwise -- a tooltip on
+that cell carries the fuller `prop_seg`/`phase_seg1`/`phase_seg2`/`sjw`
+detail for each phase that doesn't fit the cell itself.
+`_list_interfaces()` now calls `ip -d -j link show` (details, once for
+the whole table -- not one call per row) and classifies `type` directly
+from `linkinfo.info_kind` (`"can"`/`"vcan"`), which also replaced an
+earlier separate `ip ... type vcan` lookup the old classification needed
+just to build a vcan-name set. `_parse_can_info_data()`/`_parse_can_phase()`
+are the shared parse both this column and `_read_can_config()` (the
+dialog's own prefill) build on. **Configure CAN…** itself now refuses to
+open for a vcan (or anything non-CAN) with a clear message instead of
+showing a bitrate-editing dialog pre-filled with fixed defaults that
+looked like real config but weren't -- reported directly: "a virtual can
+shall not show any [baudrate], as it does now when clicking on
+configure can."
 
 ```bash
 pip install -r admin_gui/requirements.txt   # Debian/Ubuntu: add --break-system-packages

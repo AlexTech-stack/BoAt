@@ -1152,3 +1152,60 @@ Settings page renders as a blank page with no widgets. `screenshot.png`
 regenerated again to match; the dialog and Nodes-page screenshots were
 unaffected by this move. Full account: `backlog/launcher_agent_backlog.md`'s
 dark-theme entry, "continued" update.
+
+---
+
+### TC_AdminGui_022_can_config_column
+
+**TestSets:** [AdminGui]
+
+**Preconditions:**
+- A reachable agent with at least one vcan and, ideally, a real
+  already-configured physical CAN interface
+
+**TestSteps:**
+1. Inspect the Interfaces table's CAN Config column across every
+   interface type present (vcan, real CAN, veth, Ethernet, loopback)
+2. Hover a real CAN interface's CAN Config cell
+3. Select a vcan row and click **Configure CAN…**
+4. Select a real `can`-type row and click **Configure CAN…**
+
+**Expected:**
+- Step 1: vcan rows read `virtual`; a real, already-configured CAN link
+  reads `<bitrate> bps, <sample point>% SP` (plus ` / FD <data bitrate>
+  bps, <sample point>% SP` if CAN FD is active); anything else
+  (veth/ether/loopback, or an unconfigured CAN link) reads `—`
+- Step 2: tooltip shows the fuller detail (`prop_seg`/`phase_seg1`/
+  `phase_seg2`/`sjw`) for each phase
+- Step 3: a clear message ("has no real bitrate or CAN FD configuration
+  to set") appears instead of the bitrate-editing dialog -- no dialog
+  with fake 500000/no-FD defaults opens
+- Step 4: the real Configure CAN dialog opens as before, pre-filled from
+  the interface's actual current state
+
+**Verdict:** OK
+
+**Result:**
+Verified on real hardware (`agn-testcomputer`), strictly read-only (the
+box had two live gateways, `launcher_agent`, and four other `ui/*.py`
+services all running at once at the time -- confirmed via `ps`/`ss`
+before and after, an isolated test agent used throughout, no
+create/delete/up/down/configure calls made against anything real). First
+via `curl` directly against `GET /api/interfaces`: `can0`/`can1` (the
+user's own current real config, left exactly as found) returned full
+`can_config` with correct `sample_point_pct` (87.5/75.0) and all
+seg/sjw fields for both nominal and FD data phases; `vcan0`/`veth0`/`lo`
+all correctly returned `can_config: null`; the separate flat
+`GET .../can-config` endpoint (dialog prefill) confirmed unchanged after
+the underlying refactor. Then through the real Qt code path (Xvfb +
+`xcb`, a throwaway driver script, not committed): confirmed the table's
+7 real columns; confirmed `can0`'s real cell text
+(`"250000 bps, 87.5% SP / FD 2000000 bps, 75.0% SP"`) and tooltip
+content; confirmed `vcan0` read `"virtual"` and `veth0`/`lo` read `"—"`;
+selected `vcan0` and called the real `configure_can_selected()`,
+confirming exactly one captured info message and that `CanConfigDialog`
+was never constructed. A screenshot confirmed the column renders
+correctly across every interface type present. All test artifacts
+cleaned up afterward; every one of the user's own live processes
+confirmed running under the same PIDs afterward. Full account:
+`backlog/launcher_agent_backlog.md`'s "CAN Config column" entry.

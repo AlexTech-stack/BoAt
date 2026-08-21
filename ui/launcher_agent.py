@@ -991,31 +991,80 @@ def _read_test_run_report(report_dir: str) -> dict:
 
 # ── Host introspection ───────────────────────────────────────────────────────
 
+def _parse_can_phase(bt: dict) -> dict:
+    """One CAN bittiming phase block (`ip -d -j link show`'s
+    `linkinfo.info_data.bittiming` or `.data_bittiming`) into a compact
+    dict: `bitrate`, `sample_point_pct` (the raw `sample_point` -- a
+    0-1 fraction like "0.875" -- converted to a percentage, e.g. 87.5),
+    and whichever of `prop_seg`/`phase_seg1`/`phase_seg2`/`sjw` `ip`
+    actually reported. Assumes `bt` has a `bitrate` key -- callers check
+    that first, same convention as the rest of this file's best-effort
+    parsing."""
+    phase = {"bitrate": bt["bitrate"]}
+    sp = bt.get("sample_point")
+    if sp is not None:
+        try:
+            phase["sample_point_pct"] = round(float(sp) * 100, 1)
+        except (TypeError, ValueError):
+            pass
+    for key in ("prop_seg", "phase_seg1", "phase_seg2", "sjw"):
+        if key in bt:
+            phase[key] = bt[key]
+    return phase
+
+
+def _parse_can_info_data(info_data: dict) -> Optional[dict]:
+    """A type-can link's `linkinfo.info_data` (from `ip -d -j link show`)
+    into `{"fd": bool, "nominal": {...}, "data": {...}?}` -- "nominal" is
+    the classic-CAN phase (present whenever there's a real bittiming
+    block, i.e. this link has actually been configured with a bitrate at
+    all), "data" is the FD data-phase (present only when FD is active
+    *and* `data_bittiming` was reported). Returns None when there's no
+    bittiming to report at all (link exists but was never configured) --
+    the caller treats that the same as "config unknown", not an error."""
+    bt = info_data.get("bittiming")
+    if not bt or "bitrate" not in bt:
+        return None
+    fd = "FD" in info_data.get("ctrlmode", [])
+    result = {"fd": fd, "nominal": _parse_can_phase(bt)}
+    if fd:
+        dbt = info_data.get("data_bittiming")
+        if dbt and "bitrate" in dbt:
+            result["data"] = _parse_can_phase(dbt)
+    return result
+
+
 def _list_interfaces() -> List[dict]:
     """Interface listing, mirroring (and now a superset of) ui/launcher.py's
     version -- that tool's own vcan/veth create/delete endpoints are
     unaffected by this agent also having equivalents; either can be used
     against the same host, they just both shell out to the same `ip`
-    commands."""
+    commands.
+
+    Uses `-d` (details) so `linkinfo.info_kind` -- "can" for physical CAN,
+    "vcan" for virtual -- classifies type directly from this one call,
+    replacing the separate `ip ... type vcan` lookup an earlier version
+    needed just to build a vcan-name set. Also embeds `can_config` (see
+    `_parse_can_info_data()`) for a "can" interface, and `None` for
+    everything else (vcan has genuinely no bitrate/FD config to report --
+    the client shows "virtual" for that case instead, keyed off `type`,
+    not off `can_config` being empty)."""
     try:
-        raw = subprocess.run(["ip", "-j", "link", "show"], capture_output=True, text=True, check=True)
+        raw = subprocess.run(["ip", "-d", "-j", "link", "show"], capture_output=True, text=True, check=True)
         all_ifaces: list = json.loads(raw.stdout)
-        vcan_names: set = set()
-        try:
-            vraw = subprocess.run(["ip", "-j", "link", "show", "type", "vcan"], capture_output=True, text=True)
-            if vraw.returncode == 0:
-                for e in json.loads(vraw.stdout):
-                    vcan_names.add(e["ifname"])
-        except Exception:
-            pass
 
         out = []
         for iface in all_ifaces:
             name = iface["ifname"]
             flags = iface.get("flags", [])
             link_type = iface.get("link_type", "")
-            if name in vcan_names:
+            info = iface.get("linkinfo") or {}
+            info_kind = info.get("info_kind")
+
+            if info_kind == "vcan":
                 iface_type = "vcan"
+            elif info_kind == "can":
+                iface_type = "can"
             elif link_type == "ether" and "veth" in name:
                 iface_type = "veth"
             elif link_type == "ether":
@@ -1023,7 +1072,12 @@ def _list_interfaces() -> List[dict]:
             elif link_type == "loopback":
                 iface_type = "loopback"
             else:
-                iface_type = link_type or "other"  # physical CAN ("can") lands here
+                iface_type = link_type or "other"
+
+            can_config = None
+            if iface_type == "can":
+                can_config = _parse_can_info_data(info.get("info_data") or {})
+
             out.append({
                 "name": name,
                 "type": iface_type,
@@ -1031,6 +1085,7 @@ def _list_interfaces() -> List[dict]:
                 "lower_up": "LOWER_UP" in flags,
                 "operstate": iface.get("operstate", "UNKNOWN"),
                 "mac": iface.get("address", ""),
+                "can_config": can_config,
             })
         return out
     except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError) as e:
@@ -1058,12 +1113,14 @@ def _read_can_config(name: str) -> Optional[dict]:
     """Current bitrate/data-bitrate/FD state for a real `type can` link
     (physical hardware, never vcan -- vcan's own `linkinfo.info_kind` is
     `"vcan"`, with no `bittiming` at all, matching its own real lack of a
-    bitrate concept), read from `ip -d -j link show <name>`'s structured
-    JSON (`linkinfo.info_data.bittiming.bitrate`, `.data_bittiming.
-    bitrate`, `.ctrlmode` containing `"FD"`). Returns None for anything
-    that isn't a real CAN link or that this parse doesn't recognize --
-    the caller falls back to fixed defaults rather than erroring, same
-    reasoning as every other best-effort introspection in this file."""
+    bitrate concept), as the flat `{"bitrate", "dbitrate", "fd"}` shape
+    CanConfigDialog's prefill expects. Built on the same
+    `_parse_can_info_data()` the richer per-row `can_config` in
+    `_list_interfaces()` uses -- this just flattens it and drops the
+    sample-point/seg/sjw detail that shape doesn't need. Returns None for
+    anything that isn't a real, already-configured CAN link -- the caller
+    falls back to fixed defaults rather than erroring, same reasoning as
+    every other best-effort introspection in this file."""
     try:
         raw = subprocess.run(["ip", "-d", "-j", "link", "show", name],
                               capture_output=True, text=True, check=True)
@@ -1075,15 +1132,13 @@ def _read_can_config(name: str) -> Optional[dict]:
     info = data[0].get("linkinfo", {})
     if info.get("info_kind") != "can":
         return None
-    info_data = info.get("info_data", {})
-    bittiming = info_data.get("bittiming", {})
-    if "bitrate" not in bittiming:
+    parsed = _parse_can_info_data(info.get("info_data") or {})
+    if not parsed:
         return None
-    data_bittiming = info_data.get("data_bittiming", {})
     return {
-        "bitrate": bittiming["bitrate"],
-        "dbitrate": data_bittiming.get("bitrate"),
-        "fd": "FD" in info_data.get("ctrlmode", []),
+        "bitrate": parsed["nominal"]["bitrate"],
+        "dbitrate": parsed.get("data", {}).get("bitrate"),
+        "fd": parsed["fd"],
     }
 
 

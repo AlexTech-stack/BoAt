@@ -757,6 +757,76 @@ regenerated again to match (the other three doc screenshots -- dialogs
 and the Nodes page -- were unaffected by this move and didn't need
 regenerating). All test artifacts cleaned up afterward.
 
+## Done (2026-08-20) — CAN Config column + fixed a misleading vcan dialog
+
+User: "add a new coloum where the current settings of a can interface is
+shown baudrate canfd maybe also samplepoint(s) in % and/or seg1 seg2 and
+sjw ect. When the interface is virtual then just mark it with virtual,
+also a virtual can shall not show any boudrate, as it does now when
+clicking on configure can." Two parts: a new read-only column, and a
+real bug in **Configure CAN…**'s existing behavior for vcan (it opened
+the same bitrate-editing dialog with fixed 500000/no-FD defaults
+regardless of interface type, misleadingly implying a vcan had a real,
+editable bitrate).
+
+**Agent side** (`ui/launcher_agent.py`): `_list_interfaces()` now calls
+`ip -d -j link show` (details, `-d`) instead of the plain listing --
+still exactly one `ip` subprocess call for the whole table, not one per
+row. `linkinfo.info_kind` (`"can"`/`"vcan"`) now classifies `type`
+directly, which also let a second, separate `ip ... type vcan` call the
+old version needed (just to build a vcan-name set for classification) be
+removed entirely -- a real simplification, not just an addition. New
+`_parse_can_phase()` (one bittiming block -> `{bitrate, sample_point_pct,
+prop_seg, phase_seg1, phase_seg2, sjw}`, converting the raw `sample_point`
+fraction like `"0.875"` to a percentage) and `_parse_can_info_data()`
+(a full `linkinfo.info_data` -> `{fd, nominal, data?}`) are shared
+between the new per-row `can_config` field and `_read_can_config()`
+(the Configure CAN dialog's own prefill, refactored to reuse the same
+parse and flatten it to its existing `{bitrate, dbitrate, fd}` shape --
+no change to that endpoint's contract or to `agent_client.py`/
+`CanConfigDialog`).
+
+**Client side**: `admin_gui/main.py` gained a **CAN Config** column
+(Host, Name, Type, **CAN Config**, Up, Operstate, MAC) via
+`_format_can_config_cell()` (`"virtual"` for vcan, `"<bitrate> bps,
+<SP>% SP[ / FD <dbitrate> bps, <SP>% SP]"` for a real configured CAN
+link, `"—"` otherwise) and `_format_can_config_tooltip()` (the
+prop_seg/phase_seg1/phase_seg2/sjw detail for each phase, on hover,
+since it doesn't fit the cell). `configure_can_selected()` now checks
+the selected interface's `type` *before* opening `CanConfigDialog`:
+`vcan` gets a clear "has no real bitrate or CAN FD configuration to set"
+message instead of the dialog (matching **Delete**'s existing
+refused-client-side-with-a-clear-message pattern for a vcan/veth-only
+action); any other non-`can` type gets an equivalent message rather than
+silently attempting a configure that was never going to do anything
+sensible either.
+
+**Verified on real hardware** (`agn-testcomputer`), strictly read-only
+(the box now has two live gateways, `launcher_agent`, and four other
+`ui/*.py` services running at once -- confirmed via `ps`/`ss`, an
+isolated test agent used for every check, no create/delete/up/down/
+configure calls made against anything real this pass). `curl` directly
+against the new listing: `can0`/`can1` (currently FD-enabled, bitrate
+250000/2000000 from the user's own separate testing since the last
+session, left exactly as found) returned full `can_config` with
+`sample_point_pct` 87.5/75.0 and all four seg/sjw fields on both phases;
+`vcan0`, `veth0`, `lo` all returned `can_config: null` correctly; the
+flat `GET .../can-config` endpoint (dialog prefill) still returns the
+unchanged shape post-refactor. Then through the real Qt code path (Xvfb
++ `xcb`, a throwaway driver script, not committed): confirmed the real
+table's 7 columns; confirmed `can0`'s real cell text and tooltip
+content; confirmed `vcan0`/`veth0`/`lo` cells read `"virtual"`/`"—"`/
+`"—"` respectively; selected `vcan0` and called the real
+`configure_can_selected()`, confirming it showed exactly one info
+message (captured, not a blocking modal) and never constructed
+`CanConfigDialog` at all. A screenshot confirmed the column renders
+correctly across every interface type present, including the user's own
+live `can0`/`can1`, untouched throughout. All test artifacts (isolated
+agent process, Xvfb, driver script) cleaned up afterward; every one of
+the user's own live processes (two gateways, `launcher_agent`, four
+`ui/*.py` services) confirmed still running under the same PIDs
+afterward.
+
 ## Next steps (not started)
 
 - Decide instance persistence approach once the "agent restart loses
