@@ -1112,9 +1112,10 @@ class NewInstanceDialog(QDialog):
         layout.addRow("Node tick (µs):", self.tick_us_edit)
 
         tick_note = QLabel(
+            "This is the interval at which the gateway's main loop runs, and thus how often "
+            "it processes messages. "
+            "The lower the value, the more CPU it will use, but the more responsive it will be. "
             "BOAT_NODE_TICK_US overrides BOAT_NODE_TICK_MS when both are set. "
-            "This is the minimum achievable PDU/node-plugin cycle time, not a "
-            "per-message rate."
         )
         tick_note.setWordWrap(True)
         tick_note.setStyleSheet("color: gray; font-size: 11px;")
