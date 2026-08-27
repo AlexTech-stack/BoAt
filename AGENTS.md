@@ -1,5 +1,14 @@
 # AGENTS.md — BoAt Platform
 
+> **Sibling file: `CLAUDE.md`.** The two are split by *audience*, not by depth: this file is
+> what opencode (see `.opencode/`) and any other agent following the AGENTS.md convention
+> loads; `CLAUDE.md` is what Claude Code loads. They describe the same repository and must
+> never disagree. **Any change you make here to a fact about the codebase has to land in
+> `CLAUDE.md` too** — otherwise Claude Code keeps acting on the stale version and nobody
+> notices, because neither file's readers see the other. Neither is authoritative over the
+> other; the source code is authoritative over both. This file is the longer of the two and
+> carries operational detail `CLAUDE.md` only summarizes.
+
 ## Repository structure
 
 - **`boat-platform/`** — Main platform (C++20, CMake+Ninja, gRPC)
@@ -22,19 +31,21 @@
     - `tcp/` — TCP transport plugin (state machine only; transmits via the core Eth registry when gateway-resident)
     - `probe/` — gateway conformance probe (verifies delivery, declared_buses filtering, self-sent tagging, round-trip from inside the dispatch loop)
   - `src/replay/` — Replay engine
-  - `proto/boat/v1/` — 16 protobuf definitions defining all gRPC services
+  - `proto/boat/v1/` — 18 protobuf files declaring 16 gRPC services
   - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
   - `sdk/cpp/include/boat/` — C++ SDK headers
     - `plugin.h` — Plugin ABI v8 (unified `on_frame`, `set_frame_publisher`, `declared_buses`)
     - `frame.h` — Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU bus types)
     - `can_tp.h` — Standalone CanTp C API (can_tp_send, can_tp_configure, can_tp_remove)
     - `someip.h` — SOME/IP protocol constants
-  - `cli/` — `boat-cli` package (Typer CLI: `boat sim|scenario|replay|frame|can|eth|pdu|can-tp|plugin|...`)
+  - `cli/` — `boat-cli` package (Typer CLI: `boat ai|sim|scenario|replay|plugin|can-tp|frame|pdu|db|test|trace` — there is no `can`/`eth` subcommand, see "CLI CAN commands" below)
   - `config/` — PDU database JSON files
   - `demo/` — Demo node scripts (not web UI; scenario-specific, e.g. `cyclic_sender_node.py`'s CAN-ID start/stop trigger)
   - `nodes/` — General-purpose node scripts, discoverable/runnable two ways: `ui/control_panel.py`'s "Nodes" web UI (any `.py` file not prefixed `_`, auto-listed with its module docstring's first line), and `ui/launcher_agent.py`/`admin_gui`'s Nodes tab (same discovery, but as a tracked, multi-node, multi-host registry -- see "Launcher Agent"/"Admin GUI" below). Each script accepts `--address` (default `None`, so `BOAT_HOST` decides when omitted) and its own behavior flags -- see `cyclic_can_sender.py` (configurable periodic CAN(FD) frame) and `can_request_responder.py` (replies to one CAN ID with a fixed response) for the raw-CAN pattern, or `pdu_cyclic_publisher.py`/`can_tp_trigger_sender.py` for the equivalent pattern **through a plugin** (`pdu_router`/`can_tp` respectively) instead of the gateway's core FrameSink -- see "Plugin-based node scripts" below. `control_panel.py` always passes `--address <its gateway field>` explicitly; `launcher_agent.py` sets `BOAT_HOST` in the spawned process's env instead -- both work since `--address` defaults to `None`.
-- **`ui/`** — 7 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, recorder:8083, control_panel, debug, system_dashboard)
-- **`tools/`** — 2 standalone tools (pdu_editor:8087, trace_analyzer:8088)
+- **`ui/`** — 8 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, control_panel:8081, recorder:8083, debug:8084, system_dashboard:8081, launcher_agent:8090). `start_ui.sh` launches only 5 of them — see "UI services" below. Every port has a `BOAT_*_PORT` env override; note `control_panel` and `system_dashboard` share 8081 by default, as do `launcher_agent` and `tools/eth_trace_analyzer.py` on 8090.
+- **`tools/`** — 4 standalone web tools started by `start_tools.sh` (pdu_editor:8087, trace_analyzer:8088, trace_editor:8089, eth_trace_analyzer:8090), plus the plain scripts `dbc2boatjson.py` (DBC → PDU-database JSON) and `test_vw_mlb_replay.py`
+- **`tools/dbc/`** — on-demand fetch of comma.ai's opendbc DBC files (`fetch_opendbc.sh`, download-only; the fetched files and any derived JSON are gitignored and must not be committed — see `tools/dbc/README.md`)
+- **`admin_gui/`** — PySide6 desktop client for one or more launcher agents (repo root, **not** under `boat-platform/`) — see "Admin GUI" below
 - **`traces/`** — Trace output directory (gitignored)
 
 ## Build & run
@@ -233,9 +244,13 @@ Flow Control by hand to watch a real multi-frame exchange, which
 ## UI services
 
 ```bash
-bash start_ui.sh   # launches all 10 services in background
+bash start_ui.sh   # launches 5 of the 8 services in background
 bash stop_ui.sh    # kills them all
 ```
+
+`start_ui.sh` starts `launcher`, `dashboard`, `commander`, `control_panel` and `recorder`.
+`debug.py`, `system_dashboard.py` and `launcher_agent.py` are **not** in it -- run those by hand
+(`launcher_agent.py` deliberately so; it's the headless per-host agent, see below).
 
 Each service is a standalone `python3 ui/<name>.py` FastAPI/uvicorn app with embedded HTML. SDK path is resolved via `sys.path.insert(0, ...)` relative to the script location.
 
@@ -542,7 +557,7 @@ dependency above.
 
 ## Quirks & gotchas
 
-- **Plugin ABI v8** (current, on `ABI_v8_frame_unification_and_major-refactor`):
+- **Plugin ABI v8** (current, merged to `master`):
   - Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU)
   - Plugin vtable (9 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`
   - `BOAT_PLUGIN_ABI_VERSION = 8` — v7 plugins rejected with clear error
@@ -555,6 +570,11 @@ dependency above.
   - Architecture reference: `boat-platform/docs/architecture/system-architecture.md`
 
 - Gateway binary path: `build/{preset}/src/gateway/grpc_gateway/boat_gateway`
+- **TLS is opt-in and server-side only.** `BOAT_TLS_CERT` + `BOAT_TLS_KEY` (PEM paths) must be
+  set *together* or the gateway refuses to start; adding `BOAT_TLS_CLIENT_CA` additionally
+  requires client certificates (mTLS). There is no client-side counterpart yet -- `BoAtClient`,
+  `trace_replay.py` and `boat/test/harness.py` all build `grpc.insecure_channel()`, so a
+  TLS-enabled gateway is currently unreachable from the Python SDK/CLI and from `admin_gui`.
 - `boat` CLI entry point (boat_cli/main.py): Typer app with subcommands. Uses `BoAtClient(address)` from `boat-py`.
 - `python3 -m boat` dispatches: subcommands `can|pdu|eth|db` → `boat/cmd.py` (one-shot), anything else → `boat/cli.py` (interactive REPL).
 - Proto stubs in `sdk/python/boat/stubs/boat/v1/` must be regenerated when proto files change (`generate_stubs.sh`).
@@ -564,6 +584,28 @@ dependency above.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`.
 - Docker images pushed to `ghcr.io/boat-platform/boat-platform:*`.
+
+## License
+
+Apache-2.0. `LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES.md` live at the repo root
+(`boat-platform/LICENSE` is a second copy, kept because CPack ships from that directory --
+`CPACK_RESOURCE_FILE_LICENSE` in `cmake/Packaging.cmake` resolves relative to it).
+
+New source files carry a two-line SPDX header, comment prefix per language, after any
+`#!` shebang -- not the full Apache boilerplate:
+
+```
+// Copyright 2026 Alexander Günther
+// SPDX-License-Identifier: Apache-2.0
+```
+
+Two categories are intentionally header-less because their generators would overwrite it:
+the protoc stubs under `sdk/python/boat/stubs/boat/v1/` and `tools/wireshark/boat_pdu_db.lua`.
+
+No third-party code is vendored: C++ deps arrive via CMake `FetchContent` at build time,
+Python deps via pip. Adding a dependency means adding it to `THIRD_PARTY_NOTICES.md`.
+The opendbc DBC files `tools/dbc/fetch_opendbc.sh` downloads (MIT, comma.ai) are gitignored
+and deliberately never redistributed by this repo.
 
 ## PDU Features
 
