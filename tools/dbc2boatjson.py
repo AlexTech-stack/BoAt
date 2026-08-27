@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """
 BoAt Platform — DBC to PDU Database JSON Converter
 

@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """
 BoAt Platform — Trace Recorder
 Manages recording sessions: subscribes to CAN / Ethernet / Bus streams and writes

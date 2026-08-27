@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Load tools/dbc/vw_mlb.json and send all CAN messages cyclically onto vcan0.
 
 The database is not part of this repository -- it is generated on demand from

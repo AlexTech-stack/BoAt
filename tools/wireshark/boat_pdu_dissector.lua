@@ -1,3 +1,6 @@
+-- Copyright 2026 Alexander Günther
+-- SPDX-License-Identifier: Apache-2.0
+
 -- BoAt PDU/signal post-dissector for Wireshark.
 --
 -- Decodes CAN frames captured from BoAt (via boat_extcap.py, or any

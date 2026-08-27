@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 from boat.test.pdu import PduHelper, _unpack_intel, _unpack_motorola, unpack_message
 from boat.message import Message
 from boat.pdu_db import PduDatabase

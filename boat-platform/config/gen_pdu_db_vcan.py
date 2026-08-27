@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Generate pdu_db_vcan.json — 30 CAN messages across vcan0 and vcan1."""
 
 import json

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 # Example: I-PDU Groups
 # Demonstrates how to create, enable, disable, and list PDU groups.
 # Prerequisites: boat gateway running on localhost:50051

@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """
 BoAt Platform — Gateway Launcher
 Network interface setup, gateway lifecycle management, and live debug output.

@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """System prompt builder for `boat ai bus-setup`.
 
 Injects bus configuration commands, environment variables, and hardware

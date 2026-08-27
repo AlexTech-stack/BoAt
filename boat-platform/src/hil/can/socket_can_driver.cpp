@@ -1,3 +1,6 @@
+// Copyright 2026 Alexander Günther
+// SPDX-License-Identifier: Apache-2.0
+
 #include "can/socket_can_driver.h"
 
 #ifdef __linux__

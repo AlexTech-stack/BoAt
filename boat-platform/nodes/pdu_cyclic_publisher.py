@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """PDU cyclic publisher -- configures a raw PDU route via the pdu_router
 plugin and sends a fixed payload on a fixed interval.
 

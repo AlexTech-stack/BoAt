@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """CLI: boat frame send / subscribe — unified FrameService."""
 
 from __future__ import annotations

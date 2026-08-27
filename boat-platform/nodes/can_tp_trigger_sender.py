@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """CAN-TP trigger sender -- on a plain CAN trigger frame, sends a fresh
 incrementing-byte payload through the can_tp plugin's own segmentation,
 so a human with nothing but `cansend`/`candump` can watch (and drive) a

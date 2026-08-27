@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """User-level AI configuration stored in ~/.config/boat/ai.toml.
 
 The API key is stored in the config file at ~/.config/boat/ which is

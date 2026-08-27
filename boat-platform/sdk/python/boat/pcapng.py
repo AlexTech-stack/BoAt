@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """PCAPNG (pcap-next-generation) reader/writer for mixed CAN + Ethernet traces.
 
 Hand-rolled (no third-party dependency), mirroring the existing hand-rolled

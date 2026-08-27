@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Base class for Python Ethernet nodes.
 
 An Ethernet node connects to the BoAt gateway, subscribes to Ethernet frames,

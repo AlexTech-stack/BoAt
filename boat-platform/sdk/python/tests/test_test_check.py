@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 from unittest.mock import patch, MagicMock
 
 from boat.test.check import check_environment

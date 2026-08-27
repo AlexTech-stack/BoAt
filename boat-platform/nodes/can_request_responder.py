@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """CAN request/responder -- replies to one CAN ID with a fixed response frame.
 
 A minimal ECU-simulation building block: waits for --request-id on

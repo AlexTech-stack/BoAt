@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Persisted list of launcher-agent hosts the admin app talks to.
 
 No Qt dependency -- plain JSON file under the user's home directory, so it

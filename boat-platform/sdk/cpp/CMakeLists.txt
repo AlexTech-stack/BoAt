@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 add_library(boat_plugin_sdk INTERFACE)
 
 target_include_directories(boat_plugin_sdk

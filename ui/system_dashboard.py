@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """
 BoAt Platform — System Overview Dashboard
 Run:  python3 demo/system_dashboard.py

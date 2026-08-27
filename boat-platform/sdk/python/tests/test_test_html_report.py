@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 from boat.test.html_report import generate_html_report
 from boat.test.report import (
     TestReport, TestInfo, TestStepRecord, AssertionRecord,

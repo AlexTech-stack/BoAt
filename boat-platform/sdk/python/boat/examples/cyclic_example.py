@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Example: cyclic-sender-with-trigger.
 
 Listens on ALL interfaces (iface_filter="") for two control frames:

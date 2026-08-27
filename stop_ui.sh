@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
 
 pkill -f "python3 ui/launcher.py" 2>/dev/null && echo "Stopped launcher" || true
 pkill -f "python3 ui/dashboard.py" 2>/dev/null && echo "Stopped dashboard" || true

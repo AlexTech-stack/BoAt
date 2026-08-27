@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Python SDK for replaying CAN trace files through the BoAt gateway.
 
 ``TraceReplayer.replay()`` supports CAN only (.asc, .blf, and the CAN

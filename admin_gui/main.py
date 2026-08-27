@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """
 BoAt Admin — PySide6 desktop client for one or more launcher agents.
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 # Example: CanTp — Large PDU transfer over CAN using ISO 15765-2
 # Sends a 255-byte payload segmented across multiple CAN frames.
 #

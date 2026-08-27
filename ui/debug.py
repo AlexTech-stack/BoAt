@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """
 BoAt Platform — Gateway gRPC Traffic Inspector
 Run:  python3 demo/debug.py

@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Message instance with signal packing.
 
 A Message is created from a PDU database entry and holds the current

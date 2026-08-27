@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Hardware HIL test: ISO-TP CAN Bridge via DUT.
 
 Tests that the DUT correctly bridges CAN frames bidirectionally

@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """HTTP client for ui/launcher_agent.py's REST API.
 
 Deliberately has no Qt dependency -- it's exercised/tested headlessly, and

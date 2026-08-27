@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 from .bus import TestCanBus, TestEthBus
 from .check import check_environment
 from .config import EnvironmentConfig, ManifestConfig, BusConfig, DutConfig, GatewayConfig, PluginRef

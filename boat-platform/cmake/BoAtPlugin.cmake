@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 function(add_boat_plugin target_name)
   add_library(${target_name} MODULE ${ARGN})
   target_compile_features(${target_name} PRIVATE cxx_std_20)

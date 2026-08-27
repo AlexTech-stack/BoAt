@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 add_library(boat_ipc STATIC
   ipc_channel_selector.cpp
   ipc_payload_dispatch.cpp

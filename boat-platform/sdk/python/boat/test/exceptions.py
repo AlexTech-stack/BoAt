@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 class TestTimeoutError(TimeoutError):
     __test__ = False
     """Raised when a bus expect() call times out."""

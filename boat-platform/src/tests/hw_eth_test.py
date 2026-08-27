@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Hardware Ethernet loopback test via BoAt gateway.
 
 Sends a raw Ethernet frame from enx28107b9f2016 (50.50.0.1) through the

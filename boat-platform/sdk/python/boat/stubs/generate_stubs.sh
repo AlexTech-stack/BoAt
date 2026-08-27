@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
 

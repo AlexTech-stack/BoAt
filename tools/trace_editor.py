@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """
 BoAt Platform — Trace Editor
 View, filter, and edit the frames inside a gateway binary trace file

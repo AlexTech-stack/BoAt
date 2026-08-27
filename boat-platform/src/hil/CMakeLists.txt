@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 add_library(boat_hil STATIC
   can/socket_can_driver.cpp
   can/physical_can_driver.cpp

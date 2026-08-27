@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Reverse engineering engine for CAN trace signal discovery.
 
 Builds on :mod:`boat.trace_analyzer` to discover signal boundaries,

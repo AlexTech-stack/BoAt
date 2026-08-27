@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 # Example: SOME/IP Plugin — Service-oriented middleware over Ethernet
 #
 # Prerequisites:

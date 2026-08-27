@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Bulk statistics engine for Ethernet (.pcap/.pcapng) trace analysis.
 
 Mirrors :mod:`boat.trace_analyzer`'s CAN-side design -- one pass over the

@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """System prompt builder for `boat ai cli`.
 
 Injects the full CLI command reference so the LLM can translate user intent

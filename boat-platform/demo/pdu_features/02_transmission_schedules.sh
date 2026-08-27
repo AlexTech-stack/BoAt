@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 # Example: PDU Transmission Schedules
 # Demonstrates Cyclic, OnChange, and Mixed transmission modes.
 # Prerequisites: boat gateway running on localhost:50051

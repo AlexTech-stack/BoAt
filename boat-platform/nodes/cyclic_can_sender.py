@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Cyclic CAN sender -- sends one configurable CAN(FD) frame on a fixed interval.
 
 A general-purpose node: point it at a bus/frame/cycle via CLI flags, no

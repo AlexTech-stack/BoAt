@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Example Ethernet node: custom-protocol-responder.
 
 Listens on veth0 for frames with EtherType 0x88B5 (IEEE 802 experimental/local use).

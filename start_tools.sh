@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
 
 python3 tools/pdu_editor.py &
 python3 tools/trace_analyzer.py &

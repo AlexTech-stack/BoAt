@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 add_boat_plugin(pdu_router pdu_router_plugin.cpp)
 target_include_directories(pdu_router PRIVATE
   ${CMAKE_SOURCE_DIR}/src

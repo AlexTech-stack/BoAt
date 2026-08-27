@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """PDU database loader.
 
 Loads a pdu_db.json file (see config/pdu_db.schema.json) and provides

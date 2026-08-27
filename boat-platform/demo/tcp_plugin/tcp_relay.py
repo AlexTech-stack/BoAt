@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """TCP relay: listens on a socket, forwards received payloads to another server.
 
 Usage:

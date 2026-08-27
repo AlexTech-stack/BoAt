@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Save/load a "session" -- a docker-compose-style YAML file capturing
 which hosts and which agent-managed instance/node/test-run *definitions*
 should exist -- so a whole multi-host setup can be recreated in one action

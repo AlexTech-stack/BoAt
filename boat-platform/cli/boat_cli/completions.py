@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Shell-completion callbacks shared across boat CLI subcommands.
 
 Typer 0.24.x accepts these signatures for the autocompletion parameter:

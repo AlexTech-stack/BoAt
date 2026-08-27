@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """CAN loopback routing test -- verifies the routing time of a "gateway
 DUT" that relays every frame from can0 to can1 and vice versa, using two
 physical CAN interfaces wired onto one shared bus as a DUT-free stand-in

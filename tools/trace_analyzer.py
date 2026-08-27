@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """
 BoAt Platform — Trace Analyzer
 Read BLF trace files, analyze CAN messages, derive PDU database JSON.

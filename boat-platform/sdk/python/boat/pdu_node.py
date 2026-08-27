@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Base class for Python PDU nodes.
 
 A PDU node connects to the BoAt gateway, subscribes to PDU frames, and can

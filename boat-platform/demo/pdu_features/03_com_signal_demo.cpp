@@ -1,3 +1,6 @@
+// Copyright 2026 Alexander Günther
+// SPDX-License-Identifier: Apache-2.0
+
 // Example: COM Signal Library Usage
 // Build: g++ -std=c++20 -I src/hil 03_com_signal_demo.cpp src/hil/pdu/com/com_signal.cpp -o com_demo
 // Run:   ./com_demo

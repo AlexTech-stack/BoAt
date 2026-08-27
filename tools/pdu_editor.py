@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """
 BoAt Platform — PDU Database Editor
 Create, modify, validate, and export PDU database JSON files.

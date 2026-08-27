@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Example CAN node: speed-limiter-alert.
 
 Listens on vcan0 for CAN ID 0x100 (vehicle speed, 2 bytes big-endian, unit: 0.1 km/h).

@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
 
 python3 ui/launcher.py &
 python3 ui/dashboard.py &

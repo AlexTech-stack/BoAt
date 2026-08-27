@@ -1,3 +1,6 @@
+// Copyright 2026 Alexander Günther
+// SPDX-License-Identifier: Apache-2.0
+
 #include "state/sim_state_machine.h"
 
 #include <algorithm>

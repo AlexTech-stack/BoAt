@@ -1,3 +1,6 @@
+// Copyright 2026 Alexander Günther
+// SPDX-License-Identifier: Apache-2.0
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "determinism/determinism_engine.h"

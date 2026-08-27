@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Example: sensor-data-decoder — decode multi-byte payload fields and re-encode responses.
 
 Listens on vcan0 for ID 0x200.

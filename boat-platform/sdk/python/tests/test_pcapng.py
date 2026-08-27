@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for the hand-rolled PCAPNG reader/writer."""
 from __future__ import annotations
 

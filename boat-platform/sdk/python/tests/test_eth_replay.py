@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for Ethernet pcap replay conversion and IP packet reconstruction."""
 from __future__ import annotations
 

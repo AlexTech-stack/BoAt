@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 set(CPACK_PACKAGE_NAME "boat-platform")
 set(CPACK_PACKAGE_VENDOR "boat-platform")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")

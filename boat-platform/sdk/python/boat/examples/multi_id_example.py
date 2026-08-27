@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Example: door-control-node — handle multiple CAN IDs in a single node.
 
 Listens on vcan0 (iface_filter="vcan0") for three different IDs:

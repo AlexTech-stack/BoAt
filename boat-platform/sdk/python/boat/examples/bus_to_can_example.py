@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Example: setpoint-actuator — react to a bus signal by sending a CAN frame.
 
 Subscribes to the bus signal 'actuator.setpoint' (a float, 0.0–100.0 %).

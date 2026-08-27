@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """
 BoAt Platform — CAN Trace, Bus Signal Log & Event Log
 Run:  python3 demo/dashboard.py

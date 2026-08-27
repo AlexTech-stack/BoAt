@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Always-on node signal bus — publish and subscribe to named typed signals.
 
 Independent of simulation lifecycle.  Any running node can publish or subscribe

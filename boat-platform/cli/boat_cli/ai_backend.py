@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Thin stdlib-only client for any OpenAI-compatible chat completions endpoint.
 
 Works with Ollama, LM Studio, llama.cpp server, vLLM, LocalAI, and OpenAI/cloud

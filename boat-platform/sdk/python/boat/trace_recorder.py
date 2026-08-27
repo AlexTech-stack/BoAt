@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Python SDK client for the BoAt Trace Recorder daemon.
 
 The recorder daemon (demo/recorder.py) must be running on the same or a

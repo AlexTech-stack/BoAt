@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 function(boat_register_proto_directory proto_dir)
   if(NOT EXISTS "${proto_dir}")
     message(FATAL_ERROR "Proto directory does not exist: ${proto_dir}")

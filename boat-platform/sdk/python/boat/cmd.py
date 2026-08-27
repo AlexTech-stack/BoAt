@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """One-shot CLI for BoAt — non-interactive subcommand mode.
 
 Usage

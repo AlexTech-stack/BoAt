@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """High-level PDU message node.
 
 Combines PduDatabase + PduNode to send messages by name or DbId with

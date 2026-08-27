@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Example Bus node: engine-state-logger.
 
 Subscribes to 'engine.rpm' and 'engine.temp' signals on the BoAt bus.

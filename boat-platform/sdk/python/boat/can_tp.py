@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """Python interface for CAN Transport Protocol (ISO 15765-2).
 
 This is a high-level wrapper around the CanTpService gRPC API, which

@@ -1,3 +1,6 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 """boat trace — start / stop / list / replay trace recording sessions.
 
 The start/stop/status commands communicate with the BoAt recorder daemon

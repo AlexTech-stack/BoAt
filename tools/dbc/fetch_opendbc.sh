@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
 #
 # Download comma.ai's opendbc CAN database files into tools/dbc/opendbc/.
 #
@@ -19,7 +22,16 @@ REF="${OPENDBC_REF:-master}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ref)     REF="$2"; shift 2 ;;
-    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help)
+      # Print the header comment block, minus the license lines. Matching on
+      # content rather than line numbers so it survives edits above.
+      awk 'NR==1 && /^#!/ { next }
+           /^#/ { l=$0; sub(/^# ?/,"",l)
+                  if (l !~ /^(Copyright|SPDX-License-Identifier)/) print l
+                  next }
+           /^[[:space:]]*$/ { next }
+           { exit }' "$0"
+      exit 0 ;;
     *)         echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done

@@ -1,3 +1,6 @@
+// Copyright 2026 Alexander Günther
+// SPDX-License-Identifier: Apache-2.0
+
 // probe_plugin — a gateway conformance probe (v8 ABI).
 //
 // Purpose: verify the gateway's frame plumbing from *inside* the dispatch loop,
