@@ -1,0 +1,4 @@
+# Nothing fetched or generated here is redistributed by BoAt.
+# opendbc content is MIT, Copyright (c) 2020 Comma.ai, Inc. -- see README.md.
+opendbc/
+*.json

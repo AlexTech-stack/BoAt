@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
-"""Load vw_mlb.json and send all CAN messages cyclically onto vcan0.
+"""Load tools/dbc/vw_mlb.json and send all CAN messages cyclically onto vcan0.
+
+The database is not part of this repository -- it is generated on demand from
+comma.ai's opendbc collection (MIT, Copyright (c) 2020 Comma.ai, Inc.), which
+BoAt fetches but does not redistribute. See tools/dbc/README.md.
 
 Usage:
-    # 1. Start the gateway first (separate terminal):
+    # 1. Fetch the DBCs and convert one (once) -- see tools/dbc/README.md:
+    tools/dbc/fetch_opendbc.sh
+    python3 tools/dbc2boatjson.py boat-platform/config/pdu_db.schema.json \\
+        tools/dbc/opendbc/vw_mlb.dbc tools/dbc/vw_mlb.json --default-cycle-ms 200
+
+    # 2. Start the gateway (separate terminal):
     BOAT_CAN_INTERFACES=vcan0 \\
         ./build/debug/src/gateway/grpc_gateway/boat_gateway
 
-    # 2. Run this script:
+    # 3. Run this script:
     python3 tools/test_vw_mlb_replay.py
 """
 
+import os
 import sys
 import time
 
@@ -18,12 +28,25 @@ from boat.pdu_node import PduNode
 from boat.message import Message
 from boat.v1 import pdu_pb2
 
-DB_PATH = "tools/vw_mlb.json"
+DB_PATH = "tools/dbc/vw_mlb.json"
 BUS_MAP = {"CAN": "vcan0"}
 ADDRESS = "localhost:50051"
 
 
 def main():
+    if not os.path.exists(DB_PATH):
+        sys.exit(
+            f"{DB_PATH} not found.\n"
+            "It is generated from comma.ai's opendbc, which this repository does "
+            "not ship. Fetch the DBCs and convert one:\n\n"
+            "    tools/dbc/fetch_opendbc.sh\n"
+            "    python3 tools/dbc2boatjson.py "
+            "boat-platform/config/pdu_db.schema.json \\\n"
+            "        tools/dbc/opendbc/vw_mlb.dbc tools/dbc/vw_mlb.json "
+            "--default-cycle-ms 200\n\n"
+            "See tools/dbc/README.md for details."
+        )
+
     db = PduDatabase(DB_PATH)
     node = PduNode(address=ADDRESS)
 

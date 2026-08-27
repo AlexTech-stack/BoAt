@@ -6,6 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "boat-cli"
 version = "0.1.0"
 description = "Typer-based CLI for BoAt platform"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Alexander Günther", email = "alexander.guenther@tuta.io" }]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+]
 requires-python = ">=3.11"
 dependencies = [
   "typer[all]>=0.12",
@@ -13,6 +19,10 @@ dependencies = [
   "boat-py>=0.1.0",
   "python-can>=4.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/AlexTech-stack/BoAt"
+Source = "https://github.com/AlexTech-stack/BoAt"
 
 [project.scripts]
 boat = "boat_cli.main:app"

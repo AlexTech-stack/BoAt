@@ -105,3 +105,10 @@ The node tick thread also ticks the `pdu_router` plugin (via its `on_tick`), dri
 - **Ubuntu 22.04** ships cmake 3.22 (too old). Use the [Kitware binary release](https://github.com/Kitware/CMake/releases) or the official APT repo.
 - **System cargo** (apt package `cargo`) may be too old. Always use `rustup`.
 - <code>build/debug/_deps/iceoryx-src/iceoryx_hoofs/posix/filesystem/source/posix_acl.cpp</code> requires `sys/acl.h` — install `libacl1-dev`.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) (identical to the copy at the
+repository root), plus [NOTICE](../NOTICE) and
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for the components fetched
+at build time.

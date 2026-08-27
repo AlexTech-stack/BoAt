@@ -41,3 +41,27 @@ BOAT_CAN_INTERFACES=vcan0 ./build/debug/src/gateway/grpc_gateway/boat_gateway
 - [API specification](boat-platform/docs/api/api-specification.md)
 - [Project plan](boat-platform/project-plan.md)
 - [AGENTS.md](AGENTS.md) — Build, run, and development reference
+
+## License
+
+BoAt is open source under the [Apache License 2.0](LICENSE).
+
+```
+Copyright 2026 Alexander Günther
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+Contributions are accepted under the same license (Apache-2.0 §5). Third-party
+components used at build or run time keep their own licenses — see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [NOTICE](NOTICE).
