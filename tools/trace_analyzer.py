@@ -61,7 +61,7 @@ def api_blf_list():
     files = sorted(set(files))[:200]
     return {"files": files, "export_dir": str(_EXPORT_DIR)}
 
-_SUPPORTED_SUFFIXES = (".blf", ".asc", ".trace", ".pcapng")
+_SUPPORTED_SUFFIXES = (".blf", ".asc", ".log", ".trace", ".pcapng")
 
 def _signal_preview(sig) -> dict[str, Any]:
     """UI-only preview of a discovered signal -- never written to the

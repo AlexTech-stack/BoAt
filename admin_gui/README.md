@@ -41,9 +41,9 @@ per-machine system dependency, unrelated to the Python packages above (and
 unrelated to whether you're on a real desktop or connecting via RDP/VNC —
 either way it's the same `xcb` plugin doing the rendering).
 
-![admin_gui main window, showing a host with a running instance](docs/screenshot.png)
+![admin_gui main window: the Gateway page, with a running gateway instance selected -- its live log and equivalent command line below](docs/screenshot.png)
 
-![New Instance dialog, showing the dropdown pickers for interfaces and plugins](docs/new_instance_dialog.png)
+![New Instance dialog: the dropdown pickers for interfaces and plugins, with probe.so selected so the per-key Plugin config fields from its schema sidecar are shown](docs/new_instance_dialog.png)
 
 The dark sidebar theme was adapted from a mockup the user provided --
 [`docs/ui_mockup.jpg`](docs/ui_mockup.jpg) -- kept here as the design
@@ -115,9 +115,9 @@ reference for any future visual changes.
 
 ## Nodes tab
 
-![Nodes tab, showing a running node instance targeting a gateway](docs/nodes_tab.png)
+![Nodes tab: a running cyclic_can_sender node selected, showing its live log and equivalent command line](docs/nodes_tab.png)
 
-![New Node dialog, showing the Target gateway dropdown and paste field](docs/new_node_dialog.png)
+![New Node dialog: the paste field, the Target gateway dropdown, and one input field per argument the selected script's build_parser() declares](docs/new_node_dialog.png)
 
 Same shape as the Gateways tab (table, New/Edit/Start/Stop/Delete, log
 viewer, equivalent command line), driving script processes under
@@ -181,6 +181,10 @@ own:
 
 ## Test Runs tab
 
+![Test Runs tab: a finished run with Result PASS, its log, and the report directory on the agent's host](docs/test_runs_tab.png)
+
+![New Test Run dialog, showing the Manifest and Environment dropdowns with each one's description underneath](docs/new_test_run_dialog.png)
+
 Treats one `boat test run <manifest.json>` invocation as a third kind of
 agent-managed process, reusing the same subprocess lifecycle as the Nodes
 tab (its own registry server-side, `TestRunInstance`/`TestRunRegistry` --
@@ -227,6 +231,8 @@ and from ctest/pytest unit tests.
   client regardless of which host it's running on. **Refresh** re-fetches
   (useful mid-run, since each test's `report.json` lands as soon as that
   test finishes, not all at once at the end).
+
+  ![View Report dialog: the per-test tree with verdict and duration, and the selected test's detail pane](docs/test_report_dialog.png)
 - The agent locates the `boat` CLI itself (`BOAT_CLI_BIN` env override →
   `shutil.which("boat")` → literal `~/.local/bin/boat` fallback, since a
   non-interactively-started agent process may not have `~/.local/bin` on
@@ -236,6 +242,8 @@ and from ctest/pytest unit tests.
   nodes -- see "Session files" below.
 
 ## Interfaces tab
+
+![Interfaces tab: every interface on the host -- physical Ethernet, vcan, veth pairs, and two physical CAN FD links with their bitrates in CAN Config](docs/interfaces_tab.png)
 
 Manages network interfaces on a host directly -- create/delete vcan and
 veth pairs, bring any interface up/down, and configure a `type can`
@@ -284,6 +292,8 @@ against the same host and neither owns exclusive control.
   fixed after real testing on a PEAK PCAN-USB Pro FD surfaced both this
   and the FD gap below -- see `backlog/launcher_agent_backlog.md`'s
   "Configure CAN" entry for the full account).
+
+  ![Configure CAN dialog for a physical CAN FD interface, pre-filled from its actual current bitrate/FD state](docs/can_config_dialog.png)
 - **Up** / **Down** act on the selected interface, whatever it is --
   including physical hardware. **Down** asks for confirmation first,
   since bringing down an interface a running gateway is actively using
