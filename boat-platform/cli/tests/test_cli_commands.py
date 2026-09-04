@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import struct
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -536,3 +537,74 @@ def test_frame_send_rejects_tcp_client_side() -> None:
 
 
 
+
+
+# ── trace score ────────────────────────────────────────────────────────────────
+
+
+def _write_score_log(tmp_path, frames: int = 200):
+    """A candump log with one ID: app ramp + counter nibble + SUM8 byte."""
+    lines = []
+    for i in range(frames):
+        p = bytes([(i * 3) % 256, 3, 1, 4, 1, 5, i % 16])
+        p += bytes([(-sum(p)) & 0xFF])
+        lines.append(f"({1000 + i * 0.01:.6f}) vcan0 12A#{p.hex().upper()}")
+    path = tmp_path / "score.log"
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_trace_score_triage_only(tmp_path) -> None:
+    path = _write_score_log(tmp_path)
+    result = runner.invoke(app, ["trace", "score", str(path), "--triage-only"])
+    assert result.exit_code == 0
+    assert "stage-1 gate: worth the RE pass" in result.output
+    assert "0x12A" in result.output
+    # stage 2 must not have run
+    assert "grade" not in result.output
+
+
+def test_trace_score_full_run_produces_grade_and_buckets(tmp_path) -> None:
+    path = _write_score_log(tmp_path)
+    result = runner.invoke(app, ["--json", "trace", "score", str(path)])
+    assert result.exit_code == 0
+    payload = json.loads(result.output.strip().splitlines()[-1])
+    assert payload["stage"] == 2
+    assert payload["components"]["grade"] is not None
+    msg = payload["messages"][0]
+    assert msg["can_id"] == "0x12A"
+    buckets = msg["bucket_bits"]
+    # the counter nibble is functionally proven -> seq; the payload is live
+    assert buckets["seq"] >= 4
+    assert sum(buckets.values()) == 64
+
+
+def test_trace_score_idle_bus_skips_stage_2(tmp_path) -> None:
+    lines = [f"({1000 + i * 0.01:.6f}) vcan0 12A#0000000000000000"
+             for i in range(100)]
+    path = tmp_path / "idle.log"
+    path.write_text("\n".join(lines) + "\n")
+    result = runner.invoke(app, ["--json", "trace", "score", str(path)])
+    assert result.exit_code == 0
+    payload = json.loads(result.output.strip().splitlines()[-1])
+    assert payload["stage"] == 1
+    assert payload["worth_re_pass"] is False
+
+
+def test_trace_score_missing_file() -> None:
+    result = runner.invoke(app, ["trace", "score", "/nonexistent/x.log"])
+    assert result.exit_code == 1
+
+
+def test_trace_score_mask_flag_is_recorded(tmp_path) -> None:
+    """A clean audit under a mask is not independent evidence, so whether
+    the mask ran has to travel with the numbers."""
+    path = _write_score_log(tmp_path)
+    on = json.loads(runner.invoke(
+        app, ["--json", "trace", "score", str(path)]
+    ).output.strip().splitlines()[-1])
+    off = json.loads(runner.invoke(
+        app, ["--json", "trace", "score", str(path), "--no-mask"]
+    ).output.strip().splitlines()[-1])
+    assert on["search_mask_applied"] is True
+    assert off["search_mask_applied"] is False

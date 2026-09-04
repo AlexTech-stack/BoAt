@@ -24,10 +24,15 @@ from __future__ import annotations
 import math
 import statistics
 from collections import Counter, defaultdict
+from math import comb
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from bisect import bisect_left
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from boat.trace_analyzer import CanIdStats, TraceAnalysis, TraceAnalyzer
+
+if TYPE_CHECKING:  # runtime import would cycle: trace_information imports this module
+    from boat.trace_information import SearchMask
 
 _HAS_NUMPY = False
 try:
@@ -90,6 +95,12 @@ class DiscoveredSignal:
     # constant K the aggregate over the *whole* frame is held at, which is
     # what makes the scheme checkable. See _find_simple_checksum().
     checksum_target: int | None = None
+    # Set when this field is one incompressible block -- every bit an
+    # independent fair coin -- rather than a quantity with readable
+    # structure. A truncated SecOC MAC or a CRC32 trailer reads this way.
+    # Assembled by TraceReverseEngineer._coalesce_opaque_runs() from the
+    # one-bit fragments clustering shreds such a field into.
+    is_opaque: bool = False
 
 
 @dataclass
@@ -214,6 +225,12 @@ _CRC_DATA_ID_LIST_MIN_GROUPS = 4
 # their Data IDs read off once the algorithm is established.
 _CRC_DATA_ID_LIST_MIN_DISTINCT = 2
 _CRC_DATA_ID_LIST_MIN_INFORMATIVE = 4
+
+
+def _spans_a_hint(hints: list[int], start: int, end: int) -> bool:
+    """Is any hinted position in ``[start, end)``? ``hints`` is sorted."""
+    i = bisect_left(hints, start)
+    return i < len(hints) and hints[i] < end
 
 
 def _reflect(value: int, width: int) -> int:
@@ -420,16 +437,50 @@ class TraceReverseEngineer:
         analyzer: A :class:`~boat.trace_analyzer.TraceAnalyzer` instance
                   that has already been run via ``analyze()``.
         min_confidence: Minimum confidence (0-1) to include a signal.
+        search_mask: Optional
+            :class:`~boat.trace_information.SearchMask` from the stage-1
+            information triage, marking payload regions whose statistics
+            say no application signal can live there (high surprise, no
+            structure -- a rolling code, a MAC, an encrypted block).
+
+            It gates **only** the statistical application-signal clustering
+            in :meth:`find_application_signals`. The functional detectors --
+            :meth:`find_counters`, :meth:`find_crcs`, :meth:`find_multiplexors`
+            -- keep full access to every bit, deliberately: they *prove*
+            what they find, so a statistical prior has no business
+            overruling them, and a CRC sitting in an otherwise opaque tail
+            must still be findable.
+
+            Default ``None`` reproduces the unmasked behaviour exactly.
+        counter_lsb_hints: Optional ``{can_id: sorted bit positions}`` from
+            :meth:`~boat.trace_information.TraceInformationScorer.counter_lsb_hints`,
+            naming the positions that could be a counter's LSB. Used in
+            :meth:`_scan_for_counters` to drop candidate spans that contain
+            no such position *before* extracting any frames -- a necessary
+            condition, so pruning by it cannot change which counters are
+            found, only how long it takes to not find them. IDs absent from
+            the mapping are scanned unpruned.
+
+            Default ``None`` scans every candidate, as before.
     """
 
     def __init__(
         self,
         analyzer: TraceAnalyzer,
         min_confidence: float = 0.3,
+        search_mask: "SearchMask | None" = None,
+        counter_lsb_hints: dict[int, list[int]] | None = None,
     ) -> None:
         self._analyzer = analyzer
         self._analysis: TraceAnalysis | None = analyzer._analysis
         self._min_confidence = min_confidence
+        self._search_mask = search_mask
+        self._counter_lsb_hints = counter_lsb_hints
+        # One byte order for the whole capture, decided from its counters by
+        # _decide_capture_byte_order() when find_application_signals() runs.
+        # None until then, which leaves the old per-signal heuristic in place
+        # for anything built before that point (the counters themselves).
+        self._capture_byte_order: int | None = None
 
     def reverse_engineer(self) -> ReverseEngineeringResult:
         """Run the full reverse engineering pipeline (all stages together,
@@ -490,7 +541,8 @@ class TraceReverseEngineer:
             # merged, cross-stage list renumbers everything from scratch so
             # names stay unique and sequential in the combined result.
             discovered_signals = self._post_process_signals(
-                counters + crcs + app_signals_by_id.get(aid, []), s
+                counters + crcs + app_signals_by_id.get(aid, []), s,
+                byte_order=self._capture_byte_order,
             )
 
             length = max(s.dlc_values) if s.dlc_values else 8
@@ -700,15 +752,31 @@ class TraceReverseEngineer:
         When both are given, :meth:`_corroborated_counters` first discards
         counters with an unusual stride that nothing corroborates, so their
         bits are clustered here as the ordinary signals they are.
+
+        A ``search_mask`` given to the constructor is applied here and
+        nowhere else: its bits join the already-claimed ones, and its
+        ``skip_ids`` are passed over entirely. Clustering noise produces
+        confabulated signals -- measured on a real capture, one 32-bit
+        rolling-code field became thirty-two 1-bit "signals" -- so the
+        regions whose statistics rule that out are cheaper skipped than
+        cleaned up afterwards.
         """
         if self._analysis is None:
             raise RuntimeError("Call analyzer.analyze() before find_application_signals()")
 
         counters_by_id = self._corroborated_counters(counters_by_id or {}, crcs_by_id)
         crcs_by_id = crcs_by_id or {}
+        # Decided before any clustering, so every signal built below reads
+        # its bits in the order the rest of the network uses.
+        self._capture_byte_order = self._decide_capture_byte_order(
+            counters_by_id, crcs_by_id
+        )
         result: dict[int, list[DiscoveredSignal]] = {}
+        mask = self._search_mask
         for aid, s in self._analysis.can_stats.items():
             if not s.payload_samples or s.count < 2:
+                continue
+            if mask is not None and aid in mask.skip_ids:
                 continue
 
             claimed: set[int] = set()
@@ -716,6 +784,8 @@ class TraceReverseEngineer:
             for sig in counters_by_id.get(aid, []) + crcs_by_id.get(aid, []):
                 claimed.update(range(sig.start_pos, sig.start_pos + sig.length))
                 next_sig_id += 1
+            if mask is not None:
+                claimed.update(mask.excluded_bits.get(aid, ()))
 
             raw_values = self._compute_raw_values(s)
             selector = next(
@@ -729,6 +799,45 @@ class TraceReverseEngineer:
                 app_signals = self._cluster_application_signals(
                     s, raw_values, claimed, next_sig_id
                 )
+            # A partition that does not reproduce on held-out frames is
+            # not a more-or-less correct partition, it is an unsupported
+            # one -- so its signals' confidence is scaled by how far it
+            # does reproduce, and the ordinary min_confidence filter below
+            # then removes what falls short. Deliberately not a hard cut
+            # on the agreement itself: measured across 150 real messages
+            # it is a continuum (deciles 0.22, 0.47, 0.56 ... 0.94, 0.99)
+            # with no gap wider than 0.065, so any threshold on it would
+            # be arbitrary. Scaling degrades along that continuum instead.
+            # Opaque fields are established first and then held exempt.
+            # "Every bit here is a fair coin" is a measurement of the bits
+            # themselves, not a guess about where a boundary lies, so
+            # clustering's reproducibility has no bearing on it -- and an
+            # opaque region is often *why* a message clusters
+            # irreproducibly, so gating it on that would discard the one
+            # finding that explains the rest. Ordering matters as well:
+            # the runs have to be assembled before the filter below, or
+            # their one-bit fragments are dropped individually and there
+            # is nothing left to assemble.
+            app_signals = self._coalesce_opaque_runs(app_signals, s)
+            agreement = self._partition_agreement(s)
+            if agreement is not None:
+                # Clamped at zero: the index goes negative when the two
+                # halves agree *less* than chance, but "worse than no
+                # evidence" is still just no evidence.
+                scale = max(0.0, min(1.0, agreement))
+                for sig in app_signals:
+                    # A field that counts, or that checks the rest of the
+                    # frame, carries its own corroboration: the property was
+                    # measured arithmetically on those exact bits, and bits
+                    # drawn from the wrong boundary do not add up. Stage 2's
+                    # dedicated scans do not reach every such field -- on
+                    # 21 messages of a real capture find_counters() found
+                    # nothing and clustering found the counter -- so this
+                    # exemption is what keeps those. Same reasoning as the
+                    # opaque exemption above, and as the representability
+                    # filter's.
+                    if not (sig.is_opaque or sig.is_counter or sig.is_checksum):
+                        sig.confidence *= scale
             app_signals = [
                 sig for sig in app_signals if sig.confidence >= self._min_confidence
             ]
@@ -1450,12 +1559,23 @@ class TraceReverseEngineer:
         found: list[DiscoveredSignal] = []
         claimed: set[int] = set()
         sig_id = start_sig_id
+        lsb_hints = (
+            self._counter_lsb_hints.get(stats.arbitration_id)
+            if self._counter_lsb_hints is not None else None
+        )
 
         for length in self._COUNTER_WIDTHS:
             stride = min(length, self._COUNTER_SCAN_ALIGNMENT)
             for start in range(0, total_bits - length + 1, stride):
                 bits = list(range(start, start + length))
                 if any(b in claimed for b in bits):
+                    continue
+                # Cheapest rejection first: a span with no possible LSB in
+                # it cannot be a counter, and this costs a bisect where
+                # _quick_counter_check costs a 64-frame extraction.
+                if lsb_hints is not None and not _spans_a_hint(
+                    lsb_hints, start, start + length
+                ):
                     continue
                 if not self._quick_counter_check(bits, stats, length):
                     continue
@@ -2714,7 +2834,15 @@ class TraceReverseEngineer:
 
         start_pos = min(bits)
         length = len(bits)
-        byte_order = self._detect_byte_order(bits, stats)
+        # The capture's own byte order once it has been decided, in place of
+        # the per-signal smoothness heuristic. Only for genuinely multi-byte
+        # fields: below that the question is meaningless and _detect_byte_order
+        # returns Intel unconditionally anyway.
+        byte_order = (
+            self._capture_byte_order
+            if self._capture_byte_order is not None and length > 8
+            else self._detect_byte_order(bits, stats)
+        )
         raw_nums = self._extract_raw_numbers(
             bits, byte_order, stats
         )
@@ -3252,26 +3380,506 @@ class TraceReverseEngineer:
 
         return statistics.mean(scores) if scores else 0.5
 
-    # ── Post-processing ───────────────────────────────────────────────
+    # ── Sample sufficiency ────────────────────────────────────────────
+
+    # Below this many frames a message is not split at all: each half would
+    # be too thin for its own clustering to mean anything, so the halves
+    # would disagree for that reason rather than for the message's.
+    _SPLIT_HALF_MIN_FRAMES = 40
+
+    # Frames each half is judged on. Clustering cost grows with frame count
+    # and the agreement settles long before this; capping keeps the check
+    # from doubling the price of a long capture.
+    _SPLIT_HALF_SAMPLE_CAP = 4000
+
+    @classmethod
+    def _partition_agreement(cls, stats: CanIdStats) -> float | None:
+        """How far this message's field partition reproduces on frames that
+        did not produce it: cluster the first half of the capture and the
+        second half separately, and score how far the two agree about each
+        *pair* of bits -- together, or apart.
+
+        Scored as the **adjusted** Rand index, which is 0 for a partition
+        no more reproducible than chance and 1 for an identical one. The
+        adjustment is what makes the number mean anything here: the plain
+        Rand index has a baseline that rises with the number of singleton
+        clusters, and singletons are exactly what a shredded message is
+        made of, so it flatters the very case this is meant to catch. On
+        148 real messages the plain index called the worst offenders 0.22
+        -- on a scale whose floor for them was already high -- while the
+        adjusted index puts them at -0.02 to -0.10, i.e. no better than
+        chance, which is the honest reading.
+
+        This is the question a raw frame count only proxies for, and badly:
+        `0x1C46001D` fails to reproduce at 295 frames while `0x16A9556C`
+        reproduces perfectly at 1078, and a subsampling sweep found
+        messages whose signal count is flat from 60 frames to 18630. What
+        separates them is not how many frames there are but whether the
+        partition survives being asked twice.
+
+        Returns None when the message is too short to split.
+        """
+        payloads = stats.payload_samples
+        n = len(payloads)
+        if n < cls._SPLIT_HALF_MIN_FRAMES:
+            return None
+        cap = cls._SPLIT_HALF_SAMPLE_CAP
+        mid = n // 2
+        halves = (payloads[:mid][:cap], payloads[mid:][:cap])
+
+        partitions = []
+        for half in halves:
+            probe = CanIdStats(
+                channel=stats.channel,
+                arbitration_id=stats.arbitration_id,
+                is_extended=stats.is_extended,
+                is_fd=stats.is_fd,
+            )
+            probe.payload_samples = list(half)
+            probe.count = len(half)
+            matrix = cls._build_bit_matrix(probe)
+            if matrix is None or len(matrix) < 2:
+                return None
+            partitions.append(cls._cluster_correlated_bits(matrix, exclude=set()))
+
+        first, second = partitions
+        # Only bits at least one half found active are worth scoring: a bit
+        # both halves call inactive agrees trivially and would swamp the
+        # measure on a wide frame that is mostly constant.
+        bits = [b for b in sorted(set(first) & set(second))
+                if first[b] != -1 or second[b] != -1]
+        if len(bits) < 2:
+            return None
+        return cls._adjusted_rand(
+            cls._cluster_labels(first, bits), cls._cluster_labels(second, bits)
+        )
 
     @staticmethod
+    def _cluster_labels(partition: dict[int, int], bits: list[int]) -> list[int]:
+        """Cluster ids for *bits*, with every unclustered bit given a label
+        of its own. Cluster -1 is not a group: it means "too inactive to
+        cluster", and lumping those bits together would assert that they
+        form one field, which is the opposite of what it says."""
+        labels: list[int] = []
+        singleton = -1
+        for bit in bits:
+            if partition[bit] == -1:
+                labels.append(singleton)
+                singleton -= 1
+            else:
+                labels.append(partition[bit])
+        return labels
+
+    @staticmethod
+    def _adjusted_rand(first: list[int], second: list[int]) -> float:
+        """Adjusted Rand index of two labellings of the same items: 1 when
+        they agree, 0 when they agree only as much as chance would, and
+        negative when they agree less than that."""
+        n = len(first)
+        if n < 2:
+            return 1.0
+        contingency = Counter(zip(first, second))
+        rows = Counter(first)
+        cols = Counter(second)
+        index = sum(comb(v, 2) for v in contingency.values())
+        sum_rows = sum(comb(v, 2) for v in rows.values())
+        sum_cols = sum(comb(v, 2) for v in cols.values())
+        total_pairs = comb(n, 2)
+        expected = sum_rows * sum_cols / total_pairs
+        maximum = (sum_rows + sum_cols) / 2
+        if maximum == expected:
+            return 1.0
+        return (index - expected) / (maximum - expected)
+
+    # ── Capture-wide byte order ───────────────────────────────────────
+
+    # A multi-byte counter has to advance by this fraction of its steps
+    # under one byte order and not the other before it gets a vote.
+    _BYTE_ORDER_VOTE_MIN_FRACTION = 0.9
+
+    def _decide_capture_byte_order(
+        self,
+        counters_by_id: dict[int, list[DiscoveredSignal]],
+        crcs_by_id: dict[int, list[DiscoveredSignal]] | None = None,
+    ) -> int:
+        """The one byte order this capture uses, as its counters report it.
+
+        A vehicle network is laid out in a single byte order; mixed-order
+        networks exist but are rare enough that guessing per signal costs
+        far more than it buys. Deciding once and applying it everywhere
+        also removes the per-signal smoothness heuristic
+        (:meth:`_detect_byte_order`), whose asymmetric threshold quietly
+        favoured Intel and which never ran at all on the ~95% of signals
+        that fit inside one byte.
+
+        A multi-byte counter settles the question on its own: read in the
+        wrong order its value jumps around, and in the right one it
+        advances by exactly one per frame. Multi-byte CRCs vote too --
+        theirs is a verified property, not a guess -- but they are far
+        rarer. Fields of eight bits or fewer are silent by construction:
+        byte order says nothing about a value that never leaves its byte.
+
+        Returns Intel (0) when nothing votes, which is what the previous
+        per-signal code defaulted to.
+        """
+        votes = Counter()
+        for aid, sigs in counters_by_id.items():
+            stats = self._analysis.can_stats.get(aid) if self._analysis else None
+            if stats is None:
+                continue
+            for counter in sigs:
+                if counter.length <= 8:
+                    continue
+                bits = list(range(counter.start_pos, counter.start_pos + counter.length))
+                fits = []
+                for order in (0, 1):
+                    raw = self._extract_raw_numbers(bits, order, stats)
+                    if not raw:
+                        continue
+                    stride, fraction = self._counter_stride(raw, counter.length)
+                    # +1 or -1 (which is 2^width - 1 modulo the width);
+                    # any other stride means the capture is decimated and
+                    # the field says nothing about byte order either way.
+                    if (fraction >= self._BYTE_ORDER_VOTE_MIN_FRACTION
+                            and stride in (1, (1 << counter.length) - 1)):
+                        fits.append(order)
+                if len(fits) == 1:      # both orders fitting proves nothing
+                    votes[fits[0]] += 1
+        for sigs in (crcs_by_id or {}).values():
+            for crc in sigs:
+                if crc.length > 8 and crc.crc_algorithm:
+                    votes[crc.byte_order] += 1
+        if not votes:
+            return 0
+        return votes.most_common(1)[0][0]
+
+    @staticmethod
+    def _is_representable(start_pos: int, length: int, byte_order: int) -> bool:
+        """Can a field at these *internal* bits be written down in the PDU
+        database's StartPos convention without moving it?
+
+        Clustering only ever produces a contiguous run of this module's own
+        MSB-first bit positions. Motorola takes any of them: its StartPos
+        *is* that numbering. Intel does not. An Intel signal occupies
+        LSB0-absolute bits ``[s, s+L)``, and mapping that back to internal
+        numbering gives a contiguous run only when the field sits inside a
+        single byte, or covers whole bytes from a byte boundary. A 22-bit
+        span starting at internal bit 82 is simply not an Intel field, and
+        exporting it anyway silently moved it to bit 80 -- two bits off,
+        with no indication anything had happened.
+        """
+        if byte_order == 1:
+            return True
+        if length <= 8:
+            return (start_pos % 8) + length <= 8
+        return start_pos % 8 == 0 and length % 8 == 0
+
+    # ── Opaque-run coalescing ─────────────────────────────────────────
+
+    # A run of bit-adjacent one-bit signals shorter than this is left
+    # alone: a handful of neighbouring flags is entirely ordinary, and
+    # only a wide block is worth re-reading as a single field.
+    _OPAQUE_RUN_MIN_BITS = 8
+
+    # Frames the fair-coin test is judged on. The statistics converge long
+    # before this, and the cap keeps the test O(1) in capture length -- a
+    # multi-million-frame trace would otherwise pay for the whole capture
+    # to re-derive a number settled in the first few hundred frames.
+    _OPAQUE_RUN_SAMPLE_CAP = 4096
+
+    # Below this many frames the test is not run at all: the confidence
+    # interval is then wider than the effect, so every run would pass.
+    _OPAQUE_RUN_MIN_SAMPLES = 128
+
+    # Half-width of the accepted band around p=0.5, in standard errors.
+    # A fair bit's p̂ has SE = 0.5/sqrt(n), so 4 SE two-sided leaves a
+    # ~6e-5 per-bit false-reject rate -- across a 52-bit run, still under
+    # half a percent that a genuinely random block is rejected.
+    _OPAQUE_RUN_SIGMAS = 4.0
+
+    # Floor and ceiling on that band. The floor stops an enormous capture
+    # from demanding p̂ = 0.5000; the ceiling stops a short one from
+    # accepting anything at all.
+    _OPAQUE_RUN_MIN_TOL = 0.02
+    _OPAQUE_RUN_MAX_TOL = 0.15
+
+    @classmethod
+    def _bit_coin_stats(
+        cls, stats: CanIdStats, start: int, length: int
+    ) -> tuple[list[float], list[float], int] | None:
+        """Per-bit P(bit=1) and P(bit changes) over ``[start, start+length)``.
+
+        Returns ``(p_one, p_change, n)``, or None when too few frames carry
+        the whole range. Bit numbering is MSB-first (bit 0 is the most
+        significant bit of byte 0), the convention every other position in
+        this module uses.
+        """
+        need = -(-(start + length) // 8)  # bytes the range reaches into
+        ones = [0] * length
+        changes = [0] * length
+        n = 0
+        prev: int | None = None
+        for payload in stats.payload_samples:
+            if len(payload) < need:
+                # A short frame does not carry this range at all. Break the
+                # run of consecutive frames too, so a change is never
+                # counted across the gap.
+                prev = None
+                continue
+            width = len(payload) * 8
+            value = int.from_bytes(payload, "big")
+            field = (value >> (width - start - length)) & ((1 << length) - 1)
+            n += 1
+            bit = field
+            for i in range(length - 1, -1, -1):
+                if bit & 1:
+                    ones[i] += 1
+                bit >>= 1
+                if not bit:
+                    break
+            if prev is not None:
+                diff = prev ^ field
+                while diff:
+                    low = diff & -diff
+                    changes[length - low.bit_length()] += 1
+                    diff ^= low
+            prev = field
+            if n >= cls._OPAQUE_RUN_SAMPLE_CAP:
+                break
+        if n < cls._OPAQUE_RUN_MIN_SAMPLES:
+            return None
+        p_one = [c / n for c in ones]
+        # n-1 transitions between n frames -- but short frames may have
+        # broken the chain, so this is an upper bound on the denominator
+        # and the resulting rate a slight under-estimate. That biases
+        # towards *not* merging, which is the safe direction.
+        p_change = [c / (n - 1) for c in changes]
+        return p_one, p_change, n
+
+    @classmethod
+    def _opaque_tolerance(cls, n: int) -> float:
+        """Half-width of the fair-coin acceptance band at *n* samples."""
+        tol = cls._OPAQUE_RUN_SIGMAS * 0.5 / math.sqrt(n)
+        return min(cls._OPAQUE_RUN_MAX_TOL, max(cls._OPAQUE_RUN_MIN_TOL, tol))
+
+    @classmethod
+    def _longest_opaque_span(
+        cls, stats: CanIdStats, start: int, length: int
+    ) -> tuple[int, int] | None:
+        """Longest sub-range of ``[start, start+length)`` whose every bit is
+        an independent fair coin, or None if no long-enough one exists.
+
+        A sub-range rather than the whole run because clustering's run
+        boundaries are not the field's: on a real capture a 33-bit run of
+        one-bit fragments began one bit *before* the field it belonged to,
+        that first bit reading p1=0.82 against its neighbours' 0.50.
+        Swallowing it would have moved the field's start and corrupted
+        every value read out of it.
+        """
+        measured = cls._bit_coin_stats(stats, start, length)
+        if measured is None:
+            return None
+        p_one, p_change, n = measured
+        tol = cls._opaque_tolerance(n)
+
+        best_len = 0
+        best_start = start
+        run = 0
+        for i in range(length):
+            fair = (
+                abs(p_one[i] - 0.5) <= tol
+                and abs(p_change[i] - 0.5) <= tol
+            )
+            run = run + 1 if fair else 0
+            if run > best_len:
+                best_len = run
+                best_start = start + i - run + 1
+        if best_len < cls._OPAQUE_RUN_MIN_BITS:
+            return None
+        return best_start, best_len
+
+    @classmethod
+    def _coalesce_opaque_runs(
+        cls, signals: list[DiscoveredSignal], stats: CanIdStats
+    ) -> list[DiscoveredSignal]:
+        """Fuse runs of bit-adjacent one-bit signals that are really one
+        incompressible field.
+
+        Correlation clustering cannot hold such a field together: its bits
+        are independent by construction, which is exactly the property
+        clustering groups *by*. So a truncated SecOC MAC or a CRC32
+        trailer arrives here as thirty-two consecutive one-bit "flags" --
+        measured on a 64-byte CAN FD frame, the last four bytes with every
+        bit at p1 = 0.50 and p_change = 0.50 over 3396 frames.
+
+        Reporting those as thirty-two booleans is worse than reporting one
+        opaque field, because it invents thirty-two readable quantities
+        where there are none. :meth:`_merge_adjacent_smooth_signals`
+        cannot do this job: it keeps a merge only when the combined value
+        varies *smoothly*, and this one is the opposite of smooth.
+        """
+        if not signals:
+            return signals
+
+        ordered = sorted(signals, key=lambda s: s.start_pos)
+        out: list[DiscoveredSignal] = []
+        i = 0
+        while i < len(ordered):
+            # Extend a run of bit-adjacent, plain one-bit signals.
+            j = i
+            while (
+                j < len(ordered)
+                and ordered[j].length == 1
+                and not ordered[j].is_counter
+                and not ordered[j].is_checksum
+                and (j == i or ordered[j].start_pos == ordered[j - 1].start_pos + 1)
+            ):
+                j += 1
+            run_len = j - i
+            span = (
+                cls._longest_opaque_span(stats, ordered[i].start_pos, run_len)
+                if run_len >= cls._OPAQUE_RUN_MIN_BITS
+                else None
+            )
+            if span is None:
+                out.append(ordered[i])
+                i += 1
+                continue
+
+            opaque_start, opaque_len = span
+            # Fragments outside the fair-coin span keep their own identity;
+            # only the span itself becomes one field.
+            for sig in ordered[i:j]:
+                if not (opaque_start <= sig.start_pos < opaque_start + opaque_len):
+                    out.append(sig)
+            out.append(DiscoveredSignal(
+                id=0,  # renumbered by _post_process_signals
+                name="Opaque",
+                start_pos=opaque_start,
+                length=opaque_len,
+                byte_order=0,
+                value_type="Unsigned",
+                factor=1.0,
+                offset=0.0,
+                min_val=0.0,
+                max_val=float((1 << opaque_len) - 1),
+                unit="",
+                enum_values=None,
+                is_counter=False,
+                is_checksum=False,
+                # Not a guess about meaning -- a measurement that there is
+                # no meaning to read here -- so it carries the confidence
+                # of the fragments it replaces rather than one of its own.
+                confidence=max(s.confidence for s in ordered[i:j]),
+                is_opaque=True,
+            ))
+            i = j
+        out.sort(key=lambda s: s.start_pos)
+        return out
+
+    # ── Overlap resolution ────────────────────────────────────────────
+
+    @staticmethod
+    def _overlap_rank(sig: DiscoveredSignal) -> tuple[int, float, int, int]:
+        """Sort key deciding which of two overlapping signals survives.
+
+        A counter or a checksum is verified against an actual algorithm --
+        a CRC that reproduces every frame, a field that advances by one
+        every frame -- while a clustered application signal is a
+        statistical guess, so protocol fields outrank them. Ties go to the
+        more confident, then the wider, then the earlier: all three keep
+        the outcome independent of input order.
+        """
+        kind = 2 if sig.is_checksum else 1 if sig.is_counter else 0
+        return (-kind, -sig.confidence, -sig.length, sig.start_pos)
+
+    @classmethod
+    def _resolve_overlaps(
+        cls, signals: list[DiscoveredSignal]
+    ) -> list[DiscoveredSignal]:
+        """Drop signals whose bits a stronger signal has already claimed.
+
+        Nothing did this before, and the stages genuinely collide: each
+        runs against its own view of which bits are free, so a counter
+        found in stage 2 and an application signal clustered in stage 3
+        can be handed to :meth:`combine_results` describing the same bits.
+        Measured on a 5.4M-frame capture, 308 pairs of exported signals
+        overlapped, five of them an application signal sitting on top of a
+        counter or CRC.
+
+        Dropped rather than trimmed: a field narrowed after the fact no
+        longer means what it was measured to mean, and its range, scaling
+        and sample values would all still describe the wider one.
+        """
+        occupied: set[int] = set()
+        kept: list[DiscoveredSignal] = []
+        for sig in sorted(signals, key=cls._overlap_rank):
+            bits = range(sig.start_pos, sig.start_pos + sig.length)
+            if occupied.isdisjoint(bits):
+                occupied.update(bits)
+                kept.append(sig)
+        kept.sort(key=lambda s: s.start_pos)
+        return kept
+
+    # ── Post-processing ───────────────────────────────────────────────
+
+    @classmethod
     def _post_process_signals(
+        cls,
         signals: list[DiscoveredSignal],
         stats: CanIdStats,
+        byte_order: int | None = None,
     ) -> list[DiscoveredSignal]:
-        """Post-process signals: merge adjacent, fix overlaps, name counters."""
+        """Coalesce opaque runs, drop overlaps, renumber, and name.
+
+        Runs on each stage's own output and again on the merged list in
+        :meth:`combine_results`, which is where it does the work that
+        matters: only there are a message's counters, CRCs and clustered
+        signals in one list, so only there can they be reconciled against
+        each other.
+        """
         if not signals:
             return []
 
-        signals.sort(key=lambda s: s.start_pos)
+        signals = cls._coalesce_opaque_runs(signals, stats)
+        signals = cls._resolve_overlaps(signals)
+        if byte_order is not None:
+            # A span the capture's byte order cannot express is not an
+            # exotic field, it is a wrong boundary -- clustering found an
+            # edge in the wrong place. Dropped rather than snapped to the
+            # nearest legal position, which is what the export used to do
+            # silently. Counters and CRCs are exempt: they are byte-aligned
+            # by construction and verified against an algorithm, so a
+            # disagreement there would mean this test is wrong, not them.
+            signals = [
+                s for s in signals
+                if s.is_counter or s.is_checksum
+                or cls._is_representable(s.start_pos, s.length, byte_order)
+            ]
 
+        # Identity is assigned here and nowhere else. Every stage numbers
+        # its own signals from 1, so the merged list arrives with ids that
+        # collide across stages -- on a 5.4M-frame capture, 321 of the 761
+        # populated messages had a duplicate. That matters beyond looking
+        # untidy: to_pdu_db() keys SigSendType by signal id, so colliding
+        # ids silently gave one signal another's answer.
         counter_idx = 0
-        for sig in signals:
+        checksum_idx = 0
+        n_checksums = sum(1 for s in signals if s.is_checksum)
+        for offset, sig in enumerate(signals, start=1):
+            sig.id = offset
             if sig.is_counter:
                 counter_idx += 1
                 sig.name = f"Counter_{counter_idx}"
             elif sig.is_checksum:
-                sig.name = sig.crc_algorithm if sig.crc_algorithm else "Checksum"
+                checksum_idx += 1
+                base = sig.crc_algorithm if sig.crc_algorithm else "Checksum"
+                # Only suffixed when it would otherwise be ambiguous, so
+                # the common single-checksum message keeps the bare
+                # algorithm name it has always exported.
+                sig.name = base if n_checksums == 1 else f"{base}_{checksum_idx}"
+            elif sig.is_opaque:
+                sig.name = f"Opaque_{sig.id}"
             elif sig.enum_values and len(sig.enum_values) <= 4:
                 sig.name = f"State_{sig.id}"
             elif len(sig.raw_values) >= 3:
@@ -3352,6 +3960,13 @@ class TraceReverseEngineer:
                     f"rolling counter, stride {sig.counter_stride} "
                     f"(capture sees 1 frame in {sig.counter_stride})"
                 )
+        if sig.is_opaque:
+            parts.append(
+                f"opaque {sig.length}-bit field: every bit an independent "
+                "fair coin (p1 = p_change = 0.5), so nothing readable is "
+                "encoded here -- consistent with a truncated SecOC MAC or "
+                "a CRC trailer"
+            )
         if sig.is_checksum:
             if sig.crc_algorithm is None:
                 parts.append("checksum, formula unidentified (behavioural match)")

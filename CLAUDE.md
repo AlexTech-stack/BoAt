@@ -149,6 +149,7 @@ boat test run <manifest.json>               # automated HIL suite runner
 boat replay import <trace> --trace-id ...   # convert+upload .asc/.blf/.pcap → boat.v1.Frame records
 boat replay stream --trace <id> --speed accelerated --multiplier 2.0 --buses vcan0
 boat trace replay <trace.asc> --buses vcan0 # direct, CAN-only, client-paced (no import)
+boat trace score <trace.blf> [--triage-only] [--no-mask] # rate a trace's information value for RE (local, no gateway)
 ```
 
 Programmatic: `from boat.client import BoAtClient` / `from boat.frame_node import FrameNode` (e.g. `node.send_can("vcan0", 0x123, b"...")`). Every `*Node` class and `BoAtClient` resolve their gateway address the same way: explicit `address=` > `BOAT_HOST` env var > `localhost:50051` — which is what keeps node scripts portable across gateways. The `boat` CLI's `--host` flag follows the same order.

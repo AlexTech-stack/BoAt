@@ -9,9 +9,13 @@ Start the recorder before using those commands.
 
 The replay command reads a local .asc or .blf file and re-injects CAN
 frames directly through the gateway via gRPC.
+
+The score command is fully local (no gateway, no recorder): it rates a
+trace file's information value for reverse engineering.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -296,3 +300,242 @@ def cmd_replay(
         raise typer.Exit(0)
 
     typer.echo(f"Done -- {total} frame(s) sent.")
+
+
+@trace_app.command("score")
+def cmd_score(
+    ctx:  typer.Context,
+    file: Path = typer.Argument(..., help="CAN trace to score (.blf, .asc, .log, "
+                                          ".trace, or .pcapng)"),
+    triage_only: bool = typer.Option(False, "--triage-only",
+                        help="Stage 1 only: skip the reverse-engineering pass. "
+                             "Fast, but bits stay unclassified, so no buckets, "
+                             "audit, or grade."),
+    mask: bool = typer.Option(True, "--mask/--no-mask",
+                        help="Feed the stage-1 statistics back into the "
+                             "reverse-engineering pass, so it skips payload "
+                             "regions that cannot hold an application signal. "
+                             "Use --no-mask to keep the stage-2 audit as an "
+                             "independent measurement of the RE pass."),
+    top: int = typer.Option(15, "--top", "-n",
+                        help="Number of message rows to print, busiest-entropy "
+                             "first (0 = all). Ignored with --json, which always "
+                             "carries every message."),
+) -> None:
+    """Score a trace's information value for reverse engineering.
+
+    Runs the two-stage information analysis: stage 1 (triage) rates the
+    capture and decides whether it is worth the expensive
+    reverse-engineering pass at all; stage 2 then runs that pass,
+    classifies every payload bit into entropy buckets (const / derived /
+    seq / signal / residual), audits the claimed signals against their own
+    statistics, and grades the capture for structure extraction. If the
+    stage-1 gate says the trace is not worth it, stage 2 is skipped and
+    the reasons are printed. See backlog/trace_information_value.md for
+    the concept and the measurements behind the thresholds.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "sdk" / "python"))
+        from boat.trace_analyzer import TraceAnalyzer
+        from boat.trace_information import TraceInformationScorer
+        from boat.trace_reverse_engineer import TraceReverseEngineer
+    except ImportError as e:
+        print_error(f"Cannot import boat SDK: {e}")
+        raise typer.Exit(1)
+
+    file = file.resolve()
+    if not file.exists():
+        _die(f"File not found: {file}")
+
+    analyzer = TraceAnalyzer(file)
+    try:
+        analysis = analyzer.analyze()
+    except ValueError as e:
+        _die(str(e))
+
+    scorer = TraceInformationScorer(analyzer)
+    profile = scorer.triage()
+
+    staged = False
+    masked = False
+    if triage_only:
+        pass
+    elif not profile.worth_re_pass:
+        typer.echo("stage-1 gate: not worth the reverse-engineering pass — "
+                   "skipping stage 2", err=True)
+    else:
+        search_mask = scorer.search_mask(profile) if mask else None
+        if search_mask:
+            typer.echo(
+                f"mask: skipping {search_mask.masked_bits} bits across "
+                f"{len(search_mask.excluded_bits)} messages "
+                f"({len(search_mask.skip_ids)} skipped entirely)", err=True)
+        # Always on: a necessary condition, so it cannot change the result,
+        # only how fast the counter scan reaches it.
+        hints = scorer.counter_lsb_hints(profile)
+        typer.echo("running reverse-engineering pass (this can take a while "
+                   "on large captures)...", err=True)
+        result = TraceReverseEngineer(
+            analyzer, search_mask=search_mask, counter_lsb_hints=hints
+        ).reverse_engineer()
+        profile = scorer.classify(result, profile)
+        staged = True
+        masked = search_mask is not None
+
+    json_mode = ctx.obj.get("json_mode", False) if ctx.obj else False
+    if json_mode:
+        payload = _score_to_dict(profile, stage=2 if staged else 1)
+        payload["search_mask_applied"] = masked
+        typer.echo(json.dumps(payload))
+        return
+
+    _print_score(profile, analysis.errors, staged, top, masked)
+
+
+def _score_to_dict(profile, stage: int) -> dict:
+    """Flatten a TraceInformationProfile for --json, without per-bit detail
+    (a CAN FD capture carries hundreds of thousands of bits)."""
+    messages = []
+    for m in sorted(profile.messages.values(), key=lambda m: -m.h_marginal):
+        messages.append({
+            "can_id": f"0x{m.can_id:X}",
+            "channel": m.channel,
+            "count": m.count,
+            "is_fd": m.is_fd,
+            "is_extended": m.is_extended,
+            "lengths": {str(k): v for k, v in m.lengths.items()},
+            "width_bits": m.width_bits,
+            "live_bits": m.live_bits,
+            "live_bits_steady": m.live_bits_steady,
+            "h_marginal": round(m.h_marginal, 3),
+            "h_conditional": round(m.h_conditional, 3),
+            "mutual_information": round(m.mutual_information, 3),
+            "distinct_payloads": m.distinct_payloads,
+            "payload_saturation": round(m.payload_saturation, 3),
+            "saturation_verdict": m.saturation_verdict,
+            "under_sampled": m.under_sampled,
+            "frames_per_second": round(m.frames_per_second, 1),
+            "innovation_bits_per_s": round(m.innovation_bits_per_s, 1),
+            "net_innovation_bits_per_s": (
+                round(m.net_innovation_bits_per_s, 1)
+                if m.net_innovation_bits_per_s is not None else None),
+            "bucket_bits": m.bucket_bits,
+            "opaque_tail_bytes": m.opaque_tail_bytes,
+            "suspect_signals": m.suspect_signals,
+            "flags": m.flags,
+        })
+    return {
+        "path": profile.path,
+        "stage": stage,
+        "total_frames": profile.total_frames,
+        "duration_s": round(profile.duration_s, 3),
+        "unique_ids": profile.unique_ids,
+        "channels": sorted(profile.channels),
+        "staged_discovery": profile.staged_discovery,
+        "phases": [{"label": p.label, "start_s": round(p.start_s, 3),
+                    "end_s": round(p.end_s, 3),
+                    "ids_first_seen": p.ids_first_seen}
+                   for p in profile.phases],
+        "components": {
+            "breadth": round(profile.breadth, 3),
+            "excitation": round(profile.excitation, 3),
+            "sufficiency": round(profile.sufficiency, 3),
+            "explainability": _round_opt(profile.explainability),
+            "redundancy": _round_opt(profile.redundancy),
+            "opacity": _round_opt(profile.opacity),
+            "signal_share": _round_opt(profile.signal_share),
+            "grade": _round_opt(profile.grade),
+        },
+        "gross_innovation_bits_per_s": round(profile.gross_innovation_bits_per_s, 1),
+        "net_innovation_bits_per_s": _round_opt(profile.net_innovation_bits_per_s, 1),
+        "worth_re_pass": profile.worth_re_pass,
+        "reasons": profile.reasons,
+        "actions": profile.actions,
+        "suspect_signals": profile.suspect_signals,
+        "messages": messages,
+    }
+
+
+def _round_opt(v: float | None, digits: int = 3) -> float | None:
+    return round(v, digits) if v is not None else None
+
+
+def _print_score(profile, errors: list[str], staged: bool, top: int,
+                 masked: bool) -> None:
+    phases = ", ".join(
+        f"{p.label} {p.start_s:.1f}-{p.end_s:.1f}s" for p in profile.phases
+    )
+    typer.echo(f"{profile.path}")
+    typer.echo(
+        f"  {profile.total_frames} frames, {profile.duration_s:.1f}s, "
+        f"{profile.unique_ids} IDs, phases: {phases}"
+    )
+    typer.echo(
+        f"  breadth={profile.breadth:.2f}  excitation={profile.excitation:.2f}  "
+        f"sufficiency={profile.sufficiency:.2f}"
+    )
+    if staged:
+        typer.echo(
+            f"  explainability={profile.explainability:.2f}  "
+            f"redundancy={profile.redundancy:.2f}  "
+            f"opacity={profile.opacity:.2f}  "
+            f"signal_share={profile.signal_share:.2f}"
+        )
+        typer.echo(
+            f"  innovation: {profile.gross_innovation_bits_per_s:.0f} bits/s gross, "
+            f"{profile.net_innovation_bits_per_s:.0f} bits/s net "
+            f"(after counter/CRC/audit subtraction)"
+        )
+        typer.echo(f"  grade: {profile.grade:.2f}")
+    else:
+        typer.echo(
+            f"  innovation: {profile.gross_innovation_bits_per_s:.0f} bits/s "
+            f"gross (stage 1 — before counter/CRC subtraction)"
+        )
+    verdict = "worth the RE pass" if profile.worth_re_pass else "NOT worth the RE pass"
+    typer.echo(f"  stage-1 gate: {verdict}")
+    if masked:
+        typer.echo("  search mask: applied (audit is not independent "
+                   "evidence here — rerun with --no-mask to measure the "
+                   "RE pass itself)")
+    for r in profile.reasons:
+        typer.echo(f"    {r}")
+    if profile.actions:
+        typer.echo("  actions:")
+        for a in profile.actions:
+            typer.echo(f"    - {a}")
+    for e in errors:
+        typer.echo(f"  note: {e}")
+
+    msgs = sorted(profile.messages.values(), key=lambda m: -m.h_marginal)
+    if top > 0:
+        msgs = msgs[:top]
+    if staged:
+        headers = ["ID", "N", "live/width", "Hmarg", "Hcond", "MI",
+                   "sig", "der", "seq", "res", "net b/s", "verdict", "flags"]
+        rows = [[
+            f"0x{m.can_id:X}", m.count, f"{m.live_bits}/{m.width_bits}",
+            f"{m.h_marginal:.1f}", f"{m.h_conditional:.1f}",
+            f"{m.mutual_information:.1f}",
+            (m.bucket_bits or {}).get("signal", 0),
+            (m.bucket_bits or {}).get("derived", 0),
+            (m.bucket_bits or {}).get("seq", 0),
+            (m.bucket_bits or {}).get("residual", 0),
+            f"{m.net_innovation_bits_per_s:.0f}"
+            if m.net_innovation_bits_per_s is not None else "-",
+            m.saturation_verdict, ",".join(m.flags),
+        ] for m in msgs]
+    else:
+        headers = ["ID", "N", "live/width", "Hmarg", "Hcond", "MI",
+                   "distinct", "sat", "verdict", "flags"]
+        rows = [[
+            f"0x{m.can_id:X}", m.count, f"{m.live_bits}/{m.width_bits}",
+            f"{m.h_marginal:.1f}", f"{m.h_conditional:.1f}",
+            f"{m.mutual_information:.1f}", m.distinct_payloads,
+            f"{m.payload_saturation:.2f}", m.saturation_verdict,
+            ",".join(m.flags),
+        ] for m in msgs]
+    print_table(headers, rows, json_mode=False)
+    if top > 0 and len(profile.messages) > top:
+        typer.echo(f"  ({len(profile.messages) - top} more messages — "
+                   f"use --top 0 to show all, or --json)")

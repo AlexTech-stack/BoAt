@@ -23,6 +23,7 @@ All in `boat-platform/sdk/python/boat/`:
 | TraceReplayer | `trace_replay.py` | Direct real-time CAN replay (ASC/BLF, via gRPC CanService); also converts ASC/BLF/PCAP to the gateway's binary trace format for `boat replay import` |
 | TraceAnalyzer | `trace_analyzer.py` | BLF trace parsing and signal analysis |
 | TraceReverseEngineer | `trace_reverse_engineer.py` | Signal boundary discovery from raw traces |
+| TraceInformationScorer | `trace_information.py` | Information triage (stage 1: is a trace worth reverse engineering) and classification (stage 2: entropy buckets, claim audit, grade) — see `backlog/trace_information_value.md` |
 
 ## gRPC service
 

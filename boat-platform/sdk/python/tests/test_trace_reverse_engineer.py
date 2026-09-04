@@ -373,3 +373,417 @@ class TestNegativeControls:
     def test_short_capture_yields_nothing(self) -> None:
         e = _engineer({0x100: _stats([[i % 16] + _app(i, 7) for i in range(12)])})
         assert e.find_crcs(e.find_counters()) == {}
+
+
+# ── Merge pass: opaque runs, overlaps, identity ──────────────────────
+#
+# All three came out of one 5.4M-frame CAN FD capture whose export had
+# 9357 one-bit signals (72% of the database), 308 overlapping pairs, and a
+# duplicate signal id in 321 of its 761 populated messages.
+
+
+def _bit(pos: int, *, enum: bool = True, conf: float = 0.5) -> DiscoveredSignal:
+    """A plain one-bit signal at *pos* -- the fragment clustering emits."""
+    return DiscoveredSignal(
+        id=1, name="b", start_pos=pos, length=1, byte_order=0,
+        value_type="Unsigned", factor=1.0, offset=0.0, min_val=0, max_val=1,
+        unit="", enum_values={"0": "a", "1": "b"} if enum else None,
+        is_counter=False, is_checksum=False, confidence=conf)
+
+
+def _wide(pos: int, length: int, *, conf: float = 0.5, counter: bool = False,
+          checksum: bool = False) -> DiscoveredSignal:
+    return DiscoveredSignal(
+        id=1, name="w", start_pos=pos, length=length, byte_order=0,
+        value_type="Unsigned", factor=1.0, offset=0.0, min_val=0,
+        max_val=(1 << length) - 1, unit="", enum_values=None,
+        is_counter=counter, is_checksum=checksum, confidence=conf)
+
+
+def _mac_payloads(n: int = 1000, seed: int = 7) -> list[list[int]]:
+    """8-byte frames: 4 quiet bytes then a fresh random 32-bit trailer --
+    the shape of a truncated SecOC MAC or a CRC32."""
+    rng = random.Random(seed)
+    return [[0x10, 0x20, 0x30, i & 0xFF]
+            + list(rng.getrandbits(32).to_bytes(4, "big")) for i in range(n)]
+
+
+class TestOpaqueRunCoalescing:
+    def test_random_trailer_becomes_one_field(self):
+        stats = _stats(_mac_payloads())
+        frags = [_bit(p) for p in range(32, 64)]
+        out = TraceReverseEngineer._coalesce_opaque_runs(frags, stats)
+        assert len(out) == 1
+        assert (out[0].start_pos, out[0].length) == (32, 32)
+        assert out[0].is_opaque
+
+    def test_genuine_flags_are_left_alone(self):
+        # Bits that are mostly steady and flip rarely are what a real bank
+        # of status flags looks like; nothing here is a fair coin.
+        payloads = [[0x00, 0x00, 0x00, 0x00,
+                     0x01 if i % 97 == 0 else 0x00,
+                     0x02 if i % 61 == 0 else 0x00, 0x00, 0x00]
+                    for i in range(1000)]
+        frags = [_bit(p) for p in range(32, 64)]
+        out = TraceReverseEngineer._coalesce_opaque_runs(frags, _stats(payloads))
+        assert len(out) == 32
+        assert not any(s.is_opaque for s in out)
+
+    def test_biased_neighbour_is_trimmed_off(self):
+        # A real capture put a p1=0.82 bit immediately before a 32-bit
+        # random field, and the fragment run spanned both. Swallowing that
+        # bit would shift the field's start and corrupt every readout.
+        rng = random.Random(11)
+        payloads = [[0x00, 0x00, 0x00,
+                     0x01 if i % 5 else 0x00]
+                    + list(rng.getrandbits(32).to_bytes(4, "big"))
+                    for i in range(1000)]
+        frags = [_bit(31)] + [_bit(p) for p in range(32, 64)]
+        out = TraceReverseEngineer._coalesce_opaque_runs(frags, _stats(payloads))
+        opaque = [s for s in out if s.is_opaque]
+        assert len(opaque) == 1
+        assert (opaque[0].start_pos, opaque[0].length) == (32, 32)
+        assert any(s.start_pos == 31 and s.length == 1 for s in out)
+
+    def test_short_run_is_never_merged(self):
+        stats = _stats(_mac_payloads())
+        frags = [_bit(p) for p in range(32, 32 + 7)]  # one below the minimum
+        out = TraceReverseEngineer._coalesce_opaque_runs(frags, stats)
+        assert len(out) == 7
+        assert not any(s.is_opaque for s in out)
+
+    def test_too_few_frames_to_judge(self):
+        # 40 frames put the confidence interval wider than the effect, so
+        # the test must decline rather than merge on noise.
+        stats = _stats(_mac_payloads(n=40))
+        frags = [_bit(p) for p in range(32, 64)]
+        out = TraceReverseEngineer._coalesce_opaque_runs(frags, stats)
+        assert len(out) == 32
+
+    def test_counter_and_checksum_break_a_run(self):
+        stats = _stats(_mac_payloads())
+        frags = ([_bit(p) for p in range(32, 48)]
+                 + [_wide(48, 8, counter=True)]
+                 + [_bit(p) for p in range(56, 64)])
+        out = TraceReverseEngineer._coalesce_opaque_runs(frags, stats)
+        assert any(s.is_counter for s in out)
+        # The counter splits one 32-bit block into two runs, and each is
+        # judged on its own -- 8 bits is exactly the minimum, so both stand.
+        assert [(s.start_pos, s.length) for s in out if s.is_opaque] == [(32, 16), (56, 8)]
+
+
+class TestOverlapResolution:
+    def test_protocol_field_beats_application_signal(self):
+        counter = _wide(8, 8, counter=True, conf=0.4)
+        app = _wide(4, 12, conf=0.95)
+        kept = TraceReverseEngineer._resolve_overlaps([app, counter])
+        assert [s.is_counter for s in kept] == [True]
+
+    def test_more_confident_wins_between_equals(self):
+        weak, strong = _wide(0, 8, conf=0.4), _wide(4, 8, conf=0.9)
+        kept = TraceReverseEngineer._resolve_overlaps([weak, strong])
+        assert [(s.start_pos, s.confidence) for s in kept] == [(4, 0.9)]
+
+    def test_disjoint_signals_all_survive(self):
+        sigs = [_wide(0, 8), _wide(8, 8), _wide(16, 8)]
+        assert len(TraceReverseEngineer._resolve_overlaps(sigs)) == 3
+
+    def test_outcome_is_independent_of_input_order(self):
+        sigs = [_wide(0, 8, conf=0.5), _wide(4, 8, conf=0.5), _wide(20, 4, conf=0.7)]
+        a = TraceReverseEngineer._resolve_overlaps(list(sigs))
+        b = TraceReverseEngineer._resolve_overlaps(list(reversed(sigs)))
+        assert [(s.start_pos, s.length) for s in a] == [(s.start_pos, s.length) for s in b]
+
+
+class TestSignalIdentity:
+    def test_ids_are_unique_and_sequential(self):
+        stats = _stats([[i & 0xFF] * 8 for i in range(200)])
+        sigs = [_wide(0, 8, counter=True), _wide(8, 8, checksum=True), _wide(16, 8)]
+        out = TraceReverseEngineer._post_process_signals(sigs, stats)
+        assert [s.id for s in out] == list(range(1, len(out) + 1))
+
+    def test_names_are_unique_within_a_message(self):
+        stats = _stats([[i & 0xFF] * 8 for i in range(200)])
+        sigs = [_wide(0, 8, checksum=True), _wide(8, 8, checksum=True),
+                _wide(16, 8, counter=True), _wide(24, 8, counter=True)]
+        out = TraceReverseEngineer._post_process_signals(sigs, stats)
+        names = [s.name for s in out]
+        assert len(set(names)) == len(names)
+
+    def test_lone_checksum_keeps_its_bare_algorithm_name(self):
+        stats = _stats([[i & 0xFF] * 8 for i in range(200)])
+        sig = _wide(0, 8, checksum=True)
+        sig.crc_algorithm = "CRC8H2F"
+        out = TraceReverseEngineer._post_process_signals([sig], stats)
+        assert out[0].name == "CRC8H2F"
+
+    def test_post_process_leaves_no_overlaps(self):
+        stats = _stats([[i & 0xFF] * 8 for i in range(200)])
+        sigs = [_wide(0, 8, counter=True), _wide(4, 8, conf=0.9), _wide(16, 8)]
+        out = TraceReverseEngineer._post_process_signals(sigs, stats)
+        occupied: set[int] = set()
+        for s in out:
+            bits = set(range(s.start_pos, s.start_pos + s.length))
+            assert not (bits & occupied)
+            occupied |= bits
+
+
+# ── Capture-wide byte order, and spans it cannot express ─────────────
+#
+# A vehicle network uses one byte order throughout. Deciding it once from
+# the counters replaces a per-signal smoothness heuristic that never ran on
+# the ~95% of signals fitting inside one byte, and whose asymmetric
+# threshold favoured Intel -- the order that, unlike Motorola, cannot
+# express an arbitrary span.
+
+
+def _intel_internal_bits(start: int, length: int) -> list[int]:
+    """Internal (MSB-first) positions an Intel field at LSB0-absolute
+    ``[start, start+length)`` actually occupies."""
+    return sorted((b // 8) * 8 + (7 - b % 8) for b in range(start, start + length))
+
+
+class TestRepresentability:
+    def test_matches_the_real_intel_bit_layout(self):
+        # The predicate must agree with what an Intel field really covers,
+        # not with a rule of thumb about it. Build the set of internal spans
+        # some Intel field genuinely occupies, then check both directions.
+        expressible = set()
+        for length in range(1, 33):
+            for start in range(0, 128):
+                bits = _intel_internal_bits(start, length)
+                if bits == list(range(bits[0], bits[0] + length)):
+                    expressible.add((bits[0], length))
+        checked = 0
+        for length in range(1, 33):
+            for pos in range(0, 64):
+                assert TraceReverseEngineer._is_representable(pos, length, 0) == (
+                    (pos, length) in expressible
+                ), f"disagreed at internal start {pos}, length {length}"
+                checked += 1
+        assert checked == 32 * 64
+
+    def test_intel_accepts_only_byte_aligned_multibyte(self):
+        f = TraceReverseEngineer._is_representable
+        assert f(8, 16, 0) and f(0, 32, 0)
+        assert not f(9, 16, 0)      # not byte-aligned
+        assert not f(8, 22, 0)      # not a whole number of bytes
+        assert not f(82, 22, 0)     # the real case, from a CAN FD capture
+
+    def test_intel_accepts_a_field_inside_one_byte(self):
+        f = TraceReverseEngineer._is_representable
+        assert f(8, 4, 0) and f(12, 4, 0) and f(8, 8, 0)
+        assert not f(6, 4, 0)       # straddles the byte boundary
+
+    def test_motorola_expresses_any_span(self):
+        f = TraceReverseEngineer._is_representable
+        assert all(f(p, l, 1) for p in range(0, 40) for l in range(1, 33))
+
+
+class TestCaptureByteOrder:
+    @staticmethod
+    def _with_counter(order: int, n: int = 400):
+        """A message whose only moving field is a 16-bit counter laid down
+        in *order*, so exactly one reading of it advances by one."""
+        payloads = []
+        for i in range(n):
+            v = i & 0xFFFF
+            hi, lo = (v >> 8) & 0xFF, v & 0xFF
+            pair = [hi, lo] if order == 1 else [lo, hi]
+            payloads.append([0x00, 0x00] + pair + [0x00] * 4)
+        return _stats(payloads, aid=0x200)
+
+    @pytest.mark.parametrize("order", [0, 1])
+    def test_counter_reveals_the_order(self, order):
+        stats = self._with_counter(order)
+        eng = _engineer({0x200: stats})
+        counters = eng.find_counters()
+        assert counters, "fixture must produce a counter to vote with"
+        assert eng._decide_capture_byte_order(counters) == order
+
+    def test_no_evidence_falls_back_to_intel(self):
+        stats = _stats([[i & 0xFF] * 8 for i in range(200)])
+        eng = _engineer({0x100: stats})
+        # Only sub-byte counters here, which say nothing about byte order.
+        assert eng._decide_capture_byte_order({}) == 0
+
+
+class TestNonRepresentableSpansDropped:
+    def test_unexpressable_span_is_dropped_not_moved(self):
+        stats = _stats([[i & 0xFF] * 12 for i in range(200)])
+        sigs = [_wide(82, 22), _wide(8, 16)]
+        out = TraceReverseEngineer._post_process_signals(sigs, stats, byte_order=0)
+        assert [(s.start_pos, s.length) for s in out] == [(8, 16)]
+
+    def test_nothing_is_dropped_without_a_decided_order(self):
+        stats = _stats([[i & 0xFF] * 12 for i in range(200)])
+        sigs = [_wide(82, 22), _wide(8, 16)]
+        out = TraceReverseEngineer._post_process_signals(sigs, stats)
+        assert len(out) == 2
+
+    def test_counters_and_crcs_are_exempt(self):
+        stats = _stats([[i & 0xFF] * 12 for i in range(200)])
+        sigs = [_wide(82, 22, counter=True), _wide(20, 12, checksum=True)]
+        out = TraceReverseEngineer._post_process_signals(sigs, stats, byte_order=0)
+        assert len(out) == 2
+
+    def test_motorola_capture_drops_nothing(self):
+        stats = _stats([[i & 0xFF] * 12 for i in range(200)])
+        sigs = [_wide(82, 22), _wide(9, 16)]
+        out = TraceReverseEngineer._post_process_signals(sigs, stats, byte_order=1)
+        assert len(out) == 2
+
+    def test_exported_start_bit_now_round_trips(self):
+        # The point of dropping them: every signal that survives can be
+        # written down and read back at the bits it was measured on.
+        stats = _stats([[i & 0xFF] * 12 for i in range(200)])
+        sigs = [_wide(82, 22), _wide(8, 16), _wide(12, 4), _wide(0, 8)]
+        out = TraceReverseEngineer._post_process_signals(sigs, stats, byte_order=0)
+        for s in out:
+            exported = TraceReverseEngineer._to_dbc_start_bit(s.start_pos, s.length, 0)
+            assert _intel_internal_bits(exported, s.length)[0] == s.start_pos
+
+
+# ── Sample sufficiency ───────────────────────────────────────────────
+#
+# The messages that shredded worst on a real CAN FD capture had 80-152
+# frames against 280-370 active bits. A raw frame-count gate does not
+# separate them: a subsampling sweep found signal counts flat from 60
+# frames to 18630, and one message disagreed with itself at 295 frames
+# while another reproduced perfectly at 1078. Reproducibility does.
+
+
+class TestPartitionAgreement:
+    def test_reproducible_layout_scores_high(self):
+        # Two independent fields, each varying on its own schedule all the
+        # way through: the same partition is there in both halves.
+        payloads = []
+        for i in range(600):
+            a = (i * 7) % 251
+            b = (i // 3) % 241
+            payloads.append([a, a, 0x00, 0x00, b, b, 0x00, 0x00])
+        got = TraceReverseEngineer._partition_agreement(_stats(payloads))
+        assert got is not None and got > 0.8
+
+    def test_short_message_is_not_split(self):
+        assert TraceReverseEngineer._partition_agreement(
+            _stats([[i & 0xFF] * 8 for i in range(20)])) is None
+
+    def test_structure_that_changes_halfway_scores_low(self):
+        # First half: bytes 0-1 move together. Second half: they stop and
+        # bytes 4-5 move instead. No single partition describes both, and
+        # the pairings the halves do find share nothing.
+        rng = random.Random(5)
+        payloads = []
+        for i in range(400):
+            v = rng.randrange(256)
+            if i < 200:
+                payloads.append([v, v, 0, 0, 0x11, 0x22, 0, 0])
+            else:
+                payloads.append([0x33, 0x44, 0, 0, v, v, 0, 0])
+        got = TraceReverseEngineer._partition_agreement(_stats(payloads))
+        # Plain Rand scores this 0.97 -- the singleton-heavy baseline --
+        # which is exactly why the index is chance-adjusted.
+        assert got is not None and got <= 0.05
+
+    def test_pure_noise_agrees_trivially_and_is_not_this_gate_s_job(self):
+        # A documented blind spot. Independent random bits leave both
+        # halves with nothing to cluster, so both return all-singletons and
+        # those agree perfectly -- "found no structure, consistently" is
+        # indistinguishable here from "found structure, consistently".
+        # The gate measures reproducibility, not opacity; a fair-coin
+        # region is _coalesce_opaque_runs' responsibility, and that is what
+        # actually collapses it.
+        rng = random.Random(3)
+        payloads = [[rng.randrange(256) for _ in range(8)] for _ in range(400)]
+        stats = _stats(payloads)
+        assert TraceReverseEngineer._partition_agreement(stats) == pytest.approx(1.0)
+        frags = [_bit(p) for p in range(64)]
+        out = TraceReverseEngineer._coalesce_opaque_runs(frags, stats)
+        assert len(out) == 1 and out[0].is_opaque and out[0].length == 64
+
+    def test_agreement_scales_signal_confidence(self):
+        rng = random.Random(9)
+        payloads = []
+        for i in range(400):
+            v = rng.randrange(256)
+            payloads.append([v, v, 0, 0, 0x11, 0x22, 0, 0] if i < 200
+                            else [0x33, 0x44, 0, 0, v, v, 0, 0])
+        stats = _stats(payloads, aid=0x321)
+        eng = _engineer({0x321: stats})
+        assert TraceReverseEngineer._partition_agreement(stats) <= 0.05
+        # An unreproducible partition is scaled to nothing, so none of its
+        # signals clear min_confidence.
+        assert eng.find_application_signals().get(0x321, []) == []
+
+
+class TestAdjustedRand:
+    def test_identical_labellings_score_one(self):
+        a = [0, 0, 1, 1, 2, 2]
+        assert TraceReverseEngineer._adjusted_rand(a, list(a)) == pytest.approx(1.0)
+
+    def test_relabelling_does_not_matter(self):
+        a = [0, 0, 1, 1, 2, 2]
+        b = [7, 7, 3, 3, 9, 9]
+        assert TraceReverseEngineer._adjusted_rand(a, b) == pytest.approx(1.0)
+
+    def test_unrelated_labellings_score_about_zero(self):
+        a = [0, 0, 0, 1, 1, 1]
+        b = [0, 1, 0, 1, 0, 1]
+        assert abs(TraceReverseEngineer._adjusted_rand(a, b)) < 0.35
+
+    def test_all_singletons_against_all_singletons(self):
+        # Both halves clustering nothing is agreement, not evidence -- but
+        # it is at least not a contradiction, so it must not read negative.
+        a = list(range(8))
+        assert TraceReverseEngineer._adjusted_rand(a, list(a)) == pytest.approx(1.0)
+
+    def test_unclustered_bits_are_not_one_group(self):
+        # -1 means "too inactive to cluster". Treating those bits as a
+        # single cluster would assert they form one field.
+        labels = TraceReverseEngineer._cluster_labels({0: -1, 1: -1, 2: 5}, [0, 1, 2])
+        assert labels[0] != labels[1]
+        assert len(set(labels)) == 3
+
+
+class TestOpaqueFieldsSurviveTheGate:
+    def test_fair_coin_field_is_not_scaled_away(self):
+        # An opaque region is often *why* a message clusters
+        # irreproducibly. Gating it on that reproducibility would discard
+        # the one finding that explains the rest -- and because the run is
+        # assembled from one-bit fragments, filtering before assembling
+        # would leave nothing to assemble.
+        rng = random.Random(21)
+        payloads = []
+        for i in range(400):
+            v = rng.randrange(256)
+            head = [v, v, 0, 0] if i < 200 else [0x33, 0x44, 0, 0]
+            payloads.append(head + list(rng.getrandbits(32).to_bytes(4, "big")))
+        stats = _stats(payloads, aid=0x654)
+        eng = _engineer({0x654: stats})
+        assert TraceReverseEngineer._partition_agreement(stats) < 0.5
+        found = eng.find_application_signals().get(0x654, [])
+        opaque = [s for s in found if s.is_opaque]
+        assert len(opaque) == 1
+        assert (opaque[0].start_pos, opaque[0].length) == (32, 32)
+
+
+class TestSelfCorroboratingFieldsSurviveTheGate:
+    def test_clustered_counter_is_not_scaled_away(self):
+        # Stage 2's dedicated scan does not reach every counter: on 21
+        # messages of a real capture find_counters() returned nothing and
+        # the generic clustering found the counter instead. Such a field
+        # carries its own corroboration -- it was measured arithmetically
+        # on those exact bits, and bits taken from a wrong boundary do not
+        # count -- so an unreproducible partition must not remove it.
+        rng = random.Random(31)
+        payloads = []
+        for i in range(400):
+            v = rng.randrange(256)
+            head = [v, v, 0] if i < 200 else [0x33, 0x44, 0]
+            payloads.append(head + [i & 0xFF] + [0, 0, 0, 0])
+        stats = _stats(payloads, aid=0x765)
+        eng = _engineer({0x765: stats})
+        assert TraceReverseEngineer._partition_agreement(stats) < 0.9
+        found = eng.find_application_signals().get(0x765, [])
+        assert any(s.is_counter for s in found), "the counting byte must survive"

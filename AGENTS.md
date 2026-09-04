@@ -1018,6 +1018,144 @@ boat replay stream --trace myrun \
 boat trace replay trace.asc --loop 250 --verbose --buses vcan0
 ```
 
+#### `boat trace score` (local, no gateway)
+```bash
+# Rates a trace's information value for reverse engineering (stage 1:
+# per-bit entropy triage + "worth the RE pass?" gate; stage 2 then runs
+# TraceReverseEngineer and classifies every bit into entropy buckets,
+# audits claimed signals, and grades the capture). Fully local -- reads
+# the file, talks to nothing. Concept + thresholds:
+# backlog/trace_information_value.md; SDK: boat/trace_information.py.
+boat trace score capture.blf                 # full two-stage scoring
+boat trace score capture.log --triage-only   # fast stage-1 gate only
+boat trace score capture.log --no-mask       # don't feed stage-1 back into the RE pass
+boat --json trace score capture.log          # machine-readable, all messages
+```
+
+Stage 1 also feeds *back* into reverse engineering: `search_mask()` marks payload
+regions whose statistics rule out an application signal (high surprise, no
+structure -- rolling codes, MACs), and `TraceReverseEngineer(..., search_mask=)`
+skips them. It gates **only** the statistical clustering in
+`find_application_signals`; `find_counters`/`find_crcs`/`find_multiplexors` keep
+full access, because they prove what they find. On a real capture this removed 58
+confabulated signals and 0 genuine ones. Note the mask and the stage-2 audit are
+*not* independent (same failure mode, same constants) -- use `--no-mask` when
+measuring the RE pass itself.
+
+`counter_lsb_hints()` is the second feedback path, and unconditional: a counter's
+LSB alternates on every frame for any stride the code accepts, so a candidate span
+containing no such bit cannot be a counter. `TraceReverseEngineer(...,
+counter_lsb_hints=)` drops those spans before extracting frames. Being a *necessary*
+condition it cannot change the result -- verified byte-identical on two captures --
+and it cut `find_counters` by ~49%.
+
+#### The merge pass (`_post_process_signals`)
+
+Runs on each stage's output and again on the merged list in `combine_results()`,
+which is where it matters -- only there are a message's counters, CRCs and
+clustered signals in one list. Three jobs, all of which the pre-existing version
+claimed in its docstring and none of which it did:
+
+- **`_coalesce_opaque_runs`** fuses runs of bit-adjacent one-bit signals whose every
+  bit is an independent fair coin (`p1` and `p_change` both within 4 SE of 0.5, with
+  the band floored at 0.02 and capped at 0.15, judged on at most 4096 frames and
+  declined below 128). Correlation clustering *cannot* hold such a field together --
+  independence is the property it groups by -- so a truncated SecOC MAC or CRC32
+  trailer arrives as 32 consecutive one-bit "flags". `_merge_adjacent_smooth_signals`
+  cannot do this job either: it keeps a merge only when the combined value varies
+  smoothly, and this one is the opposite of smooth. The result is exported as
+  `Opaque_<n>` with `is_opaque` set. It finds the *longest qualifying sub-run*, not
+  the whole run: on a real capture a 33-bit run began one bit before the field it
+  belonged to (that bit `p1=0.82` against its neighbours' 0.50), and swallowing it
+  would have shifted the field's start.
+- **`_resolve_overlaps`** drops signals whose bits a stronger one already claimed --
+  protocol fields (verified against an actual algorithm) outrank clustered guesses,
+  then confidence, then width, then position. Dropped rather than trimmed: a field
+  narrowed after the fact no longer means what it was measured to mean.
+- **Identity** is assigned here and nowhere else. Every stage numbers from 1, so the
+  merged list arrives with ids colliding across stages. That is not cosmetic:
+  `to_pdu_db()` keys `SigSendType` by signal id, so colliding ids silently gave one
+  signal another's answer.
+
+Measured on 100 messages / 268k frames of a CAN FD capture: internal overlaps
+78 -> 0, duplicate-id messages 13 -> 0. On a different 60-message / 514k-frame
+subset of the same capture: signals 2410 -> 1352, one-bit signals 1995 -> 901,
+36 opaque fields recovered (32 of them exactly 32 bits wide -- the MAC trailers).
+
+#### Sample sufficiency: does the partition reproduce?
+
+`_partition_agreement()` clusters the first half of a message's frames and the
+second half separately and scores how far the two agree about each *pair* of bits,
+as an **adjusted** Rand index -- 0 meaning no more reproducible than chance. Each
+application signal's confidence is then multiplied by that score (clamped to
+[0,1]) and the ordinary `min_confidence` filter removes what falls short. Set
+`min_confidence=0` to keep everything.
+
+Three measurements shaped this, each ruling out a simpler design:
+
+- **A frame-count gate does not work.** Subsampling one message from 60 frames to
+  18630 left its signal count flat (26 -> 25); another jumped from 16 active bits
+  to 344 as more of the capture was seen. And frame count does not identify the
+  bad cases: `0x1C46001D` fails to reproduce at 295 frames while `0x16A9556C`
+  reproduces perfectly at 1078.
+- **A threshold on the agreement would be arbitrary.** Across 148 real messages it
+  is a continuum (deciles 0.22, 0.47, 0.56 ... 0.94, 0.99 for the plain index)
+  with no gap wider than 0.065. Scaling degrades along it instead of cutting.
+- **The index must be chance-adjusted.** The plain Rand index's baseline rises
+  with the number of singleton clusters, and singletons are what a shredded
+  message is made of, so it flatters exactly the case this must catch. It scored
+  the worst offenders 0.22; adjusted, they are -0.02 to -0.10 -- no better than
+  chance, which is the honest reading.
+
+Opaque fields are assembled *before* the scaling and are exempt from it: "every
+bit here is a fair coin" is a measurement of the bits, not a guess about a
+boundary, and an opaque region is often *why* a message clusters irreproducibly.
+Gating it on that reproducibility discarded 29 of 34 opaque fields in an earlier
+revision. Counters and CRCs never enter this path at all.
+
+Measured on 60 messages / 514k frames: signals 1288 -> 248, one-bit signals
+901 -> 67, opaque fields 34 -> 34 (all kept), 6 of 60 messages left with no
+application signals, at +26% runtime. On a second subset deliberately selected
+for pathology, 60 of 100 messages lost all application signals -- that selection
+is not representative, but the gate is aggressive by design.
+
+**Known blind spot:** when neither half finds any structure, both return
+all-singleton partitions, which agree perfectly and score 1.0. The gate measures
+reproducibility, not opacity; a fair-coin region is `_coalesce_opaque_runs`'
+responsibility.
+
+#### Byte order is decided once per capture
+
+A vehicle network is laid out in one byte order throughout; mixed-order networks
+exist but are rare enough that guessing per signal costs more than it buys.
+`_decide_capture_byte_order()` settles it from the capture's **multi-byte
+counters**: read in the wrong order a counter's value jumps around, in the right
+one it advances by exactly one per frame. Multi-byte CRCs vote too (theirs is
+verified, not guessed). Fields of <=8 bits are silent by construction and never
+vote. No evidence at all falls back to Intel. `find_application_signals()` decides
+it before clustering starts, and `_build_signal` then uses it for every multi-byte
+field in place of `_detect_byte_order`'s per-signal smoothness heuristic -- which
+never ran on the ~95% of signals that fit inside one byte, and whose asymmetric
+threshold (`motorola_jitter < intel_jitter * 0.7`) quietly favoured Intel.
+
+That bias mattered, because **Intel cannot express an arbitrary span**.
+Clustering only ever produces a contiguous run of internal MSB-first bit
+positions. Motorola takes any of them -- its `StartPos` *is* that numbering. An
+Intel field occupies LSB0-absolute bits `[s, s+L)`, which maps back to a
+contiguous internal run only when the field sits inside one byte, or covers whole
+bytes from a byte boundary (`_is_representable`, verified against the real bit
+layout by exhaustive test). A 22-bit span at internal bit 82 is not an Intel
+field, and `_to_dbc_start_bit` used to export it at bit 80 -- two bits off, no
+warning. On one 100-message subset, 209 of 303 multi-byte signals were in that
+state.
+
+So a span the capture's byte order cannot express is treated as a **wrong
+boundary**, not an exotic layout, and is dropped in the merge pass. Counters and
+CRCs are exempt -- byte-aligned by construction and verified against an
+algorithm, so a disagreement there would mean the test is wrong, not them.
+Measured on that subset: every exported signal's `StartPos` now describes the
+bits it was measured on (0 misplaced, was 209).
+
 ### Loopback prevention
 
 The registry send path is the single site that tags locally-sent frames to
