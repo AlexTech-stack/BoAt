@@ -206,8 +206,9 @@ detailed how-tos and architecture documents in the repository; it does not repla
 
 <p>In practice, BoAt lets you:</p>
 <ul>
-  <li><strong>Simulate ECU networks</strong> — run deterministic, tick-scheduled simulations
-    of CAN/Ethernet traffic, with seeded reproducibility (same seed → bit-identical output).</li>
+  <li><strong>Simulate ECU networks</strong> — run tick-scheduled simulations of
+    CAN/Ethernet traffic, with seeded reproducibility (same seed → bit-identical frame
+    content; see <a href="#determinism-detail">Determinism</a> for the exact guarantees).</li>
   <li><strong>Bridge virtual and real buses</strong> — the same gateway drives
     <code>vcan0</code> in CI and a PEAK/Kvaser adapter on the bench.</li>
   <li><strong>Record, edit, and replay traffic</strong> — capture live traffic to
@@ -270,11 +271,27 @@ for Ethernet — and <code>.pcapng</code> for <em>mixed</em> CAN+Ethernet) and h
 internal <code>.trace</code> binary format (length-prefixed <code>boat.v1.Frame</code>
 records) that the replay engine consumes. See <a href="#formats">Trace file formats</a>.</p>
 
-<h3>Determinism</h3>
-<p>The scheduler is tick-based and all randomness is seeded. Running the same scenario
-with the same seed twice produces <em>bit-identical</em> output — this is enforced by a
-dedicated test (<code>boat_determinism_seed</code>) and is the property that makes replay
-and CI regression comparison trustworthy.</p>
+<h3 id="determinism-detail">Determinism</h3>
+<p>The scheduler is tick-based and all randomness is seeded. Because BoAt is a testing
+platform, it is worth being precise about which properties actually reproduce:</p>
+<ul>
+  <li><strong>Seeded PRNG and fault-injection streams</strong> — reproducible by
+    construction (<code>DeterminismEngine</code>), covered by
+    <code>boat_determinism_seed</code>. That test links only <code>boat_core</code>, so it
+    pins the PRNG rather than the end-to-end claim.</li>
+  <li><strong>Replayed frame content and ordering</strong> — <em>bit-identical</em> across
+    runs, including under CPU load. Asserted end-to-end by
+    <code>boat_determinism_replay</code>, which replays one trace twice through the real
+    <code>ReplayController → FrameSink → CanBusRegistry</code> path and diffs what reached
+    the wire.</li>
+  <li><strong>Which tick a replayed frame is observed in</strong> — <em>not yet
+    reproducible</em>. Replay, the simulation tick scheduler, and the always-on node tick
+    thread are three independent time domains. Replay and the node tick thread both
+    schedule against absolute deadlines, which holds them in lockstep on an idle host but
+    not under contention.</li>
+</ul>
+<p>So CI regression comparison on frame content and ordering is trustworthy; comparison on
+tick numbers is not, on a loaded runner. Coupling those clocks is open work.</p>
 
 <!-- ═══════════════════════════ GETTING STARTED ═══════════════════════════ -->
 
@@ -789,8 +806,10 @@ boat test run --trace-format pcapng</code></pre>
 
 <p>Test binaries are named <code>boat_unit_*</code>, <code>boat_integration_*</code>,
 <code>boat_hil_*</code> (HIL tests need <code>BOAT_HIL_ENABLED=1</code> and hardware),
-and <code>boat_determinism_seed</code> — the one that runs the same seed twice and
-asserts bit-identical output. System-test conventions:
+and <code>boat_determinism_seed</code> / <code>boat_determinism_replay</code> — the
+first runs the same seed twice and asserts bit-identical PRNG output, the second drives a
+trace through the real replay path twice and diffs what reached the wire. System-test
+conventions:
 <span class="kbd-path">test/Structure.md</span>.</p>
 
 <h2 id="howto-ai">How-To: AI assistants</h2>

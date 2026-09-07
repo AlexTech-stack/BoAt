@@ -504,8 +504,9 @@
         <div class="feat-icon">⚙️</div>
         <div class="feat-title">Deterministic Simulation Core</div>
         <div class="feat-desc">
-          Tick-based scheduler with a seeded determinism engine guarantees
-          bit-identical results across runs and environments. Ideal for CI regression testing.
+          Tick-based scheduler with a seeded determinism engine. Replayed frame content
+          and ordering are bit-identical across runs, including under load; tick-level
+          timing does not yet reproduce on a contended host.
         </div>
       </div>
 
