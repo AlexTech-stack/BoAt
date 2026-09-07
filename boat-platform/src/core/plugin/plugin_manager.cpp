@@ -86,6 +86,10 @@ void PluginManager::SetFramePublisher(FramePublishFn fn) {
   frame_publisher_fn_ = std::move(fn);
 }
 
+void PluginManager::SetTimeSource(TimeSourceFn fn) {
+  time_source_fn_ = std::move(fn);
+}
+
 PluginHandle PluginManager::Load(const std::string& so_path, const std::string& config_json) {
 #ifdef _WIN32
   (void)so_path;
@@ -187,6 +191,19 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
         plugin->ctx,
         [](void* pctx, const BoatPduFrame* frame) {
           if (frame != nullptr) (*static_cast<PduPublishFn*>(pctx))(*frame);
+        },
+        fn_shared.get());
+    handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
+  }
+
+  // v9: Wire the host clock. Done before the frame publisher so a plugin can
+  // legitimately read the time from inside its first publish callback.
+  if (plugin->vtable->set_time_source != nullptr && time_source_fn_) {
+    auto fn_shared = std::make_shared<TimeSourceFn>(time_source_fn_);
+    plugin->vtable->set_time_source(
+        plugin->ctx,
+        [](void* pctx) -> std::uint64_t {
+          return (*static_cast<TimeSourceFn*>(pctx))();
         },
         fn_shared.get());
     handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));

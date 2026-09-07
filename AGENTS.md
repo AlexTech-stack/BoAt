@@ -34,7 +34,7 @@
   - `proto/boat/v1/` — 18 protobuf files declaring 16 gRPC services
   - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
   - `sdk/cpp/include/boat/` — C++ SDK headers
-    - `plugin.h` — Plugin ABI v8 (unified `on_frame`, `set_frame_publisher`, `declared_buses`)
+    - `plugin.h` — Plugin ABI v9 (unified `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`)
     - `frame.h` — Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU bus types)
     - `can_tp.h` — Standalone CanTp C API (can_tp_send, can_tp_configure, can_tp_remove)
     - `someip.h` — SOME/IP protocol constants
@@ -130,7 +130,25 @@ pip install -e ./sdk/python[dev] && pip install -e ./cli
 pytest sdk/python/tests cli/tests -v
 ```
 
-Test binary naming: `boat_unit_*` (unit), `boat_integration_*`, `boat_hil_*`, `boat_determinism_seed`.
+Test binary naming: `boat_unit_*` (unit), `boat_integration_*`, `boat_hil_*`, `boat_determinism_*`.
+
+Two determinism tests, and the difference matters. `boat_determinism_seed` links only `boat_core`: it seeds
+a `mt19937_64` twice and compares the streams, so it verifies the PRNG and nothing else — it cannot fail.
+`boat_determinism_replay` (`src/tests/determinism/test_replay_determinism.cpp`) is the system-level test:
+it writes a length-delimited `boat.v1.Frame` trace, replays it twice through
+`ReplayController` → `FrameSink` → `CanBusRegistry` → a recording driver, and diffs the wire log. A 1 ms
+tick thread mirrors the gateway's node tick thread so delivery races tick advancement as it does in
+production.
+
+It asserts two different things:
+
+- **Frame content and ordering** — hard `REQUIRE`. Bit-identical across runs, including under CPU
+  oversubscription (measured 10/10).
+- **Tick attribution** — tagged `[!mayfail]`. Replay and the node tick thread are independent clocks that
+  are never coupled, so which tick a frame lands in is not decided by the trace. Both sides schedule
+  against absolute deadlines (`TickTimer::WaitUntil`), which keeps them in lockstep on an idle host
+  (30/30 identical) but not under contention (0/6 identical, and the tick thread drops ticks outright).
+  Promote this to a plain `REQUIRE` once replay delivery and plugin ticks share one clock.
 
 Manual verification runbooks for specific feature areas live under `boat-platform/docs/testing/`, e.g. `cantp-plugin-manager-verification.md` (CanTp gRPC bridge, multi-instance `--iface`, `NodePluginService`/`boat plugin list`, PDU-bus dispatch).
 
@@ -557,10 +575,23 @@ dependency above.
 
 ## Quirks & gotchas
 
-- **Plugin ABI v8** (current, merged to `master`):
+- **Plugin ABI v9** (current, merged to `master`):
   - Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU)
-  - Plugin vtable (9 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`
-  - `BOAT_PLUGIN_ABI_VERSION = 8` — v7 plugins rejected with clear error
+  - Plugin vtable (10 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`
+  - `BOAT_PLUGIN_ABI_VERSION = 9` — any other version rejected with a clear error
+    (`boat_unit_plugin_time_source` loads a deliberately stale fixture to prove it)
+  - `set_time_source(ctx, BoatNowNsFn, host_ctx)` — v9. The host hands each plugin a clock
+    returning monotonic nanoseconds: real time normally, virtual time under
+    `BOAT_TIME_SOURCE=virtual`. Called once, after `initialize()` succeeds and before the
+    first tick; optional in both directions (a NULL entry, or a host that never calls
+    `PluginManager::SetTimeSource`, are both fine). Plugins that need time **must** use it
+    instead of `steady_clock::now()` — a plugin reading a system clock puts back exactly the
+    nondeterminism the tick authority takes out, and every component that inferred elapsed
+    time for itself has had that wrong at least once (pdu_router read a tick counter as
+    milliseconds, replay multiplied milliseconds by nanoseconds-per-tick, TestHarness assumed
+    10 ms per tick). The gateway supplies `TickAuthority::NowNs()`.
+    `can_tp` uses it. **Still to convert: `tcp` reads `steady_clock::now()` directly on its
+    own threads and passes NULL here.**
   - `PduRouter` is a plugin (`pdu_router.so`), loaded by the gateway
   - `boat plugin list` shows loaded plugins from **both** `PluginManager` instances (sim-scoped + always-on `node_manager`) in one table with a `scope` column — `PluginService` (register/list/info/unload) only ever reaches the sim-scoped one; `NodePluginService` (list/info/unload, no register) reaches `node_manager`. `boat plugin info|unload` need `--scope {sim,node}`; `--scope node` unload additionally needs `--yes`. See `README.md`'s "Dual PluginManager".
   - `FrameService` gRPC provides unified send/subscribe for all bus types
@@ -580,6 +611,71 @@ dependency above.
 - Proto stubs in `sdk/python/boat/stubs/boat/v1/` must be regenerated when proto files change (`generate_stubs.sh`).
 - iceoryx2 requires `cargo` (Rust) at build time only; the resulting shared-memory IPC is used at runtime for large payloads (>4KB).
 - HIL tests need `BOAT_HIL_ENABLED=1` and a real or virtual CAN interface (`vcan0`).
+
+### Tick timer backends
+
+`boat::hil::TickTimer` (`src/hil/pdu/tick_timer.{h,cpp}`) has two live backends, chosen by
+`TickTimer::Create`:
+
+- `TimerfdTickTimer` — Linux timerfd, drift-free absolute scheduling. The default, and what
+  every production caller uses today.
+- `VirtualTickTimer` — a logical clock. `WaitForNextTick()` advances virtual now by one
+  interval and returns immediately; `WaitUntil(deadline)` jumps virtual now to the deadline.
+  Virtual now is anchored to a real `steady_clock` reading taken in `Init()`, so a caller that
+  derives deadlines from its own `steady_clock::now()` still lands on sensible offsets.
+
+`Create(interval)` consults `BOAT_TIME_SOURCE` (`realtime` by default; unset, empty, or
+unrecognised values all yield real time — a typo must never quietly stop a HIL run pacing real
+hardware). `Create(interval, TimeSource)` ignores the environment.
+
+The gateway passes `TimeSource::kRealTime` explicitly: a bare gateway paces real hardware, so
+going virtual is a deliberate deployment choice, not an env default. Covered by
+`boat_unit_tick_timer`.
+
+### TickAuthority — one clock, ordered phases
+
+`boat::hil::TickAuthority` (`src/hil/tick_authority.{h,cpp}`) owns one `TickTimer` and runs a
+fixed, ordered list of phases every tick, each to completion, on its own thread. `main.cpp`
+registers two:
+
+1. `node_plugins` — `node_manager.TickAll(tick)`, which drives the PDU transmission engine
+2. `sim_plugins` — `TickScheduler::TickIfRunning()`, the deterministic tick pipeline for a
+   running scenario (reseed → `EventBus::Dispatch` → plugin ticks → `SimClock::Step`); a no-op
+   when no simulation is active
+3. `replay` — `ReplayController::PumpDueRecords(tick)`
+
+The gateway prints the interval and phase order at startup
+(`[Gateway] Tick authority: 1000 us/tick, phases: node_plugins -> replay`).
+
+This replaced two independent wall-clock threads. **`ReplayController` now owns no thread and
+no clock**: `Start()` maps the trace and anchors the pass, and the replay phase pumps it.
+A record is due when elapsed *authority ticks* (scaled by `speed_multiplier`) reach its
+offset from the pass anchor — no wall clock is read, so a loaded host makes the authority
+tick later in real terms without ever changing which tick a record lands in. That is what
+made `boat_determinism_replay`'s tick-attribution case a hard `REQUIRE`: 10/10 identical
+under 2× CPU oversubscription, where the old design managed 0/6.
+
+Consequences worth knowing:
+
+- A standalone `ReplayController` makes no progress unless something pumps it. Tests use a
+  small `Pump` helper; embedders need a `TickAuthority` or an equivalent loop.
+- `SetTickInterval()` must match the driving authority's interval, since due-times are
+  measured in ticks. Calling it pins the interval so a later `Start()` won't fall back to
+  `BOAT_NODE_TICK_US/_MS`.
+- Pause is now exact: zero records are delivered while paused, rather than "however many the
+  running thread had already begun".
+- Phases run in registration order and a throwing phase is caught (see `PhaseErrorCount()`),
+  so one bad plugin cannot strand replay.
+
+`TickScheduler` (`src/core/scheduler/`) likewise owns no thread and no clock any more. Its
+coordinator loop is gone, and so is the worker pool behind it: `ExecuteTick` used to enqueue
+an empty lambda onto that pool and wait for it, which barriered against nothing, since
+`EnqueueTask` had no other caller. `Start`/`Pause`/`Resume`/`Stop` now only set the state the
+`sim_plugins` phase reads; `Step(n)` advances ticks directly for `boat sim step`. Both paths
+run the same pipeline under one `tick_mutex_`, which also closes a latent race: two threads
+computing `clock_.tick() + 1` concurrently could claim the same tick, and
+`DeterminismEngine::BeforeTick` throws on a non-increasing tick. Simulation ticks now advance
+at `BOAT_NODE_TICK_MS`/`_US` rather than a hard-coded 1 ms.
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`.
@@ -756,6 +852,22 @@ boat can-tp list-sessions
 boat can-tp subscribe-errors --nsdu-id 0x7E0
 ```
 
+**Tick-driven, not thread-driven.** CanTp has no TX thread. `tp_on_tick` calls
+`can_tp_service_pending()`, which does one pass: send every CF whose STmin has
+elapsed, then fire any N_Bs/N_Cr deadline that has passed. Time comes from the
+v9 host clock (`CanTpPlugin::NowNs()`), falling back to `steady_clock` only when
+the plugin is loaded without a host that supplies one. Consequences:
+
+- STmin resolution is the tick interval. A connection asking for STmin below
+  `BOAT_NODE_TICK_MS`/`_US` gets the tick interval instead; set
+  `BOAT_NODE_TICK_US` if you need finer separation.
+- STmin=0 still streams. `tp_on_tick` drains while CFs remain immediately due,
+  bounded by `kMaxCfBurstPerTick` (256) so one large transfer cannot stall the
+  `sim_plugins` and `replay` phases that run after it in the same tick.
+- ISO-TP timeouts are now testable without waiting. `boat_unit_can_tp_tick`
+  trips N_Bs by assigning to a variable rather than sleeping for the 100 ms
+  deadline, and the whole file runs in microseconds.
+
 **N_Bs/N_Cr watchdogs.** Of ISO 15765-2's six timing parameters, only N_Bs
 (TX waiting for FC) and N_Cr (RX waiting for the next CF) are enforced — the
 two whose expiry actually leaves a session stuck forever. `--n-bs-ms`/
@@ -885,13 +997,13 @@ BOAT_CAN_INTERFACES=vcan0 \
 Config keys: `iface` (default `vcan0`), `buses` (default `["can"]`), `mode`
 (`passive`|`active`|`both`, default `both`), `probe_id` (default `0x7FF`),
 `probe_period_ticks` (1000), `echo_timeout_ticks` (50), `report_period_ticks`
-(5000). It's also the canonical minimal v8 plugin example. Note: periods are in
+(5000). It's also the canonical minimal v9 plugin example. Note: periods are in
 node ticks (tick length = `BOAT_NODE_TICK_MS`/`_US`).
 
 > Plugin config JSON may contain commas — `BOAT_NODE_PLUGINS` is split
 > brace-aware, so commas inside a `{...}` config do not split the entry.
 
-## Replay System (ABI v8) — Core-Sink Architecture
+## Replay System (ABI v9) — Core-Sink Architecture
 
 The replay system reads trace files (.asc, .blf, .pcap), converts them to protobuf
 `boat.v1.Frame` records, and transmits them through the single core `FrameSink`.

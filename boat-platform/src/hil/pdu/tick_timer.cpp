@@ -4,6 +4,8 @@
 #include "pdu/tick_timer.h"
 
 #include <cerrno>
+#include <cstdlib>
+#include <cstring>
 #include <thread>
 
 #ifdef __linux__
@@ -15,10 +17,80 @@ namespace boat::hil {
 
 // ── Factory ───────────────────────────────────────────────────────────────────
 
+TimeSource TickTimer::TimeSourceFromEnv() {
+  const char* v = std::getenv("BOAT_TIME_SOURCE");
+  if (v != nullptr && std::strcmp(v, "virtual") == 0) return TimeSource::kVirtual;
+  // Anything else -- unset, empty, "realtime", or a typo -- stays real time.
+  // Failing open to wall clock is the safe direction: a virtual clock on a
+  // HIL bench would silently stop pacing real hardware.
+  return TimeSource::kRealTime;
+}
+
 std::unique_ptr<TickTimer> TickTimer::Create(std::chrono::nanoseconds interval) {
-  auto t = std::make_unique<TimerfdTickTimer>();
+  return Create(interval, TimeSourceFromEnv());
+}
+
+std::unique_ptr<TickTimer> TickTimer::Create(std::chrono::nanoseconds interval,
+                                             TimeSource source) {
+  std::unique_ptr<TickTimer> t;
+  if (source == TimeSource::kVirtual) {
+    t = std::make_unique<VirtualTickTimer>();
+  } else {
+    t = std::make_unique<TimerfdTickTimer>();
+  }
   t->Init(interval);
   return t;
+}
+
+// ── VirtualTickTimer ──────────────────────────────────────────────────────────
+
+bool VirtualTickTimer::Init(std::chrono::nanoseconds interval) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  interval_    = interval > std::chrono::nanoseconds::zero()
+                     ? interval
+                     : std::chrono::nanoseconds(1);
+  start_       = std::chrono::steady_clock::now();
+  virtual_now_ = start_;
+  tick_count_  = 0;
+  initialised_ = true;
+  stopped_.store(false, std::memory_order_release);
+  return true;
+}
+
+bool VirtualTickTimer::WaitForNextTick() {
+  if (stopped_.load(std::memory_order_acquire)) return false;
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!initialised_) return false;
+  virtual_now_ += interval_;
+  ++tick_count_;
+  return true;
+}
+
+bool VirtualTickTimer::WaitUntil(std::chrono::steady_clock::time_point deadline) {
+  if (stopped_.load(std::memory_order_acquire)) return false;
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!initialised_) return false;
+  // A deadline already behind virtual now fires immediately without rewinding
+  // the clock -- same observable behaviour as timerfd with TFD_TIMER_ABSTIME.
+  if (deadline > virtual_now_) {
+    virtual_now_ = deadline;
+    tick_count_  = static_cast<uint64_t>((virtual_now_ - start_) / interval_);
+  } else {
+    ++tick_count_;
+  }
+  return true;
+}
+
+void VirtualTickTimer::Stop() { stopped_.store(true, std::memory_order_release); }
+
+uint64_t VirtualTickTimer::TickCount() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return tick_count_;
+}
+
+std::chrono::nanoseconds VirtualTickTimer::Elapsed() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(virtual_now_ - start_);
 }
 
 // ── SleepTickTimer ────────────────────────────────────────────────────────────

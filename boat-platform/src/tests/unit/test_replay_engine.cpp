@@ -91,6 +91,28 @@ struct MockEventStore : IEventStore {
 
 }  // namespace
 
+namespace {
+
+/* ReplayController owns no thread and no clock: in the gateway a TickAuthority
+   phase calls PumpDueRecords once per tick. Pump stands in for that authority,
+   so these tests drive replay exactly the way production does -- and, unlike
+   the sleep-and-hope they replace, they assert on an exact number of ticks. */
+struct Pump {
+  ReplayController& controller;
+  std::uint64_t tick{0};
+
+  void Ticks(std::uint64_t n) {
+    for (std::uint64_t i = 0; i < n; ++i) controller.PumpDueRecords(++tick);
+  }
+  void UntilDone(std::uint64_t budget = 200000) {
+    for (std::uint64_t i = 0; i < budget && controller.IsRunning(); ++i) {
+      controller.PumpDueRecords(++tick);
+    }
+  }
+};
+
+}  // namespace
+
 TEST_CASE("ReplayController Start/Stop lifecycle", "[unit][replay]") {
   MockTraceStore trace_store;
   MockEventStore event_store;
@@ -108,7 +130,8 @@ TEST_CASE("ReplayController Start/Stop lifecycle", "[unit][replay]") {
   controller.Start(config);
   REQUIRE_FALSE(controller.HasError());
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
@@ -132,7 +155,8 @@ TEST_CASE("ReplayController replays records in tick order", "[unit][replay]") {
   config.speed_multiplier = 1000.0;
 
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
@@ -163,7 +187,8 @@ TEST_CASE("ReplayController publishes events on EventBus", "[unit][replay]") {
   config.speed_multiplier = 1000.0;
 
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.UntilDone();
   event_bus.Dispatch();
   controller.Stop();
 
@@ -184,15 +209,35 @@ TEST_CASE("ReplayController accelerated speed finishes faster than real-time", "
   config.speed = ReplaySpeed::ACCELERATED;
   config.speed_multiplier = 1000.0;
 
-  auto start = std::chrono::steady_clock::now();
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  Pump pump{controller};
+  pump.UntilDone();
+  const auto ticks_at_1000x = pump.tick;
   controller.Stop();
-  auto elapsed = std::chrono::steady_clock::now() - start;
 
   REQUIRE_FALSE(controller.HasError());
   REQUIRE(event_store.inserted.size() == 10);
-  REQUIRE(elapsed < std::chrono::milliseconds(500));
+
+  // 10 records 10 ms apart span 90 ms of trace. The first tick anchors the
+  // pass and delivers only what is due at zero elapsed time; at 1000x the
+  // remaining 90 ms of trace all comes due on the very next one. Pull mode
+  // lets the multiplier be checked directly rather than inferred from a
+  // wall-clock stopwatch.
+  REQUIRE(ticks_at_1000x == 2);
+
+  MockEventStore slow_store;
+  ReplayController slow(trace_store, slow_store, event_bus);
+  ReplayConfig slow_config = config;
+  slow_config.speed_multiplier = 1.0;
+  slow.Start(slow_config);
+  Pump slow_pump{slow};
+  slow_pump.UntilDone();
+  slow.Stop();
+
+  REQUIRE(slow_store.inserted.size() == 10);
+  // At 1x the same 90 ms of trace needs 90 ticks of 1 ms to come due.
+  REQUIRE(slow_pump.tick >= 90);
+  REQUIRE(slow_pump.tick > ticks_at_1000x * 10);
 }
 
 TEST_CASE("ReplayController step-by-step pauses after each record", "[unit][replay]") {
@@ -210,15 +255,21 @@ TEST_CASE("ReplayController step-by-step pauses after each record", "[unit][repl
   config.speed_multiplier = 1.0;
 
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+
+  // One record per tick, then self-pause -- and further ticks change nothing
+  // until Resume(), which pull mode lets us assert exactly.
+  pump.Ticks(1);
+  REQUIRE(event_store.inserted.size() == 1);
+  pump.Ticks(5);
   REQUIRE(event_store.inserted.size() == 1);
 
   controller.Resume();
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump.Ticks(1);
   REQUIRE(event_store.inserted.size() == 2);
 
   controller.Resume();
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump.Ticks(1);
   REQUIRE(event_store.inserted.size() == 3);
 
   controller.Stop();
@@ -240,27 +291,23 @@ TEST_CASE("ReplayController Pause/Resume suspends and continues replay", "[unit]
   config.speed_multiplier = 2.0;
 
   controller.Start(config);
+  Pump pump{controller};
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  controller.Pause();
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
-
-  auto count_after_pause = event_store.inserted.size();
+  pump.Ticks(50);
+  const auto count_after_pause = event_store.inserted.size();
   REQUIRE(count_after_pause > 0);
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  controller.Pause();
+  pump.Ticks(100);
 
-  auto count_while_paused = event_store.inserted.size();
-  REQUIRE(count_while_paused <= count_after_pause + 2);
+  // Pull mode makes this exact. The old wall-clock version could only assert
+  // "no more than two extra records slipped through", because a paused thread
+  // might already have been mid-record.
+  REQUIRE(event_store.inserted.size() == count_after_pause);
 
   controller.Resume();
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  auto count_after_resume = event_store.inserted.size();
-  REQUIRE(count_after_resume > count_after_pause);
+  pump.Ticks(100);
+  REQUIRE(event_store.inserted.size() > count_after_pause);
 
   controller.Stop();
   REQUIRE_FALSE(controller.HasError());
@@ -281,10 +328,11 @@ TEST_CASE("ReplayController Seek jumps to requested tick", "[unit][replay]") {
   config.speed_multiplier = 1000.0;
 
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.Ticks(1);
   controller.Seek(150);
   controller.Resume();
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
@@ -320,7 +368,8 @@ TEST_CASE("ReplayController empty trace finishes immediately", "[unit][replay]")
   config.speed = ReplaySpeed::REAL_TIME;
 
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
@@ -343,7 +392,8 @@ TEST_CASE("ReplayController Stop unmaps trace", "[unit][replay]") {
 
   REQUIRE(trace_store.unmapped.empty());
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE(trace_store.unmapped.size() == 1);
@@ -364,9 +414,11 @@ TEST_CASE("ReplayController multiple Start calls stop previous replay", "[unit][
   ReplayConfig config2{.trace_id = "second", .speed = ReplaySpeed::REAL_TIME, .speed_multiplier = 1000.0};
 
   controller.Start(config1);
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  Pump warmup{controller};
+  warmup.Ticks(1);
   controller.Start(config2);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE(trace_store.unmapped.size() == 2);
@@ -396,7 +448,8 @@ TEST_CASE("ReplayController StartFromEvents replays events from event store", "[
   cfg.speed_multiplier = 100.0;
   cfg.start_tick = 100;
   controller.StartFromEvents(filter, cfg);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
@@ -433,7 +486,8 @@ TEST_CASE("ReplayController defaults speed_multiplier to 1.0 when zero", "[unit]
   config.start_tick = 100;
 
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
@@ -464,7 +518,8 @@ TEST_CASE("ReplayController anchors to the actual first-record tick for absolute
 
   auto start = std::chrono::steady_clock::now();
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
   auto elapsed = std::chrono::steady_clock::now() - start;
 
@@ -491,7 +546,8 @@ TEST_CASE("ReplayController re-anchors to the first-record tick on each loop pas
   config.loop_delay_ms = 5;
 
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  Pump pump{controller};
+  pump.Ticks(200);   // several passes at a 5 ms loop delay
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
@@ -549,7 +605,8 @@ TEST_CASE("ReplayController maps CAN channel to interface via ReplayConfig.buses
   config.buses = {"can0", "can1"};
 
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
@@ -595,7 +652,8 @@ TEST_CASE("ReplayController falls back to vcan0 when no buses are configured",
   // config.buses left empty (default).
 
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
@@ -654,7 +712,8 @@ TEST_CASE("ReplayController overrides Ethernet iface and MAC via ReplayConfig",
   config.mac_map["192.168.0.1"] = "02:de:ad:be:ef:02";
 
   controller.Start(config);
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  Pump pump{controller};
+  pump.UntilDone();
   controller.Stop();
 
   REQUIRE_FALSE(controller.HasError());
@@ -664,4 +723,55 @@ TEST_CASE("ReplayController overrides Ethernet iface and MAC via ReplayConfig",
   REQUIRE(captured_dst_mac[0] == 0x02);
   REQUIRE(captured_dst_mac[5] == 0x01);
   REQUIRE(captured_src_mac[5] == 0x02);
+}
+
+/* Replay's deadline maths carried the same unit confusion the PDU router did:
+   a record's trace tick is a count of *milliseconds* (FrameTimestampToMs), but
+   the offset was computed as tick_delta * tick_duration_, i.e. milliseconds
+   multiplied by nanoseconds-per-tick. Those agree only at the 1 ms default,
+   which is why no existing test caught it -- none of them set the tick
+   interval. At BOAT_NODE_TICK_US=100 a trace replayed ten times too fast.
+
+   A record's due time is a duration, so halving the tick interval must double
+   the number of ticks it takes to get there and leave the elapsed simulated
+   time unchanged. */
+TEST_CASE("Replay due-times are durations, independent of tick resolution",
+          "[unit][replay][tick-units]") {
+  auto ticks_to_finish = [](std::chrono::nanoseconds interval) {
+    MockTraceStore trace_store;
+    MockEventStore event_store;
+    boat::core::EventBus event_bus;
+    ReplayController controller(trace_store, event_store, event_bus);
+
+    // 5 records, 10 ms apart => 40 ms of trace spanned after the first.
+    trace_store.traces["paced"] = BuildSequentialTrace(0, 5);
+
+    ReplayConfig config;
+    config.trace_id = "paced";
+    config.speed = ReplaySpeed::REAL_TIME;
+    config.speed_multiplier = 1.0;
+
+    controller.SetTickInterval(interval);
+    controller.Start(config);
+    Pump pump{controller};
+    pump.UntilDone();
+
+    REQUIRE(event_store.inserted.size() == 5);
+    return pump.tick;
+  };
+
+  const auto at_1ms   = ticks_to_finish(std::chrono::milliseconds(1));
+  const auto at_100us = ticks_to_finish(std::chrono::microseconds(100));
+
+  INFO("1ms=" << at_1ms << " ticks, 100us=" << at_100us << " ticks");
+
+  // The first tick anchors the pass and delivers only what is due at zero
+  // elapsed time, so discount it before converting ticks back to a duration.
+  const auto span_1ms_us   = (at_1ms   - 1) * 1000;
+  const auto span_100us_us = (at_100us - 1) * 100;
+
+  // Same trace, same 40 ms, whatever the tick resolution. Before the fix the
+  // 100 us run covered the trace in a tenth of the time.
+  REQUIRE(span_1ms_us == span_100us_us);
+  REQUIRE(span_1ms_us == 40000);
 }

@@ -186,6 +186,7 @@ extern "C" BoatPlugin* boat_plugin_create() {
     vt.on_frame            = &someip_on_frame;
     vt.set_frame_publisher = &someip_set_frame_publisher;
     vt.declared_buses      = &someip_declared_buses;
+    vt.set_time_source     = nullptr;
     return vt;
   }();
 

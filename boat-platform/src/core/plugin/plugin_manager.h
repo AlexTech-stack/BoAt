@@ -62,6 +62,11 @@ class PluginManager {
   void SetPduPublisher(PduPublishFn fn);
   void SetFramePublisher(FramePublishFn fn);
 
+  /* v9: the clock plugins read instead of calling a system clock. Set this
+     before Load() -- it is wired into each plugin as it loads. */
+  using TimeSourceFn = std::function<std::uint64_t()>;
+  void SetTimeSource(TimeSourceFn fn);
+
   PluginHandle Load(const std::string& so_path, const std::string& config_json);
   void Unload(const std::string& name);
   void TickAll(std::uint64_t tick);
@@ -92,6 +97,7 @@ class PluginManager {
   BusPublishFn bus_publisher_fn_;
   PduPublishFn pdu_publisher_fn_;
   FramePublishFn frame_publisher_fn_;
+  TimeSourceFn   time_source_fn_;
 
   mutable std::mutex services_mutex_;
   std::map<std::string, void*> services_;

@@ -8,7 +8,7 @@
 
 #include "boat/frame.h"
 
-#define BOAT_PLUGIN_ABI_VERSION 8
+#define BOAT_PLUGIN_ABI_VERSION 9
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,7 +42,27 @@ typedef void (*BoatPduPublishFn)(void* publisher_ctx, const BoatPduFrame* frame)
    The bus is independent of any simulation lifecycle. */
 typedef void (*BoatBusPublishFn)(void* publisher_ctx, const char* name, double value);
 
-/* ── v8 Plugin VTable ────────────────────────────────────────────────── */
+/* Host → Plugin: monotonic nanoseconds on the clock the *host* controls.
+   Real time normally; virtual time when the gateway is running a virtual
+   clock (BOAT_TIME_SOURCE=virtual).
+
+   A plugin that needs time MUST read it here rather than calling
+   steady_clock::now() or clock_gettime() itself. Two reasons:
+
+     - Determinism. A plugin reading a system clock reintroduces exactly the
+       nondeterminism the single tick authority removes: its behaviour then
+       depends on host scheduling rather than on the run's inputs.
+     - Units. Every component that inferred elapsed time on its own has got it
+       wrong at least once -- the PDU router read a tick counter as
+       milliseconds, replay multiplied milliseconds by nanoseconds-per-tick,
+       and the C++ test harness assumed 10 ms per tick. Handing plugins a
+       nanosecond clock leaves nothing to infer.
+
+   The value is monotonic and starts near zero when the gateway's tick
+   authority starts; treat it as an interval clock, not a wall date. */
+typedef uint64_t (*BoatNowNsFn)(void* host_ctx);
+
+/* ── v9 Plugin VTable ────────────────────────────────────────────────── */
 
 typedef struct BoatPluginVTable {
   /* Required — parse config JSON, return 0 on success. */
@@ -75,6 +95,11 @@ typedef struct BoatPluginVTable {
      Returns a JSON array of bus type names, e.g. "[\"can\",\"eth\"]".
      "" or NULL means "accept all". */
   BoatDeclaredBusesFn declared_buses;
+
+  /* v9, optional — host hands the plugin its clock. Called once, after
+     initialize() succeeds and before the first tick. Set to NULL if the
+     plugin never needs to know the time. See BoatNowNsFn. */
+  void (*set_time_source)(void* ctx, BoatNowNsFn fn, void* host_ctx);
 } BoatPluginVTable;
 
 typedef struct BoatPlugin {

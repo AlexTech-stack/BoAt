@@ -92,6 +92,8 @@ struct ProbePlugin {
   void* frame_publisher_ctx = nullptr;
   BoatBusPublishFn bus_publish_fn = nullptr;
   void* bus_publisher_ctx = nullptr;
+  BoatNowNsFn now_ns_fn = nullptr;   // v9: host clock
+  void* now_ns_ctx = nullptr;
 
   // state (guarded by mu; never held across frame_publish_fn)
   std::mutex mu;
@@ -255,6 +257,13 @@ void probe_on_frame(void* ctx, const BoatFrame* frame) {
 void probe_on_tick(void* ctx, uint64_t tick) {
   auto* p = static_cast<ProbePlugin*>(ctx);
 
+  // v9: surface the host clock so a test (or an operator watching the signal
+  // bus) can confirm the plugin was given one and that it advances.
+  if (p->now_ns_fn != nullptr && p->bus_publish_fn != nullptr) {
+    p->bus_publish_fn(p->bus_publisher_ctx, "probe.now_ns",
+                      static_cast<double>(p->now_ns_fn(p->now_ns_ctx)));
+  }
+
   // Phase 1: decide whether to emit a probe (under lock, no publish inside).
   bool do_emit = false;
   uint16_t seq = 0;
@@ -348,6 +357,15 @@ void probe_set_bus_publisher(void* ctx, BoatBusPublishFn fn,
   p->bus_publisher_ctx = publisher_ctx;
 }
 
+/* v9 conformance check: the host must hand every plugin a clock rather than
+   leave it to call one itself. Republishing it on the bus each tick makes the
+   wiring observable, which is the point of this plugin. */
+void probe_set_time_source(void* ctx, BoatNowNsFn fn, void* host_ctx) {
+  auto* p = static_cast<ProbePlugin*>(ctx);
+  p->now_ns_fn  = fn;
+  p->now_ns_ctx = host_ctx;
+}
+
 const char* probe_declared_buses(void* ctx) {
   auto* p = static_cast<ProbePlugin*>(ctx);
   return p->declared_str.c_str();
@@ -385,6 +403,7 @@ extern "C" BoatPlugin* boat_plugin_create() {
     vt.on_frame            = &probe_on_frame;
     vt.set_frame_publisher = &probe_set_frame_publisher;
     vt.declared_buses      = &probe_declared_buses;
+    vt.set_time_source     = &probe_set_time_source;
     return vt;
   }();
 

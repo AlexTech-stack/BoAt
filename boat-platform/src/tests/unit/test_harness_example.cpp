@@ -54,11 +54,15 @@ TEST_CASE("TestHarness advances ticks", "[unit][test_harness]") {
   REQUIRE(harness.CurrentTick() == 0);
 
   harness.Advance(std::chrono::milliseconds(50));
-  REQUIRE(harness.CurrentTick() >= 5);  // 50ms / 10ms per tick = 5 ticks
+  REQUIRE(harness.CurrentTick() == 50);  // 1 ms per tick, matching the gateway default
 
   auto tick1 = harness.CurrentTick();
   harness.Advance(std::chrono::milliseconds(100));
-  REQUIRE(harness.CurrentTick() > tick1);
+  REQUIRE(harness.CurrentTick() == tick1 + 100);
+
+  // The tick-count primitive is exact and carries no ms assumption.
+  harness.AdvanceTicks(7);
+  REQUIRE(harness.CurrentTick() == tick1 + 107);
 }
 
 TEST_CASE("TestHarness Ethernet send", "[unit][test_harness]") {

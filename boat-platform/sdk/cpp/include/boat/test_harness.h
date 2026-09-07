@@ -342,13 +342,24 @@ class TestHarness {
 
   // ── Time ───────────────────────────────────────────────────────────────
 
-  void Advance(std::chrono::milliseconds ms) {
-    uint64_t ticks = std::max(uint64_t(1), uint64_t(ms.count()) / 10);
-    for (uint64_t i = 0; i < ticks; ++i) {
+  /* Drive n ticks. This is the primitive: a tick is a dimensionless counter
+     (SimClock carries no time unit), so a tick count is the only unambiguous
+     way to advance the harness. Prefer it in new tests. */
+  void AdvanceTicks(uint64_t n) {
+    for (uint64_t i = 0; i < n; ++i) {
       sim_->clock().Step(1);
       sim_->plugin_manager().TickAll(sim_->clock().tick());
       pdu_router_.OnTick(sim_->clock().tick());
     }
+  }
+
+  /* Convenience wrapper assuming 1 ms per tick -- the gateway's compiled-in
+     default (BOAT_NODE_TICK_MS/_US can change it, and this wrapper does not
+     track that). It previously assumed 10 ms per tick, which matched no other
+     tick domain in the system and made harness tests run cyclic behavior 10x
+     slower than the real gateway. Always advances at least one tick. */
+  void Advance(std::chrono::milliseconds ms) {
+    AdvanceTicks(std::max(uint64_t(1), uint64_t(ms.count())));
   }
 
   uint64_t CurrentTick() const { return sim_->clock().tick(); }

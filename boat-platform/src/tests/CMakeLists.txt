@@ -12,7 +12,8 @@ FetchContent_MakeAvailable(Catch2)
 include(Catch)
 
 add_executable(boat_unit_tick_scheduler unit/test_tick_scheduler.cpp)
-target_link_libraries(boat_unit_tick_scheduler PRIVATE boat_core Catch2::Catch2WithMain)
+target_include_directories(boat_unit_tick_scheduler PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
+target_link_libraries(boat_unit_tick_scheduler PRIVATE boat_core boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_tick_scheduler)
 
 add_executable(boat_unit_signal_router unit/test_signal_router.cpp)
@@ -149,9 +150,90 @@ target_link_libraries(
 )
 catch_discover_tests(boat_integration_replay_service)
 
+# A plugin reporting the previous ABI version, so the loader's rejection path
+# can be tested rather than assumed.
+add_library(stale_abi_plugin MODULE fixtures/stale_abi_plugin.cpp)
+target_include_directories(stale_abi_plugin PRIVATE ${CMAKE_SOURCE_DIR}/sdk/cpp/include)
+set_target_properties(stale_abi_plugin PROPERTIES PREFIX "" SUFFIX ".so")
+
+add_executable(boat_unit_can_tp_tick unit/test_can_tp_tick.cpp)
+target_include_directories(boat_unit_can_tp_tick PRIVATE
+  ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/sdk/cpp/include)
+target_link_libraries(boat_unit_can_tp_tick PRIVATE boat_core Catch2::Catch2WithMain)
+if(TARGET can_tp)
+  add_dependencies(boat_unit_can_tp_tick can_tp)
+  target_compile_definitions(boat_unit_can_tp_tick PRIVATE
+    CAN_TP_SO="$<TARGET_FILE:can_tp>")
+endif()
+catch_discover_tests(boat_unit_can_tp_tick)
+
+add_executable(boat_unit_plugin_time_source unit/test_plugin_time_source.cpp)
+target_include_directories(boat_unit_plugin_time_source PRIVATE
+  ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/hil)
+target_link_libraries(boat_unit_plugin_time_source PRIVATE boat_core boat_hil Catch2::Catch2WithMain)
+if(TARGET probe)
+  add_dependencies(boat_unit_plugin_time_source probe)
+  target_compile_definitions(boat_unit_plugin_time_source PRIVATE
+    PROBE_SO="$<TARGET_FILE:probe>")
+endif()
+add_dependencies(boat_unit_plugin_time_source stale_abi_plugin)
+target_compile_definitions(boat_unit_plugin_time_source PRIVATE
+  STALE_ABI_PLUGIN_SO="$<TARGET_FILE:stale_abi_plugin>")
+catch_discover_tests(boat_unit_plugin_time_source)
+
+add_executable(boat_unit_tick_authority unit/test_tick_authority.cpp)
+target_include_directories(boat_unit_tick_authority PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
+target_link_libraries(boat_unit_tick_authority PRIVATE boat_hil boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_tick_authority)
+
+add_executable(boat_unit_tick_timer unit/test_tick_timer.cpp)
+target_include_directories(boat_unit_tick_timer PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
+target_link_libraries(boat_unit_tick_timer PRIVATE boat_hil boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_tick_timer)
+
+add_executable(boat_unit_pdu_tick_units unit/test_pdu_tick_units.cpp)
+target_include_directories(boat_unit_pdu_tick_units PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/hil
+)
+target_link_libraries(boat_unit_pdu_tick_units PRIVATE boat_core boat_hil Catch2::Catch2WithMain)
+if(TARGET pdu_router)
+  add_dependencies(boat_unit_pdu_tick_units pdu_router)
+  target_compile_definitions(boat_unit_pdu_tick_units PRIVATE
+    PDU_ROUTER_SO="$<TARGET_FILE:pdu_router>")
+endif()
+catch_discover_tests(boat_unit_pdu_tick_units)
+
 add_executable(boat_determinism_seed determinism/test_seed.cpp)
 target_link_libraries(boat_determinism_seed PRIVATE boat_core Catch2::Catch2WithMain)
 catch_discover_tests(boat_determinism_seed)
+
+# System-level counterpart to boat_determinism_seed: drives a real trace through
+# ReplayController -> FrameSink -> CanBusRegistry -> driver, twice, and compares
+# what reached the wire. Unlike the seed test it links the replay and HIL stacks,
+# so it can actually observe the property README.md advertises.
+add_executable(
+  boat_determinism_replay
+  determinism/test_replay_determinism.cpp
+  ../gateway/grpc_gateway/frame_sink.cpp
+)
+target_include_directories(boat_determinism_replay PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/hil
+  ${BOAT_PROTO_GENERATED_DIR}
+)
+target_link_libraries(
+  boat_determinism_replay
+  PRIVATE
+    boat_core
+    boat_hil
+    boat_store
+    boat_replay
+    boat_proto_generated
+    protobuf::libprotobuf
+    Catch2::Catch2WithMain
+)
+catch_discover_tests(boat_determinism_replay)
 
 add_executable(boat_unit_ethernet_bus_registry unit/test_ethernet_bus_registry.cpp)
 target_include_directories(boat_unit_ethernet_bus_registry PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
