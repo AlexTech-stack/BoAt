@@ -132,6 +132,7 @@ Key env vars (`src/gateway/grpc_gateway/main.cpp` is the authoritative list):
 - `BOAT_GRPC_PORT` — default 50051; set to run more than one gateway on a host. The gateway **refuses to start** if the port is taken rather than silently sharing it via gRPC's `SO_REUSEPORT`.
 - `BOAT_TLS_CERT` + `BOAT_TLS_KEY` — opt-in TLS, PEM paths, **must be set together**; `BOAT_TLS_CLIENT_CA` additionally requires client certs (mTLS). Note the Python `BoAtClient` has no TLS support yet — it builds insecure channels only, so a TLS-enabled gateway is not reachable from the SDK/CLI as-is.
 - `BOAT_HIL_ENABLED=1` — HIL tests
+- `BOAT_TIME_SOURCE=realtime|virtual` — selects the `TickTimer` backend (`src/hil/pdu/tick_timer.cpp`). **Not yet honoured by the gateway**: both production call sites (the node tick thread and `ReplayController`) pass `TimeSource::kRealTime` explicitly, because nothing coordinates the two clocks yet and selecting `virtual` in only one of them would spin that loop rather than make anything deterministic. The `VirtualTickTimer` backend and this flag exist as the seam for that work; anything that parses the env today defaults to real time on unset, empty, or unrecognised values.
 
 ## Python CLI / SDK
 

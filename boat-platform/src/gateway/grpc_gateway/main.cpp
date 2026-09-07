@@ -452,7 +452,11 @@ int main() {
       }
     }
 
-    auto timer = boat::hil::TickTimer::Create(tick_ns);
+    // Pinned to real time: the virtual backend exists (BOAT_TIME_SOURCE) but
+    // nothing yet coordinates this thread with the replay clock, so selecting
+    // it here would only spin this loop as fast as the CPU allows. The single
+    // tick authority that makes virtual time meaningful flips this over.
+    auto timer = boat::hil::TickTimer::Create(tick_ns, boat::hil::TimeSource::kRealTime);
     g_node_tick_running.store(true, std::memory_order_release);
     std::thread([&node_manager, timer = std::move(timer)]() {
       std::uint64_t tick = 0;

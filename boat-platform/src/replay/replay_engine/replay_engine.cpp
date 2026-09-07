@@ -149,7 +149,11 @@ void ReplayController::Start(const ReplayConfig& config) {
   }
 
   ParseTickDurationFromEnv();
-  tick_timer_ = boat::hil::TickTimer::Create(tick_duration_);
+  // Pinned to real time -- see the matching note on the node tick thread in
+  // main.cpp. Replay pacing and plugin ticks have to move to one clock together
+  // or not at all; flipping either alone changes nothing.
+  tick_timer_ = boat::hil::TickTimer::Create(tick_duration_,
+                                             boat::hil::TimeSource::kRealTime);
   replay_base_time_ = std::chrono::steady_clock::now();
   replay_base_tick_ = config.start_tick;
 

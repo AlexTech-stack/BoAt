@@ -598,6 +598,27 @@ dependency above.
 - Proto stubs in `sdk/python/boat/stubs/boat/v1/` must be regenerated when proto files change (`generate_stubs.sh`).
 - iceoryx2 requires `cargo` (Rust) at build time only; the resulting shared-memory IPC is used at runtime for large payloads (>4KB).
 - HIL tests need `BOAT_HIL_ENABLED=1` and a real or virtual CAN interface (`vcan0`).
+
+### Tick timer backends
+
+`boat::hil::TickTimer` (`src/hil/pdu/tick_timer.{h,cpp}`) has two live backends, chosen by
+`TickTimer::Create`:
+
+- `TimerfdTickTimer` — Linux timerfd, drift-free absolute scheduling. The default, and what
+  every production caller uses today.
+- `VirtualTickTimer` — a logical clock. `WaitForNextTick()` advances virtual now by one
+  interval and returns immediately; `WaitUntil(deadline)` jumps virtual now to the deadline.
+  Virtual now is anchored to a real `steady_clock` reading taken in `Init()`, so a caller that
+  derives deadlines from its own `steady_clock::now()` still lands on sensible offsets.
+
+`Create(interval)` consults `BOAT_TIME_SOURCE` (`realtime` by default; unset, empty, or
+unrecognised values all yield real time — a typo must never quietly stop a HIL run pacing real
+hardware). `Create(interval, TimeSource)` ignores the environment.
+
+**The gateway does not honour `BOAT_TIME_SOURCE` yet.** Both production call sites — the node
+tick thread in `main.cpp` and `ReplayController::Start` — pass `TimeSource::kRealTime`
+explicitly and say why in a comment. Replay pacing and plugin ticks have to move to one clock
+together; switching either alone just spins that loop. Covered by `boat_unit_tick_timer`.
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`.
