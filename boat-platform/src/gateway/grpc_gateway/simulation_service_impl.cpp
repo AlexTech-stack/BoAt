@@ -199,7 +199,7 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
         [this](std::uint64_t tick) { sim_.plugin_manager().TickAll(tick); });
 
     sim_.scheduler().Start();   // no-op if already running (e.g. PAUSED→RUNNING)
-    sim_.scheduler().Resume();  // clears paused_ so coordinator loop unblocks
+    sim_.scheduler().Resume();  // clears paused_ so the tick phase starts ticking
     FillSimulation(request->simulation_id(), scenario, response->mutable_simulation());
     return grpc::Status::OK;
   } catch (const std::exception& ex) {

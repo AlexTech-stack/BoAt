@@ -626,7 +626,10 @@ fixed, ordered list of phases every tick, each to completion, on its own thread.
 registers two:
 
 1. `node_plugins` — `node_manager.TickAll(tick)`, which drives the PDU transmission engine
-2. `replay` — `ReplayController::PumpDueRecords(tick)`
+2. `sim_plugins` — `TickScheduler::TickIfRunning()`, the deterministic tick pipeline for a
+   running scenario (reseed → `EventBus::Dispatch` → plugin ticks → `SimClock::Step`); a no-op
+   when no simulation is active
+3. `replay` — `ReplayController::PumpDueRecords(tick)`
 
 The gateway prints the interval and phase order at startup
 (`[Gateway] Tick authority: 1000 us/tick, phases: node_plugins -> replay`).
@@ -650,6 +653,16 @@ Consequences worth knowing:
   running thread had already begun".
 - Phases run in registration order and a throwing phase is caught (see `PhaseErrorCount()`),
   so one bad plugin cannot strand replay.
+
+`TickScheduler` (`src/core/scheduler/`) likewise owns no thread and no clock any more. Its
+coordinator loop is gone, and so is the worker pool behind it: `ExecuteTick` used to enqueue
+an empty lambda onto that pool and wait for it, which barriered against nothing, since
+`EnqueueTask` had no other caller. `Start`/`Pause`/`Resume`/`Stop` now only set the state the
+`sim_plugins` phase reads; `Step(n)` advances ticks directly for `boat sim step`. Both paths
+run the same pipeline under one `tick_mutex_`, which also closes a latent race: two threads
+computing `clock_.tick() + 1` concurrently could claim the same tick, and
+`DeterminismEngine::BeforeTick` throws on a non-increasing tick. Simulation ticks now advance
+at `BOAT_NODE_TICK_MS`/`_US` rather than a hard-coded 1 ms.
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`.

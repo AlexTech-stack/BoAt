@@ -12,7 +12,8 @@ FetchContent_MakeAvailable(Catch2)
 include(Catch)
 
 add_executable(boat_unit_tick_scheduler unit/test_tick_scheduler.cpp)
-target_link_libraries(boat_unit_tick_scheduler PRIVATE boat_core Catch2::Catch2WithMain)
+target_include_directories(boat_unit_tick_scheduler PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
+target_link_libraries(boat_unit_tick_scheduler PRIVATE boat_core boat_hil Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_tick_scheduler)
 
 add_executable(boat_unit_signal_router unit/test_signal_router.cpp)

@@ -84,19 +84,23 @@ boat --json frame list-ifaces
 
 The gateway runs **two independent `PluginManager` instances**, each with a separate tick domain:
 
-| Manager | Created in | Lifecycle | Tick source | Plugin set |
-|---|---|---|---|---|
-| `node_manager` | `main.cpp:170` | Always-on (gateway lifetime) | Dedicated background thread, configurable interval via `BOAT_NODE_TICK_MS`/`US` | Plugins from `BOAT_NODE_PLUGINS` env var (e.g. CanTp, SOME/IP) |
-| `plugin_manager` | `main.cpp:78` | Per-simulation (loaded/unloaded via gRPC) | Simulation `TickScheduler` coordinator (1ms tick via `on_tick_hook`) | Scenario-declared plugins from `StartSimulation` RPC |
+| Manager | Lifecycle | Tick phase | Plugin set |
+|---|---|---|---|
+| `node_manager` | Always-on (gateway lifetime) | `node_plugins` | Plugins from `BOAT_NODE_PLUGINS` env var (e.g. CanTp, SOME/IP) |
+| `plugin_manager` | Per-simulation (loaded/unloaded via gRPC) | `sim_plugins`, via `TickScheduler::TickIfRunning` | Scenario-declared plugins from `StartSimulation` RPC |
 
-This "double-tick" design serves two distinct use cases:
+Both are ordered phases of one `TickAuthority`, so the interval is the same for
+both (`BOAT_NODE_TICK_MS`/`_US`) and the order is fixed:
+`node_plugins` → `sim_plugins` → `replay`. This replaced an earlier "double-tick"
+design in which each manager had its own wall-clock thread and the two never
+agreed; the split now serves two distinct **lifetimes**, not two clocks:
 
 - **Node plugins** (e.g. CAN Transport Protocol) must stay alive and responsive on the bus regardless of whether any simulation is running. If a CAN diagnostic request arrives, the CanTp plugin needs to react even with no active scenario.
-- **Simulation plugins** are loaded per-scenario, ticked deterministically by the simulation scheduler, and fully torn down when the simulation stops. They are part of the reproducible simulation state.
+- **Simulation plugins** are loaded per-scenario, run the deterministic tick pipeline (reseed → dispatch → plugin ticks → advance `SimClock`), and are fully torn down when the simulation stops. They are part of the reproducible simulation state.
 
 Both managers use the same C ABI (`BoatPluginVTable`) and can load the same `.so` files. A plugin can be loaded into both managers simultaneously (e.g. a vehicle dynamics node that runs persistently while a test simulation loads additional signal-processing plugins).
 
-The node tick thread also ticks the `pdu_router` plugin (via its `on_tick`), driving the PDU transmission engine so scheduled CAN/Ethernet frames are sent on time even outside simulation. As of ABI v8 the PDU router is itself a node plugin (`pdu_router.so`) rather than gateway-core logic.
+The `node_plugins` phase also ticks the `pdu_router` plugin (via its `on_tick`), driving the PDU transmission engine so scheduled CAN/Ethernet frames are sent on time even outside simulation. As of ABI v8 the PDU router is itself a node plugin (`pdu_router.so`) rather than gateway-core logic.
 
 **gRPC surface follows the same split.** `PluginService` (`boat plugin register`) only ever talks to `plugin_manager` (the simulation-scoped one) — node plugins loaded via `BOAT_NODE_PLUGINS` are invisible to it. `NodePluginService` (`ListNodePlugins`/`GetNodePluginInfo`/`UnloadNodePlugin`) exposes `node_manager` instead — no register RPC, since node plugins are only ever loaded at gateway startup today. `boat plugin list` queries both and merges them into one table with a `scope` column so you don't need to know which manager a given plugin lives in; `boat plugin unload <id> --scope {sim,node}` requires an explicit scope, and `--scope node` additionally requires `--yes` since it's immediate and gateway-wide, not scoped to any simulation.
 

@@ -469,6 +469,12 @@ int main() {
       node_manager.TickAll(tick);
       // PduRouter plugin handles its own OnTick via PluginManager::TickAll
     });
+    // Scenario-scoped plugins run the deterministic tick pipeline (reseed,
+    // dispatch, plugin ticks, advance SimClock). A no-op unless a simulation
+    // is running, which is the common case for a bare gateway.
+    tick_authority.AddPhase("sim_plugins", [&sim](std::uint64_t) {
+      sim.scheduler().TickIfRunning();
+    });
     tick_authority.AddPhase("replay", [&replay_controller](std::uint64_t tick) {
       replay_controller.PumpDueRecords(tick);
     });
