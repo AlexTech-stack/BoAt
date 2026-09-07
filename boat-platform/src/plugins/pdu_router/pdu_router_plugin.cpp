@@ -7,24 +7,61 @@
 #include <core/pdu_router_interface.h>
 #include <core/plugin/plugin_manager.h>
 
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
 
+/* Microseconds per node tick, matching how the gateway sizes its tick timer
+   (BOAT_NODE_TICK_US wins over BOAT_NODE_TICK_MS; compiled-in default 1 ms).
+   ReplayController::ParseTickDurationFromEnv does the same thing for the same
+   reason -- every component that has to turn a tick count into elapsed time
+   must agree on how long a tick is. */
+std::uint64_t ParseTickMicrosFromEnv() {
+  if (const char* us = std::getenv("BOAT_NODE_TICK_US")) {
+    char* end = nullptr;
+    const auto v = std::strtoull(us, &end, 10);
+    if (end != us && v > 0) return v;
+  }
+  if (const char* ms = std::getenv("BOAT_NODE_TICK_MS")) {
+    char* end = nullptr;
+    const auto v = std::strtoull(ms, &end, 10);
+    if (end != ms && v > 0) return v * 1000ULL;
+  }
+  return 1000ULL;
+}
+
 struct PduRouterPlugin {
   boat::hil::PduRouter router;
+  /* PluginManager::TickAll hands out a raw tick counter, but
+     PduRouter::OnTick reads its argument as elapsed *milliseconds* -- it
+     compares against PduSchedule::cycle_ms and PduDeadlineConfig::cycle_time_ms.
+     The two coincide only at a 1 ms tick. Without this conversion a gateway
+     started with BOAT_NODE_TICK_US=100 transmits every cyclic route ten times
+     faster than configured and trips every deadline monitor ten times early. */
+  std::uint64_t tick_us{1000};
 };
 
 int pdu_router_initialize(void* ctx, const char* /*config_json*/) {
   auto* p = static_cast<PduRouterPlugin*>(ctx);
   if (!p) return -1;
+  p->tick_us = ParseTickMicrosFromEnv();
   return 0;
 }
 
 void pdu_router_on_tick(void* ctx, uint64_t tick) {
   auto* p = static_cast<PduRouterPlugin*>(ctx);
   if (!p) return;
-  p->router.OnTick(tick);
+  // Tick count -> elapsed milliseconds; see PduRouterPlugin::tick_us.
+  //
+  // Caveat: this reads the *node* tick interval from the environment. An
+  // instance loaded into the simulation-scoped PluginManager is ticked by
+  // TickScheduler at a fixed 1 ms instead, so the two disagree if
+  // BOAT_NODE_TICK_US is set and the router is also scenario-scoped. Fixing
+  // that properly needs the host to hand plugins their tick duration across
+  // the ABI rather than each plugin guessing from env.
+  p->router.OnTick(tick * p->tick_us / 1000ULL);
 }
 
 void pdu_router_shutdown(void* ctx) {

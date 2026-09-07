@@ -149,6 +149,19 @@ target_link_libraries(
 )
 catch_discover_tests(boat_integration_replay_service)
 
+add_executable(boat_unit_pdu_tick_units unit/test_pdu_tick_units.cpp)
+target_include_directories(boat_unit_pdu_tick_units PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/hil
+)
+target_link_libraries(boat_unit_pdu_tick_units PRIVATE boat_core boat_hil Catch2::Catch2WithMain)
+if(TARGET pdu_router)
+  add_dependencies(boat_unit_pdu_tick_units pdu_router)
+  target_compile_definitions(boat_unit_pdu_tick_units PRIVATE
+    PDU_ROUTER_SO="$<TARGET_FILE:pdu_router>")
+endif()
+catch_discover_tests(boat_unit_pdu_tick_units)
+
 add_executable(boat_determinism_seed determinism/test_seed.cpp)
 target_link_libraries(boat_determinism_seed PRIVATE boat_core Catch2::Catch2WithMain)
 catch_discover_tests(boat_determinism_seed)
