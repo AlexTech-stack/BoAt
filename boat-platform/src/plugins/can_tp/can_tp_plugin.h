@@ -10,11 +10,9 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -55,19 +53,18 @@ struct NsduConnection {
   uint8_t  tx_bs_remaining{0};    // BS remaining before needing next FC
   uint8_t  tx_bs_original{0};     // BS from the received FC (0 = unlimited)
   uint32_t tx_stmin_us{0};        // STmin from peer in microseconds
-  std::chrono::steady_clock::time_point tx_next_send_time;
+  std::uint64_t tx_next_send_time{0};   // host-clock ns; see CanTpPlugin::NowNs
 
   // RX CF tracking for re-FC (BS > 0)
   uint32_t rx_cf_count{0};
 
-  // ISO 15765-2 N_Bs/N_Cr watchdog deadlines. Set on entry to TX_WAIT_FC /
-  // RX_WAIT_CF (and refreshed on every accepted CF for N_Cr); checked by the
-  // TX pacing thread's poll loop, which already scans every connection on a
-  // tight interval regardless of tick configuration -- see
-  // can_tp_tx_thread_func in can_tp_plugin.cpp. Only meaningful while the
-  // corresponding state is WAIT_FC / WAIT_CF.
-  std::chrono::steady_clock::time_point tx_fc_deadline;
-  std::chrono::steady_clock::time_point rx_cf_deadline;
+  // ISO 15765-2 N_Bs/N_Cr watchdog deadlines, in host-clock nanoseconds.
+  // Set on entry to TX_WAIT_FC / RX_WAIT_CF (and refreshed on every accepted
+  // CF for N_Cr); checked once per tick by ServicePending() in
+  // can_tp_plugin.cpp. Only meaningful while the corresponding state is
+  // WAIT_FC / WAIT_CF.
+  std::uint64_t tx_fc_deadline{0};
+  std::uint64_t rx_cf_deadline{0};
 };
 
 /* CanTp plugin state.
@@ -89,15 +86,22 @@ struct CanTpPlugin : public boat::core::ICanTp {
   // instead of colliding on a single fixed "can_tp".
   std::string         service_name;
 
-  // TX pacing thread + synchronization. Also guards the RX path in
-  // tp_on_frame (SF/FF/CF handling) -- see can_tp_plugin.cpp for why: it's
-  // effectively a general per-plugin connection-state mutex now, not just a
-  // TX-thread lock, so that Remove() erasing a connection can never race a
-  // concurrent on_frame() dereferencing the same NsduConnection*.
-  std::thread         tx_thread;
+  // Connection-state mutex. Guards `connections` for both the TX pacing work
+  // done on the tick (ServicePending) and the RX path in tp_on_frame (SF/FF/CF
+  // handling), so Remove() erasing a connection can never race a concurrent
+  // on_frame() dereferencing the same NsduConnection*.
   mutable std::mutex  tx_mutex;
-  std::condition_variable tx_cv;
-  std::atomic<bool>   tx_stop{false};
+
+  // v9 host clock. CanTp used to run its own TX thread against
+  // steady_clock::now(), which put its STmin pacing and N_Bs/N_Cr watchdogs on
+  // a time domain nothing else shared -- the plugin was invisible to the tick
+  // authority and reintroduced host-scheduling dependence into every ISO-TP
+  // timeout. It is now driven from on_tick and reads time from the host, so a
+  // virtual clock reaches it. Falls back to steady_clock when no host supplied
+  // one, so the plugin still works when loaded standalone.
+  BoatNowNsFn         now_ns_fn{nullptr};
+  void*               now_ns_ctx{nullptr};
+  [[nodiscard]] std::uint64_t NowNs() const;
 
   // Decoded-payload subscribers (boat can-tp subscribe), separate from
   // tx_mutex so invoking callbacks never happens while holding the

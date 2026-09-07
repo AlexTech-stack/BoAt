@@ -156,6 +156,17 @@ add_library(stale_abi_plugin MODULE fixtures/stale_abi_plugin.cpp)
 target_include_directories(stale_abi_plugin PRIVATE ${CMAKE_SOURCE_DIR}/sdk/cpp/include)
 set_target_properties(stale_abi_plugin PROPERTIES PREFIX "" SUFFIX ".so")
 
+add_executable(boat_unit_can_tp_tick unit/test_can_tp_tick.cpp)
+target_include_directories(boat_unit_can_tp_tick PRIVATE
+  ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/sdk/cpp/include)
+target_link_libraries(boat_unit_can_tp_tick PRIVATE boat_core Catch2::Catch2WithMain)
+if(TARGET can_tp)
+  add_dependencies(boat_unit_can_tp_tick can_tp)
+  target_compile_definitions(boat_unit_can_tp_tick PRIVATE
+    CAN_TP_SO="$<TARGET_FILE:can_tp>")
+endif()
+catch_discover_tests(boat_unit_can_tp_tick)
+
 add_executable(boat_unit_plugin_time_source unit/test_plugin_time_source.cpp)
 target_include_directories(boat_unit_plugin_time_source PRIVATE
   ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/hil)

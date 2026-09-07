@@ -590,8 +590,8 @@ dependency above.
     time for itself has had that wrong at least once (pdu_router read a tick counter as
     milliseconds, replay multiplied milliseconds by nanoseconds-per-tick, TestHarness assumed
     10 ms per tick). The gateway supplies `TickAuthority::NowNs()`.
-    **Still to convert: `can_tp` and `tcp` read `steady_clock::now()` directly on their own
-    threads and pass NULL here.**
+    `can_tp` uses it. **Still to convert: `tcp` reads `steady_clock::now()` directly on its
+    own threads and passes NULL here.**
   - `PduRouter` is a plugin (`pdu_router.so`), loaded by the gateway
   - `boat plugin list` shows loaded plugins from **both** `PluginManager` instances (sim-scoped + always-on `node_manager`) in one table with a `scope` column — `PluginService` (register/list/info/unload) only ever reaches the sim-scoped one; `NodePluginService` (list/info/unload, no register) reaches `node_manager`. `boat plugin info|unload` need `--scope {sim,node}`; `--scope node` unload additionally needs `--yes`. See `README.md`'s "Dual PluginManager".
   - `FrameService` gRPC provides unified send/subscribe for all bus types
@@ -851,6 +851,22 @@ boat can-tp list-sessions
 # attempt that didn't complete
 boat can-tp subscribe-errors --nsdu-id 0x7E0
 ```
+
+**Tick-driven, not thread-driven.** CanTp has no TX thread. `tp_on_tick` calls
+`can_tp_service_pending()`, which does one pass: send every CF whose STmin has
+elapsed, then fire any N_Bs/N_Cr deadline that has passed. Time comes from the
+v9 host clock (`CanTpPlugin::NowNs()`), falling back to `steady_clock` only when
+the plugin is loaded without a host that supplies one. Consequences:
+
+- STmin resolution is the tick interval. A connection asking for STmin below
+  `BOAT_NODE_TICK_MS`/`_US` gets the tick interval instead; set
+  `BOAT_NODE_TICK_US` if you need finer separation.
+- STmin=0 still streams. `tp_on_tick` drains while CFs remain immediately due,
+  bounded by `kMaxCfBurstPerTick` (256) so one large transfer cannot stall the
+  `sim_plugins` and `replay` phases that run after it in the same tick.
+- ISO-TP timeouts are now testable without waiting. `boat_unit_can_tp_tick`
+  trips N_Bs by assigning to a variable rather than sleeping for the 100 ms
+  deadline, and the whole file runs in microseconds.
 
 **N_Bs/N_Cr watchdogs.** Of ISO 15765-2's six timing parameters, only N_Bs
 (TX waiting for FC) and N_Cr (RX waiting for the next CF) are enforced — the

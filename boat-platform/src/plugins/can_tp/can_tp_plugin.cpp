@@ -7,6 +7,17 @@
 #include <sstream>
 #include <string>
 
+std::uint64_t CanTpPlugin::NowNs() const {
+  if (now_ns_fn != nullptr) return now_ns_fn(now_ns_ctx);
+  // No host clock (plugin loaded standalone): fall back to the system
+  // monotonic clock so behaviour is unchanged for embedders that don't supply
+  // one. Determinism needs the host clock.
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
+
 namespace {
 
 // PCI byte definitions per ISO 15765-2
@@ -112,10 +123,18 @@ NsduConnection* find_by_target(CanTpPlugin* plugin, uint32_t can_id,
 
 // ── TX thread ──────────────────────────────────────────────────────────────
 
-void can_tp_tx_thread_func(CanTpPlugin* plugin) {
+/* One TX/watchdog pass: send any CF whose STmin has elapsed, and fire any
+   N_Bs/N_Cr deadline that has passed. Returns true if it sent at least one CF,
+   which tp_on_tick uses to decide whether more may already be due.
+
+   This was a dedicated thread looping on steady_clock with a condition-variable
+   sleep. It is now called from on_tick, so CanTp's pacing and watchdogs run on
+   the host's clock alongside every other tick consumer instead of on a private
+   time domain -- which is what lets a virtual clock reach ISO-TP timeouts. */
+bool can_tp_service_pending(CanTpPlugin* plugin) {
   using namespace std::chrono;
 
-  while (!plugin->tx_stop.load()) {
+  {
     // Collect connections that need TX processing. Each entry captures
     // everything the send-CF phase below needs in one locked pass, instead
     // of that phase re-locking three separate times per CF to read tx_seq/
@@ -129,15 +148,10 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
       uint32_t chunk;
     };
     std::vector<TxWork> to_send_cf;
-    // Earliest of: next CF's STmin pacing time, any TX_WAIT_FC's N_Bs
-    // deadline, any RX_WAIT_CF's N_Cr deadline. Drives how long to sleep
-    // below -- steady_clock::time_point::max() means "nothing pending,
-    // sleep until notified".
-    steady_clock::time_point next_wake = steady_clock::time_point::max();
 
     {
       std::lock_guard<std::mutex> lock(plugin->tx_mutex);
-      auto now = steady_clock::now();
+      const std::uint64_t now = plugin->NowNs();
       for (auto& [addr, conn] : plugin->connections) {
         if (conn.tx_state == NsduConnection::TX_SEND_CF) {
           if (now >= conn.tx_next_send_time) {
@@ -148,8 +162,6 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
                 static_cast<uint32_t>(std::min(
                     conn.tx_buffer.size() - conn.tx_offset,
                     static_cast<size_t>(max_payload - cf_overhead)))});
-          } else {
-            next_wake = std::min(next_wake, conn.tx_next_send_time);
           }
         }
 
@@ -169,8 +181,6 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
             plugin->NotifyError(conn.nsdu_id, CANTP_N_TIMEOUT_BS,
                 "N_Bs expired after " + std::to_string(conn.config.n_bs_ms) +
                 "ms waiting for Flow Control");
-          } else {
-            next_wake = std::min(next_wake, conn.tx_fc_deadline);
           }
         }
 
@@ -182,32 +192,14 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
             plugin->NotifyError(conn.nsdu_id, CANTP_N_TIMEOUT_CR,
                 "N_Cr expired after " + std::to_string(conn.config.n_cr_ms) +
                 "ms waiting for the next Consecutive Frame");
-          } else {
-            next_wake = std::min(next_wake, conn.rx_cf_deadline);
           }
         }
       }
     }
 
-    if (to_send_cf.empty()) {
-      // Nothing was immediately due -- next_wake (computed above) reflects
-      // the true state and it's safe to sleep on it. No predicate on either
-      // wait: can_tp_send() and tp_on_frame() call tx_cv.notify_one()
-      // whenever they create or move up a deadline (new TX_WAIT_FC, an FC
-      // unblocking one, a new/refreshed RX_WAIT_CF) -- any wake, spurious
-      // or real, just loops back around to rescan, which is always safe
-      // and cheap. This replaces the old fixed 500µs poll, which woke and
-      // rescanned every connection ~2000×/sec even when nothing was
-      // pending.
-      std::unique_lock<std::mutex> wait_lock(plugin->tx_mutex);
-      if (plugin->tx_stop.load()) break;
-      if (next_wake == steady_clock::time_point::max()) {
-        plugin->tx_cv.wait(wait_lock);
-      } else {
-        plugin->tx_cv.wait_until(wait_lock, next_wake);
-      }
-      continue;
-    }
+    // Nothing due this tick. The watchdogs above already ran, so there is
+    // no deadline to sleep on -- the next tick rescans.
+    if (to_send_cf.empty()) return false;
 
     // Send CFs without holding the lock
     for (auto& work : to_send_cf) {
@@ -246,15 +238,16 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
         conn->tx_offset += work.chunk;
         conn->tx_seq = (conn->tx_seq + 1) & 0x0F;
         if (conn->tx_bs_remaining > 0) conn->tx_bs_remaining--;
-        conn->tx_next_send_time = steady_clock::now() +
-                                  microseconds(conn->tx_stmin_us);
+        conn->tx_next_send_time =
+            plugin->NowNs() + static_cast<std::uint64_t>(conn->tx_stmin_us) * 1000ULL;
 
         if (conn->tx_offset < conn->tx_buffer.size()) {
           if (conn->tx_bs_original > 0 && conn->tx_bs_remaining == 0) {
             // Block size reached — wait for next FC
             conn->tx_state = NsduConnection::TX_WAIT_FC;
-            conn->tx_fc_deadline = steady_clock::now() +
-                                   milliseconds(conn->config.n_bs_ms);
+            conn->tx_fc_deadline =
+                plugin->NowNs() +
+                static_cast<std::uint64_t>(conn->config.n_bs_ms) * 1'000'000ULL;
           }
           // else: BS=0 (unlimited) — keep sending CFs without waiting
         } else {
@@ -266,14 +259,8 @@ void can_tp_tx_thread_func(CanTpPlugin* plugin) {
         }
       }
     }
-    // Loop back around immediately (no sleep) rather than trusting
-    // next_wake here -- it was computed *before* the sends above updated
-    // tx_next_send_time (STmin pacing) or tx_fc_deadline (block-boundary
-    // N_Bs) for the connections just serviced, so it can't be trusted for
-    // them. The next iteration's scan reads the fresh values instead. For
-    // STmin=0 (unlimited) streaming this means back-to-back scan+send with
-    // no sleep, which is correct -- that's what STmin=0 means.
   }
+  return true;
 }
 
 // ── Plugin vtable callbacks ──────────────────────────────────────────────────
@@ -300,26 +287,48 @@ int tp_initialize(void* ctx, const char* config_json) {
   if (plugin->iface.empty()) plugin->iface = "vcan0";
   plugin->service_name = "can_tp:" + plugin->iface;
 
-  // Start the TX pacing thread
-  plugin->tx_stop.store(false);
-  plugin->tx_thread = std::thread(can_tp_tx_thread_func, plugin);
+  // No TX thread: pacing and the N_Bs/N_Cr watchdogs run on the host's tick
+  // (see tp_on_tick), so CanTp shares the gateway's clock instead of running
+  // its own.
 
   return 0;
 }
 
-void tp_on_tick(void* /*ctx*/, uint64_t /*tick*/) {}
+/* Cap on CFs drained in a single tick.
+   With STmin=0 the peer has asked for no separation at all, and the old TX
+   thread streamed back-to-back until the buffer emptied. Draining inside the
+   tick preserves that, but the tick authority runs every other phase after
+   this one, so the burst has to be bounded or a large transfer would stall
+   replay and the PDU router behind it. 256 CFs is ~1.8 KB of ISO-TP payload at
+   DLC 8 -- above any realistic diagnostic exchange, and still a fixed bound. */
+constexpr int kMaxCfBurstPerTick = 256;
+
+void tp_on_tick(void* ctx, uint64_t /*tick*/) {
+  auto* plugin = static_cast<CanTpPlugin*>(ctx);
+  if (plugin == nullptr) return;
+  // Keep servicing while CFs remain immediately due: STmin=0 means the next CF
+  // is due the instant the previous one goes out, and one pass per tick would
+  // otherwise pace an unlimited-rate transfer at the tick interval.
+  for (int i = 0; i < kMaxCfBurstPerTick; ++i) {
+    if (!can_tp_service_pending(plugin)) break;
+  }
+}
+
+void tp_set_time_source(void* ctx, BoatNowNsFn fn, void* host_ctx) {
+  auto* plugin = static_cast<CanTpPlugin*>(ctx);
+  if (plugin == nullptr) return;
+  std::lock_guard<std::mutex> lock(plugin->tx_mutex);
+  plugin->now_ns_fn  = fn;
+  plugin->now_ns_ctx = host_ctx;
+}
 
 void tp_shutdown(void* ctx) {
   auto* plugin = static_cast<CanTpPlugin*>(ctx);
   if (plugin == nullptr) return;
 
-  // Stop the TX thread
-  plugin->tx_stop.store(true);
-  plugin->tx_cv.notify_all();
-  if (plugin->tx_thread.joinable()) {
-    plugin->tx_thread.join();
-  }
-
+  // No thread to stop -- the host guarantees no concurrent callbacks after
+  // shutdown() returns, and on_tick is one of them.
+  std::lock_guard<std::mutex> lock(plugin->tx_mutex);
   plugin->connections.clear();
 }
 
@@ -438,12 +447,12 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
       // that keeps sending WT before N_Bs expires can hold the session open
       // indefinitely, which is correct behavior (it's still telling us it's
       // there); a peer that goes silent still gets caught by the deadline.
-      conn->tx_fc_deadline = std::chrono::steady_clock::now() +
-                             std::chrono::milliseconds(conn->config.n_bs_ms);
+      conn->tx_fc_deadline =
+          plugin->NowNs() +
+          static_cast<std::uint64_t>(conn->config.n_bs_ms) * 1'000'000ULL;
       // Not strictly required (this only pushes the deadline later, never
       // earlier), but notifying here too keeps "every deadline mutation
       // notifies" simple to reason about rather than case-by-case.
-      plugin->tx_cv.notify_one();
       return;
     }
     // Continue
@@ -453,8 +462,7 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     conn->tx_bs_original  = bs;
     conn->tx_stmin_us     = stmin_to_us(stmin);
     conn->tx_state        = NsduConnection::TX_SEND_CF;
-    conn->tx_next_send_time = std::chrono::steady_clock::now();
-    plugin->tx_cv.notify_one();
+    conn->tx_next_send_time = plugin->NowNs();
     return;
   }
 
@@ -545,14 +553,14 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
     conn->rx_next_seq = 1;
     conn->rx_cf_count = 0;
     conn->rx_state = NsduConnection::RX_WAIT_CF;
-    conn->rx_cf_deadline = std::chrono::steady_clock::now() +
-                           std::chrono::milliseconds(conn->config.n_cr_ms);
+    conn->rx_cf_deadline =
+        plugin->NowNs() +
+        static_cast<std::uint64_t>(conn->config.n_cr_ms) * 1'000'000ULL;
     // Required, not just for consistency: this is a *new* deadline where
     // none existed before, possibly earlier than whatever the TX thread is
     // currently sleeping until (or it may be sleeping indefinitely, with
     // nothing else pending) -- without this it wouldn't wake to notice
     // N_Cr until some unrelated event happened to notify it.
-    plugin->tx_cv.notify_one();
 
     // Send Flow Control (Continue) with configured BS and STmin
     if (plugin->frame_publish_fn == nullptr) return;
@@ -611,9 +619,9 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
       // deadline later (never earlier), so notifying isn't strictly
       // required, but see the FC(WT) comment above for why it's done
       // anyway.
-      conn->rx_cf_deadline = std::chrono::steady_clock::now() +
-                             std::chrono::milliseconds(conn->config.n_cr_ms);
-      plugin->tx_cv.notify_one();
+      conn->rx_cf_deadline =
+          plugin->NowNs() +
+          static_cast<std::uint64_t>(conn->config.n_cr_ms) * 1'000'000ULL;
       // Re-FC: if BS > 0 and we've received a full block, send another FC
       ++conn->rx_cf_count;
       if (conn->config.block_size > 0 &&
@@ -666,7 +674,7 @@ int32_t can_tp_configure(void* tp_ctx, const CanTpConfig* config) {
   conn.config      = *config;
   // Resolve the 0-sentinel to the ISO default once here, so every later
   // read of conn.config.n_bs_ms/n_cr_ms (deadline-setting in can_tp_send()
-  // and tp_on_frame(), the watchdog check in can_tp_tx_thread_func()) can
+  // and tp_on_frame(), the watchdog check in can_tp_service_pending()) can
   // use the value directly without re-checking for 0.
   conn.config.n_bs_ms = resolve_timeout_ms(config->n_bs_ms);
   conn.config.n_cr_ms = resolve_timeout_ms(config->n_cr_ms);
@@ -745,7 +753,7 @@ int32_t can_tp_remove(void* tp_ctx, uint32_t nsdu_id) {
   // Refuse to erase a connection the TX pacing thread may still be actively
   // working with (holds a raw NsduConnection* obtained under this same lock,
   // used across several re-locks while streaming CFs -- see
-  // can_tp_tx_thread_func). Only IDLE/COMPLETE are safe to erase.
+  // can_tp_service_pending). Only IDLE/COMPLETE are safe to erase.
   if (it->second.tx_state != NsduConnection::TX_IDLE &&
       it->second.tx_state != NsduConnection::TX_COMPLETE) {
     return -2;  // busy
@@ -865,11 +873,11 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
     conn->tx_bs_remaining = 0;   // will be set when FC arrives
     conn->tx_stmin_us = 0;
     conn->tx_state = NsduConnection::TX_WAIT_FC;
-    conn->tx_next_send_time = std::chrono::steady_clock::now();
-    conn->tx_fc_deadline = std::chrono::steady_clock::now() +
-                           std::chrono::milliseconds(conn->config.n_bs_ms);
+    conn->tx_next_send_time = plugin->NowNs();
+    conn->tx_fc_deadline =
+        plugin->NowNs() +
+        static_cast<std::uint64_t>(conn->config.n_bs_ms) * 1'000'000ULL;
   }
-  plugin->tx_cv.notify_one();
 
   return 0;  // 0 = initiated
 }
@@ -888,7 +896,7 @@ extern "C" BoatPlugin* boat_plugin_create() {
     vt.on_frame            = &tp_on_frame;
     vt.set_frame_publisher = &tp_set_frame_publisher;
     vt.declared_buses      = &can_tp_declared_buses;
-    vt.set_time_source     = nullptr;
+    vt.set_time_source     = &tp_set_time_source;
     return vt;
   }();
 
