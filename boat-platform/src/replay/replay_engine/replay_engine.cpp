@@ -304,6 +304,68 @@ bool ReplayController::SeekToTick(std::uint64_t target_tick, std::size_t& offset
   return false;
 }
 
+std::span<const std::uint8_t> ReplayController::ReadRecordAt(
+    std::size_t& offset, boat::v1::Frame& pf) const {
+  std::uint32_t record_len;
+  std::memcpy(&record_len, mapped_trace_.data() + offset, sizeof(record_len));
+  offset += sizeof(record_len);
+  if (record_len == 0 || offset + record_len > mapped_trace_.size()) {
+    throw std::runtime_error("invalid trace record length");
+  }
+  if (!pf.ParseFromArray(mapped_trace_.data() + offset, record_len)) {
+    throw std::runtime_error("invalid protobuf frame record");
+  }
+  const auto* begin = mapped_trace_.data() + offset;
+  offset += record_len;
+  return {begin, record_len};
+}
+
+void ReplayController::DispatchRecord(const boat::v1::Frame& pf, std::uint64_t tick,
+                                      std::span<const std::uint8_t> raw) {
+  // ── Dispatch via core::Frame ──────────────────────────────────────────
+  auto core_frame = ProtoToCoreFrame(pf, active_config_);
+
+  {
+    std::lock_guard<std::mutex> lock(forwarder_mutex_);
+    if (event_forwarder_) {
+      event_forwarder_(core_frame);
+    }
+  }
+
+  // ── Publish replay event for gRPC streaming ───────────────────────────
+  std::string proto_bytes(reinterpret_cast<const char*>(raw.data()), raw.size());
+
+  boat::core::BusEvent replay_event;
+  replay_event.type = kReplayBusEventType;
+  replay_event.tick = tick;
+  replay_event.payload = proto_bytes;
+  event_bus_.Publish(std::move(replay_event));
+
+  // ── Push to internal queue (StreamReplay) ─────────────────────────────
+  {
+    std::lock_guard<std::mutex> lock(event_queue_mutex_);
+    event_queue_.push_back({tick, proto_bytes});
+  }
+
+  // ── Store in event store ──────────────────────────────────────────────
+  {
+    std::vector<std::uint8_t> payload_copy(proto_bytes.begin(), proto_bytes.end());
+    boat::store::EventRecord record;
+    record.id = std::to_string(tick) + "_" + std::to_string(pf.can().can_id());
+    record.simulation_id = active_config_.trace_id;
+    record.tick = tick;
+    record.wall_time_ns = static_cast<std::int64_t>(pf.timestamp_ns());
+    record.signal_id = std::to_string(pf.can().can_id());
+    record.value_type = 0;
+    record.value_blob = std::move(payload_copy);
+    record.tags = "{}";
+    std::array<boat::store::EventRecord, 1> batch{record};
+    event_store_.InsertBatch(std::span<const boat::store::EventRecord>(batch));
+  }
+
+  current_tick_.store(tick);
+}
+
 void ReplayController::ReplayLoop() {
   try {
     if (mapped_trace_.empty()) {
@@ -344,18 +406,8 @@ void ReplayController::ReplayLoop() {
         }
 
         // ── Read length-delimited protobuf record ───────────────────────
-        std::uint32_t record_len;
-        std::memcpy(&record_len, mapped_trace_.data() + offset, sizeof(record_len));
-        offset += sizeof(record_len);
-        if (record_len == 0 || offset + record_len > mapped_trace_.size()) {
-          throw std::runtime_error("invalid trace record length");
-        }
-
         boat::v1::Frame pf;
-        if (!pf.ParseFromArray(mapped_trace_.data() + offset, record_len)) {
-          throw std::runtime_error("invalid protobuf frame record");
-        }
-        offset += record_len;
+        const auto raw = ReadRecordAt(offset, pf);
 
         std::uint64_t tick = FrameTimestampToMs(pf.timestamp_ns());
 
@@ -385,48 +437,7 @@ void ReplayController::ReplayLoop() {
         last_record_time = std::chrono::steady_clock::now();
         has_records = true;
 
-        // ── Dispatch via core::Frame ────────────────────────────────────
-        auto core_frame = ProtoToCoreFrame(pf, active_config_);
-
-        {
-          std::lock_guard<std::mutex> lock(forwarder_mutex_);
-          if (event_forwarder_) {
-            event_forwarder_(core_frame);
-          }
-        }
-
-        // ── Publish replay event for gRPC streaming ─────────────────────
-        std::string proto_bytes(reinterpret_cast<const char*>(mapped_trace_.data() + offset - record_len), record_len);
-
-        boat::core::BusEvent replay_event;
-        replay_event.type = kReplayBusEventType;
-        replay_event.tick = tick;
-        replay_event.payload = proto_bytes;
-        event_bus_.Publish(std::move(replay_event));
-
-        // ── Push to internal queue (StreamReplay) ───────────────────────
-        {
-          std::lock_guard<std::mutex> lock(event_queue_mutex_);
-          event_queue_.push_back({tick, proto_bytes});
-        }
-
-        // ── Store in event store ────────────────────────────────────────
-        {
-          std::vector<std::uint8_t> payload_copy(proto_bytes.begin(), proto_bytes.end());
-          boat::store::EventRecord record;
-          record.id = std::to_string(tick) + "_" + std::to_string(pf.can().can_id());
-          record.simulation_id = active_config_.trace_id;
-          record.tick = tick;
-          record.wall_time_ns = static_cast<std::int64_t>(pf.timestamp_ns());
-          record.signal_id = std::to_string(pf.can().can_id());
-          record.value_type = 0;
-          record.value_blob = std::move(payload_copy);
-          record.tags = "{}";
-          std::array<boat::store::EventRecord, 1> batch{record};
-          event_store_.InsertBatch(std::span<const boat::store::EventRecord>(batch));
-        }
-
-        current_tick_.store(tick);
+        DispatchRecord(pf, tick, raw);
 
         if (active_config_.speed == ReplaySpeed::STEP_BY_STEP) {
           paused_.store(true);

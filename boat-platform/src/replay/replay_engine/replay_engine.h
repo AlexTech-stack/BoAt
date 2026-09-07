@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "boat/v1/frame.pb.h"
 #include "core/frame.h"
 #include "event/event_bus.h"
 #include "event_store/event_store.h"
@@ -83,6 +84,21 @@ class ReplayController {
   void ReplayLoop();
   bool SeekToTick(std::uint64_t tick, std::size_t& offset, std::uint64_t& landed_tick) const;
   void ParseTickDurationFromEnv();
+
+  /* Parse the length-delimited protobuf record starting at `offset` into `pf`,
+     advancing `offset` past it. Returns a view of the record's raw bytes
+     inside the mapped trace, so callers republish exactly what was stored
+     rather than re-serialising. Throws on a malformed record. */
+  std::span<const std::uint8_t> ReadRecordAt(std::size_t& offset,
+                                             boat::v1::Frame& pf) const;
+
+  /* Everything that happens once a record is due: hand the frame to the
+     forwarder, publish it on the EventBus, queue it for StreamReplay, persist
+     it, and advance current_tick_. Deliberately free of any pacing -- the
+     caller decides when a record is due, which is what lets the same body
+     serve both the self-paced loop and an externally driven tick. */
+  void DispatchRecord(const boat::v1::Frame& pf, std::uint64_t tick,
+                      std::span<const std::uint8_t> raw);
 
   boat::store::ITraceStore& trace_store_;
   boat::store::IEventStore& event_store_;
