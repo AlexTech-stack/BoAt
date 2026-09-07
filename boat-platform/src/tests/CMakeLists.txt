@@ -150,6 +150,26 @@ target_link_libraries(
 )
 catch_discover_tests(boat_integration_replay_service)
 
+# A plugin reporting the previous ABI version, so the loader's rejection path
+# can be tested rather than assumed.
+add_library(stale_abi_plugin MODULE fixtures/stale_abi_plugin.cpp)
+target_include_directories(stale_abi_plugin PRIVATE ${CMAKE_SOURCE_DIR}/sdk/cpp/include)
+set_target_properties(stale_abi_plugin PROPERTIES PREFIX "" SUFFIX ".so")
+
+add_executable(boat_unit_plugin_time_source unit/test_plugin_time_source.cpp)
+target_include_directories(boat_unit_plugin_time_source PRIVATE
+  ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/hil)
+target_link_libraries(boat_unit_plugin_time_source PRIVATE boat_core boat_hil Catch2::Catch2WithMain)
+if(TARGET probe)
+  add_dependencies(boat_unit_plugin_time_source probe)
+  target_compile_definitions(boat_unit_plugin_time_source PRIVATE
+    PROBE_SO="$<TARGET_FILE:probe>")
+endif()
+add_dependencies(boat_unit_plugin_time_source stale_abi_plugin)
+target_compile_definitions(boat_unit_plugin_time_source PRIVATE
+  STALE_ABI_PLUGIN_SO="$<TARGET_FILE:stale_abi_plugin>")
+catch_discover_tests(boat_unit_plugin_time_source)
+
 add_executable(boat_unit_tick_authority unit/test_tick_authority.cpp)
 target_include_directories(boat_unit_tick_authority PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
 target_link_libraries(boat_unit_tick_authority PRIVATE boat_hil boat_core Catch2::Catch2WithMain)

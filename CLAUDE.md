@@ -44,7 +44,7 @@ The project is **Apache-2.0** (`LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md` at 
   download-only) into a gitignored directory. Converting one to BoAt's PDU-database JSON is
   a separate manual step — see `tools/dbc/README.md`. Don't commit fetched or derived files.
 
-## Architecture (ABI v8) — cross-cutting invariants
+## Architecture (ABI v9) — cross-cutting invariants
 
 These are on `master`. Read them before editing frame/plugin/replay code — they are
 cross-cutting invariants, not local details. If something you read elsewhere assumes
@@ -53,7 +53,7 @@ CLI commands, it is pre-v8 and no longer correct.
 
 1. **Unified frame type.** There is one `BoatFrame` (ABI, `sdk/cpp/include/boat/frame.h`) and one internal `core::Frame` (`src/core/`) covering **all** bus types: `can`, `canfd`, `eth`, `tcp`, `pdu`. The old separate `BoatCanFrame` / `BoatEthFrame` types and their typedefs are **deleted**. Conversions cross the ABI boundary via `core::Frame::ToAbi()` / `ProtoToCoreFrame()`. The wire/trace representation is the `boat.v1.Frame` protobuf.
 
-2. **Plugin ABI v8** (`sdk/cpp/include/boat/plugin.h`, `BOAT_PLUGIN_ABI_VERSION = 8`). v7 fallbacks are gone; a v7 plugin is **rejected at load with a clear error**. The vtable has 9 fields: `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`. New plugins should implement `on_frame` (receive) + `set_frame_publisher` (send) + `declared_buses` (which bus types it handles).
+2. **Plugin ABI v9** (`sdk/cpp/include/boat/plugin.h`, `BOAT_PLUGIN_ABI_VERSION = 9`). Any plugin reporting a different version is **rejected at load with a clear error** — there are no fallbacks, so a v8 build must be recompiled. The vtable has 10 fields: `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`. New plugins should implement `on_frame` (receive) + `set_frame_publisher` (send) + `declared_buses` (which bus types it handles). **v9 added `set_time_source`**: the host hands the plugin a `BoatNowNsFn` returning monotonic nanoseconds on *its* clock (real, or virtual under `BOAT_TIME_SOURCE=virtual`). A plugin that needs time must read it there rather than calling `steady_clock::now()` — reading a system clock reintroduces the nondeterminism the tick authority removes, and three separate components have already got elapsed-time inference wrong on their own.
 
 3. **Core owns transport; plugins own conversations.** The gateway is a thin dispatcher. The **single `FrameSink`** (`src/gateway/grpc_gateway/frame_sink.{h,cpp}`) is the *only* path a frame reaches a bus — it routes by `bus_type` to `CanBusRegistry` / `EthernetBusRegistry`. Inbound frames go through `PluginManager::DispatchFrame()`, which calls `on_frame` **only on plugins whose `declared_buses` include that bus type** (pre-filtered at load — no O(N) fan-out). Plugins publish outbound frames back through a `frame_publish_fn` (wired to the `FrameSink`). Two `PluginManager` instances exist — a simulation-scoped one and an always-on node manager — but they no longer have separate tick domains: both are ordered phases of the single `TickAuthority` (`node_plugins` → `sim_plugins` → `replay`), so the split is purely about **lifetime**, not timing. The rule: **stateless transport (CAN/Ethernet frames on/off the wire) is core; stateful conversations (TCP, ISO-TP, PDU routing, SOME/IP) are plugins.**
 
@@ -61,7 +61,7 @@ CLI commands, it is pre-v8 and no longer correct.
 
 5. **`FrameService` gRPC + `boat frame` CLI.** A unified `FrameService` provides send/subscribe for **all** bus types. `boat frame send` / `boat frame subscribe` / `boat frame list-ifaces` are the CLI verbs. The old `boat can` / `boat eth` Typer commands are **removed outright** — not deprecated wrappers, gone (there is no `can.py`/`eth.py` in `boat_cli/`). There is no CLI hardware-detection command either; use `ip -d link show type can`. `proto/boat/v1/` holds **18 `.proto` files declaring 16 gRPC services**.
 
-6. **Plugin config is data-driven.** Plugins take JSON config appended to their path as a query string: `plugin.so?{"iface":"vcan0"}`. `BOAT_NODE_PLUGINS` is split brace-aware, so commas inside a `{...}` config don't split the entry. TCP's old dedicated C API was removed — TCP is now a config-driven, gateway-resident v8 plugin (`tcp.so?{"mode":"server","listen_port":8080,...}`).
+6. **Plugin config is data-driven.** Plugins take JSON config appended to their path as a query string: `plugin.so?{"iface":"vcan0"}`. `BOAT_NODE_PLUGINS` is split brace-aware, so commas inside a `{...}` config don't split the entry. TCP's old dedicated C API was removed — TCP is now a config-driven, gateway-resident v9 plugin (`tcp.so?{"mode":"server","listen_port":8080,...}`).
 
 7. **Replay pipeline.** Replay does not write to buses directly, and **owns no thread and no clock**. `TickAuthority` (`src/hil/tick_authority.h`) runs ordered phases every tick — `node_plugins` then `replay` — and the replay phase calls `ReplayController::PumpDueRecords(tick)`. Records come due on elapsed *ticks* scaled by `speed_multiplier`, never on a wall clock, which is what makes tick attribution reproducible. `ReplayController` (`src/replay/`) parses trace records into `core::Frame` and transmits each through the single `FrameSink` (`replay_controller.SetEventForwarder`). The registry's RX dispatch then delivers replayed frames to plugins' `on_frame`, so plugins still observe replayed traffic. There is **no FrameForwarder plugin** — that indirection (and the `can_io` direct-SocketCAN alternative) was removed; the core `FrameSink` is the one path to the wire. Interface/MAC targeting is a **replay-time** decision, not baked in at import, so one imported trace replays against different hardware without re-importing.
 
@@ -197,7 +197,7 @@ operational detail this file summarizes in a line or two. Read the relevant sect
 | Launcher Agent REST API | `## Launcher Agent` (~91 lines) | Full endpoint list, `external:<pid>` discovery of unmanaged gateways, node registry, `PYTHONUNBUFFERED` gotcha |
 | PDU groups & schedules | `### I-PDU Groups`, `### Transmission Schedules` (~71 lines) | Every `boat pdu route` flag, the three send types, and the three ways to stop a cyclic send |
 | COM signal library | `### COM Signal Library (C++)` (~27 lines) | `PackSignals`/`UnpackSignals` usage, Intel vs Motorola, E2E CRC helpers |
-| Probe plugin | `### Probe Plugin` (~33 lines) | Config keys and what each conformance check proves — also the canonical minimal v8 plugin example |
+| Probe plugin | `### Probe Plugin` (~33 lines) | Config keys and what each conformance check proves — also the canonical minimal v9 plugin example |
 | Replay internals | `## Replay System` + subsections | Trace record layout, the full import/stream flag surface, the sink dataflow diagram |
 | Test-runner detail | `## Test` | The three-meanings-of-"test" distinction in full, plus `backlog/test_runner_backlog.md` context |
 

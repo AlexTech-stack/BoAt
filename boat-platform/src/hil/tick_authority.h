@@ -82,8 +82,15 @@ class TickAuthority {
 
   [[nodiscard]] std::vector<std::string> PhaseNames() const;
 
+  /* Monotonic nanoseconds on this authority's clock -- real time when running
+     a timerfd backend, virtual time when running the logical one. This is what
+     the gateway hands plugins as their time source, so a plugin never has to
+     read a system clock or infer elapsed time from a tick count. Before Start()
+     (and under StepFor) it is derived from the completed tick count. */
+  [[nodiscard]] std::uint64_t NowNs() const;
+
  private:
-  void Loop();
+  void Loop(TickTimer* timer);
   void RunPhases(std::uint64_t tick);
 
   struct Entry {
@@ -95,6 +102,7 @@ class TickAuthority {
   std::vector<Entry>        phases_;
   std::thread               thread_;
   std::unique_ptr<TickTimer> timer_;
+  std::chrono::nanoseconds  interval_{std::chrono::milliseconds(1)};
   std::atomic<bool>         running_{false};
   std::atomic<std::uint64_t> current_tick_{0};
   std::atomic<std::uint64_t> phase_errors_{0};

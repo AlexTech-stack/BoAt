@@ -338,7 +338,17 @@ int main() {
   // Node manager: loads permanent always-on plugins from BOAT_NODE_PLUGINS
   // (comma-separated .so paths). These are wired to the CAN/Ethernet bus at
   // startup and run independently of any simulation lifecycle.
+  // The single tick authority. Declared before the plugin managers so their
+  // time source can be wired before any plugin loads, and so it outlives the
+  // phases it runs.
+  boat::hil::TickAuthority tick_authority;
+  const auto host_now_ns = [&tick_authority]() { return tick_authority.NowNs(); };
+
   boat::core::PluginManager node_manager;
+  // v9: plugins read the host's clock rather than a system one, so a virtual
+  // clock reaches them and nobody has to infer elapsed time from a tick count.
+  node_manager.SetTimeSource(host_now_ns);
+  sim.plugin_manager().SetTimeSource(host_now_ns);
   {
     node_manager.SetBusPublisher([&signal_bus](const char* name, double value) {
       signal_bus.Publish(name, value);
@@ -425,10 +435,6 @@ int main() {
     bf.payload_len = f.payload_len;
     node_manager.DispatchFrame(bf);
   });
-
-  // The single tick authority. Declared here so it outlives the phases it
-  // runs and is stopped before the managers they capture are torn down.
-  boat::hil::TickAuthority tick_authority;
 
   // Start the tick authority for node plugins, the PDU transmission engine,
   // and replay delivery.

@@ -1013,6 +1013,7 @@ extern "C" BoatPlugin* boat_plugin_create() {
   vtable->on_frame          = tp_on_frame;         // v8
   vtable->set_frame_publisher = tp_set_frame_publisher;  // v8
   vtable->declared_buses    = tcp_declared_buses;  // v8
+  vtable->set_time_source   = nullptr;             // v9: see tier 3 step 2
 
   auto* bp = new BoatPlugin();
   bp->vtable = vtable;

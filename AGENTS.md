@@ -34,7 +34,7 @@
   - `proto/boat/v1/` — 18 protobuf files declaring 16 gRPC services
   - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
   - `sdk/cpp/include/boat/` — C++ SDK headers
-    - `plugin.h` — Plugin ABI v8 (unified `on_frame`, `set_frame_publisher`, `declared_buses`)
+    - `plugin.h` — Plugin ABI v9 (unified `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`)
     - `frame.h` — Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU bus types)
     - `can_tp.h` — Standalone CanTp C API (can_tp_send, can_tp_configure, can_tp_remove)
     - `someip.h` — SOME/IP protocol constants
@@ -575,10 +575,23 @@ dependency above.
 
 ## Quirks & gotchas
 
-- **Plugin ABI v8** (current, merged to `master`):
+- **Plugin ABI v9** (current, merged to `master`):
   - Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU)
-  - Plugin vtable (9 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`
-  - `BOAT_PLUGIN_ABI_VERSION = 8` — v7 plugins rejected with clear error
+  - Plugin vtable (10 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`
+  - `BOAT_PLUGIN_ABI_VERSION = 9` — any other version rejected with a clear error
+    (`boat_unit_plugin_time_source` loads a deliberately stale fixture to prove it)
+  - `set_time_source(ctx, BoatNowNsFn, host_ctx)` — v9. The host hands each plugin a clock
+    returning monotonic nanoseconds: real time normally, virtual time under
+    `BOAT_TIME_SOURCE=virtual`. Called once, after `initialize()` succeeds and before the
+    first tick; optional in both directions (a NULL entry, or a host that never calls
+    `PluginManager::SetTimeSource`, are both fine). Plugins that need time **must** use it
+    instead of `steady_clock::now()` — a plugin reading a system clock puts back exactly the
+    nondeterminism the tick authority takes out, and every component that inferred elapsed
+    time for itself has had that wrong at least once (pdu_router read a tick counter as
+    milliseconds, replay multiplied milliseconds by nanoseconds-per-tick, TestHarness assumed
+    10 ms per tick). The gateway supplies `TickAuthority::NowNs()`.
+    **Still to convert: `can_tp` and `tcp` read `steady_clock::now()` directly on their own
+    threads and pass NULL here.**
   - `PduRouter` is a plugin (`pdu_router.so`), loaded by the gateway
   - `boat plugin list` shows loaded plugins from **both** `PluginManager` instances (sim-scoped + always-on `node_manager`) in one table with a `scope` column — `PluginService` (register/list/info/unload) only ever reaches the sim-scoped one; `NodePluginService` (list/info/unload, no register) reaches `node_manager`. `boat plugin info|unload` need `--scope {sim,node}`; `--scope node` unload additionally needs `--yes`. See `README.md`'s "Dual PluginManager".
   - `FrameService` gRPC provides unified send/subscribe for all bus types
@@ -968,13 +981,13 @@ BOAT_CAN_INTERFACES=vcan0 \
 Config keys: `iface` (default `vcan0`), `buses` (default `["can"]`), `mode`
 (`passive`|`active`|`both`, default `both`), `probe_id` (default `0x7FF`),
 `probe_period_ticks` (1000), `echo_timeout_ticks` (50), `report_period_ticks`
-(5000). It's also the canonical minimal v8 plugin example. Note: periods are in
+(5000). It's also the canonical minimal v9 plugin example. Note: periods are in
 node ticks (tick length = `BOAT_NODE_TICK_MS`/`_US`).
 
 > Plugin config JSON may contain commas — `BOAT_NODE_PLUGINS` is split
 > brace-aware, so commas inside a `{...}` config do not split the entry.
 
-## Replay System (ABI v8) — Core-Sink Architecture
+## Replay System (ABI v9) — Core-Sink Architecture
 
 The replay system reads trace files (.asc, .blf, .pcap), converts them to protobuf
 `boat.v1.Frame` records, and transmits them through the single core `FrameSink`.

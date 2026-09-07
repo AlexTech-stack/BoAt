@@ -127,6 +127,7 @@ BoatPluginVTable gVTable = [] {
   vt.on_frame            = &pdu_router_on_frame;
   vt.set_frame_publisher = &pdu_router_set_frame_publisher;
   vt.declared_buses      = &pdu_router_declared_buses;
+  vt.set_time_source     = nullptr;
   return vt;
 }();
 
