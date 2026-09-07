@@ -24,7 +24,33 @@
 
 namespace btcp = boat::tcp;
 
+// ── Host clock (ABI v9) ────────────────────────────────────────────────────
+
+std::uint64_t btcp::TcpPlugin::NowNs() const {
+  if (now_ns_fn != nullptr) return now_ns_fn(now_ns_ctx);
+  // No host clock (plugin loaded standalone): fall back to the system
+  // monotonic clock so behaviour is unchanged for embedders that don't supply
+  // one. Determinism needs the host clock.
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+// Every TCP timer in this plugin is configured in milliseconds but compared
+// against the host clock's nanoseconds. Convert at exactly one place -- the
+// PDU router and replay both got a unit conversion like this wrong when each
+// open-coded it.
+constexpr std::uint64_t kNsPerMs = 1'000'000ULL;
+constexpr std::uint64_t MsToNs(std::uint64_t ms) { return ms * kNsPerMs; }
+
+// Zero-window persist probe backoff: first probe after 5 s, doubling per
+// probe, capped at 60 s (RFC 1122 4.2.2.17 leaves the values to the
+// implementation; these are the ones this plugin has always used).
+constexpr std::uint64_t kPersistBaseMs = 5000;
+constexpr std::uint64_t kPersistMaxMs  = 60000;
 
 static std::mt19937& Rng() {
   static std::mt19937 rng(std::random_device{}());
@@ -250,192 +276,6 @@ static int tp_initialize(void* ctx, const char* config_json) {
     }
   }
 
-  // Start TX thread
-  plugin->running.store(true);
-  plugin->tx_thread = std::thread([plugin]() {
-    while (plugin->running.load()) {
-      std::unique_lock<std::recursive_mutex> lock(plugin->mutex);
-      plugin->tx_cv.wait_for(lock, std::chrono::milliseconds(100));
-
-      auto now = std::chrono::steady_clock::now();
-      for (auto& [id, conn] : plugin->connections) {
-        (void)id;
-        bool need_send = false;
-        std::vector<uint8_t> seg;
-
-        // Send pending data (fire-and-forget regardless of state)
-        if (!conn.send_buffer.empty()) {
-          if (conn.peer_window > 0) {
-          if (conn.persist_active) {
-            conn.persist_active = false;
-            conn.persist_count = 0;
-          }
-          bool nagle_block = (plugin->nagle_enabled &&
-                              !conn.unacked_segment.empty() &&
-                              conn.send_buffer.size() < static_cast<uint32_t>(conn.mss));
-          if (!nagle_block) {
-          uint32_t chunk = std::min<uint32_t>({
-              static_cast<uint32_t>(conn.send_buffer.size()),
-              static_cast<uint32_t>(conn.mss),
-              conn.peer_window});
-          std::vector<uint8_t> data(conn.send_buffer.begin(),
-                                     conn.send_buffer.begin() + chunk);
-          conn.send_buffer.erase(conn.send_buffer.begin(),
-                                  conn.send_buffer.begin() + chunk);
-
-          if (conn.af == AF_INET) {
-            seg = btcp::BuildIp4TcpSegment(
-                conn.src_ip.data(), conn.dst_ip.data(),
-                conn.src_port, conn.dst_port,
-                conn.my_seq, conn.my_ack,
-                data.data(), static_cast<uint32_t>(data.size()),
-                btcp::TCP_FLAG_ACK | btcp::TCP_FLAG_PSH, plugin->rx_window);
-          } else {
-            seg = btcp::BuildIp6TcpSegment(
-                conn.src_ip.data(), conn.dst_ip.data(),
-                conn.src_port, conn.dst_port,
-                conn.my_seq, conn.my_ack,
-                data.data(), static_cast<uint32_t>(data.size()),
-                btcp::TCP_FLAG_ACK | btcp::TCP_FLAG_PSH, plugin->rx_window);
-          }
-          conn.my_seq += static_cast<uint32_t>(data.size());
-          conn.unacked_segment = seg;
-          conn.retransmit_at = now + std::chrono::milliseconds(plugin->retry_ms);
-          conn.retry_count = 0;
-          conn.last_activity = now;
-          need_send = true;
-          }  // end !nagle_block
-          } else {
-            // Peer window is zero — enter persist mode
-            if (!conn.persist_active) {
-              conn.persist_active = true;
-              conn.persist_count = 0;
-              conn.persist_at = now + std::chrono::milliseconds(5000);
-            }
-          }
-        }
-
-        // Retransmit unacked segment on timeout
-        if (!conn.unacked_segment.empty() && now >= conn.retransmit_at) {
-          if (conn.retry_count >= static_cast<int>(plugin->max_retries)) {
-            if (conn.on_event)
-              conn.on_event(conn.user_ctx, conn.conn_id, btcp::TCP_EVENT_ERROR);
-            conn.state = btcp::TCP_CLOSED;
-            continue;
-          }
-          seg = conn.unacked_segment;
-          conn.retransmit_at = now + std::chrono::milliseconds(
-              plugin->retry_ms * (1 << conn.retry_count));
-          conn.retry_count++;
-          need_send = true;
-        }
-
-        // Zero-window persist probe
-        if (conn.persist_active && now >= conn.persist_at) {
-          if (conn.persist_count > static_cast<int>(plugin->max_retries)) {
-            conn.state = btcp::TCP_CLOSED;
-            if (conn.on_event)
-              conn.on_event(conn.user_ctx, conn.conn_id, btcp::TCP_EVENT_ERROR);
-          } else {
-            // Send 1-byte probe
-            if (conn.af == AF_INET) {
-              seg = btcp::BuildIp4TcpSegment(
-                  conn.src_ip.data(), conn.dst_ip.data(),
-                  conn.src_port, conn.dst_port,
-                  conn.my_seq - 1, conn.my_ack,
-                  nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
-            } else {
-              seg = btcp::BuildIp6TcpSegment(
-                  conn.src_ip.data(), conn.dst_ip.data(),
-                  conn.src_port, conn.dst_port,
-                  conn.my_seq - 1, conn.my_ack,
-                  nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
-            }
-            uint64_t backoff = std::min<uint64_t>(
-                5000ULL * (1ULL << conn.persist_count), 60000);
-            conn.persist_at = now + std::chrono::milliseconds(backoff);
-            conn.persist_count++;
-            need_send = true;
-          }
-        }
-
-        // Keepalive probing for idle established connections
-        if (conn.state == btcp::TCP_ESTABLISHED &&
-            conn.unacked_segment.empty() &&
-            conn.send_buffer.empty() &&
-            plugin->keepalive_idle_ms > 0) {
-          auto idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-              now - conn.last_activity).count();
-          if (conn.keepalive_probes_sent == 0) {
-            if (idle_ms >= static_cast<long long>(plugin->keepalive_idle_ms)) {
-              // First probe: send zero-length ACK
-              if (conn.af == AF_INET) {
-                seg = btcp::BuildIp4TcpSegment(
-                    conn.src_ip.data(), conn.dst_ip.data(),
-                    conn.src_port, conn.dst_port,
-                    conn.my_seq - 1, conn.my_ack,
-                    nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
-              } else {
-                seg = btcp::BuildIp6TcpSegment(
-                    conn.src_ip.data(), conn.dst_ip.data(),
-                    conn.src_port, conn.dst_port,
-                    conn.my_seq - 1, conn.my_ack,
-                    nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
-              }
-              conn.keepalive_probes_sent = 1;
-              conn.retransmit_at = now + std::chrono::milliseconds(plugin->keepalive_interval_ms);
-              conn.retry_count = 0;
-              need_send = true;
-            }
-          } else {
-            if (now >= conn.retransmit_at) {
-              if (conn.keepalive_probes_sent > static_cast<int>(plugin->keepalive_retry_count)) {
-                conn.state = btcp::TCP_CLOSED;
-                if (conn.on_event)
-                  conn.on_event(conn.user_ctx, conn.conn_id, btcp::TCP_EVENT_ERROR);
-              } else {
-                if (conn.af == AF_INET) {
-                  seg = btcp::BuildIp4TcpSegment(
-                      conn.src_ip.data(), conn.dst_ip.data(),
-                      conn.src_port, conn.dst_port,
-                      conn.my_seq - 1, conn.my_ack,
-                      nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
-                } else {
-                  seg = btcp::BuildIp6TcpSegment(
-                      conn.src_ip.data(), conn.dst_ip.data(),
-                      conn.src_port, conn.dst_port,
-                      conn.my_seq - 1, conn.my_ack,
-                      nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
-                }
-                conn.keepalive_probes_sent++;
-                conn.retransmit_at = now + std::chrono::milliseconds(plugin->keepalive_interval_ms);
-                conn.retry_count = 0;
-                need_send = true;
-              }
-            }
-          }
-        }
-
-        if (need_send) {
-          lock.unlock();
-          SendRaw(plugin, seg);
-          lock.lock();
-        }
-      }
-
-      // Clean up expired TIME_WAIT connections
-      auto it = plugin->connections.begin();
-      while (it != plugin->connections.end()) {
-        if (it->second.state == btcp::TCP_TIME_WAIT &&
-            now >= it->second.time_wait_until) {
-          it = plugin->connections.erase(it);
-        } else {
-          ++it;
-        }
-      }
-    }
-  });
-
   // Start standalone raw socket RX when not wired to the gateway
   std::fprintf(stderr, "[TCP] tp_initialize: eth_publish_fn=%p raw_iface=%s\n",
                (void*)plugin->frame_publish_fn, plugin->raw_iface.c_str());
@@ -454,18 +294,228 @@ static int tp_initialize(void* ctx, const char* config_json) {
   return 0;
 }
 
+/* Service every connection's TX work and timers for one tick: pending data,
+   retransmit, zero-window persist probes, keepalive, and TIME_WAIT reaping.
+
+   This was a dedicated thread looping on steady_clock with a 100 ms
+   condition-variable sleep, with on_tick doing nothing but notifying that
+   condition variable. It is now called from on_tick and every deadline is an
+   absolute nanosecond reading of the host's clock, so TCP's timers run
+   alongside every other tick consumer instead of on a private time domain --
+   which is what lets a virtual clock reach a retransmit or a TIME_WAIT expiry.
+   The tick interval (1 ms by default) is finer than the 100 ms sleep it
+   replaces, so deadlines also fire nearer to when they are actually due. */
+static void ServicePending(btcp::TcpPlugin* plugin) {
+  std::unique_lock<std::recursive_mutex> lock(plugin->mutex);
+
+  const std::uint64_t now = plugin->NowNs();
+
+  // Segments are collected under the lock and written after it, the way
+  // TransmissionEngine::OnTick and can_tp_service_pending already do it. The
+  // old TX thread dropped the lock mid-iteration to call SendRaw, which left
+  // its iterator over `connections` open to an insert from the RX thread; at
+  // one pass per tick instead of one per 100 ms sleep, that window would now
+  // be hit two orders of magnitude more often.
+  std::vector<std::vector<uint8_t>> to_send;
+
+  for (auto& [id, conn] : plugin->connections) {
+    (void)id;
+    bool need_send = false;
+    std::vector<uint8_t> seg;
+
+    // Send pending data (fire-and-forget regardless of state)
+    if (!conn.send_buffer.empty()) {
+      if (conn.peer_window > 0) {
+      if (conn.persist_active) {
+        conn.persist_active = false;
+        conn.persist_count = 0;
+      }
+      bool nagle_block = (plugin->nagle_enabled &&
+                          !conn.unacked_segment.empty() &&
+                          conn.send_buffer.size() < static_cast<uint32_t>(conn.mss));
+      if (!nagle_block) {
+      uint32_t chunk = std::min<uint32_t>({
+          static_cast<uint32_t>(conn.send_buffer.size()),
+          static_cast<uint32_t>(conn.mss),
+          conn.peer_window});
+      std::vector<uint8_t> data(conn.send_buffer.begin(),
+                                 conn.send_buffer.begin() + chunk);
+      conn.send_buffer.erase(conn.send_buffer.begin(),
+                              conn.send_buffer.begin() + chunk);
+
+      if (conn.af == AF_INET) {
+        seg = btcp::BuildIp4TcpSegment(
+            conn.src_ip.data(), conn.dst_ip.data(),
+            conn.src_port, conn.dst_port,
+            conn.my_seq, conn.my_ack,
+            data.data(), static_cast<uint32_t>(data.size()),
+            btcp::TCP_FLAG_ACK | btcp::TCP_FLAG_PSH, plugin->rx_window);
+      } else {
+        seg = btcp::BuildIp6TcpSegment(
+            conn.src_ip.data(), conn.dst_ip.data(),
+            conn.src_port, conn.dst_port,
+            conn.my_seq, conn.my_ack,
+            data.data(), static_cast<uint32_t>(data.size()),
+            btcp::TCP_FLAG_ACK | btcp::TCP_FLAG_PSH, plugin->rx_window);
+      }
+      conn.my_seq += static_cast<uint32_t>(data.size());
+      conn.unacked_segment = seg;
+      conn.retransmit_at_ns = now + MsToNs(plugin->retry_ms);
+      conn.retry_count = 0;
+      conn.last_activity_ns = now;
+      need_send = true;
+      }  // end !nagle_block
+      } else {
+        // Peer window is zero — enter persist mode
+        if (!conn.persist_active) {
+          conn.persist_active = true;
+          conn.persist_count = 0;
+          conn.persist_at_ns = now + MsToNs(kPersistBaseMs);
+        }
+      }
+    }
+
+    // Retransmit unacked segment on timeout
+    if (!conn.unacked_segment.empty() && now >= conn.retransmit_at_ns) {
+      if (conn.retry_count >= static_cast<int>(plugin->max_retries)) {
+        if (conn.on_event)
+          conn.on_event(conn.user_ctx, conn.conn_id, btcp::TCP_EVENT_ERROR);
+        conn.state = btcp::TCP_CLOSED;
+        continue;
+      }
+      seg = conn.unacked_segment;
+      conn.retransmit_at_ns =
+          now + MsToNs(plugin->retry_ms * (1ULL << conn.retry_count));
+      conn.retry_count++;
+      need_send = true;
+    }
+
+    // Zero-window persist probe
+    if (conn.persist_active && now >= conn.persist_at_ns) {
+      if (conn.persist_count > static_cast<int>(plugin->max_retries)) {
+        conn.state = btcp::TCP_CLOSED;
+        if (conn.on_event)
+          conn.on_event(conn.user_ctx, conn.conn_id, btcp::TCP_EVENT_ERROR);
+      } else {
+        // Send 1-byte probe
+        if (conn.af == AF_INET) {
+          seg = btcp::BuildIp4TcpSegment(
+              conn.src_ip.data(), conn.dst_ip.data(),
+              conn.src_port, conn.dst_port,
+              conn.my_seq - 1, conn.my_ack,
+              nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
+        } else {
+          seg = btcp::BuildIp6TcpSegment(
+              conn.src_ip.data(), conn.dst_ip.data(),
+              conn.src_port, conn.dst_port,
+              conn.my_seq - 1, conn.my_ack,
+              nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
+        }
+        uint64_t backoff = std::min<uint64_t>(
+            kPersistBaseMs * (1ULL << conn.persist_count), kPersistMaxMs);
+        conn.persist_at_ns = now + MsToNs(backoff);
+        conn.persist_count++;
+        need_send = true;
+      }
+    }
+
+    // Keepalive probing for idle established connections
+    if (conn.state == btcp::TCP_ESTABLISHED &&
+        conn.unacked_segment.empty() &&
+        conn.send_buffer.empty() &&
+        plugin->keepalive_idle_ms > 0) {
+      const std::uint64_t idle_ms =
+          (now - conn.last_activity_ns) / kNsPerMs;
+      if (conn.keepalive_probes_sent == 0) {
+        if (idle_ms >= plugin->keepalive_idle_ms) {
+          // First probe: send zero-length ACK
+          if (conn.af == AF_INET) {
+            seg = btcp::BuildIp4TcpSegment(
+                conn.src_ip.data(), conn.dst_ip.data(),
+                conn.src_port, conn.dst_port,
+                conn.my_seq - 1, conn.my_ack,
+                nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
+          } else {
+            seg = btcp::BuildIp6TcpSegment(
+                conn.src_ip.data(), conn.dst_ip.data(),
+                conn.src_port, conn.dst_port,
+                conn.my_seq - 1, conn.my_ack,
+                nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
+          }
+          conn.keepalive_probes_sent = 1;
+          conn.retransmit_at_ns = now + MsToNs(plugin->keepalive_interval_ms);
+          conn.retry_count = 0;
+          need_send = true;
+        }
+      } else {
+        if (now >= conn.retransmit_at_ns) {
+          if (conn.keepalive_probes_sent > static_cast<int>(plugin->keepalive_retry_count)) {
+            conn.state = btcp::TCP_CLOSED;
+            if (conn.on_event)
+              conn.on_event(conn.user_ctx, conn.conn_id, btcp::TCP_EVENT_ERROR);
+          } else {
+            if (conn.af == AF_INET) {
+              seg = btcp::BuildIp4TcpSegment(
+                  conn.src_ip.data(), conn.dst_ip.data(),
+                  conn.src_port, conn.dst_port,
+                  conn.my_seq - 1, conn.my_ack,
+                  nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
+            } else {
+              seg = btcp::BuildIp6TcpSegment(
+                  conn.src_ip.data(), conn.dst_ip.data(),
+                  conn.src_port, conn.dst_port,
+                  conn.my_seq - 1, conn.my_ack,
+                  nullptr, 0, btcp::TCP_FLAG_ACK, plugin->rx_window);
+            }
+            conn.keepalive_probes_sent++;
+            conn.retransmit_at_ns = now + MsToNs(plugin->keepalive_interval_ms);
+            conn.retry_count = 0;
+            need_send = true;
+          }
+        }
+      }
+    }
+
+    if (need_send) to_send.push_back(std::move(seg));
+  }
+
+  // Clean up expired TIME_WAIT connections
+  auto it = plugin->connections.begin();
+  while (it != plugin->connections.end()) {
+    if (it->second.state == btcp::TCP_TIME_WAIT &&
+        now >= it->second.time_wait_until_ns) {
+      it = plugin->connections.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  lock.unlock();
+  for (const auto& seg : to_send) SendRaw(plugin, seg);
+}
+
 static void tp_on_tick(void* ctx, uint64_t /*tick*/) {
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
-  if (plugin) plugin->tx_cv.notify_one();
+  if (plugin) ServicePending(plugin);
+}
+
+/* v9: the host hands us its clock. Called once after initialize() succeeds and
+   before the first tick, so every deadline in ServicePending is read from the
+   same clock the tick authority runs on. */
+static void tp_set_time_source(void* ctx, BoatNowNsFn fn, void* host_ctx) {
+  auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
+  if (plugin == nullptr) return;
+  std::lock_guard<std::recursive_mutex> lock(plugin->mutex);
+  plugin->now_ns_fn  = fn;
+  plugin->now_ns_ctx = host_ctx;
 }
 
 static void tp_shutdown(void* ctx) {
   auto* plugin = static_cast<btcp::TcpPlugin*>(ctx);
   if (!plugin) return;
-  plugin->running.store(false);
-  plugin->tx_cv.notify_one();
-  if (plugin->tx_thread.joinable())
-    plugin->tx_thread.join();
+  // No TX thread to stop -- the host guarantees no concurrent callbacks after
+  // shutdown() returns, and on_tick is one of them. The raw RX thread below is
+  // a standalone-mode socket reader, not a timer, so it stays.
   plugin->raw_rx_running.store(false);
   if (plugin->raw_rx_thread.joinable())
     plugin->raw_rx_thread.join();
@@ -648,7 +698,7 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
         conn.their_ack = ack;
         conn.state = btcp::TCP_SYN_RCVD;
         conn.mss = plugin->default_mss;
-        conn.last_activity = std::chrono::steady_clock::now();
+        conn.last_activity_ns = plugin->NowNs();
         {
           uint32_t syn_opt_len = (data_off > 20) ? data_off - 20 : 0;
           if (syn_opt_len > 0) {
@@ -684,8 +734,7 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
         }
         conn.my_seq += 1;
         conn.unacked_segment = seg;
-        conn.retransmit_at = std::chrono::steady_clock::now() +
-                             std::chrono::milliseconds(plugin->retry_ms);
+        conn.retransmit_at_ns = plugin->NowNs() + MsToNs(plugin->retry_ms);
         conn.retry_count = 0;
 
         int nid = conn.conn_id;
@@ -722,7 +771,7 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
         conn.persist_active = false;
         conn.persist_count = 0;
       }
-      conn.last_activity = std::chrono::steady_clock::now();
+      conn.last_activity_ns = plugin->NowNs();
 
       switch (conn.state) {
         case btcp::TCP_SYN_SENT:
@@ -875,8 +924,8 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
               SendRaw(plugin, a_seg);
               plugin->mutex.lock();
               conn.state = btcp::TCP_TIME_WAIT;
-              conn.time_wait_until = std::chrono::steady_clock::now() +
-                                     std::chrono::milliseconds(plugin->time_wait_ms);
+              conn.time_wait_until_ns =
+                  plugin->NowNs() + MsToNs(plugin->time_wait_ms);
               if (conn.on_event)
                 conn.on_event(conn.user_ctx, conn.conn_id,
                               btcp::TCP_EVENT_CLOSED);
@@ -1013,7 +1062,7 @@ extern "C" BoatPlugin* boat_plugin_create() {
   vtable->on_frame          = tp_on_frame;         // v8
   vtable->set_frame_publisher = tp_set_frame_publisher;  // v8
   vtable->declared_buses    = tcp_declared_buses;  // v8
-  vtable->set_time_source   = nullptr;             // v9: see tier 3 step 2
+  vtable->set_time_source   = tp_set_time_source;  // v9
 
   auto* bp = new BoatPlugin();
   bp->vtable = vtable;

@@ -9,7 +9,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -72,9 +71,10 @@ struct TcpConnection {
   // Pending outgoing data
   std::vector<uint8_t> send_buffer;
 
-  // Retransmit
+  // Retransmit. Deadlines are absolute nanoseconds on the host clock
+  // (TcpPlugin::NowNs), not steady_clock time points -- see TcpPlugin.
   std::vector<uint8_t> unacked_segment;
-  std::chrono::steady_clock::time_point retransmit_at;
+  std::uint64_t retransmit_at_ns{0};
   int       retry_count{0};
 
   // Callbacks
@@ -88,19 +88,19 @@ struct TcpConnection {
   uint32_t  peer_window{65535};
 
   // Keepalive
-  std::chrono::steady_clock::time_point last_activity;
+  std::uint64_t last_activity_ns{0};
   int keepalive_probes_sent{0};
 
   // Zero-window probe (persist timer)
   bool persist_active{false};
-  std::chrono::steady_clock::time_point persist_at;
+  std::uint64_t persist_at_ns{0};
   int persist_count{0};
 
   // Out-of-order receive buffer: seq_start → {seq_start, data}
   std::map<uint32_t, std::vector<uint8_t>> receive_buffer;
 
   // TIME_WAIT expiry
-  std::chrono::steady_clock::time_point time_wait_until{};
+  std::uint64_t time_wait_until_ns{0};
 };
 
 // ── Listener state ────────────────────────────────────────────────────────
@@ -133,9 +133,18 @@ struct TcpPlugin {
   std::unordered_map<int, TcpListener>  listeners;
   int next_id{1};
   std::recursive_mutex  mutex;
-  std::thread tx_thread;
-  std::condition_variable_any tx_cv;
-  std::atomic<bool> running{false};
+
+  // v9 host clock. TCP used to run its own TX thread against
+  // steady_clock::now() with on_tick doing nothing but notifying its condition
+  // variable, which put retransmit, persist, keepalive and TIME_WAIT on a time
+  // domain nothing else shared -- under BOAT_TIME_SOURCE=virtual the rest of
+  // the pipeline advanced logically while every TCP timer still waited on wall
+  // time. Those timers are now serviced from on_tick against the host's clock.
+  // Falls back to steady_clock when no host supplied one, so the plugin still
+  // works when loaded standalone.
+  BoatNowNsFn         now_ns_fn{nullptr};
+  void*               now_ns_ctx{nullptr};
+  [[nodiscard]] std::uint64_t NowNs() const;
 
   uint32_t retry_ms{1000};
   uint32_t max_retries{5};
