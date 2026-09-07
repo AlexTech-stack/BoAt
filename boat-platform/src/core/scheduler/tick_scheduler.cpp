@@ -193,7 +193,11 @@ void TickScheduler::ExecuteTickSynchronously(std::uint64_t tick) {
 }
 
 void TickScheduler::CoordinatorLoop() {
-  // Each tick represents 10 ms of simulation time; sleep to match real time.
+  // Free-running pacing only: a tick is a dimensionless counter (SimClock
+  // carries no time unit), so this merely throttles the coordinator to a
+  // best-effort ~1 ms of wall clock per tick. It is deliberately not a
+  // deterministic time base -- reproducible tick boundaries require driving
+  // Step() explicitly (see ExecuteTickSynchronously).
   constexpr auto kTickInterval = std::chrono::milliseconds(1);
   while (running_.load(std::memory_order_acquire)) {
     {
