@@ -665,3 +665,54 @@ TEST_CASE("ReplayController overrides Ethernet iface and MAC via ReplayConfig",
   REQUIRE(captured_dst_mac[5] == 0x01);
   REQUIRE(captured_src_mac[5] == 0x02);
 }
+
+/* Replay's deadline maths carried the same unit confusion the PDU router did:
+   a record's trace tick is a count of *milliseconds* (FrameTimestampToMs), but
+   the offset was computed as tick_delta * tick_duration_, i.e. milliseconds
+   multiplied by nanoseconds-per-tick. Those agree only at the 1 ms default,
+   which is why no existing test caught it -- none of them set the tick
+   interval. At BOAT_NODE_TICK_US=100 a trace replayed ten times too fast.
+
+   Playback rate is a property of the trace and the speed multiplier; the
+   gateway's tick resolution has nothing to do with it. */
+TEST_CASE("Replay pacing is independent of the node tick interval",
+          "[unit][replay][tick-units]") {
+  auto elapsed_for_tick_us = [](const char* tick_us) {
+    if (tick_us) ::setenv("BOAT_NODE_TICK_US", tick_us, 1);
+    else         ::unsetenv("BOAT_NODE_TICK_US");
+    ::unsetenv("BOAT_NODE_TICK_MS");
+
+    MockTraceStore trace_store;
+    MockEventStore event_store;
+    boat::core::EventBus event_bus;
+    ReplayController controller(trace_store, event_store, event_bus);
+
+    // 5 records, 10 ms apart => 40 ms of trace spanned after the first.
+    trace_store.traces["paced"] = BuildSequentialTrace(0, 5);
+
+    ReplayConfig config;
+    config.trace_id = "paced";
+    config.speed = ReplaySpeed::REAL_TIME;
+    config.speed_multiplier = 1.0;
+
+    const auto begin = std::chrono::steady_clock::now();
+    controller.Start(config);
+    while (controller.IsRunning()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const auto took = std::chrono::steady_clock::now() - begin;
+    controller.Stop();
+    ::unsetenv("BOAT_NODE_TICK_US");
+
+    REQUIRE(event_store.inserted.size() == 5);
+    return std::chrono::duration_cast<std::chrono::milliseconds>(took);
+  };
+
+  // ~40 ms of trace at 1x, whatever the tick resolution happens to be.
+  const auto at_default = elapsed_for_tick_us(nullptr);
+  const auto at_100us   = elapsed_for_tick_us("100");
+
+  INFO("default=" << at_default.count() << "ms  100us=" << at_100us.count() << "ms");
+  REQUIRE(at_default >= std::chrono::milliseconds(30));
+  REQUIRE(at_100us   >= std::chrono::milliseconds(30));
+}

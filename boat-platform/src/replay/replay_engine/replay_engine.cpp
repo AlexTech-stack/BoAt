@@ -427,8 +427,14 @@ void ReplayController::ReplayLoop() {
           // instead.
           const std::uint64_t tick_delta =
               (tick > replay_base_tick_) ? (tick - replay_base_tick_) : 0;
-          const auto tick_offset_ns = static_cast<double>(
-              tick_delta * tick_duration_.count());
+          // A record's trace tick is a count of *milliseconds*
+          // (FrameTimestampToMs), so this offset is milliseconds -- not ticks.
+          // tick_duration_ sizes the timer's resolution and has no place in
+          // the calculation; multiplying by it made playback speed scale with
+          // BOAT_NODE_TICK_US, so a 100 us tick replayed ten times too fast.
+          constexpr double kNsPerTraceTick = 1'000'000.0;
+          const auto tick_offset_ns =
+              static_cast<double>(tick_delta) * kNsPerTraceTick;
           const auto deadline_offset = std::chrono::nanoseconds(
               static_cast<std::uint64_t>(tick_offset_ns / speed_multiplier));
           tick_timer_->WaitUntil(replay_base_time_ + deadline_offset);
