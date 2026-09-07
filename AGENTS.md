@@ -130,7 +130,25 @@ pip install -e ./sdk/python[dev] && pip install -e ./cli
 pytest sdk/python/tests cli/tests -v
 ```
 
-Test binary naming: `boat_unit_*` (unit), `boat_integration_*`, `boat_hil_*`, `boat_determinism_seed`.
+Test binary naming: `boat_unit_*` (unit), `boat_integration_*`, `boat_hil_*`, `boat_determinism_*`.
+
+Two determinism tests, and the difference matters. `boat_determinism_seed` links only `boat_core`: it seeds
+a `mt19937_64` twice and compares the streams, so it verifies the PRNG and nothing else — it cannot fail.
+`boat_determinism_replay` (`src/tests/determinism/test_replay_determinism.cpp`) is the system-level test:
+it writes a length-delimited `boat.v1.Frame` trace, replays it twice through
+`ReplayController` → `FrameSink` → `CanBusRegistry` → a recording driver, and diffs the wire log. A 1 ms
+tick thread mirrors the gateway's node tick thread so delivery races tick advancement as it does in
+production.
+
+It asserts two different things:
+
+- **Frame content and ordering** — hard `REQUIRE`. Bit-identical across runs, including under CPU
+  oversubscription (measured 10/10).
+- **Tick attribution** — tagged `[!mayfail]`. Replay and the node tick thread are independent clocks that
+  are never coupled, so which tick a frame lands in is not decided by the trace. Both sides schedule
+  against absolute deadlines (`TickTimer::WaitUntil`), which keeps them in lockstep on an idle host
+  (30/30 identical) but not under contention (0/6 identical, and the tick thread drops ticks outright).
+  Promote this to a plain `REQUIRE` once replay delivery and plugin ticks share one clock.
 
 Manual verification runbooks for specific feature areas live under `boat-platform/docs/testing/`, e.g. `cantp-plugin-manager-verification.md` (CanTp gRPC bridge, multi-instance `--iface`, `NodePluginService`/`boat plugin list`, PDU-bus dispatch).
 

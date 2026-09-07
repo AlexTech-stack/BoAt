@@ -67,7 +67,7 @@ CLI commands, it is pre-v8 and no longer correct.
 
 8. **`FrameService.SendFrame` for non-wire buses.** Every producer — plugins, replay, and gRPC `FrameService.SendFrame` — transmits through the one `FrameSink`. TCP and PDU are not wire buses: a **TCP** send returns `UNIMPLEMENTED` (TCP is driven through the TCP plugin's connection API, not raw frame send); a **PDU** send is dispatched to the `pdu_router` plugin via `PluginManager::DispatchFrame`.
 
-9. **Determinism remains the hard invariant.** The `boat_determinism_seed` test runs the same seed twice and asserts **bit-identical** output. Don't introduce unseeded randomness or nondeterministic ordering in core/scheduling/replay code.
+9. **Determinism remains the hard invariant.** Two tests cover it. `boat_determinism_seed` runs the same seed twice and asserts **bit-identical** output — but it links only `boat_core`, so it pins the PRNG, not the product claim. `boat_determinism_replay` is the system-level one: it drives a trace through `ReplayController` → `FrameSink` → `CanBusRegistry` → driver twice and compares what reached the wire. Frame **content and ordering** are bit-identical and asserted hard. **Tick attribution** (which tick a replayed frame lands in) is *not* coupled — replay and the node tick thread are separate clocks. It holds on an idle host and diverges under CPU contention, so that case is tagged `[!mayfail]` pending the clock coupling work. Don't introduce unseeded randomness or nondeterministic ordering in core/scheduling/replay code.
 
 **Loopback prevention:** the registry send path is the **single site** that tags locally-sent frames — `BOAT_CAN_FLAG_SELF_SENT` (0x08) / `BOAT_ETH_FLAG_SELF_SENT` (0x01) — so plugins can tell their own echoes from wire RX in `on_frame`. Keep this tagging in the registry (not scattered across plugins) when touching frame flow.
 
@@ -88,7 +88,7 @@ ctest --test-dir build/debug -R TestName --timeout 30 --output-on-failure   # si
 ctest --test-dir build/debug -N                                             # list tests
 ```
 
-Test-binary naming: `boat_unit_*`, `boat_integration_*`, `boat_hil_*`, `boat_determinism_seed`. `src/tests/unit/test_frame.cpp` (`boat_unit_frame`) is a good reference for the unified frame model.
+Test-binary naming: `boat_unit_*`, `boat_integration_*`, `boat_hil_*`, `boat_determinism_{seed,replay}`. `src/tests/unit/test_frame.cpp` (`boat_unit_frame`) is a good reference for the unified frame model.
 
 **Three different things are called "test" here** — be precise about which you mean:
 `ctest`/`pytest` (tests of the codebase itself); `test/*.md` (the **manual**, hand-verified

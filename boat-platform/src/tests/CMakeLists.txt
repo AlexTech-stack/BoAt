@@ -153,6 +153,33 @@ add_executable(boat_determinism_seed determinism/test_seed.cpp)
 target_link_libraries(boat_determinism_seed PRIVATE boat_core Catch2::Catch2WithMain)
 catch_discover_tests(boat_determinism_seed)
 
+# System-level counterpart to boat_determinism_seed: drives a real trace through
+# ReplayController -> FrameSink -> CanBusRegistry -> driver, twice, and compares
+# what reached the wire. Unlike the seed test it links the replay and HIL stacks,
+# so it can actually observe the property README.md advertises.
+add_executable(
+  boat_determinism_replay
+  determinism/test_replay_determinism.cpp
+  ../gateway/grpc_gateway/frame_sink.cpp
+)
+target_include_directories(boat_determinism_replay PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/hil
+  ${BOAT_PROTO_GENERATED_DIR}
+)
+target_link_libraries(
+  boat_determinism_replay
+  PRIVATE
+    boat_core
+    boat_hil
+    boat_store
+    boat_replay
+    boat_proto_generated
+    protobuf::libprotobuf
+    Catch2::Catch2WithMain
+)
+catch_discover_tests(boat_determinism_replay)
+
 add_executable(boat_unit_ethernet_bus_registry unit/test_ethernet_bus_registry.cpp)
 target_include_directories(boat_unit_ethernet_bus_registry PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
 target_link_libraries(boat_unit_ethernet_bus_registry PRIVATE boat_hil Catch2::Catch2WithMain)
