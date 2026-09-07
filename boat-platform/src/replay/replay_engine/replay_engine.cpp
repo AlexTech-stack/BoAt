@@ -142,22 +142,32 @@ void ReplayController::Start(const ReplayConfig& config) {
   requested_seek_tick_.store(config.start_tick);
   seek_pending_.store(true);
   paused_.store(false);
-  running_.store(true);
   {
     std::lock_guard<std::mutex> lock(error_mutex_);
     last_error_.clear();
   }
 
-  ParseTickDurationFromEnv();
-  // Pinned to real time -- see the matching note on the node tick thread in
-  // main.cpp. Replay pacing and plugin ticks have to move to one clock together
-  // or not at all; flipping either alone changes nothing.
-  tick_timer_ = boat::hil::TickTimer::Create(tick_duration_,
-                                             boat::hil::TimeSource::kRealTime);
-  replay_base_time_ = std::chrono::steady_clock::now();
-  replay_base_tick_ = config.start_tick;
+  // The driving TickAuthority's interval wins when one has been supplied;
+  // only a standalone controller falls back to the environment.
+  if (!tick_interval_explicit_) ParseTickDurationFromEnv();
 
-  replay_thread_ = std::thread(&ReplayController::ReplayLoop, this);
+  pump_offset_         = 0;
+  pump_has_records_    = false;
+  authority_anchored_  = false;
+  authority_base_tick_ = 0;
+  loop_resume_tick_    = 0;
+  replay_base_tick_    = config.start_tick;
+
+  // No thread and no clock: a TickAuthority phase drives this controller via
+  // PumpDueRecords. An empty trace has nothing to deliver, so it is finished
+  // the moment it starts.
+  running_.store(!mapped_trace_.empty());
+}
+
+void ReplayController::SetTickInterval(std::chrono::nanoseconds interval) {
+  if (interval <= std::chrono::nanoseconds::zero()) return;
+  tick_duration_          = interval;
+  tick_interval_explicit_ = true;
 }
 
 void ReplayController::StartFromEvents(const boat::store::EventFilter& filter,
@@ -225,13 +235,8 @@ void ReplayController::Resume() {
 
 void ReplayController::Stop() {
   const bool was_running = running_.exchange(false);
+  paused_.store(false);
   pause_cv_.notify_all();
-  if (replay_thread_.joinable()) {
-    replay_thread_.join();
-  }
-  if (tick_timer_) {
-    tick_timer_->Stop();
-  }
   if (was_running || !active_config_.trace_id.empty()) {
     trace_store_.UnmapTrace(active_config_.trace_id);
   }
@@ -366,117 +371,105 @@ void ReplayController::DispatchRecord(const boat::v1::Frame& pf, std::uint64_t t
   current_tick_.store(tick);
 }
 
-void ReplayController::ReplayLoop() {
+bool ReplayController::IsRecordDue(std::uint64_t record_tick,
+                                  std::uint64_t authority_tick) const {
+  double multiplier = active_config_.speed_multiplier;
+  if (multiplier <= 0.0) multiplier = 1.0;
+
+  const std::uint64_t elapsed_ticks =
+      authority_tick > authority_base_tick_ ? authority_tick - authority_base_tick_ : 0;
+  const double elapsed_ns =
+      static_cast<double>(elapsed_ticks) * static_cast<double>(tick_duration_.count());
+
+  // Trace ticks are milliseconds (FrameTimestampToMs). A record earlier than
+  // the pass anchor -- possible in a hand-edited trace -- is due immediately
+  // rather than being allowed to underflow this unsigned delta.
+  const std::uint64_t delta_ms =
+      record_tick > replay_base_tick_ ? record_tick - replay_base_tick_ : 0;
+  const double required_ns = (static_cast<double>(delta_ms) * 1'000'000.0) / multiplier;
+
+  return elapsed_ns >= required_ns;
+}
+
+void ReplayController::AnchorAt(std::uint64_t target_tick, std::uint64_t authority_tick) {
+  // Anchor to the tick of the record actually landed on, not the raw target --
+  // trace timestamps are absolute epoch milliseconds, so a target of 0 would
+  // otherwise anchor the schedule decades before the first real record.
+  std::uint64_t landed_tick = target_tick;
+  pump_offset_ = 0;
+  SeekToTick(target_tick, pump_offset_, landed_tick);
+  current_tick_.store(landed_tick);
+  replay_base_tick_    = landed_tick;
+  authority_base_tick_ = authority_tick;
+  authority_anchored_  = true;
+}
+
+void ReplayController::FinishPass(std::uint64_t authority_tick) {
+  if (active_config_.loop_delay_ms > 0 && pump_has_records_) {
+    const auto delay_ns =
+        std::chrono::nanoseconds(std::chrono::milliseconds(active_config_.loop_delay_ms));
+    std::uint64_t delay_ticks =
+        static_cast<std::uint64_t>(delay_ns.count() / tick_duration_.count());
+    if (delay_ticks == 0) delay_ticks = 1;
+    loop_resume_tick_ = authority_tick + delay_ticks;
+    return;
+  }
+  running_.store(false);
+  paused_.store(false);
+  pause_cv_.notify_all();
+}
+
+void ReplayController::PumpDueRecords(std::uint64_t authority_tick) {
+  if (!running_.load()) return;
+
   try {
     if (mapped_trace_.empty()) {
       running_.store(false);
       return;
     }
 
-    const bool looping = active_config_.loop_delay_ms > 0;
+    if (seek_pending_.exchange(false)) {
+      AnchorAt(requested_seek_tick_.load(), authority_tick);
+    } else if (!authority_anchored_) {
+      authority_base_tick_ = authority_tick;
+      authority_anchored_  = true;
+    }
 
-    do {
-      std::size_t offset = 0;
-      std::chrono::steady_clock::time_point last_record_time;
-      bool has_records = false;
+    if (paused_.load()) return;
 
-      while (running_.load() && offset + sizeof(std::uint32_t) <= mapped_trace_.size()) {
-        {
-          std::unique_lock<std::mutex> lock(pause_mutex_);
-          pause_cv_.wait(lock, [this] {
-            return !running_.load() || !paused_.load() || seek_pending_.load();
-          });
-          if (!running_.load()) {
-            break;
-          }
-        }
+    if (loop_resume_tick_ != 0) {
+      if (authority_tick < loop_resume_tick_) return;
+      loop_resume_tick_ = 0;
+      AnchorAt(active_config_.start_tick, authority_tick);
+    }
 
-        if (seek_pending_.exchange(false)) {
-          const auto target_tick = requested_seek_tick_.load();
-          // Anchor to the actual tick of the record we land on, not the
-          // raw requested target -- trace timestamps are absolute (epoch
-          // milliseconds), so a target of 0 would otherwise leave the
-          // schedule anchored decades before the first real record.
-          std::uint64_t landed_tick = target_tick;
-          SeekToTick(target_tick, offset, landed_tick);
-          current_tick_.store(landed_tick);
-          replay_base_time_ = std::chrono::steady_clock::now();
-          replay_base_tick_ = landed_tick;
-          continue;
-        }
+    // STEP_BY_STEP ignores due-times entirely: one record per Resume().
+    const bool stepping = active_config_.speed == ReplaySpeed::STEP_BY_STEP;
 
-        // ── Read length-delimited protobuf record ───────────────────────
-        boat::v1::Frame pf;
-        const auto raw = ReadRecordAt(offset, pf);
+    while (running_.load() &&
+           pump_offset_ + sizeof(std::uint32_t) <= mapped_trace_.size()) {
+      // Read at a probe cursor so a record that is not yet due stays unread
+      // and is reconsidered on the next tick.
+      std::size_t probe = pump_offset_;
+      boat::v1::Frame pf;
+      const auto raw = ReadRecordAt(probe, pf);
+      const std::uint64_t record_tick = FrameTimestampToMs(pf.timestamp_ns());
 
-        std::uint64_t tick = FrameTimestampToMs(pf.timestamp_ns());
+      if (!stepping && !IsRecordDue(record_tick, authority_tick)) break;
 
-        // ── Absolute-time scheduling ────────────────────────────────────
-        double speed_multiplier = active_config_.speed_multiplier;
-        if (speed_multiplier <= 0.0) {
-          speed_multiplier = 1.0;
-        }
-        if (active_config_.speed == ReplaySpeed::REAL_TIME ||
-            active_config_.speed == ReplaySpeed::ACCELERATED) {
-          // Traces are expected to be timestamp-ordered, but a record
-          // earlier than the replay's base tick (e.g. from a hand-edited
-          // trace) must not be allowed to underflow this unsigned delta --
-          // that previously produced a deadline hundreds of millions of
-          // years out, which stalls this frame and every RPC that touches
-          // the replay controller afterward. Clamp to "play immediately"
-          // instead.
-          const std::uint64_t tick_delta =
-              (tick > replay_base_tick_) ? (tick - replay_base_tick_) : 0;
-          // A record's trace tick is a count of *milliseconds*
-          // (FrameTimestampToMs), so this offset is milliseconds -- not ticks.
-          // tick_duration_ sizes the timer's resolution and has no place in
-          // the calculation; multiplying by it made playback speed scale with
-          // BOAT_NODE_TICK_US, so a 100 us tick replayed ten times too fast.
-          constexpr double kNsPerTraceTick = 1'000'000.0;
-          const auto tick_offset_ns =
-              static_cast<double>(tick_delta) * kNsPerTraceTick;
-          const auto deadline_offset = std::chrono::nanoseconds(
-              static_cast<std::uint64_t>(tick_offset_ns / speed_multiplier));
-          tick_timer_->WaitUntil(replay_base_time_ + deadline_offset);
-        }
+      pump_offset_      = probe;
+      pump_has_records_ = true;
+      DispatchRecord(pf, record_tick, raw);
 
-        last_record_time = std::chrono::steady_clock::now();
-        has_records = true;
-
-        DispatchRecord(pf, tick, raw);
-
-        if (active_config_.speed == ReplaySpeed::STEP_BY_STEP) {
-          paused_.store(true);
-          std::unique_lock<std::mutex> lock(pause_mutex_);
-          pause_cv_.wait(lock, [this] {
-            return !running_.load() || !paused_.load() || seek_pending_.load();
-          });
-          if (!running_.load()) {
-            break;
-          }
-        }
+      if (stepping) {
+        paused_.store(true);
+        return;
       }
+    }
 
-      if (!running_.load()) {
-        break;
-      }
-
-      if (looping && has_records) {
-        auto target = last_record_time + std::chrono::milliseconds(active_config_.loop_delay_ms);
-        auto now = std::chrono::steady_clock::now();
-        if (target > now) {
-          std::this_thread::sleep_for(target - now);
-        }
-        replay_base_time_ = target;
-        // Same absolute-tick anchoring as the seek path above -- re-derive
-        // the actual tick of the record the next pass will start on rather
-        // than reusing the raw configured start_tick.
-        std::size_t restart_offset = 0;
-        std::uint64_t landed_tick = active_config_.start_tick;
-        SeekToTick(active_config_.start_tick, restart_offset, landed_tick);
-        replay_base_tick_ = landed_tick;
-      }
-    } while (running_.load() && looping);
+    if (pump_offset_ + sizeof(std::uint32_t) > mapped_trace_.size()) {
+      FinishPass(authority_tick);
+    }
   } catch (const std::exception& ex) {
     {
       std::lock_guard<std::mutex> lock(error_mutex_);
@@ -485,7 +478,6 @@ void ReplayController::ReplayLoop() {
     paused_.store(false);
     running_.store(false);
     pause_cv_.notify_all();
-    return;
   } catch (...) {
     {
       std::lock_guard<std::mutex> lock(error_mutex_);
@@ -494,12 +486,7 @@ void ReplayController::ReplayLoop() {
     paused_.store(false);
     running_.store(false);
     pause_cv_.notify_all();
-    return;
   }
-
-  paused_.store(false);
-  running_.store(false);
-  pause_cv_.notify_all();
 }
 
 void ReplayController::PushEvent(std::uint64_t tick, std::string payload) {

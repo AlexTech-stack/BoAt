@@ -57,6 +57,25 @@ class ReplayController {
   void Start(const ReplayConfig& config);
   void StartFromEvents(const boat::store::EventFilter& filter,
                        const ReplayConfig& config = {});
+
+  /* Deliver every record that has come due by `authority_tick`.
+     
+     ReplayController owns no thread and no clock: a TickAuthority phase calls
+     this once per tick, after the plugins have been ticked, so a replayed
+     frame always lands in a definite tick rather than wherever the host
+     scheduler happened to put it. Records are due on elapsed authority ticks
+     scaled by speed_multiplier -- no wall clock is consulted, which is what
+     makes two runs agree.
+
+     Safe to call when stopped or paused; it does nothing then. */
+  void PumpDueRecords(std::uint64_t authority_tick);
+
+  /* How long one authority tick is. Must match the interval the driving
+     TickAuthority was started with, since due-times are measured in ticks.
+     Defaults to BOAT_NODE_TICK_US/_MS (1 ms) so a standalone controller
+     behaves sensibly without one. */
+  void SetTickInterval(std::chrono::nanoseconds interval);
+
   void Seek(std::uint64_t tick);
   void Pause();
   void Resume();
@@ -81,9 +100,22 @@ class ReplayController {
   const ReplayConfig& GetActiveConfig() const;
 
  private:
-  void ReplayLoop();
   bool SeekToTick(std::uint64_t tick, std::size_t& offset, std::uint64_t& landed_tick) const;
   void ParseTickDurationFromEnv();
+
+  /* Has `record_tick` come due as of `authority_tick`? Pure function of the
+     two anchors, the tick interval and the speed multiplier -- deliberately
+     free of any clock reading. */
+  [[nodiscard]] bool IsRecordDue(std::uint64_t record_tick,
+                                 std::uint64_t authority_tick) const;
+
+  /* Reset the read cursor and re-anchor both clocks to the record we land on
+     seeking to `target_tick`. */
+  void AnchorAt(std::uint64_t target_tick, std::uint64_t authority_tick);
+
+  /* Called when the read cursor reaches the end of the trace: either arm the
+     loop delay or finish the replay. */
+  void FinishPass(std::uint64_t authority_tick);
 
   /* Parse the length-delimited protobuf record starting at `offset` into `pf`,
      advancing `offset` past it. Returns a view of the record's raw bytes
@@ -110,7 +142,6 @@ class ReplayController {
   std::atomic<std::uint64_t> current_tick_{0};
   std::atomic<bool> running_{false};
   std::atomic<bool> paused_{false};
-  std::thread replay_thread_;
   std::condition_variable pause_cv_;
   std::mutex pause_mutex_;
   mutable std::mutex error_mutex_;
@@ -126,11 +157,23 @@ class ReplayController {
   std::deque<ReplayEventEntry> event_queue_;
   std::mutex event_queue_mutex_;
 
-  // TickTimer-based absolute-time scheduling (drift-free).
-  std::unique_ptr<boat::hil::TickTimer> tick_timer_;
+  // Tick-driven scheduling. tick_duration_ is how long one authority tick is;
+  // replay_base_tick_ is the trace tick the current pass is anchored to and
+  // authority_base_tick_ the authority tick it was anchored at. A record's due
+  // time is the difference between those two deltas -- no wall clock anywhere.
   std::chrono::nanoseconds tick_duration_{std::chrono::milliseconds(1)};
-  std::chrono::steady_clock::time_point replay_base_time_;
   std::uint64_t replay_base_tick_{0};
+  std::uint64_t authority_base_tick_{0};
+  bool          authority_anchored_{false};
+  // Set once SetTickInterval() has been called, so a later Start() does not
+  // clobber the driving authority's interval with the environment's.
+  bool          tick_interval_explicit_{false};
+
+  // Read cursor into mapped_trace_, and the tick at which a looping replay may
+  // begin its next pass (0 = not waiting on a loop delay).
+  std::size_t   pump_offset_{0};
+  bool          pump_has_records_{false};
+  std::uint64_t loop_resume_tick_{0};
 };
 
 }  // namespace boat::replay

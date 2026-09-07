@@ -40,6 +40,7 @@
 #include "event_store/event_store.h"
 #include "gateway/grpc_gateway/frame_sink.h"
 #include "pdu/tick_timer.h"
+#include "tick_authority.h"
 #include "replay_engine/replay_engine.h"
 #include "trace_store/trace_store.h"
 
@@ -153,17 +154,17 @@ std::vector<WireLogEntry> RunReplayOnce(const std::string& prefix,
     auto driver = std::make_shared<RecordingCanDriver>(observer_tick);
     REQUIRE(can_registry.Add("vcan0", driver, event_bus));
 
-    // Mirrors the gateway's node tick thread: an independent 1 ms timerfd
-    // domain that replay knows nothing about.
-    std::atomic<bool> ticking{true};
-    auto timer = boat::hil::TickTimer::Create(std::chrono::milliseconds(1));
-    std::thread tick_thread([&observer_tick, &ticking, &timer]() {
-      while (ticking.load(std::memory_order_acquire)) {
-        if (!timer->WaitForNextTick()) break;
-        observer_tick.fetch_add(1, std::memory_order_release);
-      }
+    // Exactly the gateway's wiring: one authority, plugins first, replay
+    // second. The plugin phase stands in for node_manager.TickAll.
+    boat::hil::TickAuthority authority;
+    authority.AddPhase("node_plugins", [&observer_tick](std::uint64_t tick) {
+      observer_tick.store(tick, std::memory_order_release);
+    });
+    authority.AddPhase("replay", [&replay_controller](std::uint64_t tick) {
+      replay_controller.PumpDueRecords(tick);
     });
 
+    replay_controller.SetTickInterval(std::chrono::milliseconds(1));
     replay_controller.SetEventForwarder(
         [&frame_sink](const boat::core::Frame& f) { frame_sink.Publish(f); });
 
@@ -172,16 +173,15 @@ std::vector<WireLogEntry> RunReplayOnce(const std::string& prefix,
     cfg.speed = boat::replay::ReplaySpeed::REAL_TIME;
     cfg.buses = {"vcan0"};
     replay_controller.Start(cfg);
+    authority.Start(std::chrono::milliseconds(1), boat::hil::TimeSource::kRealTime);
 
     while (replay_controller.IsRunning()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    authority.Stop();
     replay_controller.Stop();
     INFO("replay error: " << replay_controller.LastError());
     REQUIRE_FALSE(replay_controller.HasError());
-
-    ticking.store(false, std::memory_order_release);
-    tick_thread.join();
 
     log = driver->Log();
   }
@@ -228,38 +228,25 @@ TEST_CASE("Replay puts bit-identical frame content on the wire across runs",
   REQUIRE(ContentProjection(run_a) == ContentProjection(run_b));
 }
 
-/* Known gap, deliberately not a hard failure yet.
-
-   Replay paces itself on its own thread while plugins are ticked by a separate
-   wall-clock thread; the two are never coupled.  Which tick a replayed frame
-   lands in is therefore not decided by the trace.
-
-   Measured on a 12-core host, 8 frames spaced 15 ms, two runs compared:
-
-     idle:                30/30 runs identical (ticks land on 0 15 30 ... 105)
-     2x CPU oversubscribed: 0/6 runs identical; the tick thread also loses
-                            ticks outright, so frames land early AND the tick
-                            numbering itself drifts between runs
-
-   So this is latent rather than routinely visible: both sides schedule against
-   absolute deadlines (TickTimer::WaitUntil), which holds them in lockstep on an
-   unloaded machine.  Contention -- a busy CI runner, a HIL box doing real work
-   -- breaks it.  Any plugin whose behavior depends on the tick it observes a
-   frame in (CanTp timeout windows, PduRouter cyclic phasing) inherits that.
-
-   Note the sibling test above: frame *content and ordering* stay bit-identical
-   even under the same load (10/10).  Only tick attribution diverges.
-
-   Tagged [!mayfail] so it reports without breaking CI.  Promote it to a plain
-   REQUIRE once replay delivery and plugin ticks are driven from one clock;
-   that is the change this test exists to gate. */
+/* Tick attribution, now a hard requirement.
+ 
+   Replay used to pace itself on its own thread while plugins were ticked by a
+   separate wall-clock thread, so which tick a frame landed in was decided by
+   host scheduling: identical on an idle host (30/30) but not under contention
+   (0/6, and the tick thread dropped ticks so the numbering itself drifted).
+ 
+   Both now run as ordered phases of one TickAuthority -- plugins, then replay
+   delivery, on the same thread, every tick. A record's due time is computed
+   from elapsed *ticks* rather than elapsed wall time, so a loaded host makes
+   the authority tick later in real terms without ever changing which tick a
+   record comes due on. That is what lets this be a plain REQUIRE. */
 TEST_CASE("Replay attributes frames to identical ticks across runs",
-          "[determinism][replay][system][!mayfail]") {
+          "[determinism][replay][system]") {
   const auto trace = BuildCanTrace();
 
   const auto run_a = RunReplayOnce("boat_det_tick_a", trace);
   const auto run_b = RunReplayOnce("boat_det_tick_b", trace);
 
   REQUIRE(run_a.size() == run_b.size());
-  CHECK(TickAttributedProjection(run_a) == TickAttributedProjection(run_b));
+  REQUIRE(TickAttributedProjection(run_a) == TickAttributedProjection(run_b));
 }

@@ -615,10 +615,41 @@ dependency above.
 unrecognised values all yield real time — a typo must never quietly stop a HIL run pacing real
 hardware). `Create(interval, TimeSource)` ignores the environment.
 
-**The gateway does not honour `BOAT_TIME_SOURCE` yet.** Both production call sites — the node
-tick thread in `main.cpp` and `ReplayController::Start` — pass `TimeSource::kRealTime`
-explicitly and say why in a comment. Replay pacing and plugin ticks have to move to one clock
-together; switching either alone just spins that loop. Covered by `boat_unit_tick_timer`.
+The gateway passes `TimeSource::kRealTime` explicitly: a bare gateway paces real hardware, so
+going virtual is a deliberate deployment choice, not an env default. Covered by
+`boat_unit_tick_timer`.
+
+### TickAuthority — one clock, ordered phases
+
+`boat::hil::TickAuthority` (`src/hil/tick_authority.{h,cpp}`) owns one `TickTimer` and runs a
+fixed, ordered list of phases every tick, each to completion, on its own thread. `main.cpp`
+registers two:
+
+1. `node_plugins` — `node_manager.TickAll(tick)`, which drives the PDU transmission engine
+2. `replay` — `ReplayController::PumpDueRecords(tick)`
+
+The gateway prints the interval and phase order at startup
+(`[Gateway] Tick authority: 1000 us/tick, phases: node_plugins -> replay`).
+
+This replaced two independent wall-clock threads. **`ReplayController` now owns no thread and
+no clock**: `Start()` maps the trace and anchors the pass, and the replay phase pumps it.
+A record is due when elapsed *authority ticks* (scaled by `speed_multiplier`) reach its
+offset from the pass anchor — no wall clock is read, so a loaded host makes the authority
+tick later in real terms without ever changing which tick a record lands in. That is what
+made `boat_determinism_replay`'s tick-attribution case a hard `REQUIRE`: 10/10 identical
+under 2× CPU oversubscription, where the old design managed 0/6.
+
+Consequences worth knowing:
+
+- A standalone `ReplayController` makes no progress unless something pumps it. Tests use a
+  small `Pump` helper; embedders need a `TickAuthority` or an equivalent loop.
+- `SetTickInterval()` must match the driving authority's interval, since due-times are
+  measured in ticks. Calling it pins the interval so a later `Start()` won't fall back to
+  `BOAT_NODE_TICK_US/_MS`.
+- Pause is now exact: zero records are delivered while paused, rather than "however many the
+  running thread had already begun".
+- Phases run in registration order and a throwing phase is caught (see `PhaseErrorCount()`),
+  so one bad plugin cannot strand replay.
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`.

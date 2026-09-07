@@ -25,6 +25,7 @@
 
 #include "bus_service_impl.h"
 #include "can_bus_registry.h"
+#include "tick_authority.h"
 #include "can_service_impl.h"
 #include "debug_service_impl.h"
 #include "ethernet_bus_registry.h"
@@ -425,7 +426,12 @@ int main() {
     node_manager.DispatchFrame(bf);
   });
 
-  // Start a background tick thread for node plugins and PDU transmission engine.
+  // The single tick authority. Declared here so it outlives the phases it
+  // runs and is stopped before the managers they capture are torn down.
+  boat::hil::TickAuthority tick_authority;
+
+  // Start the tick authority for node plugins, the PDU transmission engine,
+  // and replay delivery.
   // The tick interval sets the minimum achievable PDU cycle time.
   //   BOAT_NODE_TICK_MS=N   — set tick in ms (default 1)
   //   BOAT_NODE_TICK_US=N   — set tick in μs (overrides MS when set)
@@ -452,20 +458,36 @@ int main() {
       }
     }
 
-    // Pinned to real time: the virtual backend exists (BOAT_TIME_SOURCE) but
-    // nothing yet coordinates this thread with the replay clock, so selecting
-    // it here would only spin this loop as fast as the CPU allows. The single
-    // tick authority that makes virtual time meaningful flips this over.
-    auto timer = boat::hil::TickTimer::Create(tick_ns, boat::hil::TimeSource::kRealTime);
+    // One tick authority drives everything that observes a tick, in a fixed
+    // order: node plugins first, then replay delivery. That ordering is what
+    // makes "which tick did this replayed frame land in" a property of the
+    // trace rather than of whichever thread the host scheduler woke first.
+    // Replay owns no clock of its own -- it is pumped from here.
+    replay_controller.SetTickInterval(tick_ns);
+
+    tick_authority.AddPhase("node_plugins", [&node_manager](std::uint64_t tick) {
+      node_manager.TickAll(tick);
+      // PduRouter plugin handles its own OnTick via PluginManager::TickAll
+    });
+    tick_authority.AddPhase("replay", [&replay_controller](std::uint64_t tick) {
+      replay_controller.PumpDueRecords(tick);
+    });
+
+    // Still pinned to real time: a bare gateway must pace real hardware.
+    // BOAT_TIME_SOURCE=virtual becomes meaningful now that both consumers
+    // share this clock, but selecting it is a separate, deliberate step.
+    tick_authority.Start(tick_ns, boat::hil::TimeSource::kRealTime);
     g_node_tick_running.store(true, std::memory_order_release);
-    std::thread([&node_manager, timer = std::move(timer)]() {
-      std::uint64_t tick = 0;
-      while (g_node_tick_running.load(std::memory_order_acquire)) {
-        if (!timer->WaitForNextTick()) break;
-        node_manager.TickAll(tick++);
-        // PduRouter plugin handles its own OnTick via PluginManager::TickAll
-      }
-    }).detach();
+
+    std::string phase_list;
+    for (const auto& name : tick_authority.PhaseNames()) {
+      if (!phase_list.empty()) phase_list += " -> ";
+      phase_list += name;
+    }
+    std::fprintf(stderr, "[Gateway] Tick authority: %lld us/tick, phases: %s\n",
+                 static_cast<long long>(
+                     std::chrono::duration_cast<std::chrono::microseconds>(tick_ns).count()),
+                 phase_list.c_str());
   }
 
   boat::gateway::GatewayContext ctx{
@@ -569,6 +591,7 @@ int main() {
   shutdown_watcher.join();
   sim.scheduler().Stop();
   g_node_tick_running.store(false, std::memory_order_release);
+  tick_authority.Stop();
   node_manager.ShutdownAll();
   eth_registry.StopAll();
   return 0;
