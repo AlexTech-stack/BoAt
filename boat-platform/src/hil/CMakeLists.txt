@@ -16,6 +16,7 @@ add_library(boat_hil STATIC
   pdu/transmission_engine.cpp
   pdu/com/com_signal.cpp
   pdu/tick_timer.cpp
+  tick_authority.cpp
 )
 target_include_directories(boat_hil PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(boat_hil PUBLIC cxx_std_20)

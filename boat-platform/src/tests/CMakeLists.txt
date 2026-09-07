@@ -149,6 +149,11 @@ target_link_libraries(
 )
 catch_discover_tests(boat_integration_replay_service)
 
+add_executable(boat_unit_tick_authority unit/test_tick_authority.cpp)
+target_include_directories(boat_unit_tick_authority PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
+target_link_libraries(boat_unit_tick_authority PRIVATE boat_hil boat_core Catch2::Catch2WithMain)
+catch_discover_tests(boat_unit_tick_authority)
+
 add_executable(boat_unit_tick_timer unit/test_tick_timer.cpp)
 target_include_directories(boat_unit_tick_timer PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
 target_link_libraries(boat_unit_tick_timer PRIVATE boat_hil boat_core Catch2::Catch2WithMain)
