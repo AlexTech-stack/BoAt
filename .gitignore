@@ -17,6 +17,10 @@ boat-platform/build/
 # Recorded trace files (runtime data)
 boat-platform/traces/
 boat-platform/demo/traces/
+traces/
+
+# Capture-derived reverse-engineer PDU database outputs (generated, large)
+boat-platform/config/*_pdu_db*.json
 
 # Runtime state files
 .last_import
