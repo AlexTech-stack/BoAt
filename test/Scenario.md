@@ -79,7 +79,7 @@ Common precondition: gateway running.
 **TestSteps:**
 1. `boat scenario delete` for the id
 2. `boat scenario list`
-3. `boat sim create --scenario-id <deleted-id>`
+3. `boat sim create --scenario <deleted-id>`
 
 **Expected:**
 - Scenario disappears from the list; creating a simulation from it now fails with a
@@ -99,7 +99,7 @@ Common precondition: gateway running.
 - AI backend configured (`boat ai config set --endpoint ... --model ...`), reachable
 
 **TestSteps:**
-1. `boat ai scenario "Create a CAN bus with two ECUs exchanging 0x100 and 0x200"`
+1. `boat ai scenario --desc "Create a CAN bus with two ECUs exchanging 0x100 and 0x200"`
 2. `boat scenario validate` on the generated output
 
 **Expected:**

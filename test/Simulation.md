@@ -15,9 +15,9 @@ valid scenario available (`boat scenario list`).
 - Scenario `my_scenario` exists
 
 **TestSteps:**
-1. `boat sim create --scenario-id my_scenario` (note the returned simulation id)
-2. `boat sim start --simulation-id <id>`
-3. `boat sim state --simulation-id <id>`
+1. `boat sim create --scenario my_scenario` (note the returned simulation id)
+2. `boat sim start <id>`
+3. `boat sim state <id>`
 
 **Expected:**
 - Create returns a simulation id; state transitions IDLE → RUNNING
@@ -37,8 +37,8 @@ valid scenario available (`boat scenario list`).
 - A running simulation producing cyclic traffic
 
 **TestSteps:**
-1. `boat sim pause --simulation-id <id>` — watch `candump vcan0`
-2. `boat sim start --simulation-id <id>` (resume)
+1. `boat sim pause <id>` — watch `candump vcan0`
+2. `boat sim start <id>` (resume)
 
 **Expected:**
 - While paused: no simulation traffic on the bus, state = PAUSED
@@ -58,7 +58,7 @@ valid scenario available (`boat scenario list`).
 - A paused simulation whose scenario sends one frame every N ticks
 
 **TestSteps:**
-1. `boat sim step --simulation-id <id> --ticks 500`
+1. `boat sim step <id> --ticks 500`
 2. Count the frames that appeared during the step (candump timestamped log)
 
 **Expected:**
@@ -79,7 +79,7 @@ valid scenario available (`boat scenario list`).
 - A running simulation with simulation-scoped plugins loaded
 
 **TestSteps:**
-1. `boat sim stop --simulation-id <id>`
+1. `boat sim stop <id>`
 2. `boat sim list`
 3. `boat plugin list`
 
@@ -102,7 +102,7 @@ valid scenario available (`boat scenario list`).
 
 **TestSteps:**
 1. `boat sim list`
-2. `boat sim watch --simulation-id <running-id>` for a few seconds
+2. `boat sim watch <running-id>` for a few seconds
 
 **Expected:**
 - List shows both simulations with correct states
@@ -167,7 +167,7 @@ valid scenario available (`boat scenario list`).
 - Gateway running; scenario id `does_not_exist` absent
 
 **TestSteps:**
-1. `boat sim create --scenario-id does_not_exist`
+1. `boat sim create --scenario does_not_exist`
 
 **Expected:**
 - A clear error naming the unknown scenario; no simulation is created

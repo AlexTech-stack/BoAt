@@ -17,7 +17,7 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 
 **TestSteps:**
 1. `boat pdu route --id 0x100 --transport can --iface vcan0`
-2. `boat pdu send` a payload for PDU 0x100
+2. `boat pdu send --id 0x100 --data AABBCCDD`
 3. `boat pdu list-routes`
 
 **Expected:**
@@ -58,7 +58,7 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 - A cyclic route active (TC_PDU_002)
 
 **TestSteps:**
-1. `boat pdu remove-route` for PDU 0x100
+1. `boat pdu remove-route --id 0x100`
 2. Observe `candump vcan0` for 2 s; run `boat pdu list-routes`
 
 **Expected:**
@@ -142,13 +142,14 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 - At least one PDU database JSON in the config directory
 
 **TestSteps:**
-1. `boat db list`
-2. `boat db show --db pdu_db.json`
-3. `boat db signal-routes --db pdu_db.json --signal MotorSpeed`
+1. `boat db list --db boat-platform/config/pdu_db_example.json`
+2. `boat db show --db boat-platform/config/pdu_db_example.json --msg Motor_1`
+3. `boat db signal-routes --db boat-platform/config/pdu_db_example.json`
 
 **Expected:**
-- List shows available databases; show renders messages/signals; signal-routes
-  resolves the routing of the named signal
+- `list` shows every message in the database; `show` renders the named message with
+  all its signals; `signal-routes` lists the database's signal routing rules
+  (source `DbId.SigId` → destination `DbId.SigId`)
 
 **Verdict:** NOT_TESTED
 

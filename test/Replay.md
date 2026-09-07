@@ -164,8 +164,9 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 
 **Expected:**
 - Import is accepted; the reported frame count equals N and a size is shown
-- The trace is stored on the gateway (visible via `boat trace list`,
-  file at `/tmp/demo.trace`)
+- The trace is stored on the gateway as `/tmp/demo.trace` (there is no
+  list-imported-traces command; `boat trace status` reports recording sessions,
+  not imported traces)
 
 **Verdict:** NOT_TESTED
 
@@ -201,10 +202,11 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - A long trace imported and started (`boat replay start --trace demo --buses vcan0`)
 
 **TestSteps:**
-1. `boat replay pause` — observe `candump`
-2. `boat replay resume`
-3. `boat replay seek` to an earlier tick, observe
-4. `boat replay stop`
+1. `boat replay pause --replay-id trace:demo` — observe `candump`
+2. `boat replay resume --replay-id trace:demo`
+3. `boat replay seek --replay-id trace:demo --tick 0`, observe
+4. `boat replay stop --replay-id trace:demo`
+   (`boat replay start` prints the `replay_id` to use — `trace:<trace-id>`)
 
 **Expected:**
 - Pause halts bus output; resume continues from the pause point; seek repositions

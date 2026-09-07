@@ -180,8 +180,10 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 - `candump vcan0` running
 
 **TestSteps:**
-1. Send a frame through the deprecated wrapper (e.g. `python3 -m boat can send ...`
-   or `boat can ...` where available)
+1. Send a frame through the surviving wrapper:
+   `python3 -m boat --db boat-platform/config/pdu_db_example.json can send --msg Motor_1 --bus vcan0 --data AABBCCDD`
+   (note `--db` comes before the `can` subcommand). The `boat can` console
+   subcommand was removed outright in ABI v8 and no longer exists.
 
 **Expected:**
 - The wrapper still works and produces the same on-bus result as `boat frame send`

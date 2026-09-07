@@ -16,9 +16,11 @@ files built under `build/debug/src/plugins/`.
 - Common preconditions of this TestSet (see top of file)
 
 **TestSteps:**
-1. `boat plugin register` a plugin `.so` at runtime
-2. `boat plugin list`, then `boat plugin info` for it
-3. `boat plugin unload` it, then `boat plugin list` again
+1. `boat plugin register --path <plugin>.so` at runtime
+2. `boat plugin list`, then `boat plugin info <plugin_id> --scope sim` for it
+   (`plugin_id` is the `.so` path as shown by `list`; runtime registration lands in
+   the sim-scoped manager)
+3. `boat plugin unload <plugin_id> --scope sim`, then `boat plugin list` again
 
 **Expected:**
 - Register loads the plugin (initialize called); list/info show it with its metadata;
@@ -145,7 +147,7 @@ files built under `build/debug/src/plugins/`.
 
 **TestSteps:**
 1. Start the gateway with `BOAT_NODE_PLUGINS=/no/such/plugin.so`
-2. `boat plugin register /no/such/plugin.so` on a running gateway
+2. `boat plugin register --path /no/such/plugin.so` on a running gateway
 
 **Expected:**
 - Both paths produce a clear "cannot load" error naming the path; the gateway stays

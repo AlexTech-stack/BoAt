@@ -125,8 +125,8 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 - Gateway running; test environments defined
 
 **TestSteps:**
-1. `boat test list-environments`
-2. `boat test run --trace-format pcapng` against an environment
+1. `boat test list-environments -p boat-platform/config/tests`
+2. `boat test run boat-platform/config/tests/manifest_can_loopback.json --trace-format pcapng`
 
 **Expected:**
 - Environments are listed; the run executes, records traces in the requested format,
@@ -146,8 +146,8 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 - AI backend reachable (`boat ai config set --endpoint http://localhost:11434/v1 --model <m>`)
 
 **TestSteps:**
-1. `boat ai cli "How do I subscribe to CAN frames?"`
-2. `boat ai bus-setup "vcan0 with pdu_router"`
+1. `boat ai cli --query "How do I subscribe to CAN frames?"`
+2. `boat ai bus-setup --query "vcan0 with pdu_router"`
 
 **Expected:**
 - Each returns a plausible, relevant answer/config; with the backend down, a clean
@@ -172,7 +172,8 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 2. `BOAT_HOST=192.168.9.9:50052 boat --host explicit:1234 ...` against a
    reachable gateway at `explicit:1234`
 3. In Python: `BoAtClient()`, `FrameNode()` with `BOAT_HOST` set and unset;
-   inspect `.client.address` / `.address`
+   inspect `BoAtClient().address` and `FrameNode().client.address` (`FrameNode`
+   itself exposes no public `.address`)
 
 **Expected:**
 - Resolution order everywhere is: explicit `--host`/`address=` argument >

@@ -361,7 +361,7 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 
 **TestSteps:**
 1. `python3 tools/dbc2boatjson.py boat-platform/config/pdu_db.schema.json input.dbc out.json --validate`
-2. Open `out.json` in the PDU Editor; `boat db show --db out.json`
+2. Open `out.json` in the PDU Editor; `boat db show --db out.json --msg <MessageName>`
 
 **Expected:**
 - Conversion succeeds and passes schema validation; messages/signals/mux/enums/
