@@ -590,13 +590,13 @@ dependency above.
     time for itself has had that wrong at least once (pdu_router read a tick counter as
     milliseconds, replay multiplied milliseconds by nanoseconds-per-tick, TestHarness assumed
     10 ms per tick). The gateway supplies `TickAuthority::NowNs()`.
-    `can_tp` uses it. **Still to convert: `tcp` reads `steady_clock::now()` directly on its
-    own threads and passes NULL here.**
+    `can_tp`, `tcp`, `pdu_router` and `probe` use it. `someip` passes NULL, legitimately —
+    its `on_tick` is empty and nothing it does depends on elapsed time.
   - `PduRouter` is a plugin (`pdu_router.so`), loaded by the gateway
   - `boat plugin list` shows loaded plugins from **both** `PluginManager` instances (sim-scoped + always-on `node_manager`) in one table with a `scope` column — `PluginService` (register/list/info/unload) only ever reaches the sim-scoped one; `NodePluginService` (list/info/unload, no register) reaches `node_manager`. `boat plugin info|unload` need `--scope {sim,node}`; `--scope node` unload additionally needs `--yes`. See `README.md`'s "Dual PluginManager".
   - `FrameService` gRPC provides unified send/subscribe for all bus types
   - `boat frame send` / `boat frame subscribe` CLI replaces `boat can` / `boat eth`
-  - TCP plugin uses v8 ABI (config-driven, gateway-resident); old C API removed
+  - TCP plugin uses v9 ABI (config-driven, gateway-resident); old C API removed
   - `BoatCanFrame`, `BoatEthFrame` and their associated typedefs are removed
   - Architecture reference: `boat-platform/docs/architecture/system-architecture.md`
 
