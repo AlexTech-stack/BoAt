@@ -5,7 +5,7 @@ import warnings
 
 from boat.v1 import debug_pb2 as boat_dot_v1_dot_debug__pb2
 
-GRPC_GENERATED_VERSION = '1.81.1'
+GRPC_GENERATED_VERSION = '1.83.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -39,6 +39,11 @@ class DebugServiceStub:
                 request_serializer=boat_dot_v1_dot_debug__pb2.StreamRpcEventsRequest.SerializeToString,
                 response_deserializer=boat_dot_v1_dot_debug__pb2.RpcEvent.FromString,
                 _registered_method=True)
+        self.GetEffectiveConfig = channel.unary_unary(
+                '/boat.v1.DebugService/GetEffectiveConfig',
+                request_serializer=boat_dot_v1_dot_debug__pb2.GetEffectiveConfigRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_debug__pb2.GetEffectiveConfigResponse.FromString,
+                _registered_method=True)
 
 
 class DebugServiceServicer:
@@ -51,6 +56,13 @@ class DebugServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetEffectiveConfig(self, request, context):
+        """The configuration this gateway resolved from its environment at startup.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_DebugServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -58,6 +70,11 @@ def add_DebugServiceServicer_to_server(servicer, server):
                     servicer.StreamEvents,
                     request_deserializer=boat_dot_v1_dot_debug__pb2.StreamRpcEventsRequest.FromString,
                     response_serializer=boat_dot_v1_dot_debug__pb2.RpcEvent.SerializeToString,
+            ),
+            'GetEffectiveConfig': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetEffectiveConfig,
+                    request_deserializer=boat_dot_v1_dot_debug__pb2.GetEffectiveConfigRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_debug__pb2.GetEffectiveConfigResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -87,6 +104,33 @@ class DebugService:
             '/boat.v1.DebugService/StreamEvents',
             boat_dot_v1_dot_debug__pb2.StreamRpcEventsRequest.SerializeToString,
             boat_dot_v1_dot_debug__pb2.RpcEvent.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetEffectiveConfig(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.DebugService/GetEffectiveConfig',
+            boat_dot_v1_dot_debug__pb2.GetEffectiveConfigRequest.SerializeToString,
+            boat_dot_v1_dot_debug__pb2.GetEffectiveConfigResponse.FromString,
             options,
             channel_credentials,
             insecure,

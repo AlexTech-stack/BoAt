@@ -71,7 +71,13 @@ typedef struct BoatPluginVTable {
   /* Required — called on every tick by the host scheduler. */
   void (*on_tick)(void* ctx, uint64_t tick);
 
-  /* Required — cleanup. Host guarantees no concurrent callbacks after return. */
+  /* Required — cleanup. Host guarantees no concurrent callbacks after return.
+     The host makes good on that by refusing to destroy a plugin while any
+     callback into it is in flight: PluginManager::Unload drops the plugin
+     from its registries first, so no new caller can reach it, then waits for
+     the outstanding ones to finish before running destroy_fn and dlclose.
+     A plugin therefore does not need its own guard against being torn down
+     mid-on_tick / mid-on_frame. */
   void (*shutdown)(void* ctx);
 
   /* Optional — set to NULL if the plugin does not publish signals. */

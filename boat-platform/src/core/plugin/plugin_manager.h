@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -55,6 +56,66 @@ using PduPublishFn = std::function<void(const BoatPduFrame& frame)>;
 /* v8: Signature for delivering a unified BoatFrame from a plugin to the bus. */
 using FramePublishFn = std::function<void(const BoatFrame& frame)>;
 
+class PluginManager;
+
+/* RAII handle to a service pointer exported by a plugin (see FindService).
+ *
+ * Holding one blocks Unload() from running the plugin's destroy_fn and
+ * dlclose until it is released, which is what stops a caller from executing
+ * inside an unmapped .so. Because it is returned by value, the natural
+ * call shape is already safe:
+ *
+ *     GetRouter()->SendPdu(id, payload);   // guard lives to end of statement
+ *
+ * Acquire and release one on the same thread. Unload() distinguishes "wait
+ * for another thread's callback" from "I am inside a callback myself" with a
+ * per-thread counter, and handing a live ref to a different thread would
+ * confuse that bookkeeping. In practice they are function locals.
+ *
+ * Keep them SHORT-LIVED. A ServiceRef held for the duration of a streaming
+ * RPC would block Unload for as long as the stream is open, trading a
+ * use-after-free for a hang. Long-lived callers must re-acquire per use and
+ * treat a null ref as "the plugin went away", rather than caching the raw
+ * pointer across iterations.
+ */
+template <typename T>
+class ServiceRef {
+ public:
+  ServiceRef() = default;
+  ~ServiceRef() { Release(); }
+
+  ServiceRef(ServiceRef&& other) noexcept : mgr_(other.mgr_), ptr_(other.ptr_) {
+    other.mgr_ = nullptr;
+    other.ptr_ = nullptr;
+  }
+  ServiceRef& operator=(ServiceRef&& other) noexcept {
+    if (this != &other) {
+      Release();
+      mgr_ = other.mgr_;
+      ptr_ = other.ptr_;
+      other.mgr_ = nullptr;
+      other.ptr_ = nullptr;
+    }
+    return *this;
+  }
+  ServiceRef(const ServiceRef&) = delete;
+  ServiceRef& operator=(const ServiceRef&) = delete;
+
+  explicit operator bool() const noexcept { return ptr_ != nullptr; }
+  T* operator->() const noexcept { return ptr_; }
+  // Deliberately no operator*: it would be ill-formed for ServiceRef<void>,
+  // which is the natural type for "pin this plugin, I am not calling into it".
+  [[nodiscard]] T* get() const noexcept { return ptr_; }
+
+ private:
+  friend class PluginManager;
+  ServiceRef(PluginManager* mgr, T* ptr) : mgr_(mgr), ptr_(ptr) {}
+  void Release() noexcept;
+
+  PluginManager* mgr_ = nullptr;
+  T* ptr_ = nullptr;
+};
+
 class PluginManager {
  public:
   void SetPublisher(SignalPublishFn fn);
@@ -84,15 +145,46 @@ class PluginManager {
 
   /* Service provider registry */
   void RegisterService(const std::string& name, void* service);
+  /* Raw lookup with NO lifetime tie: the returned pointer is only valid
+     while nothing unloads the plugin that exported it. Safe in
+     single-threaded contexts (tests, startup wiring). Concurrent callers --
+     anything reachable from a gRPC handler -- must use AcquireService()
+     instead, which holds the plugin alive for as long as the ref lives. */
   [[nodiscard]] void* FindService(const std::string& name) const;
+
+  /* Look a service up and pin its plugin against concurrent Unload for as
+     long as the returned ref is alive. Returns an empty ref (false) when no
+     such service is registered. See ServiceRef for the lifetime rules. */
+  template <typename T>
+  [[nodiscard]] ServiceRef<T> AcquireService(const std::string& name);
   /* All currently-registered service names (e.g. "can_tp:vcan0"). Lets
      callers prefix-scan for "the set of loaded instances of plugin X"
      without a dedicated enumeration API per plugin type. */
   [[nodiscard]] std::vector<std::string> ListServices() const;
 
  private:
+  template <typename> friend class ServiceRef;
+  class BusyRelease;
+
+  /* Busy-count bookkeeping. busy_count_ is the number of plugin callbacks
+     currently in flight plus the number of live ServiceRefs. Unload() will
+     not destroy a plugin while it is non-zero, which is how the host honors
+     plugin.h's "no concurrent callbacks after return" for shutdown().
+     AcquireBusyLocked() is for callers already holding mutex_ (the dispatch
+     snapshot, which must pin atomically with the snapshot itself). */
+  void AcquireBusy();
+  void AcquireBusyLocked();
+  void ReleaseBusy() noexcept;
+  static void DestroyHandle(PluginHandle& handle) noexcept;
+
   mutable std::mutex mutex_;
   std::map<std::string, PluginHandle> plugins_;
+  std::condition_variable busy_cv_;
+  int busy_count_ = 0;                        // guarded by mutex_
+  /* Handles whose destruction had to be deferred because the thread calling
+     Unload() was itself inside a plugin callback (waiting would deadlock on
+     its own reference). Drained by whoever drops the last reference. */
+  std::vector<PluginHandle> pending_destroy_;  // guarded by mutex_
   SignalPublishFn publisher_fn_;
   BusPublishFn bus_publisher_fn_;
   PduPublishFn pdu_publisher_fn_;
@@ -102,5 +194,28 @@ class PluginManager {
   mutable std::mutex services_mutex_;
   std::map<std::string, void*> services_;
 };
+
+template <typename T>
+void ServiceRef<T>::Release() noexcept {
+  if (mgr_ != nullptr) {
+    mgr_->ReleaseBusy();
+    mgr_ = nullptr;
+  }
+  ptr_ = nullptr;
+}
+
+template <typename T>
+ServiceRef<T> PluginManager::AcquireService(const std::string& name) {
+  // Pin first, then look up: if an Unload is in progress it has already
+  // erased the service entry before waiting on busy_count_, so the lookup
+  // below correctly misses rather than handing back a doomed pointer.
+  AcquireBusy();
+  void* raw = FindService(name);
+  if (raw == nullptr) {
+    ReleaseBusy();
+    return ServiceRef<T>();
+  }
+  return ServiceRef<T>(this, static_cast<T*>(raw));
+}
 
 }  // namespace boat::core

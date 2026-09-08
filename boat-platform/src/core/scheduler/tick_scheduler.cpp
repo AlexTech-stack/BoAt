@@ -63,15 +63,19 @@ void TickScheduler::RunPipeline(std::uint64_t tick) {
   //      observe a stable snapshot: nothing published during this
   //      dispatch is delivered until the next tick.
   //
-  //   3. on_tick_hook_(tick)
+  //   3. clock_.Step()
+  //      Advance the simulation tick counter.  This is the only place
+  //      tick is incremented.  It happens *before* the plugin hook, not
+  //      after: AdvanceTick() calls RunPipeline(clock_.tick() + 1), so
+  //      stepping here is what makes clock_.tick() == tick for the
+  //      duration of step 4.  A plugin reading the clock during on_tick
+  //      must see the tick it is being ticked for.
+  //
+  //   4. on_tick_hook_(tick)
   //      Plugin ticks.  Plugins read the state dispatched in step 2 and
   //      may publish signals, CAN frames, ETH frames, PDU frames, or
   //      bus-signal values.  Those outputs are queued for the next tick's
   //      Dispatch() — they do NOT take effect immediately.
-  //
-  //   4. clock_.Step()
-  //      Advance the simulation tick counter.  This is the only place
-  //      tick is incremented.
   //
   // The pipeline is identical whether the tick came from the TickAuthority
   // phase (TickIfRunning) or from a manual Step(); tick_mutex_ serialises

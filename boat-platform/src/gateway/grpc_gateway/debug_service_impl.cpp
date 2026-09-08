@@ -60,4 +60,15 @@ grpc::Status DebugServiceImpl::StreamEvents(
   return grpc::Status::OK;
 }
 
+grpc::Status DebugServiceImpl::GetEffectiveConfig(
+    grpc::ServerContext* /*context*/,
+    const boat::v1::GetEffectiveConfigRequest* /*request*/,
+    boat::v1::GetEffectiveConfigResponse* response) {
+  // Rendered on demand rather than cached: the document is small, this is not
+  // a hot path, and rendering keeps one code path (ToJson) responsible for
+  // the format that BOAT_CONFIG_DUMP also writes.
+  response->set_config_json(config_.ToJson());
+  return grpc::Status::OK;
+}
+
 }  // namespace boat::gateway

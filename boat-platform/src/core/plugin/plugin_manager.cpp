@@ -228,6 +228,65 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
 #endif
 }
 
+namespace {
+/* Per-thread mirror of busy_count_. Lets Unload() tell "another thread is
+   mid-callback" (wait for it) from "I am myself inside a callback" (waiting
+   would deadlock on my own reference -- defer instead). */
+thread_local int t_busy_depth = 0;
+}  // namespace
+
+/* Drops a pin taken with AcquireBusyLocked(), whatever path leaves the
+   scope. */
+class PluginManager::BusyRelease {
+ public:
+  explicit BusyRelease(PluginManager& mgr) : mgr_(mgr) {}
+  ~BusyRelease() { mgr_.ReleaseBusy(); }
+  BusyRelease(const BusyRelease&) = delete;
+  BusyRelease& operator=(const BusyRelease&) = delete;
+
+ private:
+  PluginManager& mgr_;
+};
+
+void PluginManager::AcquireBusyLocked() {
+  ++busy_count_;
+  ++t_busy_depth;
+}
+
+void PluginManager::AcquireBusy() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  AcquireBusyLocked();
+}
+
+void PluginManager::ReleaseBusy() noexcept {
+  std::vector<PluginHandle> to_destroy;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    --busy_count_;
+    --t_busy_depth;
+    if (busy_count_ == 0) {
+      to_destroy.swap(pending_destroy_);
+      busy_cv_.notify_all();
+    }
+  }
+  // Outside the lock: destroy_fn runs plugin code, and dlclose can run a
+  // shared object's destructors. Neither belongs under mutex_.
+  for (auto& handle : to_destroy) DestroyHandle(handle);
+}
+
+void PluginManager::DestroyHandle(PluginHandle& handle) noexcept {
+#ifndef _WIN32
+  if (handle.plugin != nullptr && handle.destroy_fn != nullptr) {
+    handle.destroy_fn(handle.plugin);
+  }
+  if (handle.dl_handle != nullptr) {
+    dlclose(handle.dl_handle);
+  }
+#endif
+  handle.plugin = nullptr;
+  handle.dl_handle = nullptr;
+}
+
 void PluginManager::Unload(const std::string& name) {
   PluginHandle handle;
   {
@@ -253,26 +312,50 @@ void PluginManager::Unload(const std::string& name) {
       }
     }
   }
-#ifndef _WIN32
-  if (handle.plugin != nullptr) {
-    handle.destroy_fn(handle.plugin);
+  // Both maps no longer reference this handle, so no new callback or
+  // ServiceRef can reach it. What remains is draining the ones already in
+  // flight: TickAll/DispatchFrame pinned busy_count_ atomically with their
+  // snapshot, so a non-zero count means someone may be executing inside this
+  // .so right now. Destroying it here is exactly the use-after-free this
+  // wait exists to prevent -- and plugin.h promises the plugin that shutdown
+  // is not concurrent with any other callback.
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (t_busy_depth > 0) {
+      // This thread is itself inside a callback (or holds a ServiceRef), so
+      // busy_count_ can never reach 0 from here -- it includes us. Hand the
+      // handle off; the last reference to drop destroys it.
+      pending_destroy_.push_back(std::move(handle));
+      return;
+    }
+    // Waits for a quiet moment rather than blocking new dispatches: a tick
+    // that is already running is allowed to finish, and the next one is
+    // allowed to start. Ticks pace hardware, so stalling them for the
+    // duration of an unload would be the worse trade. The cost is that
+    // Unload is not guaranteed to win against a fully saturated tick loop
+    // on the first try -- it retries until it sees a gap.
+    busy_cv_.wait(lock, [this] { return busy_count_ == 0; });
   }
-  if (handle.dl_handle != nullptr) {
-    dlclose(handle.dl_handle);
-  }
-#endif
+  DestroyHandle(handle);
 }
 
 void PluginManager::TickAll(std::uint64_t tick) {
   std::vector<BoatPlugin*> snapshot;
   {
+    // The pin must happen under the same lock as the snapshot. Taking it
+    // afterwards would leave a window in which Unload sees busy_count_ == 0,
+    // destroys a plugin, and leaves a dangling entry in `snapshot`.
     std::lock_guard<std::mutex> lock(mutex_);
     snapshot.reserve(plugins_.size());
     for (auto& [name, handle] : plugins_) {
       (void)name;
       snapshot.push_back(handle.plugin);
     }
+    AcquireBusyLocked();
   }
+  // Released even if a plugin's on_tick throws, or the count leaks and
+  // every later Unload blocks forever.
+  BusyRelease unpin(*this);
   for (auto* plugin : snapshot) {
     plugin->vtable->on_tick(plugin->ctx, tick);
   }
@@ -291,7 +374,9 @@ void PluginManager::DispatchFrame(const BoatFrame& frame) {
       (void)name;
       snapshot.push_back({handle.plugin, handle.declared_bus_mask});
     }
+    AcquireBusyLocked();  // pin atomically with the snapshot -- see TickAll
   }
+  BusyRelease unpin(*this);
   const std::uint32_t bus_bit =
       (frame.bus_type < 32) ? (1u << frame.bus_type) : 0u;
   for (auto& t : snapshot) {

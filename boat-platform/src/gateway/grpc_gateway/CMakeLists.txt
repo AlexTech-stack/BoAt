@@ -21,6 +21,7 @@ add_executable(
   fault_service_impl.cpp
   frame_service_impl.cpp
   frame_sink.cpp
+  effective_config.cpp
 )
 target_include_directories(boat_gateway PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
@@ -40,5 +41,8 @@ target_link_libraries(
     spdlog::spdlog
 )
 target_compile_features(boat_gateway PRIVATE cxx_std_20)
+# Stamped into the effective-config artifact so a committed run configuration
+# says which gateway produced it.
+target_compile_definitions(boat_gateway PRIVATE BOAT_VERSION="${PROJECT_VERSION}")
 
 install(TARGETS boat_gateway RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

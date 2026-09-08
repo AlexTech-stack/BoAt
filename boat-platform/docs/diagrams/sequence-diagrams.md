@@ -103,7 +103,7 @@ sequenceDiagram
     SignalSvc-->>Client: StreamSignalValue
 ```
 
-## 5) Deterministic Replay Flow (ABI v8, core sink)
+## 5) Deterministic Replay Flow (ABI v9, core sink)
 
 Replay no longer injects events directly into the core, nor through a forwarder
 plugin. It parses trace records into `core::Frame` and transmits each through the

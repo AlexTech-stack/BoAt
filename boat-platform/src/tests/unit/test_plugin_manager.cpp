@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
 
@@ -88,6 +89,74 @@ TEST_CASE("PluginManager auto-registers and unregisters a plugin's exported serv
   REQUIRE(manager.FindService("pdu_router") == nullptr);
 }
 
+TEST_CASE("PluginManager::Unload waits for an in-flight ServiceRef before destroying",
+          "[unit][plugin_manager]") {
+  // Regression test for a use-after-free: Unload() used to erase the plugin
+  // from its maps and then immediately run destroy_fn + dlclose, without
+  // waiting for callers that had already been handed a pointer into the .so.
+  // A gRPC handler mid-RPC (or the tick thread mid-on_tick) could then be
+  // executing code in an unmapped shared object -- and plugin.h promises
+  // plugins that shutdown() is not concurrent with any other callback.
+  //
+  // Deterministic rather than racy: hold a ServiceRef, assert Unload has not
+  // returned while it lives, then release it and require Unload to complete.
+  boat::core::PluginManager manager;
+  const auto handle = manager.Load(PDU_ROUTER_SO, "{}");
+
+  // Opaque: this test cares only about the plugin's lifetime, never about
+  // calling through the pointer, so it does not need the router's interface.
+  struct OpaqueService;
+  auto ref = manager.AcquireService<OpaqueService>("pdu_router");
+  REQUIRE(ref);
+
+  std::atomic<bool> unload_returned{false};
+  std::thread unloader([&]() {
+    manager.Unload(handle.name);
+    unload_returned.store(true, std::memory_order_release);
+  });
+
+  // The service registration is dropped up front, so no NEW caller can
+  // acquire the plugin while it is being torn down...
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  REQUIRE(manager.FindService("pdu_router") == nullptr);
+  // ...but the plugin itself must still be alive, because we hold a ref.
+  REQUIRE_FALSE(unload_returned.load(std::memory_order_acquire));
+
+  ref = {};  // release -- Unload may now finish
+  unloader.join();
+  REQUIRE(unload_returned.load(std::memory_order_acquire));
+  REQUIRE(manager.List().empty());
+}
+
+TEST_CASE("PluginManager tolerates Unload racing a live tick/dispatch loop",
+          "[unit][plugin_manager]") {
+  // The stress counterpart to the test above, covering the dispatch paths
+  // rather than ServiceRef: TickAll/DispatchFrame snapshot raw BoatPlugin*
+  // out of the map and then call into the .so with the mutex released, so
+  // the pin has to be taken atomically with the snapshot. Run under ASAN to
+  // catch a regression -- without the pin this is a use-after-free.
+  boat::core::PluginManager manager;
+  manager.SetFramePublisher([](const BoatFrame&) {});
+
+  std::atomic<bool> done{false};
+  std::thread ticker([&]() {
+    std::uint64_t tick = 0;
+    while (!done.load(std::memory_order_acquire)) {
+      manager.TickAll(tick++);
+      manager.DispatchFrame(BoatFrame{});
+    }
+  });
+
+  for (int i = 0; i < 50; ++i) {
+    const auto handle = manager.Load(PDU_ROUTER_SO, "{}");
+    manager.Unload(handle.name);
+  }
+
+  done.store(true, std::memory_order_release);
+  ticker.join();
+  REQUIRE(manager.List().empty());
+}
+
 TEST_CASE("PluginManager::Unload does not erase a newer plugin's live service registration",
           "[unit][plugin_manager]") {
   // Regression test for a compare-and-erase bug: if a second, newer plugin
@@ -114,6 +183,7 @@ TEST_CASE("PluginManager::Unload does not erase a newer plugin's live service re
   manager.Unload(PDU_ROUTER_SO);
   REQUIRE(manager.FindService("pdu_router") == newer_ptr);
 }
+
 #endif
 
 #ifdef CAN_TP_SO

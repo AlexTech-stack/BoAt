@@ -17,9 +17,8 @@ namespace boat::gateway {
 
 PduServiceImpl::PduServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
 
-boat::core::IPduRouter* PduServiceImpl::GetRouter() {
-  return static_cast<boat::core::IPduRouter*>(
-      ctx_.plugin_manager.FindService("pdu_router"));
+boat::core::ServiceRef<boat::core::IPduRouter> PduServiceImpl::GetRouter() {
+  return ctx_.plugin_manager.AcquireService<boat::core::IPduRouter>("pdu_router");
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -207,7 +206,16 @@ grpc::Status PduServiceImpl::SubscribePdus(
   std::condition_variable         queue_cv;
   std::vector<boat::v1::PduFrame> queue;
 
-  const auto sub_id = GetRouter()->Subscribe(
+  // Scoped deliberately: the ref must NOT stay alive for the life of the
+  // stream, or Unload would block until the client disconnects. Every later
+  // use re-acquires and copes with the router having gone away.
+  boat::core::IPduRouter::SubId sub_id = 0;
+  {
+    auto router = GetRouter();
+    if (!router) {
+      return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
+    }
+    sub_id = router->Subscribe(
       pdu_ids,
       [&queue_mutex, &queue_cv, &queue](const boat::hil::PduFrame& f) {
         boat::v1::PduFrame proto;
@@ -218,6 +226,7 @@ grpc::Status PduServiceImpl::SubscribePdus(
         }
         queue_cv.notify_one();
       });
+  }
 
   while (!context->IsCancelled()) {
     std::vector<boat::v1::PduFrame> pending;
@@ -229,7 +238,9 @@ grpc::Status PduServiceImpl::SubscribePdus(
     }
     for (const auto& proto : pending) {
       if (!writer->Write(proto)) {
-        GetRouter()->Unsubscribe(sub_id);
+        // Router may have been unloaded while the stream was open; the
+        // subscription died with it, so there is nothing to unsubscribe.
+        if (auto router = GetRouter()) router->Unsubscribe(sub_id);
         return grpc::Status::OK;
       }
       RpcEvent ev;
@@ -246,7 +257,7 @@ grpc::Status PduServiceImpl::SubscribePdus(
     }
   }
 
-  GetRouter()->Unsubscribe(sub_id);
+  if (auto router = GetRouter()) router->Unsubscribe(sub_id);
   return grpc::Status::OK;
 }
 

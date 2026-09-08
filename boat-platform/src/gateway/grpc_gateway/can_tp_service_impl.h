@@ -46,15 +46,34 @@ class CanTpServiceImpl final : public boat::v1::CanTpService::Service {
  private:
   GatewayContext& ctx_;
   // Resolves which loaded CanTp instance to use. iface non-empty ->
-  // FindService("can_tp:" + iface) directly. iface empty -> prefix-scan
+  // AcquireService("can_tp:" + iface) directly. iface empty -> prefix-scan
   // ListServices() for "can_tp:*" entries: 0 -> not found, 1 -> use it
   // (unchanged behavior for the common single-instance case), >1 ->
-  // ambiguous (status set on out-params, ICanTp* is null).
-  boat::core::ICanTp* GetCanTp(const std::string& iface, grpc::StatusCode* status_out,
-                                std::string* message_out);
+  // ambiguous (status set on out-params, the returned ref is empty).
+  // Returned by value and pinned against concurrent Unload for as long as
+  // the ref lives, so `GetCanTp(...)->Send(...)` is safe for one statement.
+  // Do not cache the raw pointer past a single use.
+  boat::core::ServiceRef<boat::core::ICanTp> GetCanTp(const std::string& iface,
+                                                      grpc::StatusCode* status_out,
+                                                      std::string* message_out);
   // Every loaded CanTp instance, paired with its iface. Used by
-  // ListSessions when no iface filter is given.
-  std::vector<std::pair<std::string, boat::core::ICanTp*>> GetAllCanTp();
+  // ListSessions when no iface filter is given. Holds a pin per instance
+  // for as long as the vector lives -- fine for a unary call, never for a
+  // stream (use ResolveTargetIfaces there instead).
+  std::vector<std::pair<std::string, boat::core::ServiceRef<boat::core::ICanTp>>> GetAllCanTp();
+
+  // Target resolution for the streaming RPCs: returns iface NAMES, not
+  // pointers, so a long-lived stream holds no reference into a plugin that
+  // may be unloaded under it. Each use re-acquires by name.
+  bool ResolveTargetIfaces(const std::string& iface, std::vector<std::string>* out,
+                           grpc::StatusCode* status_out, std::string* message_out);
+
+  // Re-acquire each (iface, sub_id) and unsubscribe. Instances that are gone
+  // are skipped -- their subscriptions died with them.
+  void UnsubscribeAll(
+      const std::vector<std::pair<std::string, boat::core::ICanTp::SubId>>& subs);
+  void UnsubscribeErrorsAll(
+      const std::vector<std::pair<std::string, boat::core::ICanTp::SubId>>& subs);
 };
 
 }  // namespace boat::gateway

@@ -48,7 +48,26 @@ message StreamRpcEventsRequest {
   string method_filter = 1;
 }
 
+// ── Effective configuration ───────────────────────────────────────────────────
+
+message GetEffectiveConfigRequest {}
+
+message GetEffectiveConfigResponse {
+  // The configuration the gateway actually resolved at startup, as a JSON
+  // document -- byte-identical to what BOAT_CONFIG_DUMP writes.
+  //
+  // Deliberately one opaque string rather than a mirrored proto message: the
+  // document is meant to be committed next to a trace as a reproducibility
+  // artifact, and a parallel proto schema would be one more thing to drift
+  // out of sync with what the gateway actually records. The document carries
+  // its own "schema" key for versioning.
+  string config_json = 1;
+}
+
 service DebugService {
   // Subscribe to a live stream of all RPC events observed by the gateway.
   rpc StreamEvents(StreamRpcEventsRequest) returns (stream RpcEvent);
+
+  // The configuration this gateway resolved from its environment at startup.
+  rpc GetEffectiveConfig(GetEffectiveConfigRequest) returns (GetEffectiveConfigResponse);
 }
