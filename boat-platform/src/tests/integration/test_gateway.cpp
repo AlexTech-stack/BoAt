@@ -40,6 +40,8 @@
 #include "simulation/simulation_context.h"
 #include "trace_store/trace_store.h"
 
+static const boat::gateway::EffectiveConfig kTestEffectiveConfig;
+
 TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[integration][gateway]") {
   std::filesystem::remove("boat_config.db");
   const auto temp_dir = std::filesystem::temp_directory_path();
@@ -73,6 +75,10 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
       .plugin_manager = plugin_manager,
       .frame_sink = frame_sink,
       .audit_log = audit_log,
+      // These tests drive the service impls directly rather than through
+      // main(), so there is no resolved gateway config; a default-constructed
+      // one satisfies the reference without pretending to describe a run.
+      .effective_config = kTestEffectiveConfig,
   };
 
   boat::gateway::PduServiceImpl pdu_service(ctx);
@@ -335,6 +341,10 @@ TEST_CASE("PluginService and NodePluginService see disjoint PluginManager scopes
       .plugin_manager = node_manager,
       .frame_sink = frame_sink,
       .audit_log = audit_log,
+      // These tests drive the service impls directly rather than through
+      // main(), so there is no resolved gateway config; a default-constructed
+      // one satisfies the reference without pretending to describe a run.
+      .effective_config = kTestEffectiveConfig,
   };
 
   boat::gateway::PluginServiceImpl plugin_service(ctx);
@@ -454,6 +464,10 @@ TEST_CASE("CanTpService.ListSessions aggregates across every loaded instance",
       .plugin_manager = node_manager,
       .frame_sink = frame_sink,
       .audit_log = audit_log,
+      // These tests drive the service impls directly rather than through
+      // main(), so there is no resolved gateway config; a default-constructed
+      // one satisfies the reference without pretending to describe a run.
+      .effective_config = kTestEffectiveConfig,
   };
 
   boat::gateway::CanTpServiceImpl can_tp_service(ctx);
@@ -548,6 +562,10 @@ TEST_CASE("CanTpService RemoveSession and Subscribe round trip",
       .plugin_manager = node_manager,
       .frame_sink = frame_sink,
       .audit_log = audit_log,
+      // These tests drive the service impls directly rather than through
+      // main(), so there is no resolved gateway config; a default-constructed
+      // one satisfies the reference without pretending to describe a run.
+      .effective_config = kTestEffectiveConfig,
   };
 
   boat::gateway::CanTpServiceImpl can_tp_service(ctx);

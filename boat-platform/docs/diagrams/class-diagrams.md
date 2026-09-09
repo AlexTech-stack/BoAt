@@ -1,6 +1,6 @@
 # Class Diagrams
 
-## Plugin Hierarchy (ABI v8)
+## Plugin Hierarchy (ABI v9)
 
 ```mermaid
 classDiagram
@@ -25,8 +25,9 @@ classDiagram
 ```
 
 `IPlugin` in this diagram maps to the C ABI dispatch table `BoatPluginVTable`
-(9 fields) defined in `sdk/cpp/include/boat/plugin.h`. `BOAT_PLUGIN_ABI_VERSION`
-is **8**; a plugin reporting an older version is rejected at `dlopen`.
+(10 fields) defined in `sdk/cpp/include/boat/plugin.h`. `BOAT_PLUGIN_ABI_VERSION`
+is **9**; a plugin reporting any other version — older *or* newer — is rejected at
+`dlopen`. There are no fallbacks, so a v8 build must be recompiled.
 Implementations expose `boat_plugin_create`, `boat_plugin_destroy`, and
 `boat_plugin_abi_version` entry points and route lifecycle calls through that
 vtable. Plugins own **stateful conversations / variation** only — the kept set is

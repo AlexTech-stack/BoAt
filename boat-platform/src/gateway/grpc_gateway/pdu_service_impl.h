@@ -63,7 +63,11 @@ class PduServiceImpl final : public boat::v1::PduService::Service {
 
  private:
   GatewayContext& ctx_;
-  boat::core::IPduRouter* GetRouter();
+  /* Resolves the pdu_router plugin, pinned against concurrent Unload for as
+     long as the returned ref lives. Returned by value so the usual
+     `GetRouter()->Foo()` shape keeps the pin for the whole statement; never
+     cache the raw pointer past one use. */
+  boat::core::ServiceRef<boat::core::IPduRouter> GetRouter();
 };
 
 }  // namespace boat::gateway

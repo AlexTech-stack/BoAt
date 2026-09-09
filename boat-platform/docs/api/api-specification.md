@@ -1,7 +1,7 @@
 # API Specification
 
 All protobuf service files are defined under `proto/boat/v1/`, package `boat.v1`.
-14 gRPC services across 16 `.proto` files.
+16 gRPC services across 18 `.proto` files.
 
 ### `simulation.proto` — SimulationService (9 RPCs)
 
@@ -82,12 +82,13 @@ Replay session identity: `StartReplay` returns `ReplayControlResponse.replay_id`
 | `InjectFault` | Unary | Schedule fault injection for simulation |
 | `ListFaults` | Unary | Paginated fault event listing |
 
-### `frame.proto` — FrameService (2 RPCs)
+### `frame.proto` — FrameService (3 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
 | `SendFrame` | Unary | Transmit a unified BoatFrame (CAN, CANFD, Ethernet, TCP, PDU) |
 | `SubscribeFrames` | Server-streaming | Stream incoming frames by bus type filter |
+| `StreamFrames` | Bidirectional-streaming | Send and receive frames over one long-lived stream |
 
 Unified frame send/subscribe endpoint that replaces the older `CanService` and `EthernetService` for new development. The `Frame` message carries a `bus_type` discriminator (CAN, CANFD, ETHERNET, TCP, PDU) and per-bus metadata in a `oneof` block.
 
@@ -129,11 +130,41 @@ Unified frame send/subscribe endpoint that replaces the older `CanService` and `
 | `ListGroups` | Unary | List configured PDU groups |
 | `RemoveRoute` | Unary | Remove a PDU route |
 
-### `debug.proto` — DebugService (1 RPC)
+### `debug.proto` — DebugService (2 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
 | `StreamEvents` | Server-streaming | Stream internal RPC events for debugging |
+| `GetEffectiveConfig` | Unary | The configuration this gateway resolved at startup, as JSON |
+
+`GetEffectiveConfig` returns the same document `BOAT_CONFIG_DUMP` writes:
+interfaces (requested and whether each opened), node plugins with their
+verbatim config and load result, tick interval plus which env var set it, TLS
+posture, and any configuration warnings. It deliberately contains no timestamp
+or hostname so two identically configured runs emit byte-identical output.
+
+### `can_tp.proto` — CanTpService (6 RPCs)
+
+| Method | Type | Description |
+|---|---|---|
+| `Configure` | Unary | Create or update an ISO-TP session (addressing, timings, padding) |
+| `Send` | Unary | Send an N-SDU, segmenting it across CAN frames |
+| `ListSessions` | Unary | List configured sessions on this instance |
+| `RemoveSession` | Unary | Tear down a configured session |
+| `Subscribe` | Server-streaming | Stream reassembled N-SDUs |
+| `SubscribeErrors` | Server-streaming | Stream ISO-TP protocol errors (N_Bs/N_Cr timeouts, etc.) |
+
+One CanTp plugin instance is loaded per interface, so requests carry an `iface`. When it is omitted the gateway falls back to the only loaded instance, and returns `FAILED_PRECONDITION` if more than one is loaded.
+
+### `node_plugin.proto` — NodePluginService (3 RPCs)
+
+| Method | Type | Description |
+|---|---|---|
+| `ListNodePlugins` | Unary | List plugins in the always-on node PluginManager |
+| `GetNodePluginInfo` | Unary | Query one node plugin's metadata |
+| `UnloadNodePlugin` | Unary | Unload a node plugin (requires `confirm=true`) |
+
+Addresses the always-on node `PluginManager`; `PluginService` addresses the simulation-scoped one.
 
 ## Proto files without services
 

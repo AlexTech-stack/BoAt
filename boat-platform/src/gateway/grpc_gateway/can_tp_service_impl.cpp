@@ -26,13 +26,12 @@ constexpr char kCanTpServicePrefix[] = "can_tp:";
 
 CanTpServiceImpl::CanTpServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
 
-boat::core::ICanTp* CanTpServiceImpl::GetCanTp(const std::string& iface,
-                                               grpc::StatusCode* status_out,
-                                               std::string* message_out) {
+boat::core::ServiceRef<boat::core::ICanTp> CanTpServiceImpl::GetCanTp(
+    const std::string& iface, grpc::StatusCode* status_out, std::string* message_out) {
   if (!iface.empty()) {
-    auto* found = static_cast<boat::core::ICanTp*>(
-        ctx_.plugin_manager.FindService(kCanTpServicePrefix + iface));
-    if (found == nullptr) {
+    auto found = ctx_.plugin_manager.AcquireService<boat::core::ICanTp>(
+        kCanTpServicePrefix + iface);
+    if (!found) {
       *status_out = grpc::StatusCode::NOT_FOUND;
       *message_out = "no CanTp plugin loaded for iface '" + iface + "'";
     }
@@ -50,7 +49,7 @@ boat::core::ICanTp* CanTpServiceImpl::GetCanTp(const std::string& iface,
   if (ifaces.empty()) {
     *status_out = grpc::StatusCode::NOT_FOUND;
     *message_out = "CanTp plugin not loaded";
-    return nullptr;
+    return {};
   }
   if (ifaces.size() > 1) {
     std::ostringstream ss;
@@ -62,22 +61,64 @@ boat::core::ICanTp* CanTpServiceImpl::GetCanTp(const std::string& iface,
     ss << "); specify --iface to disambiguate";
     *status_out = grpc::StatusCode::FAILED_PRECONDITION;
     *message_out = ss.str();
-    return nullptr;
+    return {};
   }
-  return static_cast<boat::core::ICanTp*>(
-      ctx_.plugin_manager.FindService(kCanTpServicePrefix + ifaces.front()));
+  return ctx_.plugin_manager.AcquireService<boat::core::ICanTp>(
+      kCanTpServicePrefix + ifaces.front());
 }
 
-std::vector<std::pair<std::string, boat::core::ICanTp*>> CanTpServiceImpl::GetAllCanTp() {
-  std::vector<std::pair<std::string, boat::core::ICanTp*>> result;
+std::vector<std::pair<std::string, boat::core::ServiceRef<boat::core::ICanTp>>>
+CanTpServiceImpl::GetAllCanTp() {
+  std::vector<std::pair<std::string, boat::core::ServiceRef<boat::core::ICanTp>>> result;
   for (const auto& name : ctx_.plugin_manager.ListServices()) {
     if (name.rfind(kCanTpServicePrefix, 0) != 0) continue;
-    auto* can_tp = static_cast<boat::core::ICanTp*>(ctx_.plugin_manager.FindService(name));
-    if (can_tp != nullptr) {
-      result.emplace_back(name.substr(std::strlen(kCanTpServicePrefix)), can_tp);
+    auto can_tp = ctx_.plugin_manager.AcquireService<boat::core::ICanTp>(name);
+    if (can_tp) {
+      result.emplace_back(name.substr(std::strlen(kCanTpServicePrefix)), std::move(can_tp));
     }
   }
   return result;
+}
+
+bool CanTpServiceImpl::ResolveTargetIfaces(const std::string& iface,
+                                           std::vector<std::string>* out,
+                                           grpc::StatusCode* status_out,
+                                           std::string* message_out) {
+  if (!iface.empty()) {
+    // Existence check only -- the ref is dropped immediately so the stream
+    // that follows holds nothing.
+    if (!GetCanTp(iface, status_out, message_out)) return false;
+    out->push_back(iface);
+    return true;
+  }
+  for (const auto& name : ctx_.plugin_manager.ListServices()) {
+    if (name.rfind(kCanTpServicePrefix, 0) != 0) continue;
+    out->push_back(name.substr(std::strlen(kCanTpServicePrefix)));
+  }
+  if (out->empty()) {
+    *status_out = grpc::StatusCode::NOT_FOUND;
+    *message_out = "CanTp plugin not loaded";
+    return false;
+  }
+  return true;
+}
+
+void CanTpServiceImpl::UnsubscribeAll(
+    const std::vector<std::pair<std::string, boat::core::ICanTp::SubId>>& subs) {
+  for (const auto& [iface, sub_id] : subs) {
+    auto can_tp = ctx_.plugin_manager.AcquireService<boat::core::ICanTp>(
+        kCanTpServicePrefix + iface);
+    if (can_tp) can_tp->Unsubscribe(sub_id);
+  }
+}
+
+void CanTpServiceImpl::UnsubscribeErrorsAll(
+    const std::vector<std::pair<std::string, boat::core::ICanTp::SubId>>& subs) {
+  for (const auto& [iface, sub_id] : subs) {
+    auto can_tp = ctx_.plugin_manager.AcquireService<boat::core::ICanTp>(
+        kCanTpServicePrefix + iface);
+    if (can_tp) can_tp->UnsubscribeErrors(sub_id);
+  }
 }
 
 grpc::Status CanTpServiceImpl::Configure(
@@ -86,8 +127,8 @@ grpc::Status CanTpServiceImpl::Configure(
     boat::v1::ConfigureResponse* response) {
   grpc::StatusCode status_code = grpc::StatusCode::OK;
   std::string status_message;
-  auto* can_tp = GetCanTp(request->iface(), &status_code, &status_message);
-  if (can_tp == nullptr) {
+  auto can_tp = GetCanTp(request->iface(), &status_code, &status_message);
+  if (!can_tp) {
     return grpc::Status(status_code, status_message);
   }
 
@@ -182,8 +223,8 @@ grpc::Status CanTpServiceImpl::Send(
     boat::v1::SendResponse* response) {
   grpc::StatusCode status_code = grpc::StatusCode::OK;
   std::string status_message;
-  auto* can_tp = GetCanTp(request->iface(), &status_code, &status_message);
-  if (can_tp == nullptr) {
+  auto can_tp = GetCanTp(request->iface(), &status_code, &status_message);
+  if (!can_tp) {
     return grpc::Status(status_code, status_message);
   }
 
@@ -267,16 +308,16 @@ grpc::Status CanTpServiceImpl::ListSessions(
   if (!request->iface().empty()) {
     grpc::StatusCode status_code = grpc::StatusCode::OK;
     std::string status_message;
-    auto* can_tp = GetCanTp(request->iface(), &status_code, &status_message);
-    if (can_tp == nullptr) {
+    auto can_tp = GetCanTp(request->iface(), &status_code, &status_message);
+    if (!can_tp) {
       return grpc::Status(status_code, status_message);
     }
-    AppendSessions(request->iface(), can_tp, response);
+    AppendSessions(request->iface(), can_tp.get(), response);
     return grpc::Status::OK;
   }
 
   for (auto& [iface, can_tp] : GetAllCanTp()) {
-    AppendSessions(iface, can_tp, response);
+    AppendSessions(iface, can_tp.get(), response);
   }
   return grpc::Status::OK;
 }
@@ -287,8 +328,8 @@ grpc::Status CanTpServiceImpl::RemoveSession(
     boat::v1::RemoveSessionResponse* response) {
   grpc::StatusCode status_code = grpc::StatusCode::OK;
   std::string status_message;
-  auto* can_tp = GetCanTp(request->iface(), &status_code, &status_message);
-  if (can_tp == nullptr) {
+  auto can_tp = GetCanTp(request->iface(), &status_code, &status_message);
+  if (!can_tp) {
     return grpc::Status(status_code, status_message);
   }
 
@@ -334,19 +375,15 @@ grpc::Status CanTpServiceImpl::Subscribe(
   // Resolve the target instance(s): a specific iface, or every loaded
   // instance when none is given -- same "iface empty = all" convention
   // ListSessions already uses.
-  std::vector<std::pair<std::string, boat::core::ICanTp*>> targets;
-  if (!request->iface().empty()) {
+  // Names, not pointers: this stream can stay open for hours, and holding a
+  // ref that long would block Unload for its whole lifetime. Each use below
+  // re-acquires by iface and treats "gone" as a clean end of stream.
+  std::vector<std::string> targets;
+  {
     grpc::StatusCode status_code = grpc::StatusCode::OK;
     std::string status_message;
-    auto* can_tp = GetCanTp(request->iface(), &status_code, &status_message);
-    if (can_tp == nullptr) {
+    if (!ResolveTargetIfaces(request->iface(), &targets, &status_code, &status_message)) {
       return grpc::Status(status_code, status_message);
-    }
-    targets.emplace_back(request->iface(), can_tp);
-  } else {
-    targets = GetAllCanTp();
-    if (targets.empty()) {
-      return grpc::Status(grpc::StatusCode::NOT_FOUND, "CanTp plugin not loaded");
     }
   }
 
@@ -377,9 +414,12 @@ grpc::Status CanTpServiceImpl::Subscribe(
   std::condition_variable             queue_cv;
   std::vector<boat::v1::CanTpRxEvent> queue;
 
-  std::vector<std::pair<boat::core::ICanTp*, boat::core::ICanTp::SubId>> subs;
+  std::vector<std::pair<std::string, boat::core::ICanTp::SubId>> subs;
   subs.reserve(targets.size());
-  for (auto& [iface, can_tp] : targets) {
+  for (const auto& iface : targets) {
+    auto can_tp = ctx_.plugin_manager.AcquireService<boat::core::ICanTp>(
+        kCanTpServicePrefix + iface);
+    if (!can_tp) continue;  // unloaded between resolution and here
     const auto sub_id = can_tp->Subscribe(
         nsdu_ids,
         [&queue_mutex, &queue_cv, &queue, iface](uint32_t nsdu_id, const std::vector<uint8_t>& payload) {
@@ -394,7 +434,7 @@ grpc::Status CanTpServiceImpl::Subscribe(
           }
           queue_cv.notify_one();
         });
-    subs.emplace_back(can_tp, sub_id);
+    subs.emplace_back(iface, sub_id);
   }
 
   while (!context->IsCancelled()) {
@@ -407,7 +447,7 @@ grpc::Status CanTpServiceImpl::Subscribe(
     }
     for (const auto& ev : pending) {
       if (!writer->Write(ev)) {
-        for (auto& [can_tp, sub_id] : subs) can_tp->Unsubscribe(sub_id);
+        UnsubscribeAll(subs);
         return grpc::Status::OK;
       }
       RpcEvent audit_ev;
@@ -424,7 +464,7 @@ grpc::Status CanTpServiceImpl::Subscribe(
     }
   }
 
-  for (auto& [can_tp, sub_id] : subs) can_tp->Unsubscribe(sub_id);
+  UnsubscribeAll(subs);
   return grpc::Status::OK;
 }
 
@@ -436,19 +476,15 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
   const std::string peer = context->peer();
 
   // Same target resolution as Subscribe().
-  std::vector<std::pair<std::string, boat::core::ICanTp*>> targets;
-  if (!request->iface().empty()) {
+  // Names, not pointers: this stream can stay open for hours, and holding a
+  // ref that long would block Unload for its whole lifetime. Each use below
+  // re-acquires by iface and treats "gone" as a clean end of stream.
+  std::vector<std::string> targets;
+  {
     grpc::StatusCode status_code = grpc::StatusCode::OK;
     std::string status_message;
-    auto* can_tp = GetCanTp(request->iface(), &status_code, &status_message);
-    if (can_tp == nullptr) {
+    if (!ResolveTargetIfaces(request->iface(), &targets, &status_code, &status_message)) {
       return grpc::Status(status_code, status_message);
-    }
-    targets.emplace_back(request->iface(), can_tp);
-  } else {
-    targets = GetAllCanTp();
-    if (targets.empty()) {
-      return grpc::Status(grpc::StatusCode::NOT_FOUND, "CanTp plugin not loaded");
     }
   }
 
@@ -479,9 +515,12 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
   std::condition_variable                queue_cv;
   std::vector<boat::v1::CanTpErrorEvent> queue;
 
-  std::vector<std::pair<boat::core::ICanTp*, boat::core::ICanTp::SubId>> subs;
+  std::vector<std::pair<std::string, boat::core::ICanTp::SubId>> subs;
   subs.reserve(targets.size());
-  for (auto& [iface, can_tp] : targets) {
+  for (const auto& iface : targets) {
+    auto can_tp = ctx_.plugin_manager.AcquireService<boat::core::ICanTp>(
+        kCanTpServicePrefix + iface);
+    if (!can_tp) continue;  // unloaded between resolution and here
     const auto sub_id = can_tp->SubscribeErrors(
         nsdu_ids,
         [&queue_mutex, &queue_cv, &queue, iface](const boat::core::CanTpErrorEvent& err) {
@@ -497,7 +536,7 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
           }
           queue_cv.notify_one();
         });
-    subs.emplace_back(can_tp, sub_id);
+    subs.emplace_back(iface, sub_id);
   }
 
   while (!context->IsCancelled()) {
@@ -510,7 +549,7 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
     }
     for (const auto& ev : pending) {
       if (!writer->Write(ev)) {
-        for (auto& [can_tp, sub_id] : subs) can_tp->UnsubscribeErrors(sub_id);
+        UnsubscribeErrorsAll(subs);
         return grpc::Status::OK;
       }
       RpcEvent audit_ev;
@@ -527,7 +566,7 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
     }
   }
 
-  for (auto& [can_tp, sub_id] : subs) can_tp->UnsubscribeErrors(sub_id);
+  UnsubscribeErrorsAll(subs);
   return grpc::Status::OK;
 }
 

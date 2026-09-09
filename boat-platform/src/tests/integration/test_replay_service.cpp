@@ -23,6 +23,9 @@
 #include "simulation/simulation_context.h"
 #include "trace_store/trace_store.h"
 
+static const boat::gateway::EffectiveConfig kTestEffectiveConfig;
+
+
 namespace {
 
 std::vector<std::uint8_t> BuildTestTraceData() {
@@ -78,6 +81,10 @@ struct IntegrationFixture {
       .plugin_manager = plugin_manager,
       .frame_sink = frame_sink,
       .audit_log = audit_log,
+      // These tests drive the service impls directly rather than through
+      // main(), so there is no resolved gateway config; a default-constructed
+      // one satisfies the reference without pretending to describe a run.
+      .effective_config = kTestEffectiveConfig,
   };
   boat::gateway::ReplayServiceImpl replay_service{ctx};
 

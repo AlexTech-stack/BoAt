@@ -38,7 +38,7 @@ sequenceDiagram
   - value threshold
 - Filters are compiled to predicates at subscription time to avoid per-event string parsing.
 
-## Replay (ABI v8, core sink)
+## Replay (ABI v9, core sink)
 
 - `ReplayController` reads binary traces using `mmap`. Each record is a
   length-delimited `boat.v1.Frame` protobuf.

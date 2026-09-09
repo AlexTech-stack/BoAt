@@ -13,12 +13,12 @@
                          │       client: BOAT_HOST)
 ┌────────────────────────▼─────────────────────────────────────────┐
 │                      GATEWAY LAYER (boat_gateway)                 │
-│   BoAt gRPC Server (all 14 services)                             │
+│   BoAt gRPC Server (all 16 services)                             │
 │   PluginManager  │  Frame Dispatch  │  RPC Audit                 │
 │   CanBusRegistry │  EthernetBusRegistry │  Replay Engine          │
 │   TickTimer      │  SignalBus                                   │
 └────────────────────────┬─────────────────────────────────────────┘
-                         │ Plugin ABI v8 (dlopen C ABI)
+                         │ Plugin ABI v9 (dlopen C ABI)
 ┌────────────────────────▼─────────────────────────────────────────┐
 │                       PLUGIN LAYER                                │
 │   PduRouter  │  CanTp  │  TCP  │  SOME/IP  │  Probe  │  ...       │
@@ -43,11 +43,11 @@
 |---|---|---|
 | `boat_core` | C++20 | Tick scheduler, signal router, determinism engine, PluginManager, Frame type |
 | `boat_hil` | C++20 | CAN/Ethernet registry, drivers, bus bridges, PDU router internals |
-| `boat_gateway` | C++20 | gRPC server, all 14 service implementations, replay engine wiring |
+| `boat_gateway` | C++20 | gRPC server, all 16 service implementations, replay engine wiring |
 | `boat_ipc` | C++20 | Inter-process comm (gRPC, iceoryx2 SHM for large payloads, UDS) |
 | `boat_store` | C++20 | Event/trace persistence, SQLite event store |
 | `boat_replay` | C++20 | Deterministic replay engine |
-| `boat_plugin_sdk` | C++20 (headers) | Plugin ABI v8 header-only SDK (plugin.h, frame.h) |
+| `boat_plugin_sdk` | C++20 (headers) | Plugin ABI v9 header-only SDK (plugin.h, frame.h) |
 | `boat-py` | Python 3.11+ | Python SDK, gRPC stubs, test harness |
 | `boat-cli` | Python | Command-line interface for all gateway services |
 | `boat-ui` | Python (FastAPI) | 10 standalone web dashboards |
@@ -79,13 +79,13 @@ boat-platform/
 │       └── probe/                  # gateway conformance probe (delivery/filter/self-sent/round-trip)
 ├── sdk/
 │   ├── cpp/include/boat/
-│   │   ├── plugin.h               # Plugin ABI v8 (9 vtable fields)
+│   │   ├── plugin.h               # Plugin ABI v9 (10 vtable fields)
 │   │   ├── frame.h                # Unified BoatFrame type (CAN/CANFD/ETH/TCP/PDU)
 │   │   ├── can_tp.h               # CanTp C API (can_tp_send, can_tp_configure)
 │   │   └── someip.h               # SOME/IP protocol constants
 │   └── python/                     # boat-py package
 ├── cli/                            # boat-cli Typer application
-├── proto/boat/v1/                  # 16 .proto files, 14 gRPC services
+├── proto/boat/v1/                  # 18 .proto files, 16 gRPC services
 ├── config/                         # PDU database JSON files
 ├── tests/                          # unit, integration, determinism, HIL
 └── docs/                           # Documentation
@@ -153,11 +153,12 @@ Key data flows:
 - **PDU routing**: PduRouter plugin registers itself as `IPduRouter` service; `PduServiceImpl` delegates via `FindService("pdu_router")`
 - **CanTp**: each loaded CanTp instance registers itself as `ICanTp`, iface-scoped (`FindService("can_tp:" + iface)`); `CanTpServiceImpl` delegates, falling back to "the only loaded instance" when the caller doesn't specify one. CanTp is also both a producer and consumer of the `BOAT_BUS_PDU` frame bus: its RX-reassembly-complete path emits reassembled I-PDUs as `BOAT_BUS_PDU` frames (`pdu_id = nsdu_id`, no `iface` set), and (declaring `"pdu"` in `declared_buses()`) it also *consumes* inbound `BOAT_BUS_PDU` frames whose `pdu_id` matches a configured `nsdu_id`, segmenting and sending them the same way `CanTpService.Send` does — but only when the inbound frame's `iface` is set and matches, specifically to avoid its own un-scoped RX-echo frames looping back into a send.
 - **Replay**: replay engine (in core) publishes events as `BoatFrame` to the frame bus
-- **Tick**: gateway tick thread calls `PluginManager::TickAll(tick)` which calls each plugin's `on_tick`
+- **Tick**: the `TickAuthority` runs ordered phases every tick (`node_plugins` → `sim_plugins` → `replay`); the `node_plugins` phase calls `PluginManager::TickAll(tick)`, which calls each plugin's `on_tick`. There is no separate gateway tick thread.
 
 ## Architecture Decisions
 
 - **Plugin ABI v8 unified frame type**: `BoatCanFrame`, `BoatEthFrame` removed; single `BoatFrame` with `bus_type` discriminator
+- **Plugin ABI v9 host clock (`set_time_source`)**: the host hands each plugin a `BoatNowNsFn` returning monotonic nanoseconds on the host's clock (real, or virtual under `BOAT_TIME_SOURCE=virtual`). A plugin that needs time reads it there rather than calling `steady_clock::now()`, so plugin timing follows the tick authority instead of a clock of its own
 - **PduRouter as plugin**: PDU routing logic removed from core gateway; loaded as `pdu_router.so` at runtime
 - **FrameService gRPC**: unified send/subscribe endpoint alongside legacy CanService/EthernetService
 - **Replay in core**: replay engine stays in core (not a plugin) — reads events from disk, publishes to frame bus

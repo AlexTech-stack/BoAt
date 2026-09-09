@@ -35,6 +35,7 @@
 #include "rpc_audit_log.h"
 #include "fault_service_impl.h"
 #include "frame_sink.h"
+#include "effective_config.h"
 #include "gateway_context.h"
 #include "hil/virtual/virtual_can_driver.h"
 #include "hil/can/physical_can_driver.h"
@@ -63,7 +64,6 @@
 namespace {
 std::shared_ptr<grpc::Server> g_server;
 boat::core::TickScheduler* g_scheduler = nullptr;
-std::atomic<bool> g_node_tick_running{false};
 std::atomic<bool> g_shutdown_requested{false};
 constexpr std::uint64_t kGatewayDeterminismSeed = 777;
 
@@ -108,11 +108,18 @@ std::string ReadFileOrEmpty(const std::string& path) {
  * Note gRPC verifies the certificate against the name the client dialled, so a
  * certificate for a gateway reached by address needs an IP SAN, not just a CN.
  */
-std::shared_ptr<grpc::ServerCredentials> MakeServerCredentials() {
+std::shared_ptr<grpc::ServerCredentials> MakeServerCredentials(
+    boat::gateway::EffectiveConfig* cfg) {
   const char* cert_path = std::getenv("BOAT_TLS_CERT");
   const char* key_path  = std::getenv("BOAT_TLS_KEY");
 
   if (cert_path == nullptr && key_path == nullptr) {
+    if (cfg != nullptr) {
+      // Worth stating positively in the artifact: "no TLS" is a security
+      // property of the run, not an absence of configuration.
+      cfg->warnings.push_back(
+          "TLS not configured; gRPC is serving in the clear on all interfaces");
+    }
     return grpc::InsecureServerCredentials();
   }
   if (cert_path == nullptr || key_path == nullptr) {
@@ -122,6 +129,11 @@ std::shared_ptr<grpc::ServerCredentials> MakeServerCredentials() {
     std::exit(1);
   }
 
+  if (cfg != nullptr) {
+    cfg->tls_enabled = true;
+    cfg->tls_cert_path = cert_path;
+    cfg->tls_key_path = key_path;
+  }
   const std::string cert = ReadFileOrEmpty(cert_path);
   const std::string key  = ReadFileOrEmpty(key_path);
   if (cert.empty() || key.empty()) {
@@ -145,6 +157,10 @@ std::shared_ptr<grpc::ServerCredentials> MakeServerCredentials() {
     options.client_certificate_request =
         GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY;
     std::fprintf(stderr, "[tls] enabled with required client certificates\n");
+    if (cfg != nullptr) {
+      cfg->mtls_required = true;
+      cfg->tls_client_ca_path = client_ca_path;
+    }
   } else {
     std::fprintf(stderr, "[tls] enabled (server-side only, clients unauthenticated)\n");
   }
@@ -157,7 +173,7 @@ std::shared_ptr<grpc::ServerCredentials> MakeServerCredentials() {
  * see backlog/gateway_backlog.md's "duplicate gateway on one port" item.
  * Invalid/out-of-range values fall back to the default rather than starting
  * on an unintended port silently. */
-int ResolveGrpcPort() {
+int ResolveGrpcPort(boat::gateway::EffectiveConfig* cfg) {
   constexpr int kDefaultPort = 50051;
   const char* env = std::getenv("BOAT_GRPC_PORT");
   if (env == nullptr || env[0] == '\0') return kDefaultPort;
@@ -169,6 +185,10 @@ int ResolveGrpcPort() {
                  "[Gateway] BOAT_GRPC_PORT='%s' is not a valid port (1-65535); "
                  "using default %d\n",
                  env, kDefaultPort);
+    if (cfg != nullptr) {
+      cfg->warnings.push_back(std::string("BOAT_GRPC_PORT='") + env +
+                              "' is not a valid port (1-65535); used default");
+    }
     return kDefaultPort;
   }
   return static_cast<int>(parsed);
@@ -239,6 +259,20 @@ void HandleSignal(int) {
 }  // namespace
 
 int main() {
+  // Resolved once, here, and never re-read from the environment afterwards:
+  // every knob below records what it decided so the run can be reproduced
+  // from an artifact instead of from whatever the operator remembers
+  // exporting. Written out via BOAT_CONFIG_DUMP and served by
+  // DebugService.GetEffectiveConfig.
+  boat::gateway::EffectiveConfig effective_config;
+#ifdef BOAT_VERSION
+  effective_config.version = BOAT_VERSION;
+#endif
+  effective_config.hil_enabled = [] {
+    const char* v = std::getenv("BOAT_HIL_ENABLED");
+    return v != nullptr && std::string(v) == "1";
+  }();
+
   boat::gateway::RpcAuditLog audit_log;
   // Gateway bootstrap uses a fixed seed so startup behavior is deterministic across environments.
   boat::core::SimulationContext sim(kGatewayDeterminismSeed);
@@ -266,9 +300,15 @@ int main() {
         if (entry.rfind("raw:", 0) == 0) {
           const std::string name = entry.substr(4);
           auto driver = std::make_unique<boat::hil::RawSocketEthernetDriver>(name);
-          if (!eth_registry.Add(name, std::move(driver))) {
+          const bool opened = eth_registry.Add(name, std::move(driver));
+          effective_config.eth_interfaces.push_back(entry);
+          effective_config.eth_interfaces_opened.push_back(opened);
+          if (!opened) {
             std::fprintf(stderr, "[Gateway] Failed to open raw Ethernet interface '%s' "
                          "(check permissions / interface name)\n", name.c_str());
+            effective_config.warnings.push_back(
+                "raw Ethernet interface '" + name +
+                "' failed to open (check permissions / interface name)");
           } else {
             std::fprintf(stderr, "[Gateway] Registered raw Ethernet interface '%s'\n",
                          name.c_str());
@@ -279,14 +319,39 @@ int main() {
           std::getline(es, name, ':');
           std::getline(es, mcast, ':');
           std::getline(es, port_str);
+          bool opened = false;
           if (mcast.empty() || port_str.empty()) {
             auto driver = boat::hil::VirtualEthernetDriver::FromIndex(name, index);
-            eth_registry.Add(name, std::move(driver));
+            opened = eth_registry.Add(name, std::move(driver));
           } else {
-            const auto port = static_cast<std::uint16_t>(std::stoul(port_str));
+            // stoul() here used to be unguarded, so BOAT_ETH_INTERFACES with a
+            // non-numeric port threw std::invalid_argument straight out of
+            // main() -- the gateway died with an unhandled exception and no
+            // hint which variable was at fault.
+            char* end = nullptr;
+            const unsigned long port = std::strtoul(port_str.c_str(), &end, 10);
+            if (end == port_str.c_str() || *end != '\0' || port == 0 || port > 65535) {
+              std::fprintf(stderr,
+                           "[Gateway] BOAT_ETH_INTERFACES entry '%s' has an invalid "
+                           "port '%s' (1-65535); skipped\n",
+                           entry.c_str(), port_str.c_str());
+              effective_config.warnings.push_back(
+                  "BOAT_ETH_INTERFACES entry '" + entry + "' has an invalid port '" +
+                  port_str + "' (1-65535); skipped");
+              effective_config.eth_interfaces.push_back(entry);
+              effective_config.eth_interfaces_opened.push_back(false);
+              ++index;
+              continue;
+            }
             auto driver = std::make_unique<boat::hil::VirtualEthernetDriver>(
-                name, mcast, port);
-            eth_registry.Add(name, std::move(driver));
+                name, mcast, static_cast<std::uint16_t>(port));
+            opened = eth_registry.Add(name, std::move(driver));
+          }
+          effective_config.eth_interfaces.push_back(entry);
+          effective_config.eth_interfaces_opened.push_back(opened);
+          if (!opened) {
+            effective_config.warnings.push_back("Ethernet interface '" + entry +
+                                                "' failed to open");
           }
         }
         ++index;
@@ -316,7 +381,14 @@ int main() {
 
       // Capture info before driver is moved into the registry.
       auto info = driver->GetInfo();
-      if (can_registry.Add(iface, std::move(driver), sim.event_bus())) {
+      effective_config.can_interfaces.push_back(iface);
+      const bool can_opened = can_registry.Add(iface, std::move(driver), sim.event_bus());
+      effective_config.can_interfaces_opened.push_back(can_opened);
+      if (!can_opened) {
+        effective_config.warnings.push_back("CAN interface '" + iface +
+                                            "' failed to open");
+      }
+      if (can_opened) {
         std::fprintf(stderr, "[Gateway] Registered CAN interface '%s' "
                      "(driver=%s, fd=%s, state=%s)\n",
                      iface.c_str(),
@@ -401,14 +473,27 @@ int main() {
           std::string so_path  = entry.substr(0, qpos);
           std::string config   = (qpos != std::string::npos)
                                     ? entry.substr(qpos + 1) : "{}";
+          boat::gateway::EffectiveConfig::PluginEntry record;
+          record.so_path = so_path;
+          record.config_json = config;
           try {
             node_manager.Load(so_path, config);
+            record.loaded = true;
             std::fprintf(stderr, "[Gateway] Loaded plugin '%s'\n",
                          so_path.c_str());
           } catch (const std::exception& ex) {
+            // Still only a warning, not fatal -- a gateway that refuses to
+            // start because one optional plugin is missing is worse on a
+            // bench. But the failure is now recorded in the artifact instead
+            // of scrolling past on stderr.
+            record.loaded = false;
+            record.error = ex.what();
             std::fprintf(stderr, "[Gateway] Failed to load plugin '%s': %s\n",
                          so_path.c_str(), ex.what());
+            effective_config.warnings.push_back("plugin '" + so_path +
+                                                "' failed to load: " + ex.what());
           }
+          effective_config.node_plugins.push_back(std::move(record));
         }
       }
     }
@@ -446,23 +531,48 @@ int main() {
     using namespace std::chrono_literals;
     std::chrono::nanoseconds tick_ns = 1ms;  // default
 
-    const char* us_env = std::getenv("BOAT_NODE_TICK_US");
-    if (us_env != nullptr) {
+    // Both knobs used to fail silently: a typo'd BOAT_NODE_TICK_US left the
+    // gateway at 1ms with nothing on stderr, so a bench could be pacing
+    // hardware at 1000x the requested rate and look fine. Now a malformed
+    // value is reported and recorded in the effective config.
+    auto parse_tick = [&effective_config](const char* env_name, const char* raw,
+                                          bool* ok) -> unsigned long {
+      *ok = false;
       char* end = nullptr;
-      auto val = std::strtoul(us_env, &end, 10);
-      if (end != us_env && val > 0) {
-        tick_ns = std::chrono::microseconds(val);
+      const unsigned long val = std::strtoul(raw, &end, 10);
+      if (end == raw || *end != '\0' || val == 0) {
+        std::string w = std::string(env_name) + "='" + raw +
+                        "' is not a positive integer; ignored";
+        std::fprintf(stderr, "[Gateway] %s\n", w.c_str());
+        effective_config.warnings.push_back(std::move(w));
+        return 0;
       }
-    } else {
-      const char* ms_env = std::getenv("BOAT_NODE_TICK_MS");
-      if (ms_env != nullptr) {
-        char* end = nullptr;
-        auto val = std::strtoul(ms_env, &end, 10);
-        if (end != ms_env && val > 0) {
-          tick_ns = std::chrono::milliseconds(val);
-        }
+      *ok = true;
+      return val;
+    };
+
+    const char* us_env = std::getenv("BOAT_NODE_TICK_US");
+    const char* ms_env = std::getenv("BOAT_NODE_TICK_MS");
+    if (us_env != nullptr && us_env[0] != '\0') {
+      if (ms_env != nullptr && ms_env[0] != '\0') {
+        effective_config.warnings.push_back(
+            "BOAT_NODE_TICK_US and BOAT_NODE_TICK_MS both set; _US wins");
+      }
+      bool ok = false;
+      const auto val = parse_tick("BOAT_NODE_TICK_US", us_env, &ok);
+      if (ok) {
+        tick_ns = std::chrono::microseconds(val);
+        effective_config.tick_resolved_from = "BOAT_NODE_TICK_US";
+      }
+    } else if (ms_env != nullptr && ms_env[0] != '\0') {
+      bool ok = false;
+      const auto val = parse_tick("BOAT_NODE_TICK_MS", ms_env, &ok);
+      if (ok) {
+        tick_ns = std::chrono::milliseconds(val);
+        effective_config.tick_resolved_from = "BOAT_NODE_TICK_MS";
       }
     }
+    effective_config.tick_ns = static_cast<std::uint64_t>(tick_ns.count());
 
     // One tick authority drives everything that observes a tick, in a fixed
     // order: node plugins first, then replay delivery. That ordering is what
@@ -489,13 +599,17 @@ int main() {
     // BOAT_TIME_SOURCE=virtual becomes meaningful now that both consumers
     // share this clock, but selecting it is a separate, deliberate step.
     tick_authority.Start(tick_ns, boat::hil::TimeSource::kRealTime);
-    g_node_tick_running.store(true, std::memory_order_release);
 
     std::string phase_list;
     for (const auto& name : tick_authority.PhaseNames()) {
       if (!phase_list.empty()) phase_list += " -> ";
       phase_list += name;
+      effective_config.tick_phases.push_back(name);
     }
+    // The gateway passes kRealTime explicitly (a bare gateway paces real
+    // hardware), so record that rather than echoing BOAT_TIME_SOURCE, which
+    // does not reach this code path and would misdescribe the run.
+    effective_config.time_source = "realtime";
     std::fprintf(stderr, "[Gateway] Tick authority: %lld us/tick, phases: %s\n",
                  static_cast<long long>(
                      std::chrono::duration_cast<std::chrono::microseconds>(tick_ns).count()),
@@ -514,6 +628,7 @@ int main() {
       .plugin_manager = node_manager,
       .frame_sink = frame_sink,
       .audit_log = audit_log,
+      .effective_config = effective_config,
   };
 
   boat::gateway::BusServiceImpl      bus_impl(audit_log, signal_bus);
@@ -530,14 +645,15 @@ int main() {
   boat::gateway::CanServiceImpl can_impl(ctx);
   boat::gateway::PduServiceImpl pdu_impl(ctx);
   boat::gateway::CanTpServiceImpl can_tp_impl(ctx);
-  boat::gateway::DebugServiceImpl debug_impl(audit_log);
+  boat::gateway::DebugServiceImpl debug_impl(audit_log, effective_config);
   boat::gateway::FrameServiceImpl frame_impl(ctx);
 
-  const int grpc_port = ResolveGrpcPort();
+  const int grpc_port = ResolveGrpcPort(&effective_config);
+  effective_config.grpc_port = grpc_port;
   RefuseIfPortInUse(grpc_port);
 
   grpc::ServerBuilder builder;
-  builder.AddListeningPort("0.0.0.0:" + std::to_string(grpc_port), MakeServerCredentials());
+  builder.AddListeningPort("0.0.0.0:" + std::to_string(grpc_port), MakeServerCredentials(&effective_config));
 
   // Keepalive policy for long-lived streams from mobile/remote clients.
   //
@@ -577,6 +693,31 @@ int main() {
 
   g_server = builder.BuildAndStart();
   std::fprintf(stderr, "[Gateway] gRPC server listening on 0.0.0.0:%d\n", grpc_port);
+
+  // Everything is resolved by here, so this is the point at which the run's
+  // configuration becomes a fact worth recording.
+  if (!effective_config.warnings.empty()) {
+    std::fprintf(stderr, "[Gateway] %zu configuration warning(s):\n",
+                 effective_config.warnings.size());
+    for (const auto& w : effective_config.warnings) {
+      std::fprintf(stderr, "[Gateway]   - %s\n", w.c_str());
+    }
+  }
+  if (const char* dump_path = std::getenv("BOAT_CONFIG_DUMP")) {
+    if (dump_path[0] != '\0') {
+      const std::string json = effective_config.ToJson();
+      std::FILE* f = std::fopen(dump_path, "wb");
+      if (f == nullptr) {
+        std::fprintf(stderr, "[Gateway] BOAT_CONFIG_DUMP: cannot write '%s'\n",
+                     dump_path);
+      } else {
+        std::fwrite(json.data(), 1, json.size(), f);
+        std::fclose(f);
+        std::fprintf(stderr, "[Gateway] Effective config written to '%s'\n",
+                     dump_path);
+      }
+    }
+  }
   g_scheduler = &sim.scheduler();
   std::signal(SIGINT, HandleSignal);
   std::signal(SIGTERM, HandleSignal);
@@ -602,7 +743,6 @@ int main() {
   g_shutdown_requested.store(true, std::memory_order_relaxed);
   shutdown_watcher.join();
   sim.scheduler().Stop();
-  g_node_tick_running.store(false, std::memory_order_release);
   tick_authority.Stop();
   node_manager.ShutdownAll();
   eth_registry.StopAll();

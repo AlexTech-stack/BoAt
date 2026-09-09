@@ -575,6 +575,23 @@ dependency above.
 
 ## Quirks & gotchas
 
+- **Plugin lifetime under concurrent unload.** `Unload()` is reachable from gRPC
+  (`PluginService.UnloadPlugin`, `NodePluginService.UnloadNodePlugin`), so it can race the
+  tick thread. `TickAll`/`DispatchFrame` snapshot raw `BoatPlugin*` and release the mutex
+  before calling into the `.so` (holding it across a callback deadlocks — plugins call back
+  into the host), so the snapshot **pins** the manager's `busy_count_` atomically with the
+  snapshot itself. `Unload()` erases from `plugins_` and `services_` first, then waits for
+  `busy_count_` to drain before `destroy_fn` + `dlclose`. That is what lets the host honor
+  plugin.h's *"Host guarantees no concurrent callbacks after return"*.
+  - Use `PluginManager::AcquireService<T>(name)` — it returns a `ServiceRef<T>` that pins the
+    plugin for its lifetime — not bare `FindService()`, from anything reachable off a gRPC
+    handler. Returned by value, so `GetRouter()->Send(...)` is safe for that statement.
+  - **Keep refs short-lived.** A `ServiceRef` held for a whole streaming RPC would block
+    `Unload` until the client disconnects — a hang instead of a crash. The streaming RPCs in
+    `can_tp_service_impl.cpp` / `pdu_service_impl.cpp` deliberately store iface **names** and
+    re-acquire per use, treating a null ref as "the plugin went away".
+  - Acquire and release a ref on the same thread; the re-entrancy check is a per-thread counter.
+
 - **Plugin ABI v9** (current, merged to `master`):
   - Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU)
   - Plugin vtable (10 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`
@@ -611,6 +628,50 @@ dependency above.
 - Proto stubs in `sdk/python/boat/stubs/boat/v1/` must be regenerated when proto files change (`generate_stubs.sh`).
 - iceoryx2 requires `cargo` (Rust) at build time only; the resulting shared-memory IPC is used at runtime for large payloads (>4KB).
 - HIL tests need `BOAT_HIL_ENABLED=1` and a real or virtual CAN interface (`vcan0`).
+
+### Effective configuration (reproducibility artifact)
+
+The gateway is configured entirely by environment variables read in `main()`, and
+several of them used to fall back **silently** — an unparsable `BOAT_NODE_TICK_US`
+left the gateway at the 1 ms default with nothing on stderr, so a bench could be
+pacing hardware at a rate nobody asked for and look healthy. Worse for a tool
+selling reproducible CI runs, nothing recorded what the run had actually been
+configured with.
+
+Resolution now happens once, into `EffectiveConfig`
+(`src/gateway/grpc_gateway/effective_config.{h,cpp}`), which records:
+
+- gRPC port; TLS on/off, mTLS required, and the cert/key/CA paths
+- CAN and Ethernet interfaces **as requested**, each paired with whether it opened
+- every node plugin: `.so` path, its config **verbatim**, and loaded/error
+- tick interval, plus `resolved_from` — which of `BOAT_NODE_TICK_US` /
+  `BOAT_NODE_TICK_MS` / `default` actually decided it
+- the tick phase order, the time source, `hil_enabled`
+- a `warnings` list: anything malformed, ignored, or fallen back to a default
+
+Two ways to get it out, both rendering the same document via `ToJson()`:
+
+```bash
+BOAT_CONFIG_DUMP=./effective-config.json ./boat_gateway   # written at startup
+boat config show -o effective-config.json                 # DebugService.GetEffectiveConfig
+```
+
+- **No timestamp and no hostname**, deliberately. Two identically configured runs
+  must produce byte-identical documents, or the artifact cannot be diffed to prove
+  "these two runs were configured the same way", which is most of its value. Don't
+  add a capture time to it.
+- A plugin's config is emitted as a JSON **string**, not an inlined object. The
+  gateway never parses plugin config, and quoting it is the only way to guarantee
+  the document stays well-formed whatever the operator passed.
+- There is still **no JSON parser** in the C++ tree, by choice — `effective_config.cpp`
+  only *emits*, which needs nothing but string escaping (`JsonEscape`). Don't pull in
+  a JSON dependency to "improve" this without a reason that needs parsing.
+- Validation is warn-not-fatal: a plugin that fails to load, or an interface that
+  fails to open, still leaves the gateway running (a bench that dies over one
+  optional plugin is worse) but is now recorded rather than scrolling past on stderr.
+  The one previously *fatal* case is fixed: a non-numeric port in
+  `BOAT_ETH_INTERFACES` used to throw `std::invalid_argument` out of `main()` from an
+  unguarded `std::stoul`; it is now reported and the entry skipped.
 
 ### Tick timer backends
 

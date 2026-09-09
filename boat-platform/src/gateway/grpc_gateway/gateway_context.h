@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "effective_config.h"
 #include "rpc_audit_log.h"
 #include "core/plugin/plugin_manager.h"
 #include "core/scenario/scenario_loader.h"
@@ -36,6 +37,10 @@ struct GatewayContext {
   boat::core::PluginManager& plugin_manager;
   FrameSink& frame_sink;
   RpcAuditLog& audit_log;
+  /* A reference, not a copy: a few fields (gRPC port, TLS) are resolved after
+     this struct is built, and services only read it once an RPC arrives, by
+     which time startup has finished and the value is final. */
+  const EffectiveConfig& effective_config;
 };
 
 }  // namespace boat::gateway

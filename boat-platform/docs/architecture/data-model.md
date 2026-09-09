@@ -59,7 +59,7 @@ FaultEvent
   fault_type: ENUM(STUCK|NOISE|DROPOUT|INVERT)
   parameters: map<string,string>
 
-Frame  (ABI v8 unified frame — src/core Frame / boat.v1.Frame / BoatFrame)
+Frame  (ABI v9 unified frame — src/core Frame / boat.v1.Frame / BoatFrame)
   bus_type: ENUM(CAN|CANFD|ETH|PDU|TCP)   # single type for all buses
   iface: String                            # e.g. vcan0, can1, eth0
   timestamp_ns: uint64
@@ -79,7 +79,7 @@ It is the unit exchanged across the plugin ABI (`on_frame` /
 - `Trace` maps to `traces` table.
 - `Plugin`, `Signal`, and `FaultEvent` are embedded in scenario definitions and/or plugin registry metadata.
 
-## Trace format (ABI v8)
+## Trace format (ABI v9)
 
 - Binary traces are a stream of length-delimited `boat.v1.Frame` protobuf
   records: `uint32 len` (4 bytes) followed by the serialized `Frame`.

@@ -13,6 +13,7 @@ DEFAULT_HOST = os.environ.get("BOAT_HOST", "localhost:50051")
 
 from .ai import ai_app
 from .can_tp import can_tp_app
+from .config import config_app
 from .db import db_app
 from .frame import frame_app
 from .pdu import pdu_app
@@ -35,6 +36,7 @@ app.add_typer(frame_app,    name="frame", help="Unified frame send / subscribe v
 app.add_typer(pdu_app,      name="pdu",  help="PDU routing and transmission.")
 app.add_typer(db_app,       name="db",   help="PDU database inspection.")
 app.add_typer(test_app,     name="test",  help="Run tests and inspect test configurations.")
+app.add_typer(config_app,   name="config", help="Inspect the gateway's effective configuration.")
 app.add_typer(trace_app,    name="trace")
 
 
