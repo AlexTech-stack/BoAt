@@ -5,9 +5,15 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
-from boat.test.config import BusConfig, DutConfig, EnvironmentConfig, GatewayConfig
+from boat.test.config import (
+    BusConfig,
+    DutConfig,
+    EnvironmentConfig,
+    GatewayConfig,
+    PluginRef,
+)
 from boat.test.dut import DutProxy, PluginDutBackend, PhysicalDutBackend, MockDutBackend
-from boat.test.harness import TestHarness, StepContext
+from boat.test.harness import TestHarness, StepContext, _GatewayManager
 from boat.test.report import TestStepRecord, AssertionRecord
 
 
@@ -141,6 +147,56 @@ class TestHarnessConfig:
         with h.step(1, "Traced Step") as ctx:
             ctx.assert_true(True)
         h._trace.marker.assert_called_once_with(1, "Traced Step")
+
+
+class TestGatewayManagerPlugins:
+    def test_build_node_plugins_uses_joined_pairs(self) -> None:
+        cfg = _make_env_config()
+        cfg.plugins = [
+            PluginRef(so_path="/x/pdu_router.so", config_json="{}"),
+            PluginRef(so_path="/x/can_tp.so", config_json='{"iface":"vcan0"}'),
+        ]
+        mgr = _GatewayManager(cfg)
+        assert mgr._build_node_plugins() == (
+            '/x/pdu_router.so?{},/x/can_tp.so?{"iface":"vcan0"}'
+        )
+
+    def test_build_node_plugins_empty(self) -> None:
+        cfg = _make_env_config()
+        assert _GatewayManager(cfg)._build_node_plugins() == ""
+
+
+class TestHarnessDutStart:
+    def test_start_builds_dut_from_dut_config(self) -> None:
+        cfg = _make_env_config()
+        cfg.dut = DutConfig(name="ext-ecu", type="physical")
+        h = TestHarness(cfg)
+        h.start()
+        try:
+            assert h._dut is not None
+            assert isinstance(h._dut._backend, PhysicalDutBackend)
+        finally:
+            h.stop()
+
+    def test_start_builds_plugin_dut_without_raising(self) -> None:
+        cfg = _make_env_config()
+        cfg.dut = DutConfig(name="sim-dut", type="plugin", so_path="/x/pdu_router.so")
+        h = TestHarness(cfg)
+        h.start()
+        try:
+            assert isinstance(h._dut._backend, PluginDutBackend)
+        finally:
+            h.stop()
+
+    def test_start_without_dut(self) -> None:
+        cfg = _make_env_config()
+        cfg.dut = None
+        h = TestHarness(cfg)
+        h.start()
+        try:
+            assert h._dut is None
+        finally:
+            h.stop()
 
 
 # We skip gateway start/stop tests since they require a real binary or subprocess mocking.

@@ -22,8 +22,17 @@ namespace boat::hil {
  *   kMixed    — cyclic background with OnChange trigger and fast reps
  *
  * OnTick() must be called by the external scheduler at a fixed interval
- * (typically 1-100 ms).  UpdatePayload() must be called after every
- * successful manual SendPdu() so the engine can detect OnChange events.
+ * (typically 1-100 ms).
+ *
+ * UpdatePayload() is the payload-only entry point: it records the new
+ * payload and, for kOnChange/kMixed schedules, triggers the OnChange send
+ * (with fast repetitions).  For kCyclic it only records -- the schedule
+ * decides when the payload goes on the wire.  The scheduler therefore never
+ * transmits a cyclic PDU directly; SendPdu() delegates scheduled routes here.
+ *
+ * A scheduled PDU emits nothing until its first UpdatePayload(): there is no
+ * meaningful payload to send before then, and a zero-length frame is a
+ * malformed message to a receiving ECU.
  */
 class TransmissionEngine {
  public:
@@ -43,6 +52,7 @@ class TransmissionEngine {
   struct ScheduleState {
     PduSchedule           schedule;
     std::vector<uint8_t>  last_payload;   // for OnChange detection
+    bool                  has_payload{false};  // false until first UpdatePayload
     uint64_t              next_tick_ms{kTickNotScheduled};
     uint32_t              remaining_reps{0};
     uint64_t              next_rep_tick_ms{0};

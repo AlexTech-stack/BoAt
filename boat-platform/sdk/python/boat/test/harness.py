@@ -56,6 +56,9 @@ class _GatewayManager:
                 env["BOAT_GRPC_PORT"] = str(port)
             if self._config.tick_ms:
                 env["BOAT_NODE_TICK_MS"] = str(self._config.tick_ms)
+            plugins = self._build_node_plugins()
+            if plugins:
+                env["BOAT_NODE_PLUGINS"] = plugins
 
             self._process = subprocess.Popen(
                 [binary],
@@ -87,6 +90,11 @@ class _GatewayManager:
             if b.type in ("virtual_eth", "raw_eth")
         ]
         return ",".join(ifaces) if ifaces else ""
+
+    def _build_node_plugins(self) -> str:
+        return ",".join(
+            f"{p.so_path}?{p.config_json}" for p in self._env_cfg.plugins
+        )
 
     def _wait_for_ready(self, timeout: int = 15) -> None:
         deadline = time.monotonic() + timeout
@@ -352,7 +360,7 @@ class TestHarness:
         self._trace.start(trace_id, buses=can_ifaces)
 
         if self.config.dut:
-            self._dut = DutProxy(self._client, self.config)
+            self._dut = DutProxy(self._client, self.config.dut)
 
     def stop(self, report_dir: Optional[str] = None) -> TestReport:
         if self._trace:

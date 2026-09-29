@@ -94,6 +94,15 @@ class PduRouter : public boat::core::IPduRouter {
   bool SendContainer(const PduContainerDef& def,
                      const std::vector<IpduMEntry>& entries);
 
+  // Transmission-engine send callback: the actual wire transmit for a
+  // scheduled PDU.  Separate from SendPdu() so it cannot re-enter the
+  // schedule-aware path (see the constructor).
+  bool SendScheduledNow(uint32_t pdu_id, const std::vector<uint8_t>& payload);
+
+  // The route -> wire send, used by both SendPdu() (unscheduled) and
+  // SendScheduledNow() (engine-driven).
+  bool TransmitRoute(const PduRoute& route, const std::vector<uint8_t>& payload);
+
   // Returns false if the PDU belongs to a disabled group.
   bool IsPduGated(uint32_t pdu_id) const;
 

@@ -105,6 +105,7 @@ class TestSuiteRunner:
         self.recorder_url = recorder_url
         self.trace_format = trace_format
         self._results: list[dict[str, Any]] = []
+        self._setup_error: Optional[str] = None
 
     def run(self) -> int:
         if self.preflight:
@@ -148,9 +149,13 @@ class TestSuiteRunner:
 
         except TestGatewayError as exc:
             print(f"Gateway error: {exc}", file=sys.stderr)
+            if not self._results:
+                self._setup_error = str(exc)
             exit_code = 1
         except Exception as exc:
             print(f"Runner error: {exc}", file=sys.stderr)
+            if not self._results:
+                self._setup_error = str(exc)
             exit_code = 1
         finally:
             try:
@@ -200,9 +205,13 @@ class TestSuiteRunner:
 
         except TestGatewayError as exc:
             print(f"Gateway error: {exc}", file=sys.stderr)
+            if not self._results:
+                self._setup_error = str(exc)
             exit_code = 1
         except Exception as exc:
             print(f"Runner error: {exc}", file=sys.stderr)
+            if not self._results:
+                self._setup_error = str(exc)
             exit_code = 1
         finally:
             try:
@@ -340,7 +349,10 @@ class TestSuiteRunner:
         passed = sum(1 for r in self._results if r["verdict"] == "PASS")
         failed = total - passed
         print(file=sys.stderr)
-        print(f"Results: {passed}/{total} passed, {failed} failed", file=sys.stderr)
+        summary = f"Results: {passed}/{total} passed, {failed} failed"
+        if self._setup_error:
+            summary += f" (setup failed: {self._setup_error})"
+        print(summary, file=sys.stderr)
         for r in self._results:
             status_icon = "\u2713" if r["verdict"] == "PASS" else "\u2717"
             print(f"  {status_icon} {r['id']}: {r['verdict']} ({r['duration_ms']}ms)", file=sys.stderr)

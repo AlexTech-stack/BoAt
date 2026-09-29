@@ -12,17 +12,22 @@ namespace boat::hil {
 
 // ── Construction / destruction ────────────────────────────────────────────────
 
+/* The transmission engine's send callback does the *wire* transmit for a
+ * scheduled PDU.  It must NOT go through SendPdu(), which now delegates
+ * scheduled routes back into the engine -- re-entering that way would recurse
+ * (it happens to terminate today only because UpdatePayload records the new
+ * payload before sending, but the transmit path must not depend on that). */
 PduRouter::PduRouter()
     : tx_engine_(std::make_unique<TransmissionEngine>(
           [this](uint32_t pid, const std::vector<uint8_t>& pl) {
-            return SendPdu(pid, pl);
+            return SendScheduledNow(pid, pl);
           })) {}
 
 PduRouter::PduRouter(CanBusRegistry& can, EthernetBusRegistry& eth)
     : can_(&can), eth_(&eth),
       tx_engine_(std::make_unique<TransmissionEngine>(
           [this](uint32_t pid, const std::vector<uint8_t>& pl) {
-            return SendPdu(pid, pl);
+            return SendScheduledNow(pid, pl);
           })) {
   // Subscribe to all frames on both registries; PDU matching is done internally.
   can_sub_id_ = can_->Subscribe(
@@ -154,7 +159,7 @@ bool PduRouter::SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload) {
     }
   }
 
-  // Per-PDU route path (original behaviour).
+  // Per-PDU route path.
   PduRoute route;
   {
     std::lock_guard<std::mutex> lock(routes_mutex_);
@@ -163,6 +168,39 @@ bool PduRouter::SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload) {
     route = it->second;
   }
 
+  // A scheduled route's send() is a payload update, not a transmit.  The
+  // transmission engine decides when the payload actually reaches the wire
+  // (cyclic) or fires the on-change send and its fast repetitions.  A direct
+  // transmit here is exactly what put an extra, off-schedule frame on the bus
+  // on every send() (issue 3).
+  if (route.schedule.send_type != SendType::kNone) {
+    tx_engine_->UpdatePayload(pdu_id, payload);
+    return true;
+  }
+
+  return TransmitRoute(route, payload);
+}
+
+// The transmission engine's send callback -- the actual wire transmit for a
+// scheduled PDU.  Kept separate from SendPdu() so UpdatePayload()'s callback
+// cannot re-enter the schedule-aware SendPdu() (see the constructor comment).
+bool PduRouter::SendScheduledNow(uint32_t pdu_id,
+                                 const std::vector<uint8_t>& payload) {
+  if (IsPduGated(pdu_id)) return false;
+
+  PduRoute route;
+  {
+    std::lock_guard<std::mutex> lock(routes_mutex_);
+    const auto it = routes_.find(pdu_id);
+    if (it == routes_.end()) return false;
+    route = it->second;
+  }
+  return TransmitRoute(route, payload);
+}
+
+bool PduRouter::TransmitRoute(const PduRoute& route,
+                              const std::vector<uint8_t>& payload) {
+  const uint32_t pdu_id = route.pdu_id;
   bool sent = false;
 
   if (route.transport == PduTransport::kCan) {
@@ -231,12 +269,6 @@ bool PduRouter::SendPdu(uint32_t pdu_id, const std::vector<uint8_t>& payload) {
     } else {
       sent = eth_->SendFrame(route.iface, frame);
     }
-  }
-
-  // Notify transmission engine after a successful send so OnChange
-  // detection can compare payloads.
-  if (sent) {
-    tx_engine_->UpdatePayload(pdu_id, payload);
   }
 
   return sent;

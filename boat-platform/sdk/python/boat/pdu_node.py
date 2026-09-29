@@ -263,6 +263,11 @@ class PduNode:
     def send(self, pdu_id: int, payload: bytes) -> bool:
         """Send a PDU via the gateway.
 
+        For a route with no transmission schedule this transmits immediately.
+        For a scheduled route it only updates the payload: the schedule
+        decides when the payload goes on the wire (``cyclic``), or fires the
+        on-change send and its fast repetitions (``onchange``/``mixed``).
+
         Args:
             pdu_id:  32-bit PDU identifier (must have a configured route).
             payload: PDU payload bytes.

@@ -796,6 +796,23 @@ groups = node.list_groups()
 
 Routes can specify automatic sending behavior (Cyclic, OnChange, Mixed with n-times fast repetitions).
 
+**`send()` on a scheduled route updates the payload; it never transmits
+directly.** For a route with a `send_type`, `PduService.SendPdu` (and
+`boat pdu send`, `PduNode.send()`, or a `BOAT_BUS_PDU` frame) goes to the
+transmission engine's payload-update path instead of putting a frame on the
+wire immediately, matching AUTOSAR's PERIODIC/DIRECT/MIXED modes:
+
+- `cyclic` (PERIODIC) — the schedule alone decides wire timing.
+- `onchange` (DIRECT) — one send per payload change, plus the configured fast reps.
+- `mixed` — on-change reps plus the cyclic background.
+- `none` — no schedule: `send()` transmits immediately (manual/event-driven).
+
+A cyclic (or mixed) route emits **nothing until its first payload is set** —
+there is no meaningful payload before then, and a DLC-0 frame is a malformed
+message to a receiving ECU. Set the payload first (via `send()`), then the
+next cyclic slot carries it. This is what lets a restbus drive a cyclic PDU
+without `send()` doubling the message rate or jittering its timing.
+
 ```bash
 # Cyclic: send every 100ms
 boat pdu route --id 0x100 --transport can --iface vcan0 --send-type cyclic --cycle-ms 100

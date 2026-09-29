@@ -677,6 +677,53 @@ TEST_CASE("TransmissionEngine RemoveSchedule stops sending", "[unit][pdu][txengi
   REQUIRE(send_count == 0);
 }
 
+TEST_CASE("PduRouter cyclic route does not transmit on SendPdu",
+          "[unit][pdu][txengine]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id     = 0x100;
+  route.transport  = PduTransport::kCan;
+  route.iface      = "vcan0";
+  route.schedule.send_type = SendType::kCyclic;
+  route.schedule.cycle_ms  = 50;
+  f.router.AddRoute(route);
+
+  // SendPdu on a scheduled route is a payload update, not a transmit: the
+  // schedule alone decides when the payload goes on the wire (issue 3).
+  REQUIRE(f.router.SendPdu(0x100, {0xAA}));
+  REQUIRE(f.mock_can->written.empty());
+
+  REQUIRE(f.router.SendPdu(0x100, {0xBB}));
+  REQUIRE(f.mock_can->written.empty());
+}
+
+TEST_CASE("PduRouter cyclic route emits nothing before the first payload",
+          "[unit][pdu][txengine]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id     = 0x100;
+  route.transport  = PduTransport::kCan;
+  route.iface      = "vcan0";
+  route.schedule.send_type = SendType::kCyclic;
+  route.schedule.cycle_ms  = 50;
+  f.router.AddRoute(route);
+
+  // No payload set yet: cyclic slots must not put a 0-byte frame on the bus
+  // (issue 4).  Drive several cycles.
+  f.router.OnTick(50);
+  f.router.OnTick(100);
+  f.router.OnTick(150);
+  REQUIRE(f.mock_can->written.empty());
+
+  // Setting the payload makes the next slot transmit it.
+  REQUIRE(f.router.SendPdu(0x100, {0xAA}));
+  REQUIRE(f.mock_can->written.empty());  // still not immediate
+  f.router.OnTick(200);
+  REQUIRE(f.mock_can->written.size() == 1);
+  REQUIRE(f.mock_can->written[0].dlc == 1);
+  REQUIRE(f.mock_can->written[0].data[0] == 0xAA);
+}
+
 TEST_CASE("PduRouter OnTick triggers cyclic send from configured route", "[unit][pdu][txengine]") {
   Fixture f;
   PduRoute route;
@@ -687,14 +734,52 @@ TEST_CASE("PduRouter OnTick triggers cyclic send from configured route", "[unit]
   route.schedule.cycle_ms  = 50;
   f.router.AddRoute(route);
 
-  // Manually send to set the payload for the engine
+  // Set the payload for the engine -- no immediate transmit.
   REQUIRE(f.router.SendPdu(0x100, {0xAA}));
+  REQUIRE(f.mock_can->written.empty());
 
   // First OnTick initialises the schedule without sending
   f.router.OnTick(50);
-  REQUIRE(f.mock_can->written.size() == 1);  // only the manual send
+  REQUIRE(f.mock_can->written.empty());
 
   // Second OnTick at (50+50)=100 → first cycle fires
   f.router.OnTick(100);
-  REQUIRE(f.mock_can->written.size() >= 2);  // manual send + tick
+  REQUIRE(f.mock_can->written.size() == 1);
+  REQUIRE(f.mock_can->written[0].data[0] == 0xAA);
+
+  // ... and again after one more full cycle
+  f.router.OnTick(150);
+  REQUIRE(f.mock_can->written.size() == 2);
+}
+
+TEST_CASE("PduRouter on-change route SendPdu sends exactly once plus reps",
+          "[unit][pdu][txengine]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id     = 0x200;
+  route.transport  = PduTransport::kCan;
+  route.iface      = "vcan0";
+  route.schedule.send_type = SendType::kOnChange;
+  route.schedule.fast_ms   = 10;
+  route.schedule.repetitions = 2;
+  f.router.AddRoute(route);
+
+  // The old SendPdu path transmitted immediately *and* let UpdatePayload
+  // schedule the on-change send, i.e. two frames for one change.  Now the
+  // engine owns it: exactly one immediate frame (plus its reps).
+  REQUIRE(f.router.SendPdu(0x200, {0xAA}));
+  REQUIRE(f.mock_can->written.size() == 1);
+
+  // Same payload → no further send.
+  REQUIRE(f.router.SendPdu(0x200, {0xAA}));
+  REQUIRE(f.mock_can->written.size() == 1);
+
+  // Fast repetitions fire on subsequent ticks.
+  f.router.OnTick(10);
+  f.router.OnTick(20);
+  REQUIRE(f.mock_can->written.size() == 3);
+
+  // A changed payload fires once more.
+  REQUIRE(f.router.SendPdu(0x200, {0xBB}));
+  REQUIRE(f.mock_can->written.size() == 4);
 }

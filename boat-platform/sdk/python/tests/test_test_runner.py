@@ -62,3 +62,24 @@ class TestRunner:
         assert runner.manifest.name == "suite"
         assert len(runner.manifest.tests) == 1
         assert runner.env_config.name == "test"
+
+    def test_setup_error_is_reported_in_summary(self, tmp_path, capsys) -> None:
+        from boat.test.config import EnvironmentConfig, GatewayConfig, BusConfig
+        manifest = ManifestConfig(schema_version="1.0", name="suite",
+                                   tests=[ManifestTestEntry(id="T1", name="Test 1", file="echo ok")])
+        env_cfg = EnvironmentConfig(
+            schema_version="1.0", name="test", description="test env",
+            gateway=GatewayConfig(address="localhost:50051"),
+            buses={"can1": BusConfig(logical_name="can1", type="virtual", interface="vcan0")},
+            dut=None,
+        )
+        runner = TestSuiteRunner(manifest, env_cfg, report_dir=str(tmp_path))
+
+        with patch("boat.test.runner.TestHarness.start",
+                   side_effect=RuntimeError("boom during setup")):
+            rc = runner.run()
+
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "setup failed" in err
+        assert "boom during setup" in err

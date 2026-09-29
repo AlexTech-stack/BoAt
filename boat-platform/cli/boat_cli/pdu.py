@@ -89,7 +89,13 @@ def send_pdu(
     sig: Annotated[Optional[List[str]], typer.Option("--sig", help="Set signal physical value: Name=value (repeatable).")] = None,
     db: Annotated[str, typer.Option("--db", help="PDU database JSON file.", autocompletion=complete_json_file)] = "pdu_db.json",
 ) -> None:
-    """Send a PDU via the gateway."""
+    """Send a PDU via the gateway.
+
+    For a route with no transmission schedule this transmits immediately.
+    For a scheduled route it only updates the payload -- the schedule decides
+    when the payload reaches the wire (cyclic/onchange/mixed).  See
+    `boat pdu route`'s --send-type.
+    """
     if not msg_name and not pdu_id:
         print_error("Provide --msg (database lookup) or --id with --data.")
         sys.exit(1)

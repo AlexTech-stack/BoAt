@@ -42,6 +42,7 @@ void TransmissionEngine::UpdatePayload(
 
     const bool changed = (it->second.last_payload != payload);
     it->second.last_payload = payload;
+    it->second.has_payload = true;
 
     if (!changed) return;
 
@@ -82,8 +83,11 @@ void TransmissionEngine::OnTick(uint64_t tick_ms) {
         if (state.next_tick_ms == kTickNotScheduled) {
           state.next_tick_ms = tick_ms + state.schedule.cycle_ms;
         } else if (tick_ms >= state.next_tick_ms) {
-          should_send = true;
+          // Advance the schedule even when there is nothing to send yet, so a
+          // route that has no payload keeps its phase instead of firing a
+          // catch-up send the moment a payload is set.
           state.next_tick_ms = tick_ms + state.schedule.cycle_ms;
+          if (state.has_payload) should_send = true;
         }
       }
 

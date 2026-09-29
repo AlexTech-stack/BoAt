@@ -214,7 +214,7 @@ operational detail this file summarizes in a line or two. Read the relevant sect
 | Admin GUI internals | `## Admin GUI (PySide6 client)` (~208 lines) | Per-page behavior, dialog wiring, the dark-theme conventions, session save/load format, and several real hardware bugs found + fixed |
 | CanTp / ISO-TP | `### CanTp — CAN Transport Protocol` (~134 lines) | N_Bs/N_Cr watchdog semantics, addressing modes, CAN FD padding, multi-instance `--iface` rules, and the PDU-bus echo-loop hazard |
 | Launcher Agent REST API | `## Launcher Agent` (~91 lines) | Full endpoint list, `external:<pid>` discovery of unmanaged gateways, node registry, `PYTHONUNBUFFERED` gotcha |
-| PDU groups & schedules | `### I-PDU Groups`, `### Transmission Schedules` (~71 lines) | Every `boat pdu route` flag, the three send types, and the three ways to stop a cyclic send |
+| PDU groups & schedules | `### I-PDU Groups`, `### Transmission Schedules` (~71 lines) | Every `boat pdu route` flag, the three send types, and the three ways to stop a cyclic send; `send()` on a scheduled route only updates the payload (the schedule decides wire timing), and a cyclic route emits nothing until its first payload |
 | COM signal library | `### COM Signal Library (C++)` (~27 lines) | `PackSignals`/`UnpackSignals` usage, Intel vs Motorola, E2E CRC helpers |
 | Probe plugin | `### Probe Plugin` (~33 lines) | Config keys and what each conformance check proves — also the canonical minimal v9 plugin example |
 | Replay internals | `## Replay System` + subsections | Trace record layout, the full import/stream flag surface, the sink dataflow diagram |
