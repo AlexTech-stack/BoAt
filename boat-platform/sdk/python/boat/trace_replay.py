@@ -46,7 +46,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from boat.client import resolve_address
+from boat.client import make_channel, resolve_address
 from boat.pcapng import PcapngError, PcapngReader, PcapngWriter, DLT_CAN_SOCKETCAN, DLT_EN10MB
 
 # CAN FD flags (matches gateway constants)
@@ -898,11 +898,12 @@ class TraceReplayer:
         if self._stub is not None:
             return self._stub
         try:
-            import grpc
             from boat.v1 import can_pb2_grpc
         except ImportError as e:
             raise TraceReplayError(f"Cannot import boat gRPC stubs: {e}") from e
-        channel     = grpc.insecure_channel(self.gateway)
+        # Via make_channel rather than grpc.insecure_channel directly, so a
+        # TLS-enabled gateway is reachable here as well as from BoAtClient.
+        channel     = make_channel(self.gateway)
         self._stub  = can_pb2_grpc.CanServiceStub(channel)
         return self._stub
 

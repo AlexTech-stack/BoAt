@@ -12,7 +12,7 @@ from typing import Any, Iterator, Optional
 
 import grpc
 
-from boat.client import BoAtClient
+from boat.client import BoAtClient, make_channel
 from boat.test.bus import TestCanBus, TestEthBus
 from boat.test.config import EnvironmentConfig, BusConfig
 from boat.test.dut import DutProxy
@@ -122,7 +122,10 @@ class _GatewayManager:
                     + (f":\n{stderr}" if stderr else "")
                 )
             try:
-                channel = grpc.insecure_channel(self._config.address)
+                # Same credentials the test's own client will use: an
+                # insecure probe against a TLS gateway never becomes ready,
+                # so the harness would time out on a perfectly healthy bench.
+                channel = make_channel(self._config.address)
                 grpc.channel_ready_future(channel).result(timeout=3)
                 channel.close()
                 return
