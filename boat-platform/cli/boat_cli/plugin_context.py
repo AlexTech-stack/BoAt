@@ -99,7 +99,7 @@ Allowed imports — use NOTHING else:
   from boat.ethernet_node import EthernetNode
   from boat.pdu_node      import PduNode
   from boat.client        import BoAtClient
-  from boat.v1            import can_pb2, bus_pb2, pdu_pb2, ethernet_pb2
+  from boat.v1            import frame_pb2, bus_pb2, pdu_pb2
   import threading        (stdlib — only for cyclic/timer logic)
   import time             (stdlib — only if absolutely needed)
 
@@ -193,19 +193,19 @@ def _query_gateway(host: str) -> dict[str, Any]:
     try:
         import grpc
         from boat.client import BoAtClient
-        from boat.v1 import can_pb2, bus_pb2, ethernet_pb2
+        from boat.v1 import bus_pb2, frame_pb2
 
         client = BoAtClient(address=host)
         try:
-            resp = client.can.ListBuses(can_pb2.ListBusesRequest())
-            result["can_ifaces"] = [b.iface for b in resp.buses]
-        except Exception:
-            pass
-        try:
-            resp = client.ethernet.ListInterfaces(
-                ethernet_pb2.ListEthernetInterfacesRequest()
-            )
-            result["eth_ifaces"] = list(resp.ifaces)
+            resp = client.frame.ListInterfaces(frame_pb2.ListInterfacesRequest())
+            result["can_ifaces"] = [
+                i.iface for i in resp.interfaces
+                if i.bus_type in (frame_pb2.Frame.CAN, frame_pb2.Frame.CANFD)
+            ]
+            result["eth_ifaces"] = [
+                i.iface for i in resp.interfaces
+                if i.bus_type == frame_pb2.Frame.ETHERNET
+            ]
         except Exception:
             pass
         try:

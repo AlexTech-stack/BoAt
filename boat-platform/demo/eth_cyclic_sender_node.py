@@ -40,7 +40,7 @@ from boat.bus_node import BusNode
 from boat.can_node import CanNode
 from boat.client import BoAtClient
 from boat.ethernet_node import EthernetNode
-from boat.v1 import ethernet_pb2
+from boat.v1 import frame_pb2
 
 # ── CAN trigger IDs ──────────────────────────────────────────────────────────
 _START_ID    = 0xA1
@@ -157,10 +157,9 @@ class EthCyclicSenderNode(CanNode):
     def _get_ifaces(self) -> list[str]:
         try:
             client = BoAtClient(self._address)
-            resp = client.ethernet.ListInterfaces(
-                ethernet_pb2.ListEthernetInterfacesRequest()
-            )
-            return list(resp.ifaces)
+            resp = client.frame.ListInterfaces(frame_pb2.ListInterfacesRequest(
+                bus_types=[frame_pb2.Frame.ETHERNET]))
+            return [i.iface for i in resp.interfaces]
         except Exception:
             return []
 

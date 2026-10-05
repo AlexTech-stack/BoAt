@@ -608,3 +608,73 @@ def test_trace_score_mask_flag_is_recorded(tmp_path) -> None:
     ).output.strip().splitlines()[-1])
     assert on["search_mask_applied"] is True
     assert off["search_mask_applied"] is False
+
+
+# ── frame list-ifaces / iface auto-pick, via FrameService.ListInterfaces ─────
+
+def _iface_entry(name: str, bus_type, driver: str = "", state: str = "",
+                 fd: bool = False):
+    from boat.v1 import frame_pb2
+    return frame_pb2.InterfaceInfo(iface=name, bus_type=bus_type, driver=driver,
+                                   state=state, fd_support=fd)
+
+
+def test_frame_list_ifaces_uses_frame_service() -> None:
+    from boat.v1 import frame_pb2
+
+    fake_client = _fake_client()
+    fake_client.frame = SimpleNamespace(ListInterfaces=Mock(
+        return_value=SimpleNamespace(interfaces=[
+            _iface_entry("vcan0", frame_pb2.Frame.CAN, "vcan", "up", True),
+            _iface_entry("veth0", frame_pb2.Frame.ETHERNET),
+        ])))
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, ["frame", "list-ifaces"])
+
+    assert result.exit_code == 0
+    assert "vcan0" in result.output and "veth0" in result.output
+    assert "CAN" in result.output and "ETHERNET" in result.output
+    # The retired per-bus listing RPCs must not be consulted.
+    assert not fake_client.can.ListBuses.called
+
+
+def test_frame_send_auto_picks_iface_by_bus_type() -> None:
+    """Regression: the nested enum accessor is Frame.BusType.Value, not
+    Frame.Value -- getting it wrong raised AttributeError at request-build
+    time, which no mock-free test covered."""
+    from boat.v1 import frame_pb2
+
+    fake_client = _fake_client()
+    fake_client.frame = SimpleNamespace(
+        SendFrame=Mock(return_value=SimpleNamespace(accepted=True)),
+        ListInterfaces=Mock(return_value=SimpleNamespace(
+            interfaces=[_iface_entry("vcan0", frame_pb2.Frame.CAN)])),
+    )
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, [
+            "frame", "send", "--bus-type", "can", "--can-id", "0x123", "--data", "AABB",
+        ])
+
+    assert result.exit_code == 0, result.output
+    assert fake_client.frame.SendFrame.call_args[0][0].frame.iface == "vcan0"
+    req = fake_client.frame.ListInterfaces.call_args[0][0]
+    assert list(req.bus_types) == [frame_pb2.Frame.CAN]
+
+
+def test_frame_send_auto_pick_handles_no_interfaces() -> None:
+    fake_client = _fake_client()
+    fake_client.frame = SimpleNamespace(
+        SendFrame=Mock(return_value=SimpleNamespace(accepted=True)),
+        ListInterfaces=Mock(return_value=SimpleNamespace(interfaces=[])),
+    )
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, [
+            "frame", "send", "--bus-type", "can", "--can-id", "0x1", "--data", "AA",
+        ])
+
+    # Empty iface reaches the gateway, which is what rejects it -- the CLI must
+    # not crash while building the request.
+    assert fake_client.frame.SendFrame.call_args[0][0].frame.iface == ""

@@ -18,7 +18,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'sdk', 'python'))
 
 import grpc
-from boat.v1 import ethernet_pb2, ethernet_pb2_grpc
+from boat.v1 import frame_pb2, frame_pb2_grpc
 
 GATEWAY = "localhost:50051"
 TX_IFACE = "enx28107b9f2016"
@@ -30,12 +30,14 @@ PAYLOAD = b"BoAt-HW-Test-" + b"\xDE\xAD\xBE\xEF" * 4
 
 
 def list_interfaces(stub):
-    resp = stub.ListInterfaces(ethernet_pb2.ListEthernetInterfacesRequest())
-    return list(resp.ifaces)
+    resp = stub.ListInterfaces(frame_pb2.ListInterfacesRequest(
+        bus_types=[frame_pb2.Frame.ETHERNET]))
+    return [i.iface for i in resp.interfaces]
 
 
 def receive_frame(stub, timeout=5.0):
-    req = ethernet_pb2.SubscribeEthernetFramesRequest(iface=RX_IFACE)
+    req = frame_pb2.SubscribeFramesRequest(
+        bus_types=[frame_pb2.Frame.ETHERNET], iface_filter=RX_IFACE)
     received = threading.Event()
     frame_out = {}
 
@@ -43,7 +45,8 @@ def receive_frame(stub, timeout=5.0):
         try:
             for frame in stub.SubscribeFrames(req, timeout=timeout):
                 # Ethernet pads payloads < 46 B with zeros; check prefix.
-                if frame.ethertype == ETHERTYPE and frame.payload[:len(PAYLOAD)] == PAYLOAD:
+                if (frame.eth.ethertype == ETHERTYPE
+                        and frame.payload[:len(PAYLOAD)] == PAYLOAD):
                     frame_out['frame'] = frame
                     received.set()
                     return
@@ -57,7 +60,7 @@ def receive_frame(stub, timeout=5.0):
 
 def main():
     channel = grpc.insecure_channel(GATEWAY)
-    stub = ethernet_pb2_grpc.EthernetServiceStub(channel)
+    stub = frame_pb2_grpc.FrameServiceStub(channel)
 
     print("=== BoAt Hardware Ethernet Test ===")
 
@@ -73,14 +76,14 @@ def main():
     time.sleep(0.2)  # let subscriber register
 
     # Send frame via gateway
-    frame = ethernet_pb2.EthernetFrame(
+    frame = frame_pb2.Frame(
+        bus_type=frame_pb2.Frame.ETHERNET,
         iface=TX_IFACE,
-        src_mac=TX_MAC,
-        dst_mac=RX_MAC,
-        ethertype=ETHERTYPE,
         payload=PAYLOAD,
+        eth=frame_pb2.EthMetadata(
+            src_mac=TX_MAC, dst_mac=RX_MAC, ethertype=ETHERTYPE),
     )
-    req = ethernet_pb2.SendEthernetFrameRequest(frame=frame)
+    req = frame_pb2.SendFrameRequest(frame=frame)
     resp = stub.SendFrame(req)
     print(f"SendFrame accepted: {resp.accepted}")
     if not resp.accepted:
