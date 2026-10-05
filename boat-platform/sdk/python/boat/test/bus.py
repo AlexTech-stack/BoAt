@@ -9,6 +9,8 @@ import time
 from collections.abc import Iterator
 from typing import Optional
 
+import grpc
+
 from boat.test.exceptions import TestTimeoutError
 
 _SUBSCRIBE_POLL_S = 0.05
@@ -194,11 +196,20 @@ class TestCanBus:
         deadline = time.monotonic() + timeout_ms / 1000
         req = can_pb2.SubscribeCanFramesRequest(iface=self.interface)
         try:
-            for frame in self._client.can.SubscribeCanFrames(req):
+            # The gRPC deadline is what actually bounds this call. The
+            # monotonic check below only runs when a frame arrives, so on a
+            # silent bus it never fires and the iterator blocks forever --
+            # timeout_ms was unenforced exactly when it mattered most.
+            stream = self._client.can.SubscribeCanFrames(req, timeout=timeout_ms / 1000)
+            for frame in stream:
                 if time.monotonic() > deadline:
                     break
                 if self._matches(frame, can_id, data, mask):
                     return frame
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.DEADLINE_EXCEEDED:
+                raise RuntimeError(f"CAN subscribe error on {self._name}: {exc}") from exc
+            # Deadline hit with no match -- fall through to TestTimeoutError.
         except Exception as exc:
             raise RuntimeError(f"CAN subscribe error on {self._name}: {exc}") from exc
 
@@ -314,11 +325,17 @@ class TestEthBus:
         deadline = time.monotonic() + timeout_ms / 1000
         req = ethernet_pb2.SubscribeEthernetFramesRequest(iface=self.interface)
         try:
-            for frame in self._client.ethernet.SubscribeFrames(req):
+            # See TestCanBus.expect: the gRPC deadline is what bounds this.
+            stream = self._client.ethernet.SubscribeFrames(req, timeout=timeout_ms / 1000)
+            for frame in stream:
                 if time.monotonic() > deadline:
                     break
                 if ethertype is None or frame.ethertype == ethertype:
                     return frame
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.DEADLINE_EXCEEDED:
+                raise RuntimeError(f"Ethernet subscribe error on {self._name}: {exc}") from exc
+            # Deadline hit with no match -- fall through to TestTimeoutError.
         except Exception as exc:
             raise RuntimeError(f"Ethernet subscribe error on {self._name}: {exc}") from exc
 
