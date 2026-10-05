@@ -28,13 +28,40 @@ Note `config/pdu_db.schema.json:140` describes `StartPos` as *"Start bit positio
 
 ---
 
-## #1 — `PackMotorola`/`UnpackMotorola` use a different convention  🔴
+## #0 — The whole library is dead code (read this first)  🟢 reachability
+
+**Confirmed 2026-10-05: nothing calls it.** `com_signal.h` is `#include`d by exactly two
+files — its own `.cpp` and `src/tests/unit/test_com_signal.cpp`. `PackSignals`,
+`UnpackSignals`, `PackIntel/PackMotorola`, `UnpackIntel/UnpackMotorola` and
+`E2eCrc8/16/32` have **zero callers** anywhere in `src/`. The only CMake target that pulls
+it in besides `boat_hil` itself is `boat_unit_com_signal`.
+
+In particular `src/plugins/pdu_router/` does no signal packing at all — no `StartPos`,
+`bit_length` or Motorola handling. (The `SignalDef` in `src/core/scenario/scenario_loader.h`
+is an unrelated struct that happens to share the name; it is a scenario signal, not a COM
+signal.)
+
+So #1 and #2 below are **latent, not live**: they cannot be reached by the gateway, a
+plugin, or a test run today. That drops them from "fix now" to "fix or delete before
+anything starts using this". It also means the Python packer in `boat.message` is the only
+signal packer actually on a code path, which is why the fix landed there first.
+
+`AGENTS.md`'s "COM Signal Library (C++)" section presents this as a usable facility with a
+worked example, with no hint that it is unwired. Worth a note there either way — and note
+its example uses `is_motorola = false`, so even the documentation does not exercise the
+broken path.
+
+**Decide the disposition before fixing:** if this is intended to become the C++-side packer
+(the natural consumer is `pdu_router`, which currently has none), fix #1/#2 and point it at
+`signal_vectors.json`. If it is a leftover from an earlier design, delete it and its test.
+
+## #1 — `PackMotorola`/`UnpackMotorola` use a different convention  🟠 latent
 
 `src/hil/pdu/com/com_signal.cpp` computes `dst_bit = start_bit - (bit_length - 1 - i)` with
 no byte-relative inversion, which is neither the DBC convention nor what the Python SDK now
 does. For `StartPos=7, Length=16, 0x1234` the table requires `12 34`.
 
-## #2 — `uint32_t` underflow → ~512 MB `resize()`  🔴
+## #2 — `uint32_t` underflow → ~512 MB `resize()`  🟠 latent
 
 Same functions, and the more serious half. `dst_bit` is `uint32_t`, so **any** Motorola
 signal with `bit_length > start_bit + 1` underflows:
@@ -53,10 +80,13 @@ same expression and indexes `data[byte_idx]` out of bounds instead — an OOB re
 `config/pdu_db_test.json` contains signals that reach this: `HV_Current` and `HV_Voltage` are
 `ByteOrder: 1, StartPos: 0, Length: 16`, i.e. `0 - 15`.
 
-**Not yet confirmed against a real build** — the analysis is from reading
-`com_signal.cpp` plus a Python re-implementation of the same arithmetic. Worth reproducing
-with a scratch Catch2 case before fixing, and worth checking whether any shipped PDU DB
-reaches it through a path that actually runs (the PduRouter plugin is the caller to trace).
+**Confirmed 2026-10-05** by compiling `PackMotorola` verbatim into a standalone
+program (g++ -std=c++20): the `StartPos=7, Length=16` case really does allocate
+536870912 bytes. It is also broader than first assumed — the guard is
+`bit_length > start_bit + 1`, so a **12-bit** Motorola signal at `StartPos=7` underflows
+too. Only an 8-bit signal at `StartPos=7` stays in range.
+
+Reachability: none today, see #0.
 
 ## #3 — No signed or Motorola coverage in the C++ tests  🟠
 
