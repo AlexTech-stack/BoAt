@@ -179,7 +179,17 @@ class TraceAnalyzer:
     def _read_python_can(
         self, suffix: str, analysis: TraceAnalysis, stats: dict[tuple[int, int], CanIdStats]
     ) -> None:
-        import can as python_can
+        try:
+            import can as python_can
+        except ImportError as e:
+            # trace_replay.py guards the same import with a clear message; this
+            # one did not, and python-can is an optional extra, so reading a
+            # .blf/.asc after a plain `pip install boat-py` surfaced a bare
+            # ModuleNotFoundError with nothing to act on.
+            raise ImportError(
+                f"python-can is required to read {suffix} traces: "
+                "pip install 'boat-py[trace]'"
+            ) from e
 
         reader_cls = python_can.BLFReader if suffix == ".blf" else python_can.ASCReader
         reader = reader_cls(str(self._path))

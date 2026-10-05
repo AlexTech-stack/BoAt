@@ -350,3 +350,21 @@ class TestRealCapture:
                 if any(x.kind == "gap" for x in items)]
         # README: the flood replaces a ten-second block of traffic.
         assert len(gaps) > 40
+
+
+def test_trace_analyzer_guards_python_can(monkeypatch) -> None:
+    """python-can is an optional [trace] extra, so a missing import must say
+    what to install rather than surfacing a bare ModuleNotFoundError."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "can":
+            raise ImportError("No module named 'can'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    analyzer = TraceAnalyzer.__new__(TraceAnalyzer)
+    with pytest.raises(ImportError, match=r"boat-py\[trace\]"):
+        TraceAnalyzer._read_python_can(analyzer, ".blf", None, {})
