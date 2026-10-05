@@ -15,7 +15,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from boat.client import BoAtClient
-from boat.v1 import can_pb2, simulation_pb2
+from boat.v1 import frame_pb2, simulation_pb2
 app = FastAPI()
 client = BoAtClient("localhost:50051")
 
@@ -24,7 +24,7 @@ def api_gw_health():
     c = None
     try:
         c = BoAtClient("localhost:50051")
-        c.can.ListBuses(can_pb2.ListBusesRequest())
+        c.frame.ListInterfaces(frame_pb2.ListInterfacesRequest())
         return {"running": True}
     except Exception:
         return {"running": False}
@@ -41,8 +41,12 @@ def api_system():
     }
     # Gateway + CAN buses
     try:
-        resp = client.can.ListBuses(can_pb2.ListBusesRequest())
-        topology["can_buses"] = [{"iface": i} for i in resp.ifaces]
+        resp = client.frame.ListInterfaces(frame_pb2.ListInterfacesRequest(
+            bus_types=[frame_pb2.Frame.CAN]))
+        # ListBusesResponse's field was `buses`, not `ifaces` -- the old line
+        # raised AttributeError straight into the bare except below, so this
+        # list was always empty and `connected` always False.
+        topology["can_buses"] = [{"iface": i.iface} for i in resp.interfaces]
         topology["gateway"]["connected"] = True
     except Exception:
         pass

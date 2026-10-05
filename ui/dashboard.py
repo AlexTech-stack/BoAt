@@ -19,7 +19,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from boat.client import BoAtClient
-from boat.v1 import bus_pb2, can_pb2, ethernet_pb2
+from boat.v1 import bus_pb2, frame_pb2
 # ── State ──────────────────────────────────────────────────────────────────────
 MAX_CAN_FRAMES   = 2000
 MAX_ETH_FRAMES   = 2000
@@ -51,15 +51,15 @@ class DashboardState:
                 self.event_log.pop(0)
     def push_can_frame(self, frame) -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        hex_data = frame.data.hex(":").upper() if frame.data else ""
-        arb_id = frame.can_id & 0x1FFFFFFF
+        hex_data = frame.payload.hex(":").upper() if frame.payload else ""
+        arb_id = frame.can.can_id & 0x1FFFFFFF
         with self.lock:
             self.can_frames.append({
                 "seq": self._can_seq,
                 "ts": ts,
                 "iface": frame.iface or "?",
                 "can_id": f"0x{arb_id:X}",
-                "dlc": frame.dlc,
+                "dlc": frame.can.dlc,
                 "data": hex_data,
             })
             self._can_seq += 1
@@ -67,14 +67,14 @@ class DashboardState:
                 self.can_frames.pop(0)
     def push_eth_frame(self, frame) -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        src = frame.src_mac.hex(":") if frame.src_mac else "—"
-        dst = frame.dst_mac.hex(":") if frame.dst_mac else "—"
+        src = frame.eth.src_mac.hex(":") if frame.eth.src_mac else "—"
+        dst = frame.eth.dst_mac.hex(":") if frame.eth.dst_mac else "—"
         with self.lock:
             self.eth_frames.append({
                 "seq":      self._eth_seq,
                 "ts":        ts,
                 "iface":     frame.iface or "?",
-                "ethertype": f"0x{frame.ethertype:04X}",
+                "ethertype": f"0x{frame.eth.ethertype:04X}",
                 "src_mac":   src,
                 "dst_mac":   dst,
                 "length":    len(frame.payload),
@@ -120,8 +120,9 @@ class DashboardState:
             self.log("CAN subscription started")
             while True:
                 try:
-                    stream = client.can.SubscribeCanFrames(
-                        can_pb2.SubscribeCanFramesRequest(simulation_id="", iface="")
+                    stream = client.frame.SubscribeFrames(
+                        frame_pb2.SubscribeFramesRequest(bus_types=[
+                            frame_pb2.Frame.CAN, frame_pb2.Frame.CANFD])
                     )
                     with self.lock:
                         self._can_stream = stream
@@ -142,8 +143,9 @@ class DashboardState:
             self.log("Ethernet subscription started")
             while True:
                 try:
-                    stream = client.ethernet.SubscribeFrames(
-                        ethernet_pb2.SubscribeEthernetFramesRequest(iface="", ethertype=0)
+                    stream = client.frame.SubscribeFrames(
+                        frame_pb2.SubscribeFramesRequest(
+                            bus_types=[frame_pb2.Frame.ETHERNET])
                     )
                     with self.lock:
                         self._eth_stream = stream
@@ -189,7 +191,7 @@ dash.start_bus_subscribe(client)
 @app.get("/api/gateway/health")
 def api_gw_health():
     try:
-        client.can.ListBuses(can_pb2.ListBusesRequest())
+        client.frame.ListInterfaces(frame_pb2.ListInterfacesRequest())
         return {"running": True}
     except Exception:
         return {"running": False}

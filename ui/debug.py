@@ -28,7 +28,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from urllib.parse import unquote
 from boat.client import BoAtClient
-from boat.v1 import debug_pb2, can_pb2
+from boat.v1 import debug_pb2, frame_pb2
 # ── Config ─────────────────────────────────────────────────────────────────────
 _GW   = "localhost:50051"
 _PORT = 8084
@@ -96,13 +96,15 @@ def api_gw_health():
     c = None
     try:
         c = BoAtClient(_GW)
-        c.can.ListBuses(can_pb2.ListBusesRequest())
+        c.frame.ListInterfaces(frame_pb2.ListInterfacesRequest())
         return {"running": True}
     except Exception:
         return {"running": False}
     finally:
-        if c: c.close()
-        return {"running": False}
+        # No `return` here: a return in finally discards the pending one, so
+        # this endpoint reported running=False even against a healthy gateway.
+        if c:
+            c.close()
 
 @app.get("/api/events")
 def api_events(after: int = 0):

@@ -145,9 +145,9 @@ app = FastAPI()
 def api_gw_health():
     try:
         from boat.client import BoAtClient
-        from boat.v1 import can_pb2
+        from boat.v1 import frame_pb2
         c = BoAtClient(_DEFAULT_GW)
-        c.can.ListBuses(can_pb2.ListBusesRequest())
+        c.frame.ListInterfaces(frame_pb2.ListInterfacesRequest())
         return {"running": True}
     except Exception:
         return {"running": False}
