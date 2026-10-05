@@ -47,16 +47,28 @@ class PluginDutBackend(DutBackend):
             raise TestDutError(f"Failed to register plugin DUT: {exc}") from exc
 
     def reset(self) -> None:
-        if self._plugin_id:
-            from boat.v1 import plugin_pb2
+        """Unload and re-register the plugin, returning it to initial state.
 
-            try:
-                self._client.plugin.UnloadPlugin(
-                    plugin_pb2.UnloadPluginRequest(plugin_id=self._plugin_id)
-                )
-            except Exception:
-                pass
+        The re-register is the point: unloading alone left no DUT at all, so
+        "reset" silently destroyed it and every subsequent step ran against
+        nothing. Re-registration goes through configure() so there is one
+        code path that knows how to bring a plugin DUT up.
+        """
+        if not self._plugin_id:
+            return
+
+        from boat.v1 import plugin_pb2
+
+        try:
+            self._client.plugin.UnloadPlugin(
+                plugin_pb2.UnloadPluginRequest(plugin_id=self._plugin_id)
+            )
+        except Exception as exc:
+            raise TestDutError(f"Failed to unload plugin DUT for reset: {exc}") from exc
+        finally:
             self._plugin_id = None
+
+        self.configure({})
 
     @property
     def version(self) -> Optional[str]:
@@ -88,14 +100,16 @@ class PhysicalDutBackend(DutBackend):
 
 
 class MockDutBackend(DutBackend):
-    """In-process mock DUT with configurable callbacks."""
+    """In-process mock DUT: satisfies the DutBackend contract, does nothing.
+
+    There used to be an ``on_can(can_id, handler)`` here that recorded
+    handlers into a dict nothing ever read, so registering one looked like it
+    worked and then silently never fired. It is removed rather than left in
+    place; wiring this backend into the frame path is a feature, not a fix.
+    """
 
     def __init__(self, client=None, config=None) -> None:
-        self._handlers: dict[str, Any] = {}
         self._config = config
-
-    def on_can(self, can_id: int, handler) -> None:
-        self._handlers[f"can:{can_id}"] = handler
 
     def configure(self, config: dict) -> None:
         pass

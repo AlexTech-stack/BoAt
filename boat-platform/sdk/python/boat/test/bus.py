@@ -62,7 +62,6 @@ class _FrameStreamReader:
 
 
 class TestCanBus:
-    __test__ = False
     """Abstract CAN bus — works identically with virtual or physical hardware.
 
     Optionally associated with a ``PduHelper`` for symbolic signal access.
@@ -77,6 +76,7 @@ class TestCanBus:
         for frame in can1.subscribe(can_id=0x300):
             print(frame)
     """
+    __test__ = False
 
     def __init__(self, client, config) -> None:
         self._client = client
@@ -265,7 +265,6 @@ class TestCanBus:
 
 
 class TestEthBus:
-    __test__ = False
     """Abstract Ethernet bus — works with virtual or physical hardware.
 
     Usage::
@@ -274,6 +273,7 @@ class TestEthBus:
         eth0.send(dst_mac=b'\\x00\\x11\\x22\\x33\\x44\\x55', ethertype=0x88B5, payload=b'...')
         frame = eth0.expect(ethertype=0x88B5, timeout_ms=500)
     """
+    __test__ = False
 
     def __init__(self, client, config) -> None:
         self._client = client

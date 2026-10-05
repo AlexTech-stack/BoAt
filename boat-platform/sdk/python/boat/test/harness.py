@@ -297,7 +297,6 @@ class _TraceManager:
 
 
 class TestHarness:
-    __test__ = False
     """Main test orchestrator for BoAt HIL tests.
 
     Manages gateway lifecycle, provides bus/DUT/simulation access, coordinates
@@ -312,12 +311,17 @@ class TestHarness:
             with harness.step(1, "Send RPM") as step:
                 can1.send(0x100, b'\\x01\\xF4')
                 harness.advance(100)
-                frame = can1.expect(can_id=0x300, timeout_ms=200)
-                step.assert_true(frame is not None)
+                # expect() raises on timeout rather than returning None.
+                try:
+                    frame = can1.expect(can_id=0x300, timeout_ms=200)
+                except TestTimeoutError:
+                    frame = None
+                step.assert_frame_matches(frame, can_id=0x300)
         finally:
             report = harness.stop()
             report.save("report.json")
     """
+    __test__ = False
 
     def __init__(self, config: str | EnvironmentConfig,
                  recorder_url: Optional[str] = None,
@@ -509,20 +513,33 @@ class StepContext:
             AssertionRecord.fail(expr or "assert_equal", str(expected), str(actual))
         self._step.add_assertion(record)
 
-    def assert_frame_matches(self, frame, can_id: int = None, data: bytes = None) -> None:
+    def assert_frame_matches(self, frame, can_id: Optional[int] = None,
+                             data: Optional[bytes] = None) -> None:
         from boat.test.bus import TestCanBus
-        matches = TestCanBus._matches(frame, can_id, data, None)
+
         parts = []
         if can_id is not None:
             parts.append(f"can_id=0x{can_id:X}")
         if data is not None:
             parts.append(f"data={data.hex()}")
         expr = " and ".join(parts) or "frame is not None"
-        record = AssertionRecord.pass_(expr) if matches else AssertionRecord.fail(
-            expr,
-            f"can_id=0x{frame.can_id:X}, data={bytes(frame.data).hex()}",
-            "no match"
-        )
+
+        # A missing frame is a FAIL, not a crash. Reading frame.can_id
+        # unconditionally used to raise AttributeError on None, so a caller
+        # who defensively passed a frame they weren't sure about got a
+        # traceback instead of a recorded verdict.
+        if frame is None:
+            self._step.add_assertion(
+                AssertionRecord.fail(expr, expr, "no frame")
+            )
+            return
+
+        actual = f"can_id=0x{frame.can_id:X}, data={bytes(frame.data).hex()}"
+        # fail() is (expression, expected, actual) -- the frame's contents are
+        # the *actual*; these two used to be passed the other way round, so
+        # every failure report had them inverted.
+        record = (AssertionRecord.pass_(expr) if TestCanBus._matches(frame, can_id, data, None)
+                  else AssertionRecord.fail(expr, expr, actual))
         self._step.add_assertion(record)
 
     def record_stimulus(self, **kwargs: Any) -> None:
