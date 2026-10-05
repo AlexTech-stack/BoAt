@@ -251,6 +251,18 @@ grpc::Status FrameServiceImpl::SubscribeFrames(
     const boat::v1::SubscribeFramesRequest* request,
     grpc::ServerWriter<boat::v1::Frame>* writer) {
 
+  // An unknown interface fails rather than yielding an empty stream. Without
+  // this a typo'd iface is indistinguishable from a quiet bus: the caller waits
+  // out its timeout and reports "no frame" instead of "no such interface".
+  // SendFrame already validates, so this also makes FrameService consistent
+  // with itself.
+  const std::string& iface_filter = request->iface_filter();
+  if (!iface_filter.empty() && !ctx_.can_bus_registry.Has(iface_filter) &&
+      !ctx_.ethernet_bus_registry.Has(iface_filter)) {
+    return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                        "interface not registered: " + iface_filter);
+  }
+
   std::mutex write_mutex;
   FrameSubscription subscription(
       ctx_, *request, [&write_mutex, writer](const boat::v1::Frame& proto) {
@@ -261,6 +273,50 @@ grpc::Status FrameServiceImpl::SubscribeFrames(
   // Wait for client disconnect; the subscription unsubscribes on scope exit.
   while (!context->IsCancelled()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+
+  return grpc::Status::OK;
+}
+
+grpc::Status FrameServiceImpl::ListInterfaces(
+    grpc::ServerContext*,
+    const boat::v1::ListInterfacesRequest* request,
+    boat::v1::ListInterfacesResponse* response) {
+
+  bool want_can = true;
+  bool want_eth = true;
+  if (!request->bus_types().empty()) {
+    want_can = false;
+    want_eth = false;
+    for (auto bt : request->bus_types()) {
+      if (bt == boat::v1::Frame::CAN || bt == boat::v1::Frame::CANFD) want_can = true;
+      if (bt == boat::v1::Frame::ETHERNET) want_eth = true;
+    }
+  }
+
+  if (want_can) {
+    for (const auto& iface : ctx_.can_bus_registry.Interfaces()) {
+      const auto& info = ctx_.can_bus_registry.GetInterfaceInfo(iface);
+      auto* proto = response->add_interfaces();
+      proto->set_iface(iface);
+      proto->set_bus_type(boat::v1::Frame::CAN);
+      proto->set_driver(info.driver_name);
+      proto->set_state(info.state);
+      proto->set_fd_support(info.fd_support);
+      proto->set_bitrate(info.bitrate);
+    }
+  }
+
+  if (want_eth) {
+    // Only the name: the Ethernet registry carries no driver/state/bitrate
+    // metadata, which is why ListEthernetInterfacesResponse was a bare string
+    // list. The bus_type field is what tells a caller the blanks are "not
+    // applicable" rather than "unknown".
+    for (const auto& iface : ctx_.ethernet_bus_registry.Interfaces()) {
+      auto* proto = response->add_interfaces();
+      proto->set_iface(iface);
+      proto->set_bus_type(boat::v1::Frame::ETHERNET);
+    }
   }
 
   return grpc::Status::OK;

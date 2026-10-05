@@ -44,6 +44,11 @@ class FrameServiceStub:
                 request_serializer=boat_dot_v1_dot_frame__pb2.SubscribeFramesRequest.SerializeToString,
                 response_deserializer=boat_dot_v1_dot_frame__pb2.Frame.FromString,
                 _registered_method=True)
+        self.ListInterfaces = channel.unary_unary(
+                '/boat.v1.FrameService/ListInterfaces',
+                request_serializer=boat_dot_v1_dot_frame__pb2.ListInterfacesRequest.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_frame__pb2.ListInterfacesResponse.FromString,
+                _registered_method=True)
         self.StreamFrames = channel.stream_stream(
                 '/boat.v1.FrameService/StreamFrames',
                 request_serializer=boat_dot_v1_dot_frame__pb2.StreamFramesRequest.SerializeToString,
@@ -61,7 +66,20 @@ class FrameServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def SubscribeFrames(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Stream frames off the gateway.
+
+        An `iface_filter` naming an interface neither registry has fails with
+        NOT_FOUND rather than returning an empty stream, matching SendFrame. A
+        typo'd interface is a configuration error, and a subscription that
+        silently never yields is indistinguishable from a quiet bus. 
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListInterfaces(self, request, context):
+        """Every CAN and Ethernet interface the gateway has open. 
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -97,6 +115,11 @@ def add_FrameServiceServicer_to_server(servicer, server):
                     servicer.SubscribeFrames,
                     request_deserializer=boat_dot_v1_dot_frame__pb2.SubscribeFramesRequest.FromString,
                     response_serializer=boat_dot_v1_dot_frame__pb2.Frame.SerializeToString,
+            ),
+            'ListInterfaces': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListInterfaces,
+                    request_deserializer=boat_dot_v1_dot_frame__pb2.ListInterfacesRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_frame__pb2.ListInterfacesResponse.SerializeToString,
             ),
             'StreamFrames': grpc.stream_stream_rpc_method_handler(
                     servicer.StreamFrames,
@@ -158,6 +181,33 @@ class FrameService:
             '/boat.v1.FrameService/SubscribeFrames',
             boat_dot_v1_dot_frame__pb2.SubscribeFramesRequest.SerializeToString,
             boat_dot_v1_dot_frame__pb2.Frame.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListInterfaces(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/boat.v1.FrameService/ListInterfaces',
+            boat_dot_v1_dot_frame__pb2.ListInterfacesRequest.SerializeToString,
+            boat_dot_v1_dot_frame__pb2.ListInterfacesResponse.FromString,
             options,
             channel_credentials,
             insecure,
