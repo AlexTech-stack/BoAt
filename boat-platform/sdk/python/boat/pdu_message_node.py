@@ -24,6 +24,7 @@ import socket
 from pathlib import Path
 from typing import Dict, Optional
 
+from boat.message import Message
 from boat.pdu_db import PduDatabase
 from boat.pdu_node import PduNode
 from boat.v1 import pdu_pb2
@@ -109,66 +110,6 @@ class PduMessageNode:
                     )
 
     # ------------------------------------------------------------------
-    # Signal packing
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _pack_message(msg: dict) -> bytes:
-        """Build the on-wire payload from the message's signal defaults.
-
-        Respects multiplexing: if a multiplexor signal (IsMuxor=true) is
-        present, only static signals (no MuxValue) and signals whose
-        MuxValue matches the muxor's InitValue are packed.
-
-        CAN/CANFD frames pack signals into *Length* bytes.
-        ETH_PDU frames use *Length* as the PDU payload size.
-        ETH containers have no direct signals (they route via IpduM).
-        """
-        frame_len = msg.get("Length", 0)
-        if frame_len == 0:
-            return b""
-
-        # Determine active mux group from the muxor's InitValue.
-        active_mux = None
-        for sig in msg.get("signals", []):
-            if sig.get("IsMuxor", False):
-                active_mux = int(sig.get("InitValue", 0))
-                break
-
-        buf = bytearray(frame_len)
-
-        for sig in msg.get("signals", []):
-            mv = sig.get("MuxValue")
-            if mv is not None and active_mux is not None and mv != active_mux:
-                continue
-
-            start = sig["StartPos"]
-            length = sig["Length"]
-            byte_order = sig["ByteOrder"]  # 0=Intel, 1=Motorola
-            raw = int(sig.get("InitValue", 0))
-            max_val = (1 << length) - 1
-            raw = min(raw, max_val)
-
-            if byte_order == 0:  # Intel (little endian)
-                for bit_in_sig in range(length):
-                    if raw & (1 << bit_in_sig):
-                        pos = start + bit_in_sig
-                        byte_idx = pos // 8
-                        bit_off = pos % 8
-                        if byte_idx < len(buf):
-                            buf[byte_idx] |= 1 << bit_off
-            else:  # Motorola (big endian)
-                for bit_in_sig in range(length):
-                    if raw & (1 << (length - 1 - bit_in_sig)):
-                        pos = start - bit_in_sig
-                        byte_idx = pos // 8
-                        bit_off = pos % 8
-                        if byte_idx < len(buf):
-                            buf[byte_idx] |= 1 << bit_off
-
-        return bytes(buf)
-
-    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -209,7 +150,14 @@ class PduMessageNode:
         return self._send(msg)
 
     def _send(self, msg: dict) -> bool:
-        payload = self._pack_message(msg)
+        # Packing is delegated to Message rather than reimplemented here.
+        # The local packer this replaced had its own bit layout and read
+        # InitValue as if it were already a raw value, so any signal with a
+        # Factor != 1 went out scaled wrong (a Factor 0.1 signal by 10x);
+        # Message.__init__ seeds every signal from InitValue as a *physical*
+        # value and Message.pack() applies Factor/Offset and the multiplexor
+        # rules. One packer, one convention.
+        payload = Message(msg).pack()
         pdu_id = self._pdu_id_for_message(msg)
         if pdu_id == 0:
             raise ValueError(f"Message {msg.get('MessageName')!r} has no routable PDU ID")

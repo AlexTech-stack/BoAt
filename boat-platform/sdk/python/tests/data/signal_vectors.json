@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Golden signal-packing vectors, derived from the DBC/Vector bit-numbering",
+    "convention that tools/dbc2boatjson.py copies verbatim into StartPos (see",
+    "docs/howto/dbc2boatjson.md). These are hand-derived from the convention,",
+    "NOT captured from any implementation -- that is the point: they are the",
+    "spec, so an implementation that disagrees is the thing that is wrong.",
+    "",
+    "For ByteOrder 1 (Motorola) StartPos is the MSB position: bit index n",
+    "addresses byte n // 8, bit n % 8, and bits run downward, wrapping to the",
+    "next byte's bit 7. There is no 7 - (n % 8) inversion.",
+    "",
+    "The C++ COM library (src/hil/pdu/com/com_signal.cpp) does NOT currently",
+    "satisfy this table for Motorola -- see the backlog item. When it is fixed",
+    "it should be made to read these same rows."
+  ],
+  "vectors": [
+    { "name": "intel_8b_unsigned",        "byte_order": 0, "start_pos": 0,  "length": 8,  "value_type": "Unsigned", "factor": 1.0, "offset": 0.0, "message_length": 1, "physical": 18,     "bytes": "12" },
+    { "name": "intel_8b_signed_negative", "byte_order": 0, "start_pos": 0,  "length": 8,  "value_type": "Signed",   "factor": 1.0, "offset": 0.0, "message_length": 1, "physical": -40,    "bytes": "d8" },
+    { "name": "intel_8b_signed_positive", "byte_order": 0, "start_pos": 0,  "length": 8,  "value_type": "Signed",   "factor": 1.0, "offset": 0.0, "message_length": 1, "physical": 40,     "bytes": "28" },
+    { "name": "intel_8b_signed_minimum",  "byte_order": 0, "start_pos": 0,  "length": 8,  "value_type": "Signed",   "factor": 1.0, "offset": 0.0, "message_length": 1, "physical": -128,   "bytes": "80" },
+    { "name": "intel_16b_unsigned",       "byte_order": 0, "start_pos": 0,  "length": 16, "value_type": "Unsigned", "factor": 1.0, "offset": 0.0, "message_length": 2, "physical": 4660,   "bytes": "3412" },
+    { "name": "intel_3b_offset_straddle", "byte_order": 0, "start_pos": 6,  "length": 3,  "value_type": "Unsigned", "factor": 1.0, "offset": 0.0, "message_length": 2, "physical": 5,      "bytes": "4001" },
+    { "name": "intel_12b_factor",         "byte_order": 0, "start_pos": 0,  "length": 12, "value_type": "Unsigned", "factor": 0.1, "offset": 0.0, "message_length": 2, "physical": 40.0,   "bytes": "9001" },
+
+    { "name": "motorola_8b_unsigned",     "byte_order": 1, "start_pos": 7,  "length": 8,  "value_type": "Unsigned", "factor": 1.0, "offset": 0.0, "message_length": 1, "physical": 18,     "bytes": "12" },
+    { "name": "motorola_8b_full",         "byte_order": 1, "start_pos": 7,  "length": 8,  "value_type": "Unsigned", "factor": 1.0, "offset": 0.0, "message_length": 1, "physical": 170,    "bytes": "aa" },
+    { "name": "motorola_16b_unsigned",    "byte_order": 1, "start_pos": 7,  "length": 16, "value_type": "Unsigned", "factor": 1.0, "offset": 0.0, "message_length": 2, "physical": 4660,   "bytes": "1234" },
+    { "name": "motorola_12b_unsigned",    "byte_order": 1, "start_pos": 7,  "length": 12, "value_type": "Unsigned", "factor": 1.0, "offset": 0.0, "message_length": 2, "physical": 2748,   "bytes": "abc0" },
+    { "name": "motorola_16b_byte2",       "byte_order": 1, "start_pos": 23, "length": 16, "value_type": "Unsigned", "factor": 1.0, "offset": 0.0, "message_length": 4, "physical": 48879,  "bytes": "0000beef" },
+    { "name": "motorola_2b_high",         "byte_order": 1, "start_pos": 7,  "length": 2,  "value_type": "Unsigned", "factor": 1.0, "offset": 0.0, "message_length": 1, "physical": 3,      "bytes": "c0" },
+    { "name": "motorola_16b_signed",      "byte_order": 1, "start_pos": 7,  "length": 16, "value_type": "Signed",   "factor": 0.1, "offset": 0.0, "message_length": 2, "physical": -12.5,  "bytes": "ff83" },
+    { "name": "motorola_16b_signed_pos",  "byte_order": 1, "start_pos": 7,  "length": 16, "value_type": "Signed",   "factor": 0.1, "offset": 0.0, "message_length": 2, "physical": 12.5,  "bytes": "007d" },
+    { "name": "motorola_8b_signed_offset","byte_order": 1, "start_pos": 7,  "length": 8,  "value_type": "Signed",   "factor": 1.0, "offset": -40.0, "message_length": 1, "physical": -20.0, "bytes": "14" }
+  ]
+}
