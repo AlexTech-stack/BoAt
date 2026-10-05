@@ -223,7 +223,7 @@ class _TraceManager:
                 from boat.trace_recorder import TraceRecorder
                 self._rec = TraceRecorder(
                     recorder_url=self._recorder_url,
-                    gateway=self._client.address if hasattr(self._client, 'address') else "localhost:50051",
+                    gateway=self._client.address,
                 )
                 result = self._rec.start(
                     buses=buses,

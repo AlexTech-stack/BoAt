@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+
+from boat.client import resolve_address
 from typing import List
 
 
@@ -231,8 +233,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     root.add_argument("--db",      default=None,              metavar="PATH",
                       help="PDU database JSON (default: pdu_db.json in cwd)")
-    root.add_argument("--gateway", default="localhost:50051", metavar="HOST:PORT",
-                      help="Gateway gRPC address")
+    root.add_argument("--gateway", default=resolve_address(), metavar="HOST:PORT",
+                      help="Gateway gRPC address. Defaults to the BOAT_HOST env var, then localhost:50051.")
 
     sub = root.add_subparsers(dest="domain", metavar="<command>")
     sub.required = True

@@ -11,14 +11,27 @@ import grpc
 DEFAULT_ADDRESS = "localhost:50051"
 
 
+def resolve_address(address: Optional[str] = None) -> str:
+    """Resolve a gateway address: explicit arg > BOAT_HOST env var > default.
+
+    This is what makes a node script/binary portable across gateways/devices
+    without editing code -- point it at a different gateway by setting
+    BOAT_HOST in its environment, not by hardcoding a host:port into the
+    script itself.
+
+    Everything that takes a gateway address must route through here rather
+    than defaulting its own parameter to the literal "localhost:50051": such
+    a literal is indistinguishable from a caller-supplied address, so it
+    wins over BOAT_HOST and silently pins the caller to localhost. That is
+    exactly how CanTpHandle, TraceRecorder and TraceReplayer ended up
+    ignoring BOAT_HOST while FrameNode and PduNode honoured it.
+    """
+    return address or os.environ.get("BOAT_HOST", DEFAULT_ADDRESS)
+
+
 class BoAtClient:
     def __init__(self, address: Optional[str] = None) -> None:
-        # Resolution order: explicit `address` arg > BOAT_HOST env var > hardcoded
-        # default. This is what makes a node script/binary portable across
-        # gateways/devices without editing code -- point it at a different
-        # gateway by setting BOAT_HOST in its environment, not by hardcoding
-        # a host:port into the script itself.
-        self.address = address or os.environ.get("BOAT_HOST", DEFAULT_ADDRESS)
+        self.address = resolve_address(address)
         self.channel = grpc.insecure_channel(self.address)
         self._stubs_loaded = False
 

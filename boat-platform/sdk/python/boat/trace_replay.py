@@ -46,6 +46,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from boat.client import resolve_address
 from boat.pcapng import PcapngError, PcapngReader, PcapngWriter, DLT_CAN_SOCKETCAN, DLT_EN10MB
 
 # CAN FD flags (matches gateway constants)
@@ -188,7 +189,7 @@ class TraceReplayer:
 
     def __init__(
         self,
-        gateway: str = "localhost:50051",
+        gateway: Optional[str] = None,
         buses: Optional[List[str]] = None,
         speed: float = 1.0,
         simulation_id: str = "",
@@ -211,7 +212,8 @@ class TraceReplayer:
         mac_map: Optional[dict[str, str]] = None,
         tcp_plugin_path: Optional[str] = None,
     ) -> None:
-        self.gateway          = gateway
+        # Resolved so the channel opened in _connect() honours BOAT_HOST.
+        self.gateway          = resolve_address(gateway)
         self.buses            = buses or []
         self.speed            = speed
         self.simulation_id    = simulation_id

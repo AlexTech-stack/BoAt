@@ -40,7 +40,7 @@ if _SDK not in sys.path:
 
 import grpc
 
-from boat.client  import BoAtClient
+from boat.client  import BoAtClient, resolve_address
 from boat.message import Message
 from boat.pdu_db  import PduDatabase
 from boat.v1 import can_pb2, can_pb2_grpc, pdu_pb2, pdu_pb2_grpc
@@ -173,8 +173,8 @@ class _Completer:
 class BoAtCli:
     PROMPT = "boat> "
 
-    def __init__(self, gateway: str = "localhost:50051", db_path: str | None = None) -> None:
-        self._gateway = gateway
+    def __init__(self, gateway: str | None = None, db_path: str | None = None) -> None:
+        self._gateway = resolve_address(gateway)
         self._client: BoAtClient | None = None
         self._db:     PduDatabase | None = None
         self._vars:   dict[str, Message]  = {}
@@ -207,7 +207,8 @@ class BoAtCli:
             print(f"Error: {e}")
 
     def _cmd_connect(self, args: str) -> None:
-        addr = args.strip() or "localhost:50051"
+        # Bare `connect` re-resolves rather than snapping to localhost.
+        addr = resolve_address(args.strip() or None)
         self._gateway = addr
         self._client  = None
         print(f"Gateway set to {addr}")
@@ -367,7 +368,8 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="BoAt interactive message CLI")
     parser.add_argument("--db",      default=None,              help="PDU database JSON file to load on startup")
-    parser.add_argument("--gateway", default="localhost:50051",  help="Gateway gRPC address (default: localhost:50051)")
+    parser.add_argument("--gateway", default=resolve_address(),
+                        help="Gateway gRPC address. Defaults to the BOAT_HOST env var, then localhost:50051.")
     args = parser.parse_args()
 
     cli = BoAtCli(gateway=args.gateway, db_path=args.db)

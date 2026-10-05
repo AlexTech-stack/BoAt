@@ -37,17 +37,24 @@ class CanTpHandle:
 
     Args:
         client_or_address: an existing BoAtClient, or a "host:port" address
-            to open a new one (defaults to the gateway's default address).
+            to open a new one. Leave unset to resolve via the BOAT_HOST env
+            var, then "localhost:50051" -- same order as BoAtClient and the
+            *Node classes, which keeps a script portable across gateways.
 
     RPC failures (e.g. the CanTp plugin isn't loaded, or the request is
     invalid) raise grpc.RpcError -- callers that want the CLI's friendlier
     error messages should catch it themselves.
     """
 
-    def __init__(self, client_or_address: Union[BoAtClient, str] = "localhost:50051") -> None:
+    def __init__(self, client_or_address: Union[BoAtClient, str, None] = None) -> None:
         if isinstance(client_or_address, BoAtClient):
             self._client = client_or_address
         else:
+            # None (not a literal "localhost:50051") so BoAtClient can apply
+            # the documented order: explicit > BOAT_HOST > default. The literal
+            # default this replaced looked identical to a caller-supplied
+            # address, so CanTpHandle() silently ignored BOAT_HOST while every
+            # *Node class honoured it.
             self._client = BoAtClient(address=client_or_address)
 
     def configure(self, nsdu_id: int, source_addr: int, target_addr: int,
