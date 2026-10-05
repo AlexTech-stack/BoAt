@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import subprocess
@@ -28,6 +29,19 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _x(s: Any) -> str:
+    """XML-escape a value for safe interpolation.
+
+    Mirrors html_report.py's _e(). Step names and assertion expressions are
+    arbitrary user strings, and without escaping a single '<', '&' or '"' in
+    one of them makes the whole document unparseable -- a CI runner then
+    discards the entire report rather than just mis-rendering one name.
+    """
+    if s is None:
+        return ""
+    return html.escape(str(s), quote=True)
+
+
 def _generate_junit_xml(report: TestReport) -> str:
     total = len(report.steps)
     failures = sum(1 for s in report.steps if s.verdict == "FAIL")
@@ -41,36 +55,36 @@ def _generate_junit_xml(report: TestReport) -> str:
     lines: list[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     lines.append(
-        f'<testsuite name="{suite_name}" tests="{total}" '
+        f'<testsuite name="{_x(suite_name)}" tests="{total}" '
         f'failures="{failures}" errors="{errors}" skipped="{skipped}" '
-        f'time="{duration_s:.3f}" timestamp="{report.execution.started_at}">'
+        f'time="{duration_s:.3f}" timestamp="{_x(report.execution.started_at)}">'
     )
 
     for step in report.steps:
         classname = f"{suite_name}.{test_name}"
         step_duration = (step.duration_ms or 0) / 1000
         if step.verdict == "FAIL":
-            lines.append(f'  <testcase name="{step.name}" classname="{classname}" time="{step_duration:.3f}">')
+            lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}">')
             for a in step.assertions:
                 if a.result != "PASS":
-                    lines.append(f'    <failure message="{a.expression}" type="AssertionError">')
-                    lines.append(f"      Expected: {a.expected}, Actual: {a.actual}")
+                    lines.append(f'    <failure message="{_x(a.expression)}" type="AssertionError">')
+                    lines.append(f"      Expected: {_x(a.expected)}, Actual: {_x(a.actual)}")
                     lines.append("    </failure>")
             lines.append("  </testcase>")
         elif step.verdict == "ERROR":
-            lines.append(f'  <testcase name="{step.name}" classname="{classname}" time="{step_duration:.3f}">')
+            lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}">')
             for a in step.assertions:
                 if a.result != "PASS":
-                    lines.append(f'    <error message="{a.expression}" type="Error">')
-                    lines.append(f"      {a.actual}")
+                    lines.append(f'    <error message="{_x(a.expression)}" type="Error">')
+                    lines.append(f"      {_x(a.actual)}")
                     lines.append("    </error>")
             lines.append("  </testcase>")
         elif step.verdict == "SKIPPED":
-            lines.append(f'  <testcase name="{step.name}" classname="{classname}" time="{step_duration:.3f}">')
+            lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}">')
             lines.append("    <skipped/>")
             lines.append("  </testcase>")
         else:
-            lines.append(f'  <testcase name="{step.name}" classname="{classname}" time="{step_duration:.3f}"/>')
+            lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}"/>')
 
     lines.append("</testsuite>")
     return "\n".join(lines)
