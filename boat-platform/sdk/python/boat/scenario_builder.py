@@ -8,10 +8,18 @@ from collections.abc import Mapping
 
 
 class ScenarioBuilder:
+    """Builds the scenario JSON that src/core/scenario/scenario_loader.cpp reads.
+
+    build() emits exactly the loader's key set. There is deliberately no
+    tick-rate parameter: the gateway has no per-scenario tick rate -- the tick
+    comes from BOAT_NODE_TICK_MS / BOAT_NODE_TICK_US -- and the tick_rate_hz
+    argument this class used to accept was stored and never emitted, so
+    callers passing it were configuring nothing.
+    """
+
     def __init__(
         self,
         name: str = "default_scenario",
-        tick_rate_hz: int = 100,
         *,
         scenario_id: str | None = None,
         version: str = "1.0.0",
@@ -26,10 +34,10 @@ class ScenarioBuilder:
         self.plugins: list[dict] = []
         self.signals: list[dict] = []
         self.faults: list[dict] = []
-        self.tick_rate_hz: int = tick_rate_hz
 
-    def add_plugin(self, name: str, path: str, config: Mapping[str, object]) -> "ScenarioBuilder":
-        _ = name
+    def add_plugin(self, path: str, config: Mapping[str, object]) -> "ScenarioBuilder":
+        # No `name`: the loader's plugin entry is {so_path, config_json} only,
+        # and the name this used to take was discarded immediately.
         self.plugins.append(
             {
                 "so_path": path,
