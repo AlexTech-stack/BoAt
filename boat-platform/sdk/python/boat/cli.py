@@ -43,7 +43,7 @@ import grpc
 from boat.client  import BoAtClient, resolve_address
 from boat.message import Message
 from boat.pdu_db  import PduDatabase
-from boat.v1 import can_pb2, can_pb2_grpc, pdu_pb2, pdu_pb2_grpc
+from boat.v1 import frame_pb2, pdu_pb2
 
 
 # ── sender helpers ────────────────────────────────────────────────────────────
@@ -55,15 +55,15 @@ def _send_can(client: BoAtClient, msg: Message) -> str:
     flags = 0x04 if is_fd else 0  # 0x04 = CANFD (FDF) flag
     if is_fd and db.get("BRS"):
         flags |= 0x01  # Bit Rate Switch -- only meaningful alongside FDF
-    frame = can_pb2.CanFrame(
-        can_id=db["Identifier"],
-        dlc=len(data),
-        data=bytes(data),
+    frame = frame_pb2.Frame(
+        bus_type=frame_pb2.Frame.CANFD if is_fd else frame_pb2.Frame.CAN,
         iface=db["Bus"],
-        flags=flags,
+        payload=bytes(data),
+        can=frame_pb2.CanMetadata(
+            can_id=db["Identifier"], dlc=len(data), flags=flags),
     )
-    req  = can_pb2.SendCanFrameRequest(frame=frame)
-    resp = client.can.SendCanFrame(req)
+    req  = frame_pb2.SendFrameRequest(frame=frame)
+    resp = client.frame.SendFrame(req)
     if resp.accepted:
         return f"Sent CAN frame: id=0x{db['Identifier']:X}  iface={db['Bus']}  data={data.hex()}"
     return "Gateway rejected CAN frame (no route or bus error)"

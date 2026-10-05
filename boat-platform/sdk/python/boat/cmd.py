@@ -66,7 +66,7 @@ def _mac_str_to_bytes(s: str) -> bytes:
 
 def _handle_can_send(args, db, client) -> int:
     from boat.message import Message
-    from boat.v1 import can_pb2
+    from boat.v1 import frame_pb2
 
     entry = db.by_name(args.msg)
     if entry is None:
@@ -100,14 +100,13 @@ def _handle_can_send(args, db, client) -> int:
     if is_fd and entry.get("BRS"):
         flags |= 0x01  # Bit Rate Switch -- only meaningful alongside FDF
 
-    frame = can_pb2.CanFrame(
-        can_id=can_id,
-        dlc=len(payload),
-        data=payload,
+    frame = frame_pb2.Frame(
+        bus_type=frame_pb2.Frame.CANFD if is_fd else frame_pb2.Frame.CAN,
         iface=iface,
-        flags=flags,
+        payload=payload,
+        can=frame_pb2.CanMetadata(can_id=can_id, dlc=len(payload), flags=flags),
     )
-    resp = client.can.SendCanFrame(can_pb2.SendCanFrameRequest(frame=frame))
+    resp = client.frame.SendFrame(frame_pb2.SendFrameRequest(frame=frame))
     if resp.accepted:
         print(f"OK  can_id=0x{can_id:X}  iface={iface}  data={payload.hex().upper()}")
         return 0
@@ -147,7 +146,7 @@ def _handle_pdu_send(args, db, client) -> int:
 
 def _handle_eth_send(args, db, client) -> int:
     from boat.message import Message
-    from boat.v1 import ethernet_pb2
+    from boat.v1 import frame_pb2
 
     entry = db.by_name(args.msg)
     if entry is None:
@@ -170,16 +169,17 @@ def _handle_eth_send(args, db, client) -> int:
     src_mac = _mac_str_to_bytes(args.src_mac) if args.src_mac else bytes(6)
     dst_mac = _mac_str_to_bytes(args.dst_mac) if args.dst_mac else bytes(6)
 
-    frame = ethernet_pb2.EthernetFrame(
+    frame = frame_pb2.Frame(
+        bus_type=frame_pb2.Frame.ETHERNET,
         iface=iface,
-        src_mac=src_mac,
-        dst_mac=dst_mac,
-        ethertype=entry.get("EtherType", 0x88B5),
         payload=payload,
+        eth=frame_pb2.EthMetadata(
+            src_mac=src_mac,
+            dst_mac=dst_mac,
+            ethertype=entry.get("EtherType", 0x88B5),
+        ),
     )
-    resp = client.ethernet.SendFrame(
-        ethernet_pb2.SendEthernetFrameRequest(frame=frame)
-    )
+    resp = client.frame.SendFrame(frame_pb2.SendFrameRequest(frame=frame))
     if resp.accepted:
         print(f"OK  iface={iface}  ethertype=0x{entry.get('EtherType',0):04X}  "
               f"len={len(payload)}")

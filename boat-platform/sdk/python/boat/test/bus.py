@@ -95,18 +95,17 @@ class TestCanBus:
 
     def send(self, can_id: int, data: bytes, flags: int = 0) -> bool:
         """Send a CAN frame. Returns True if the gateway accepted it."""
-        from boat.v1 import can_pb2
+        from boat.v1 import frame_pb2
 
-        frame = can_pb2.CanFrame(
-            can_id=can_id,
-            dlc=len(data),
-            data=data,
+        frame = frame_pb2.Frame(
+            bus_type=frame_pb2.Frame.CAN,
             iface=self.interface,
-            flags=flags,
+            payload=data,
+            can=frame_pb2.CanMetadata(can_id=can_id, dlc=len(data), flags=flags),
         )
-        req = can_pb2.SendCanFrameRequest(frame=frame)
+        req = frame_pb2.SendFrameRequest(frame=frame)
         try:
-            resp = self._client.can.SendCanFrame(req)
+            resp = self._client.frame.SendFrame(req)
             return resp.accepted
         except Exception as exc:
             raise RuntimeError(f"CAN send failed on {self._name}: {exc}") from exc
@@ -186,21 +185,25 @@ class TestCanBus:
             timeout_ms: Maximum wait time in milliseconds.
 
         Returns:
-            The matching ``CanFrame`` protobuf object.
+            The matching ``boat.v1.Frame`` protobuf object (CAN metadata is
+            under ``.can``, payload under ``.payload``).
 
         Raises:
             TestTimeoutError: If no matching frame arrives within the timeout.
         """
-        from boat.v1 import can_pb2
+        from boat.v1 import frame_pb2
 
         deadline = time.monotonic() + timeout_ms / 1000
-        req = can_pb2.SubscribeCanFramesRequest(iface=self.interface)
+        req = frame_pb2.SubscribeFramesRequest(
+            bus_types=[frame_pb2.Frame.CAN, frame_pb2.Frame.CANFD],
+            iface_filter=self.interface,
+        )
         try:
             # The gRPC deadline is what actually bounds this call. The
             # monotonic check below only runs when a frame arrives, so on a
             # silent bus it never fires and the iterator blocks forever --
             # timeout_ms was unenforced exactly when it mattered most.
-            stream = self._client.can.SubscribeCanFrames(req, timeout=timeout_ms / 1000)
+            stream = self._client.frame.SubscribeFrames(req, timeout=timeout_ms / 1000)
             for frame in stream:
                 if time.monotonic() > deadline:
                     break
@@ -226,16 +229,19 @@ class TestCanBus:
         blocking indefinitely — use ``next()`` with a timeout or break
         when done.
         """
-        from boat.v1 import can_pb2
+        from boat.v1 import frame_pb2
 
         if self._reader is None:
-            req = can_pb2.SubscribeCanFramesRequest(iface=self.interface)
-            self._reader = _FrameStreamReader(self._client.can.SubscribeCanFrames(req))
+            req = frame_pb2.SubscribeFramesRequest(
+                bus_types=[frame_pb2.Frame.CAN, frame_pb2.Frame.CANFD],
+                iface_filter=self.interface,
+            )
+            self._reader = _FrameStreamReader(self._client.frame.SubscribeFrames(req))
 
         while True:
             frames = self._reader.poll(timeout=_SUBSCRIBE_POLL_S)
             for frame in frames:
-                if can_id is None or frame.can_id == can_id:
+                if can_id is None or frame.can.can_id == can_id:
                     yield frame
 
     def close(self) -> None:
@@ -245,10 +251,12 @@ class TestCanBus:
 
     @staticmethod
     def _matches(frame, can_id, data, mask) -> bool:
-        if can_id is not None and frame.can_id != can_id:
+        # frame is a unified boat.v1.Frame: the CAN id lives under .can and the
+        # bytes under .payload, where CanFrame had .can_id and .data.
+        if can_id is not None and frame.can.can_id != can_id:
             return False
         if data is not None:
-            fdata = bytes(frame.data)
+            fdata = bytes(frame.payload)
             edata = bytes(data)
             if mask is not None:
                 bmask = bytes(mask)
@@ -297,20 +305,23 @@ class TestEthBus:
         payload: bytes = b"",
         vlan_id: Optional[int] = None,
     ) -> bool:
-        from boat.v1 import ethernet_pb2
+        from boat.v1 import frame_pb2
 
-        frame = ethernet_pb2.EthernetFrame(
+        frame = frame_pb2.Frame(
+            bus_type=frame_pb2.Frame.ETHERNET,
             iface=self.interface,
-            src_mac=src_mac or b'\x00' * 6,
-            dst_mac=dst_mac,
-            ethertype=ethertype,
             payload=payload,
+            eth=frame_pb2.EthMetadata(
+                src_mac=src_mac or b'\x00' * 6,
+                dst_mac=dst_mac,
+                ethertype=ethertype,
+            ),
         )
         if vlan_id is not None:
-            frame.vlan_id = vlan_id
-        req = ethernet_pb2.SendEthernetFrameRequest(frame=frame)
+            frame.eth.vlan_id = vlan_id
+        req = frame_pb2.SendFrameRequest(frame=frame)
         try:
-            resp = self._client.ethernet.SendFrame(req)
+            resp = self._client.frame.SendFrame(req)
             return resp.accepted
         except Exception as exc:
             raise RuntimeError(f"Ethernet send failed on {self._name}: {exc}") from exc
@@ -320,17 +331,23 @@ class TestEthBus:
         ethertype: Optional[int] = None,
         timeout_ms: int = 1000,
     ) -> object:
-        from boat.v1 import ethernet_pb2
+        from boat.v1 import frame_pb2
 
         deadline = time.monotonic() + timeout_ms / 1000
-        req = ethernet_pb2.SubscribeEthernetFramesRequest(iface=self.interface)
+        # FrameService has no server-side ethertype filter, so it is applied
+        # below exactly as it already was for the stream returned by
+        # subscribe(); only the volume crossing the wire changes.
+        req = frame_pb2.SubscribeFramesRequest(
+            bus_types=[frame_pb2.Frame.ETHERNET],
+            iface_filter=self.interface,
+        )
         try:
             # See TestCanBus.expect: the gRPC deadline is what bounds this.
-            stream = self._client.ethernet.SubscribeFrames(req, timeout=timeout_ms / 1000)
+            stream = self._client.frame.SubscribeFrames(req, timeout=timeout_ms / 1000)
             for frame in stream:
                 if time.monotonic() > deadline:
                     break
-                if ethertype is None or frame.ethertype == ethertype:
+                if ethertype is None or frame.eth.ethertype == ethertype:
                     return frame
         except grpc.RpcError as exc:
             if exc.code() != grpc.StatusCode.DEADLINE_EXCEEDED:
@@ -346,16 +363,19 @@ class TestEthBus:
         )
 
     def subscribe(self, ethertype: Optional[int] = None) -> Iterator:
-        from boat.v1 import ethernet_pb2
+        from boat.v1 import frame_pb2
 
         if self._reader is None:
-            req = ethernet_pb2.SubscribeEthernetFramesRequest(iface=self.interface)
-            self._reader = _FrameStreamReader(self._client.ethernet.SubscribeFrames(req))
+            req = frame_pb2.SubscribeFramesRequest(
+                bus_types=[frame_pb2.Frame.ETHERNET],
+                iface_filter=self.interface,
+            )
+            self._reader = _FrameStreamReader(self._client.frame.SubscribeFrames(req))
 
         while True:
             frames = self._reader.poll(timeout=_SUBSCRIBE_POLL_S)
             for frame in frames:
-                if ethertype is None or frame.ethertype == ethertype:
+                if ethertype is None or frame.eth.ethertype == ethertype:
                     yield frame
 
     def close(self) -> None:

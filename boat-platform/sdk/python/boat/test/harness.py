@@ -537,7 +537,7 @@ class StepContext:
             )
             return
 
-        actual = f"can_id=0x{frame.can_id:X}, data={bytes(frame.data).hex()}"
+        actual = f"can_id=0x{frame.can.can_id:X}, data={bytes(frame.payload).hex()}"
         # fail() is (expression, expected, actual) -- the frame's contents are
         # the *actual*; these two used to be passed the other way round, so
         # every failure report had them inverted.
