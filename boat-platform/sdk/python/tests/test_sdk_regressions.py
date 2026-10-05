@@ -314,3 +314,15 @@ def test_scenario_builder_rejects_phantom_tick_rate() -> None:
 
     built = ScenarioBuilder(name="s").build()
     assert "tick_rate_hz" not in built
+
+
+# ── FrameNode exposes no send path that cannot work ────────────────
+
+def test_frame_node_has_no_send_tcp() -> None:
+    """FrameService.SendFrame rejects TCP with UNIMPLEMENTED by design, so a
+    send_tcp() could only ever raise -- and its failure path threw away a
+    healthy channel via _reconnect() on the way out."""
+    from boat.frame_node import FrameNode
+
+    assert not hasattr(FrameNode, "send_tcp")
+    assert hasattr(FrameNode, "send_can") and hasattr(FrameNode, "send_eth")
