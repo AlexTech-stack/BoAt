@@ -21,7 +21,6 @@ A scenario is a JSON object uploaded to the gateway.  Fields:
   "version":        "string (semver, default 1.0.0)",
   "duration_ticks": "int (how many ticks the sim runs, default 1000)",
   "seed":           "int (RNG seed for determinism, default 0)",
-  "tick_rate_hz":   "int (simulation tick rate, default 100)",
   "plugins": [
     {
       "so_path":    "string (path to plugin .so file)",
@@ -51,8 +50,8 @@ A scenario is a JSON object uploaded to the gateway.  Fields:
 
 from boat.scenario_builder import ScenarioBuilder
 
-builder = ScenarioBuilder(name="my_scenario", tick_rate_hz=100)
-builder.add_plugin("name", "/path/to/plugin.so", {"key": "value"})
+builder = ScenarioBuilder(name="my_scenario", duration_ticks=1000, seed=0)
+builder.add_plugin("/path/to/plugin.so", {"key": "value"})
 builder.add_signal("signal.id", initial_value=0.0, name="Signal Name", unit="km/h")
 builder.add_fault("signal.id", "stuck_at", at_tick=500, magnitude=0.0)
 scenario_json = builder.to_json()
@@ -85,7 +84,7 @@ Rules:
 2. Use the ScenarioBuilder class when the user wants a Python script.
 3. Use raw JSON when the user wants a file for `boat scenario create`.
 4. Include all required fields.  Plugins, signals, and faults are optional.
-5. Explain any non-obvious choices (e.g. why a specific tick_rate_hz or seed).
+5. Explain any non-obvious choices (e.g. why a specific duration_ticks or seed).
 6. Keep output concise and focused.
 """
 

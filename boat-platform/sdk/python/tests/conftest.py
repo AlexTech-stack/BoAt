@@ -16,4 +16,4 @@ def boat_client():
 
 @pytest.fixture
 def scenario_builder():
-    return ScenarioBuilder(tick_rate_hz=100)
+    return ScenarioBuilder()

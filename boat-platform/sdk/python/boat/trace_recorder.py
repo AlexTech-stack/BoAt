@@ -32,6 +32,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+from boat.client import resolve_address
+
 
 class TraceRecorderError(RuntimeError):
     pass
@@ -45,15 +47,19 @@ class TraceRecorder:
                       Defaults to ``http://localhost:8083``.
         gateway:      gRPC address of the BoAt gateway, forwarded to the
                       recorder so it knows which gateway to subscribe to.
+                      Leave unset to resolve via BOAT_HOST, then
+                      "localhost:50051".
     """
 
     def __init__(
         self,
         recorder_url: str = "http://localhost:8083",
-        gateway: str = "localhost:50051",
+        gateway: Optional[str] = None,
     ) -> None:
         self.recorder_url = recorder_url.rstrip("/")
-        self.gateway      = gateway
+        # Resolved here so the address forwarded to the recorder daemon honours
+        # BOAT_HOST; a literal default would have pinned it to localhost.
+        self.gateway      = resolve_address(gateway)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 

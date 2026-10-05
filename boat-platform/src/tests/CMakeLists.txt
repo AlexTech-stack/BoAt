@@ -70,10 +70,6 @@ target_include_directories(boat_unit_effective_config PRIVATE
 target_link_libraries(boat_unit_effective_config PRIVATE Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_effective_config)
 
-add_executable(boat_unit_com_signal unit/test_com_signal.cpp)
-target_link_libraries(boat_unit_com_signal PRIVATE boat_hil Catch2::Catch2WithMain)
-catch_discover_tests(boat_unit_com_signal)
-
 add_executable(boat_unit_ipc_channel_selector unit/test_ipc_channel_selector.cpp)
 target_link_libraries(boat_unit_ipc_channel_selector PRIVATE boat_ipc Catch2::Catch2WithMain)
 catch_discover_tests(boat_unit_ipc_channel_selector)

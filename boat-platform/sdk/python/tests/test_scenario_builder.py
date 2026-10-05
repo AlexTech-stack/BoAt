@@ -6,7 +6,6 @@ import json
 
 def test_build_matches_core_loader_schema(scenario_builder):
     scenario_builder.add_plugin(
-        name="can_tp",
         path="plugins/can_tp.so",
         config={"block_size": 4},
     )

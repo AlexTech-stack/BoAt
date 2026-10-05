@@ -618,11 +618,33 @@ dependency above.
   - Architecture reference: `boat-platform/docs/architecture/system-architecture.md`
 
 - Gateway binary path: `build/{preset}/src/gateway/grpc_gateway/boat_gateway`
-- **TLS is opt-in and server-side only.** `BOAT_TLS_CERT` + `BOAT_TLS_KEY` (PEM paths) must be
-  set *together* or the gateway refuses to start; adding `BOAT_TLS_CLIENT_CA` additionally
-  requires client certificates (mTLS). There is no client-side counterpart yet -- `BoAtClient`,
-  `trace_replay.py` and `boat/test/harness.py` all build `grpc.insecure_channel()`, so a
-  TLS-enabled gateway is currently unreachable from the Python SDK/CLI and from `admin_gui`.
+- **TLS is opt-in, on both sides.** Server: `BOAT_TLS_CERT` + `BOAT_TLS_KEY` (PEM paths) must
+  be set *together* or the gateway refuses to start; adding `BOAT_TLS_CLIENT_CA` additionally
+  requires client certificates (mTLS).
+
+  Client: `TlsConfig.from_env()` (`sdk/python/boat/client.py`) reads its own set --
+  `BOAT_TLS_CA` (PEM of the CA that signed the gateway's certificate; setting it is what
+  enables TLS), `BOAT_TLS=1` (TLS against gRPC's default root store, for a gateway whose cert
+  chains to a public CA), `BOAT_TLS_CLIENT_CERT` + `BOAT_TLS_CLIENT_KEY` (**together**, or it
+  raises -- mirroring the gateway's own refusal with half a pair), and `BOAT_TLS_SERVER_NAME`
+  (sets `grpc.ssl_target_name_override` for a gateway reached by an address its certificate
+  does not name, e.g. an IP on a bench; hostname verification still happens, against this
+  name). With none of them set the channel is insecure, which is still the right default for
+  vcan work on localhost.
+
+  All four channel sites go through the single `make_channel()` helper -- `BoAtClient`,
+  `trace_replay.py`'s `_get_stub()`, and `boat/test/harness.py`'s readiness probe -- so TLS
+  cannot be supported in one entry point and missing from another, which is how the SDK came
+  to have no TLS at all while the gateway had supported it for some time. The `boat` CLI
+  inherits it for free via `BoAtClient(address=host)`; `admin_gui` has no gRPC client of its
+  own (it drives launcher agents over REST and only passes `grpc_port` through), so nothing
+  there needs changing.
+
+  Anything unusable -- a missing or empty PEM, half a client identity -- raises
+  `TlsConfigError` at construction. It never degrades to an insecure channel: a client that
+  quietly downgrades sends traffic in the clear that the operator believed was encrypted.
+  Only the exact strings `1`/`true` opt `BOAT_TLS` in, for the same reason
+  `BOAT_TIME_SOURCE` accepts only `virtual`.
 - `boat` CLI entry point (boat_cli/main.py): Typer app with subcommands. Uses `BoAtClient(address)` from `boat-py`.
 - `python3 -m boat` dispatches: subcommands `can|pdu|eth|db` → `boat/cmd.py` (one-shot), anything else → `boat/cli.py` (interactive REPL).
 - Proto stubs in `sdk/python/boat/stubs/boat/v1/` must be regenerated when proto files change (`generate_stubs.sh`).
@@ -854,34 +876,6 @@ boat pdu remove-route --id 0x100
 # Option C: Disable the PDU's group (keeps config, silences the PDU)
 boat pdu group --id 1 --pdu 0x100
 boat pdu disable-group --id 1
-```
-
-### COM Signal Library (C++)
-
-Bit-level signal packing with Intel/Motorola support, physical-to-raw conversion, AUTOSAR E2E CRC.
-
-```cpp
-#include "pdu/com/com_signal.h"
-using namespace boat::hil::com;
-
-MessageDef msg;
-msg.length_bytes = 8;
-SignalDef sig;
-sig.name = "Speed";
-sig.bit_length = 16;
-sig.start_pos = 0;
-sig.is_motorola = false;  // Intel
-sig.factor = 0.5;
-sig.offset = 0.0;
-
-auto packed = PackSignals(msg, {{"Speed", 100.0}});
-// unpacked["Speed"] == 100.0
-auto unpacked = UnpackSignals(msg, packed.data(), packed.size());
-
-// E2E CRC
-uint8_t crc8 = E2eCrc8(data, len);
-uint16_t crc16 = E2eCrc16(data, len);
-uint32_t crc32 = E2eCrc32(data, len);
 ```
 
 ### CanTp — CAN Transport Protocol (Plugin)

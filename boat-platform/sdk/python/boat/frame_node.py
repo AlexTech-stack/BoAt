@@ -33,7 +33,7 @@ from boat.v1 import frame_pb2_grpc
 
 
 class FrameNode:
-    """Unified frame node using the v8 FrameService gRPC endpoint."""
+    """Unified frame node: send/subscribe for every bus type via FrameService."""
 
     def __init__(self, address: Optional[str] = None,
                  bus_types: Optional[List[str]] = None) -> None:
@@ -103,20 +103,12 @@ class FrameNode:
         frame.eth.vlan_id = vlan_id
         return self.send(frame)
 
-    def send_tcp(self, iface: str, src_ip: bytes, dst_ip: bytes,
-                 src_port: int, dst_port: int, data: bytes,
-                 ip_version: int = 4, conn_id: int = -1) -> bool:
-        frame = frame_pb2.Frame()
-        frame.bus_type = frame_pb2.Frame.TCP
-        frame.iface = iface
-        frame.payload = data
-        frame.tcp.src_ip = src_ip
-        frame.tcp.dst_ip = dst_ip
-        frame.tcp.src_port = src_port
-        frame.tcp.dst_port = dst_port
-        frame.tcp.ip_version = ip_version
-        frame.tcp.conn_id = conn_id
-        return self.send(frame)
+    # No send_tcp(): TCP is connection-oriented, so FrameService.SendFrame
+    # rejects a TCP frame with UNIMPLEMENTED by design (see
+    # frame_service_impl.cpp and FrameSink::Send, which returns false for
+    # kTcp). There used to be one here; it could only ever raise, and on the
+    # way out send()'s error path discarded a perfectly good gRPC channel.
+    # Drive TCP through the tcp.so plugin's own connection API instead.
 
     # ── Subscribe ──────────────────────────────────────────────────────
 

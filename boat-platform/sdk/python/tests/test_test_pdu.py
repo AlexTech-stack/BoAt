@@ -1,12 +1,17 @@
 # Copyright 2026 Alexander Günther
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 from boat.test.pdu import PduHelper, _unpack_intel, _unpack_motorola, unpack_message
 from boat.message import Message
 from boat.pdu_db import PduDatabase
 
 
-DB_PATH = "./config/pdu_db_test.json"
+# Anchored to the repo rather than the CWD: the invocation CLAUDE.md documents
+# runs pytest from the repo root, where "./config/..." does not exist, so these
+# tests failed for anyone following the README while passing from boat-platform/.
+DB_PATH = str(Path(__file__).resolve().parents[3] / "config" / "pdu_db_test.json")
 
 
 class TestBitUnpacking:
@@ -27,21 +32,28 @@ class TestBitUnpacking:
         assert val == 0x0201  # little-endian
 
     def test_unpack_motorola_single_byte(self) -> None:
-        """Motorola: MSB at start_bit=7, LSB wraps to start over."""
+        """A byte-aligned 8-bit Motorola signal reads back as that byte.
+
+        StartPos=7 is the MSB in DBC/Vector numbering, so bit index 7 is
+        byte 0 bit 7 and the eight bits read are simply byte 0. This used to
+        assert 85 with the comment "bit-reversed D0->D7", which described the
+        spurious 7 - (n % 8) inversion rather than the convention.
+        """
         data = bytes([0b10101010])
         val = _unpack_motorola(data, start_bit=7, length=8)
-        assert val == 85  # bit-reversed D0→D7: 01010101
+        assert val == 0xAA
 
     def test_unpack_motorola_high_bits(self) -> None:
-        """Motorola: start_bit=7 → bit 0 in byte, length=2 → bits 0,1 = 1,1 → 11 = 3"""
+        """StartPos=7, Length=2 reads bits 7 and 6 -- the top of the byte."""
         data = bytes([0b00000011])
         val = _unpack_motorola(data, start_bit=7, length=2)
-        assert val == 3
+        assert val == 0  # bits 7 and 6 of 0x03 are both clear
+        assert _unpack_motorola(bytes([0b11000000]), start_bit=7, length=2) == 3
 
     def test_unpack_motorola_multi_byte(self) -> None:
-        data = bytes([0x01, 0x02])
-        with_motorola = _unpack_motorola(data, start_bit=7, length=16)
-        assert isinstance(with_motorola, int)
+        """A 16-bit Motorola signal is big-endian across the two bytes."""
+        assert _unpack_motorola(bytes([0x12, 0x34]), start_bit=7, length=16) == 0x1234
+        assert _unpack_motorola(bytes([0x01, 0x02]), start_bit=7, length=16) == 0x0102
 
 
 class TestPduHelper:

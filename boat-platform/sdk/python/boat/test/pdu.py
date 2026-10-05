@@ -24,13 +24,16 @@ def _unpack_intel(data: bytes, start_bit: int, length: int) -> int:
 
 
 def _unpack_motorola(data: bytes, start_bit: int, length: int) -> int:
-    """Extract `length` bits at Motorola MSB start_bit from data."""
+    """Extract `length` bits at Motorola MSB start_bit from data.
+
+    Mirrors boat.message._pack_motorola: a bit index n addresses byte n // 8,
+    bit n % 8, with no 7 - (n % 8) inversion. See that function's docstring
+    for why the inversion that used to be here was wrong.
+    """
     raw = 0
     sb = start_bit
     for _ in range(length):
-        byte_idx = sb // 8
-        bit_in_byte = 7 - (sb % 8)
-        raw = (raw << 1) | ((data[byte_idx] >> bit_in_byte) & 1)
+        raw = (raw << 1) | ((data[sb // 8] >> (sb % 8)) & 1)
         if sb % 8 == 0:
             sb += 15
         else:
@@ -45,6 +48,19 @@ def _unpack_signal(data: bytes, sig: dict) -> int:
 
 
 def _raw_to_physical(raw: int, sig: dict) -> float:
+    """Convert an unsigned raw bit field to its physical value.
+
+    A Signed signal's bits are two's complement, so the sign has to be
+    extended out of the field's width before scaling -- without this, an
+    8-bit Signed signal carrying 0xD8 decoded as 216.0 instead of -40.0.
+    Float and Bool stay on the plain path: neither this SDK nor the C++ COM
+    library implements them yet, and inventing a layout here would just
+    create a third convention to reconcile.
+    """
+    if sig.get("ValueType") == "Signed":
+        length = sig["Length"]
+        if raw & (1 << (length - 1)):
+            raw -= 1 << length
     factor = sig["Factor"] if sig["Factor"] != 0 else 1.0
     return float(raw) * factor + sig["Offset"]
 
@@ -69,7 +85,7 @@ def unpack_message(data: bytes, msg: Message) -> dict[str, float]:
     # First pass: static signals + muxor.
     values: dict[str, float] = {}
     active_mux: Optional[int] = None
-    for name, sig in msg._sigs.items():
+    for name, sig in msg.signal_defs().items():
         mv = sig.get("MuxValue")
         if mv is not None:
             continue  # skip dynamic signals for now
@@ -81,7 +97,7 @@ def unpack_message(data: bytes, msg: Message) -> dict[str, float]:
 
     # Second pass: dynamic signals matching the active mux group.
     if active_mux is not None:
-        for name, sig in msg._sigs.items():
+        for name, sig in msg.signal_defs().items():
             mv = sig.get("MuxValue")
             if mv is None or mv != active_mux:
                 continue

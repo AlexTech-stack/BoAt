@@ -39,12 +39,17 @@ def _pack_intel(buf: bytearray, start_bit: int, length: int, raw: int) -> None:
 
 
 def _pack_motorola(buf: bytearray, start_bit: int, length: int, raw: int) -> None:
-    """Write `raw` (unsigned, `length` bits) at Motorola MSB start_bit into buf.
+    """Write `raw` (`length` bits) at Motorola MSB start_bit into buf.
 
-    Motorola start_bit = MSB position using the Vector/CANdb++ bit numbering:
-      byte_index = start_bit // 8, bit_in_byte = 7 - (start_bit % 8).
-    Bits continue downward (wrapping to the next byte's MSB when the byte
-    boundary is crossed).
+    Motorola start_bit = MSB position in Vector/CANdb++ bit numbering, which
+    `tools/dbc2boatjson.py` copies verbatim out of the DBC into StartPos. A
+    bit index n addresses byte n // 8, bit n % 8 -- there is NO 7 - (n % 8)
+    inversion. An earlier version had one, which bit-reversed every Motorola
+    signal: StartPos=7/Length=16/0x1234 packed as 48 2c instead of 12 34.
+
+    Bits run downward from the MSB and wrap to the next byte's bit 7 when the
+    byte boundary is crossed (so 7,6,...,0 then 15,14,...,8), which is what
+    makes a multi-byte Motorola signal big-endian on the wire.
     """
     mask = (1 << length) - 1
     raw  = int(raw) & mask
@@ -53,12 +58,10 @@ def _pack_motorola(buf: bytearray, start_bit: int, length: int, raw: int) -> Non
     positions = []
     sb        = start_bit
     for _ in range(length):
-        byte_idx    = sb // 8
-        bit_in_byte = 7 - (sb % 8)
-        positions.append((byte_idx, bit_in_byte))
+        positions.append((sb // 8, sb % 8))
         # Advance to next bit in Motorola order.
         if (sb % 8) == 0:
-            sb += 15          # jump to MSB of next byte
+            sb += 15          # jump to bit 7 of the next byte
         else:
             sb -= 1
 
@@ -145,6 +148,15 @@ class Message:
     def signal_names(self) -> list:
         return list(self._sigs.keys())
 
+    def signal_defs(self) -> Dict[str, dict]:
+        """Return the raw signal definition dicts, keyed by signal name.
+
+        The public way to read StartPos/Length/ByteOrder/ValueType off a
+        message -- callers that need the bit layout (e.g. boat.test.pdu's
+        unpacker) use this instead of reaching into ``_sigs``.
+        """
+        return dict(self._sigs)
+
     # ------------------------------------------------------------------
     # Packing
 
@@ -173,9 +185,13 @@ class Message:
             # physical → raw
             factor = sig["Factor"] if sig["Factor"] != 0 else 1.0
             raw    = round((phys - sig["Offset"]) / factor)
-            # clamp to unsigned bit range
-            max_raw = (1 << sig["Length"]) - 1
-            raw = max(0, min(raw, max_raw))
+            # No clamping: _pack_intel/_pack_motorola mask to Length bits, and
+            # Python's & on a negative int yields the two's-complement low bits
+            # (-40 & 0xFF == 0xD8), which is what a Signed signal must put on
+            # the wire. Clamping to [0, 2**Length-1] here used to drive every
+            # negative physical value to 0 -- a Signed signal silently packed
+            # as zero rather than its two's complement. Masking also makes
+            # out-of-range unsigned values wrap, which is what the wire does.
             _pack_signal(buf, sig, raw)
         return bytes(buf)
 
