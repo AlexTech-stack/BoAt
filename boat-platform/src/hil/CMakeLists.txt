@@ -14,7 +14,6 @@ add_library(boat_hil STATIC
   pdu/pdu_router.cpp
   pdu/ipdumcontainer.cpp
   pdu/transmission_engine.cpp
-  pdu/com/com_signal.cpp
   pdu/tick_timer.cpp
   tick_authority.cpp
 )

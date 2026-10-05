@@ -10,9 +10,10 @@
     "addresses byte n // 8, bit n % 8, and bits run downward, wrapping to the",
     "next byte's bit 7. There is no 7 - (n % 8) inversion.",
     "",
-    "The C++ COM library (src/hil/pdu/com/com_signal.cpp) does NOT currently",
-    "satisfy this table for Motorola -- see the backlog item. When it is fixed",
-    "it should be made to read these same rows."
+    "There was a second, unused C++ implementation of this (the COM signal",
+    "library) that disagreed with this table for Motorola; it was deleted",
+    "rather than fixed, since nothing called it. If a C++ packer is ever",
+    "needed, hold it to these rows."
   ],
   "vectors": [
     { "name": "intel_8b_unsigned",        "byte_order": 0, "start_pos": 0,  "length": 8,  "value_type": "Unsigned", "factor": 1.0, "offset": 0.0, "message_length": 1, "physical": 18,     "bytes": "12" },

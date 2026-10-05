@@ -1,118 +1,81 @@
-# COM Signal Library — bit-packing convention defects
+# COM Signal Library (C++) — removed
 
-Found while fixing the Python SDK's signal packers on `sdk_rework` (2026-10-05). The Python
-side is fixed and pinned by golden vectors; the C++ side is not, and the two now disagree
-by design until the items below land.
+**Resolved by deletion, 2026-10-05.** `src/hil/pdu/com/com_signal.{h,cpp}`,
+`src/tests/unit/test_com_signal.cpp` (14 Catch2 cases) and
+`demo/pdu_features/03_com_signal_demo.cpp` are gone, along with their CMake wiring.
 
-## Ground truth for `StartPos`
+Kept as a record of why, and of the one finding that outlived the code.
 
-`tools/dbc2boatjson.py:266` copies the DBC `start_bit` **verbatim** into `StartPos`, and
-`boat-platform/docs/howto/dbc2boatjson.md:111` documents the result as
-`ENGINE_RPM, Length: 16, StartPos: 7, ByteOrder: 1`. So `StartPos` carries the DBC/Vector
-convention unchanged:
+## Why it was deleted rather than fixed
 
-- For `ByteOrder: 1` (Motorola) `StartPos` is the signal's **MSB** position.
-- A bit index `n` addresses byte `n // 8`, bit `n % 8`. **There is no `7 - (n % 8)`
-  inversion.**
-- Bits run downward from the MSB and wrap to the next byte's bit 7 (`7,6,…,0` then
-  `15,14,…,8`), which is what makes a multi-byte Motorola signal big-endian on the wire.
+It had two real defects and no users.
 
-The acceptance table is `boat-platform/sdk/python/tests/data/signal_vectors.json` — 16
-hand-derived vectors (Intel/Motorola, 8/12/16-bit, signed/unsigned, aligned and straddling).
-They were derived from the convention, not captured from any implementation, so an
-implementation that disagrees with them is the thing that is wrong. The Python packers pass
-all 16 in both directions plus round-trip.
+**It used the wrong bit layout.** `StartPos` carries the DBC/Vector convention unchanged --
+`tools/dbc2boatjson.py:266` copies the DBC `start_bit` verbatim into it, and
+`docs/howto/dbc2boatjson.md:111` documents the result as
+`ENGINE_RPM, Length: 16, StartPos: 7, ByteOrder: 1`. Under that convention a bit index `n`
+addresses byte `n // 8`, bit `n % 8`, and `StartPos=7, Length=16, 0x1234` must pack to
+`12 34`. `PackMotorola` computed positions differently and did not.
 
-Note `config/pdu_db.schema.json:140` describes `StartPos` as *"Start bit position (LSB,
-0-indexed)"*, which is correct for Intel but wrong for Motorola. Worth a wording fix.
-
----
-
-## #0 — The whole library is dead code (read this first)  🟢 reachability
-
-**Confirmed 2026-10-05: nothing calls it.** `com_signal.h` is `#include`d by exactly two
-files — its own `.cpp` and `src/tests/unit/test_com_signal.cpp`. `PackSignals`,
-`UnpackSignals`, `PackIntel/PackMotorola`, `UnpackIntel/UnpackMotorola` and
-`E2eCrc8/16/32` have **zero callers** anywhere in `src/`. The only CMake target that pulls
-it in besides `boat_hil` itself is `boat_unit_com_signal`.
-
-In particular `src/plugins/pdu_router/` does no signal packing at all — no `StartPos`,
-`bit_length` or Motorola handling. (The `SignalDef` in `src/core/scenario/scenario_loader.h`
-is an unrelated struct that happens to share the name; it is a scenario signal, not a COM
-signal.)
-
-So #1 and #2 below are **latent, not live**: they cannot be reached by the gateway, a
-plugin, or a test run today. That drops them from "fix now" to "fix or delete before
-anything starts using this". It also means the Python packer in `boat.message` is the only
-signal packer actually on a code path, which is why the fix landed there first.
-
-`AGENTS.md`'s "COM Signal Library (C++)" section presents this as a usable facility with a
-worked example, with no hint that it is unwired. Worth a note there either way — and note
-its example uses `is_motorola = false`, so even the documentation does not exercise the
-broken path.
-
-**Decide the disposition before fixing:** if this is intended to become the C++-side packer
-(the natural consumer is `pdu_router`, which currently has none), fix #1/#2 and point it at
-`signal_vectors.json`. If it is a leftover from an earlier design, delete it and its test.
-
-## #1 — `PackMotorola`/`UnpackMotorola` use a different convention  🟠 latent
-
-`src/hil/pdu/com/com_signal.cpp` computes `dst_bit = start_bit - (bit_length - 1 - i)` with
-no byte-relative inversion, which is neither the DBC convention nor what the Python SDK now
-does. For `StartPos=7, Length=16, 0x1234` the table requires `12 34`.
-
-## #2 — `uint32_t` underflow → ~512 MB `resize()`  🟠 latent
-
-Same functions, and the more serious half. `dst_bit` is `uint32_t`, so **any** Motorola
-signal with `bit_length > start_bit + 1` underflows:
+**It allocated ~512 MB on normal input.** `dst_bit` was `uint32_t`, so any Motorola signal
+with `bit_length > start_bit + 1` underflowed. Confirmed by compiling the function standalone:
 
 ```
 start_bit = 7, bit_length = 16, i = 0
   sig_bit_from_lsb = 15
   dst_bit          = 7 - 15  ->  4294967288   (uint32_t wrap)
   byte_idx         = 536870911
-  buffer.resize(byte_idx + 1)  ->  ~512 MB
+  buffer.resize(536870912)                    ->  512.0 MB, really allocated
 ```
 
-That is the *normal* multi-byte Motorola case, not an edge case. `UnpackMotorola` has the
-same expression and indexes `data[byte_idx]` out of bounds instead — an OOB read.
+12-bit signals triggered it too; only an 8-bit signal at `StartPos=7` stayed in range.
+`UnpackMotorola` had the same expression and indexed `data[byte_idx]` out of bounds instead.
 
-`config/pdu_db_test.json` contains signals that reach this: `HV_Current` and `HV_Voltage` are
-`ByteOrder: 1, StartPos: 0, Length: 16`, i.e. `0 - 15`.
+**Nothing called it.** `com_signal.h` was included by exactly two files -- its own `.cpp` and
+its unit test -- plus one standalone demo built by a `g++` line in a comment, never by CMake.
+`PackSignals`, `UnpackSignals`, `PackIntel/PackMotorola`, `UnpackIntel/UnpackMotorola` and
+`E2eCrc8/16/32` had no callers in `src/`. `pdu_router` does no signal packing at all. Every
+case in the unit test set `value_type = "Unsigned"` and none exercised a multi-byte Motorola
+signal, which is how both defects survived.
 
-**Confirmed 2026-10-05** by compiling `PackMotorola` verbatim into a standalone
-program (g++ -std=c++20): the `StartPos=7, Length=16` case really does allocate
-536870912 bytes. It is also broader than first assumed — the guard is
-`bit_length > start_bit + 1`, so a **12-bit** Motorola signal at `StartPos=7` underflows
-too. Only an 8-bit signal at `StartPos=7` stays in range.
+So fixing it would have been work spent making dead code correct. The packer that is actually
+on a code path is `boat.message` in the Python SDK, which was fixed separately and is pinned
+by `boat-platform/sdk/python/tests/data/signal_vectors.json`.
 
-Reachability: none today, see #0.
+## If a C++ packer is needed later
 
-## #3 — No signed or Motorola coverage in the C++ tests  🟠
+`git log -- boat-platform/src/hil/pdu/com/` has the implementation, including the AUTOSAR E2E
+CRC-8/16/32 helpers, which were correct as far as their tests went and are the part most
+likely to be wanted again.
 
-Every case in `src/tests/unit/test_com_signal.cpp` sets `value_type = "Unsigned"`, and none
-exercises a multi-byte Motorola signal. That is why #1 and #2 survived. When #1/#2 are fixed,
-point the Catch2 suite at `signal_vectors.json` so both languages are held to one table.
+Hold any replacement to `sdk/python/tests/data/signal_vectors.json` -- 16 vectors over both
+byte orders, 8/12/16-bit, signed and unsigned, aligned and straddling, hand-derived from the
+DBC convention rather than captured from an implementation. The natural consumer is
+`pdu_router`.
 
-Sign extension itself (`com_signal.cpp:134,183,214`) looks correct and is the behaviour the
-Python fix was matched against.
+Note `config/pdu_db.schema.json:140` describes `StartPos` as *"Start bit position (LSB,
+0-indexed)"*, which is right for Intel and wrong for Motorola, where it is the MSB. Worth
+correcting whoever next reads it.
 
-## #4 — `config/pdu_db_test.json` has implausible Motorola layouts  🟡
+---
 
-`HV_Current` / `HV_Voltage`: `ByteOrder: 1, StartPos: 0, Length: 16`. In DBC numbering a
-Motorola start bit is the MSB, so real 16-bit signals start at 7/15/23 — `StartPos: 0` with
-`Length: 16` is not a layout a DBC would produce.
+## Still open: `config/pdu_db_test.json` has implausible Motorola layouts  🟡
 
-Confirmed empirically with the corrected packer: `HV_Current = -12.5` in an 8-byte message
-packs to `01 ff 06 00 00 00 00 00`. The bit sequence for `StartPos=0` runs
+The one finding here that is not about the deleted code.
+
+`HV_Current` and `HV_Voltage` are `ByteOrder: 1, StartPos: 0, Length: 16`. In DBC numbering a
+Motorola start bit is the signal's MSB, so real 16-bit signals start at 7/15/23 --
+`StartPos: 0` with `Length: 16` is not a layout a DBC would produce.
+
+Confirmed with the corrected Python packer: `HV_Current = -12.5` in an 8-byte message packs
+to `01 ff 06 00 00 00 00 00`. The bit sequence for `StartPos=0` runs
 `(byte0,bit0) → (byte1,bit7…bit0) → (byte2,bit7…)`, so a 16-bit signal spills across *three*
-bytes. It round-trips (pack and unpack agree), so nothing fails — but no ECU would lay a
-signal out that way. Either `ByteOrder` was set without intent or `StartPos` should be 7/15.
+bytes. It round-trips, so nothing fails -- but no ECU would lay a signal out that way. Either
+`ByteOrder` was set without intent or `StartPos` should be 7/15.
 
 Needs review against the source DBC. The existing tests could not catch it because they only
 round-trip, and all 112 messages in this DB pack without error either way.
 
-The two real vehicle DBs are affected in volume too:
-`Dauer_Logging_SEP894_Routing_pdu_db.json` has 86 Motorola signals,
-`Logging_Messsung_Startup_from_Bussleep_pdu_db.json` has 83. Any payload previously built
-from those through `boat.message` was wrong on the wire.
+The two real vehicle DBs carry Motorola signals in volume --
+`Dauer_Logging_SEP894_Routing_pdu_db.json` 86, `Logging_Messsung_Startup_from_Bussleep_pdu_db.json`
+83 -- so they are worth the same check.

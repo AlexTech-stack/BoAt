@@ -878,34 +878,6 @@ boat pdu group --id 1 --pdu 0x100
 boat pdu disable-group --id 1
 ```
 
-### COM Signal Library (C++)
-
-Bit-level signal packing with Intel/Motorola support, physical-to-raw conversion, AUTOSAR E2E CRC.
-
-```cpp
-#include "pdu/com/com_signal.h"
-using namespace boat::hil::com;
-
-MessageDef msg;
-msg.length_bytes = 8;
-SignalDef sig;
-sig.name = "Speed";
-sig.bit_length = 16;
-sig.start_pos = 0;
-sig.is_motorola = false;  // Intel
-sig.factor = 0.5;
-sig.offset = 0.0;
-
-auto packed = PackSignals(msg, {{"Speed", 100.0}});
-// unpacked["Speed"] == 100.0
-auto unpacked = UnpackSignals(msg, packed.data(), packed.size());
-
-// E2E CRC
-uint8_t crc8 = E2eCrc8(data, len);
-uint16_t crc16 = E2eCrc16(data, len);
-uint32_t crc32 = E2eCrc32(data, len);
-```
-
 ### CanTp — CAN Transport Protocol (Plugin)
 
 ISO 15765-2 segmentation/reassembly for PDUs larger than 8 bytes. Operates as a `BOAT_NODE_PLUGINS` node plugin using the v8 ABI (`on_frame`/`set_frame_publisher`). `boat can-tp configure`/`send` talk to the live plugin instance inside the gateway process via the `CanTpService` gRPC service (`CanTpServiceImpl` looks it up via `PluginManager::FindService("can_tp:" + iface)`) — there is no offline/local mode.
