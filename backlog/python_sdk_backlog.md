@@ -1,18 +1,27 @@
 # Python SDK (`boat-py`) — remaining audit findings
 
 From a full audit of `boat-platform/sdk/python` (2026-10-05). The verified **correctness**
-bugs were fixed on `sdk_rework`; what follows is everything that audit turned up and did not
+bugs were fixed on `sdk_rework`, as were #1, #4, #5 and #6 below (struck through); what follows is everything that audit turned up and did not
 fix. Signal-packing defects live in `com_signal_backlog.md` instead.
 
 ---
 
-## #1 — `BoAtClient` has no TLS support  🔴
+## #1 — ~~`BoAtClient` has no TLS support~~  ✅ fixed 2026-10-05
 
-The gateway supports opt-in TLS and mTLS (`BOAT_TLS_CERT` + `BOAT_TLS_KEY`, plus
-`BOAT_TLS_CLIENT_CA` for client certs), but `sdk/python/boat/client.py` builds
-`grpc.insecure_channel` unconditionally. **A TLS-enabled gateway is unreachable from the SDK
-and therefore from the CLI** — a shipped gateway feature with no client. `trace_replay.py`
-opens its own `grpc.insecure_channel` directly too, so it needs the same treatment.
+Client-side TLS added in `boat/client.py`: `TlsConfig` + `make_channel()`, configured by
+`BOAT_TLS_CA` / `BOAT_TLS` / `BOAT_TLS_CLIENT_CERT` + `BOAT_TLS_CLIENT_KEY` /
+`BOAT_TLS_SERVER_NAME`. All three channel sites (`BoAtClient`, `trace_replay._get_stub`,
+`harness._wait_for_ready`) route through the one helper; the `boat` CLI inherits it via
+`BoAtClient(address=host)`. Misconfiguration raises `TlsConfigError` instead of degrading to
+plaintext.
+
+Verified end-to-end against a real gateway on both `BOAT_TLS_CERT`/`BOAT_TLS_KEY` and
+`+BOAT_TLS_CLIENT_CA` (mTLS): CA-only reaches a TLS gateway, a client cert is accepted by an
+mTLS gateway and its absence is rejected, and `BOAT_TLS=1` correctly *fails* against a
+private CA rather than skipping verification.
+
+Still open: `src/tests/hw_eth_test.py:59` builds its own `grpc.insecure_channel` — a manual
+hardware test script, not SDK code, and it hardcodes its gateway address too.
 
 ## #2 — The unified-frame migration stopped at `frame_node.py`  🟠
 
@@ -42,28 +51,23 @@ Also unmigrated and still teaching the deprecated classes: 5 of 7 files in
 `DeprecationWarning` at runtime. Moot if the feature is replaced by a BoAt MCP server, as
 planned — recorded so the replacement does not inherit the same omission.
 
-## #4 — `python-can` is an undeclared dependency  🟠
+## #4 — ~~`python-can` is an undeclared dependency~~  ✅ fixed 2026-10-05
 
-`boat/trace_analyzer.py:182` does a bare `import can`; only `boat-cli` declares the dep.
-`pip install boat-py` followed by `TraceAnalyzer("x.blf")` raises a raw `ModuleNotFoundError`.
-`boat/trace_replay.py:932` guards the same import with a clear message — do that in
-`trace_analyzer` too and add a `[trace]` extra.
+Declared as a `[trace]` extra, and `trace_analyzer._read_python_can` now guards the import
+the way `trace_replay.py:932` already did, naming `pip install 'boat-py[trace]'`.
 
-## #5 — `FrameNode.send_tcp` can never succeed  🟡
+## #5 — ~~`FrameNode.send_tcp` can never succeed~~  ✅ fixed 2026-10-05
 
-`boat/frame_node.py:106` builds a `bus_type=TCP` frame, but
-`FrameService.SendFrame` returns `UNIMPLEMENTED` for TCP by design
-(`frame_service_impl.cpp:216`, and `FrameSink::Send` returns false for `kTcp`). Zero callers
-in the tree. It also discards a healthy gRPC channel via `_reconnect()` on the way out.
-Remove it, or make it raise `NotImplementedError` naming the TCP plugin.
+Removed, with a comment in its place pointing at the `tcp.so` plugin's connection API and at
+why `FrameService.SendFrame` rejects TCP.
 
-Related asymmetry: there is no `send_pdu`, even though a PDU `SendFrame` *is* valid
-(dispatched to `pdu_router`). Only TCP is rejected.
+Still open, and deliberately not changed: there is no `send_pdu`, even though a PDU
+`SendFrame` *is* valid (dispatched to `pdu_router`). Only TCP is rejected, so the asymmetry
+in the helper set is now the only one left.
 
-## #6 — `grpcio-tools` is a runtime dependency  🟡
+## #6 — ~~`grpcio-tools` is a runtime dependency~~  ✅ fixed 2026-10-05
 
-`sdk/python/pyproject.toml:18`. It is codegen-only (`stubs/generate_stubs.sh`) and drags a
-protoc toolchain into every install. Belongs in `dev`.
+Moved to the `dev` extra. Runtime deps are now `grpcio` + `protobuf` only.
 
 ## #7 — Error contracts differ across node classes  🟡
 
