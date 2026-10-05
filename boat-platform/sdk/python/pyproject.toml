@@ -15,14 +15,23 @@ classifiers = [
 requires-python = ">=3.11"
 dependencies = [
   "grpcio>=1.81.1",
-  "grpcio-tools>=1.81.1",
   "protobuf>=6.31.1",
 ]
 
 [project.optional-dependencies]
+# grpcio-tools is codegen-only (stubs/generate_stubs.sh regenerates the
+# committed stubs under boat/stubs/boat/v1/). It used to be a runtime
+# dependency, which pulled a protoc toolchain into every install of the SDK.
 dev = [
   "pytest>=8.0",
   "pytest-asyncio",
+  "grpcio-tools>=1.81.1",
+]
+# Reading .asc/.blf CAN traces (boat.trace_analyzer, boat.trace_replay). Both
+# guard the import and say to install this extra; .pcap/.pcapng go through
+# boat.pcapng, which is pure Python and needs nothing.
+trace = [
+  "python-can>=4.0.0",
 ]
 # Speeds up boat.trace_reverse_engineer's bit-correlation clustering; a pure-Python
 # fallback runs without it, just slower on large traces with many CAN IDs.
