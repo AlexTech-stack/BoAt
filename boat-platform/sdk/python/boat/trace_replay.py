@@ -5,7 +5,7 @@
 
 ``TraceReplayer.replay()`` supports CAN only (.asc, .blf, and the CAN
 records of a .pcapng via python-can / :mod:`boat.pcapng`) and sends each
-frame one-by-one via gRPC CanService, paced in real time by this process.
+frame one-by-one via gRPC FrameService, paced in real time by this process.
 There is no server-side mode here.
 
 For Ethernet (.pcap, or the Ethernet records of a mixed .pcapng) replay,

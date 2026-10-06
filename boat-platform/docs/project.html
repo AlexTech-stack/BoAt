@@ -514,7 +514,7 @@
         <div class="feat-icon">🔌</div>
         <div class="feat-title">Stable Plugin SDK</div>
         <div class="feat-desc">
-          C ABI v8 plugin interface with C++ convenience wrappers. Plugins expose
+          C ABI v9 plugin interface with C++ convenience wrappers. Plugins expose
           <code style="font-family:var(--mono);font-size:11px">initialize</code>,
           <code style="font-family:var(--mono);font-size:11px">on_tick</code>,
           <code style="font-family:var(--mono);font-size:11px">on_frame</code>,
@@ -533,8 +533,9 @@
         <div class="feat-desc">
           Full gRPC service surface: SimulationService, SignalService, ScenarioService,
           ReplayService, FaultService, MetricsService, TraceService, the unified
-          FrameService (send/subscribe across all bus types), CanService, and
-          the always-on BusService.
+          FrameService (send/subscribe/list-interfaces across all bus types),
+          CanTpService, PduService, PluginService, NodePluginService, DebugService,
+          and the always-on BusService.
         </div>
       </div>
 
@@ -564,8 +565,8 @@
         <div class="feat-icon">🐍</div>
         <div class="feat-title">Python SDK</div>
         <div class="feat-desc">
-          <code style="font-family:var(--mono);font-size:11px">CanNode</code> and
-          <code style="font-family:var(--mono);font-size:11px">BusNode</code> base classes
+          <code style="font-family:var(--mono);font-size:11px">FrameNode</code> (all bus
+          types) and <code style="font-family:var(--mono);font-size:11px">BusNode</code>
           for writing nodes in pure Python. Background threading built-in. Full gRPC
           stub coverage for all services via <code style="font-family:var(--mono);font-size:11px">BoAtClient</code>.
         </div>
@@ -648,7 +649,7 @@
     <p>
       <strong>Key components:</strong> <code>boat-core</code> (C++20 tick scheduler, signal router, determinism engine),
       <code>boat-gateway</code> (gRPC server, node manager),
-      <code>boat-plugin-sdk</code> (C ABI v8 plugin interface, unified <code>BoatFrame</code>),
+      <code>boat-plugin-sdk</code> (C ABI v9 plugin interface, unified <code>BoatFrame</code>),
       <code>boat-hil</code> (CAN/Ethernet drivers, PDU router),
       <code>boat-py</code> (Python SDK),
       <code>boat-cli</code> (CLI tool).
@@ -745,14 +746,16 @@ boat replay start --session session-001
       <div class="usage-card">
         <div class="usage-card-header">🐍 Python — CAN node</div>
 <pre>
-from boat.can_node import CanNode
+from boat.frame_node import FrameNode
 
-class MyNode(CanNode):
-    def on_frame(self, frame, iface):
-        print(f"{iface}  0x{frame.can_id:03X}"
-              f"  {frame.data.hex(':')}")
+node = FrameNode()
 
-node = MyNode(iface_filter="vcan0")
+def on_frame(frame):
+    print(f"{frame.iface}  0x{frame.can.can_id:03X}"
+          f"  {frame.payload.hex(':')}")
+
+node.subscribe(on_frame, bus_types=["CAN"],
+               iface_filter="vcan0")
 node.run()
 </pre>
       </div>

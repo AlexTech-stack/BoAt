@@ -160,6 +160,6 @@ Key data flows:
 - **Plugin ABI v8 unified frame type**: `BoatCanFrame`, `BoatEthFrame` removed; single `BoatFrame` with `bus_type` discriminator
 - **Plugin ABI v9 host clock (`set_time_source`)**: the host hands each plugin a `BoatNowNsFn` returning monotonic nanoseconds on the host's clock (real, or virtual under `BOAT_TIME_SOURCE=virtual`). A plugin that needs time reads it there rather than calling `steady_clock::now()`, so plugin timing follows the tick authority instead of a clock of its own
 - **PduRouter as plugin**: PDU routing logic removed from core gateway; loaded as `pdu_router.so` at runtime
-- **FrameService gRPC**: unified send/subscribe endpoint alongside legacy CanService/EthernetService
+- **FrameService gRPC**: one send/subscribe/list-interfaces endpoint for every bus type. The per-bus `CanService` and `EthernetService` were subsequently **deleted** rather than kept as deprecated wrappers, and `FrameService.ListInterfaces` absorbed `CanService.ListBuses` + `EthernetService.ListInterfaces`
 - **Replay in core**: replay engine stays in core (not a plugin) — reads events from disk, publishes to frame bus
 - **iceoryx2 SHM limited**: shared memory IPC used only within `boat_ipc` library for large payloads (>4KB), not for plugin communication

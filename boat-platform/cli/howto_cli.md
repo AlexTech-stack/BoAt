@@ -54,8 +54,8 @@ boat sim status      # talks to 192.168.1.100:50052
 boat frame list-ifaces
 ```
 
-The Python SDK's `BoAtClient` and every `*Node` class (`FrameNode`, `CanNode`,
-`EthernetNode`, `PduNode`, `BusNode`, `PduMessageNode`) follow the same
+The Python SDK's `BoAtClient` and every `*Node` class (`FrameNode`, `PduNode`,
+`BusNode`, `PduMessageNode`) follow the same
 resolution order, so a node script written with no address hardcoded is
 portable across any gateway on any device -- point it elsewhere by setting
 `BOAT_HOST` in the environment it runs in, not by editing the script.

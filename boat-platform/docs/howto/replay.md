@@ -448,7 +448,7 @@ and no format auto-selects one over the other:
 boat trace replay recording.blf --buses vcan0
 ```
 
-Each frame is sent individually via `CanService.SendCanFrame`.  Simple but
+Each frame is sent individually via `FrameService.SendFrame`.  Simple but
 each frame incurs a gRPC round-trip (~5-8ms).  This command supports CAN
 only — passing a `.pcap` file fails immediately with an error pointing to
 `boat replay import`.
