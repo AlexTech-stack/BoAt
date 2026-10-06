@@ -1,0 +1,17 @@
+{
+  "id": "example",
+  "name": "Example scenario",
+  "version": "1.0.0",
+  "duration_ticks": 1000,
+  "seed": 42,
+
+  "plugins": [],
+
+  "signals": [
+    { "id": "vehicle.speed",   "name": "Vehicle speed",   "type": "double", "unit": "km/h" },
+    { "id": "motor.torque",    "name": "Motor torque",    "type": "double", "unit": "Nm" },
+    { "id": "terminal15",      "name": "Terminal 15",     "type": "bool",   "unit": "" }
+  ],
+
+  "faults": []
+}

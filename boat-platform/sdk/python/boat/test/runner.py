@@ -296,6 +296,10 @@ class TestSuiteRunner:
                 capture_output=True,
                 text=True,
                 timeout=entry.timeout_s,
+                # Run each test from the manifest's own directory, so a relative
+                # path in `file` means "next to the manifest" rather than
+                # "relative to wherever the operator happened to be standing".
+                cwd=self.manifest.base_dir,
             )
             passed = result.returncode == 0
         except subprocess.TimeoutExpired:

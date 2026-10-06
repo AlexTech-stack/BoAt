@@ -3,7 +3,7 @@
   "name": "virtual-ci",
   "description": "All-virtual environment for CI pipeline. Uses vcan and veth interfaces.",
   "gateway": {
-    "binary": "./build/debug/src/gateway/grpc_gateway/boat_gateway",
+    "binary": "../../build/debug/src/gateway/grpc_gateway/boat_gateway",
     "tick_ms": 10,
     "address": "localhost:50051"
   },

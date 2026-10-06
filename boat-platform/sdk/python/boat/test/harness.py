@@ -38,8 +38,21 @@ class _GatewayManager:
         self._process: Optional[subprocess.Popen] = None
 
     def start(self) -> str:
+        # Resolve a relative binary path against the environment config's own
+        # directory, not the caller's working directory.
         binary = self._config.binary
-        if binary and os.path.isfile(binary):
+        if binary:
+            binary = self._env_cfg.resolve_path(binary)
+            if not os.path.isfile(binary):
+                # Previously this fell through silently: no gateway was started
+                # and the test then failed with an opaque connection error that
+                # said nothing about the real cause.
+                raise FileNotFoundError(
+                    f"gateway.binary {self._config.binary!r} not found "
+                    f"(tried {binary!r}). Build it first, or correct the path in "
+                    f"the environment config."
+                )
+        if binary:
             env = os.environ.copy()
             env["BOAT_CAN_INTERFACES"] = self._build_can_ifaces()
             env["BOAT_ETH_INTERFACES"] = self._build_eth_ifaces()

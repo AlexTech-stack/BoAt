@@ -55,9 +55,36 @@ never contains different frames.
 See [boat-platform/README.md](boat-platform/README.md) for build prerequisites, build & run instructions.
 
 ```bash
-# One-line summary
+# 1. Build (run from boat-platform/)
 cd boat-platform && cmake --preset debug && cmake --build --preset debug
+
+# 2. A virtual CAN bus to talk to
+sudo modprobe vcan
+sudo ip link add vcan0 type vcan && sudo ip link set vcan0 up
+
+# 3. Start the gateway — gRPC on 0.0.0.0:50051
 BOAT_CAN_INTERFACES=vcan0 ./build/debug/src/gateway/grpc_gateway/boat_gateway
+```
+
+Then, in a second terminal:
+
+```bash
+pip install -e ./boat-platform/sdk/python[dev] && pip install -e ./boat-platform/cli
+
+boat frame list-ifaces                                                       # what the gateway sees
+boat frame send --bus-type can --iface vcan0 --can-id 0x123 --data AABBCCDD   # put a frame on the bus
+boat frame subscribe --bus-types can                                         # watch traffic (Ctrl-C to stop)
+```
+
+And the simulation lifecycle, using the scenario that ships with the repo:
+
+```bash
+cd boat-platform
+boat scenario create --file config/scenarios/example.json   # -> scenario_id "example"
+boat sim create --scenario example                          # -> a simulation_id
+boat sim start <simulation_id>
+boat sim pause <simulation_id> && boat sim step --ticks 10 <simulation_id>
+boat sim stop  <simulation_id>
 ```
 
 ## Learn more

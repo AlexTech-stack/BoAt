@@ -75,7 +75,9 @@ OEM engineers, Tier-1 suppliers, open-source community contributors, CI/CD autom
 
 ## User Flows
 
-**Engineer runs a scenario:** `boat scenario create --file scenario.yaml` → `boat sim start --scenario <id>` → `boat sim watch <id>` → `boat sim stop <id>`
+**Engineer runs a scenario:** `boat scenario create --file config/scenarios/example.json` → `boat sim create --scenario <scenario-id>` → `boat sim start <sim-id>` → `boat sim watch <sim-id>` → `boat sim stop <sim-id>`
+
+(The CLI takes a scenario as **JSON**, not YAML, and `sim create` is a separate step from `sim start`. `config/scenarios/example.json` is a runnable minimal example.)
 
 **CI pipeline validates SUT:** GitHub Action triggers → `boat sim run --scenario regression.yaml --assert assertions.yaml` → exit 0/1
 
