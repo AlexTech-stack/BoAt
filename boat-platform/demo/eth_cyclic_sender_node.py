@@ -37,9 +37,8 @@ import threading
 import time
 
 from boat.bus_node import BusNode
-from boat.can_node import CanNode
 from boat.client import BoAtClient
-from boat.ethernet_node import EthernetNode
+from boat.frame_node import FrameNode
 from boat.v1 import frame_pb2
 
 # ── CAN trigger IDs ──────────────────────────────────────────────────────────
@@ -122,19 +121,23 @@ class _PayloadListener(BusNode):
 
 # ── Main node ─────────────────────────────────────────────────────────────────
 
-class EthCyclicSenderNode(CanNode):
-    """Listens on vcan0 for start/stop, sends cyclic UDP/IPv4 Ethernet frames."""
+class EthCyclicSenderNode:
+    """Listens on vcan0 for start/stop, sends cyclic UDP/IPv4 Ethernet frames.
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+    One FrameNode now covers both halves: CAN subscribe for the triggers and
+    Ethernet send for the cyclic traffic. That used to need a CanNode base
+    plus a separate EthernetNode purely for send().
+    """
+
+    def __init__(self, address: str | None = None, iface_filter: str = "") -> None:
         self._active         = threading.Event()
         self._cyclic_thread: threading.Thread | None = None
         self._payload_lock   = threading.Lock()
         self._udp_payload    = bytearray(_INITIAL_DATA)
 
-        address = kwargs.get("address", "localhost:50051")
         self._address = address
-        self._eth = EthernetNode(address=address)   # used only for send()
+        self._iface_filter = iface_filter
+        self._frames = FrameNode(address)
         self._bus = _PayloadListener(address=address, on_payload=self._update_payload)
 
     # ── bus callback ─────────────────────────────────────────────────────────
@@ -146,10 +149,10 @@ class EthCyclicSenderNode(CanNode):
 
     # ── CAN triggers ─────────────────────────────────────────────────────────
 
-    def on_frame(self, frame, iface: str) -> None:
-        if frame.can_id == _START_ID:
+    def on_frame(self, frame) -> None:
+        if frame.can.can_id == _START_ID:
             self._start_cyclic()
-        elif frame.can_id == _STOP_ID:
+        elif frame.can.can_id == _STOP_ID:
             self._stop_cyclic()
 
     # ── cyclic control ───────────────────────────────────────────────────────
@@ -192,12 +195,12 @@ class EthCyclicSenderNode(CanNode):
             if not ifaces:
                 print("[eth-cyclic] no Ethernet interfaces registered, skipping send")
             for iface in ifaces:
-                ok = self._eth.send(
+                ok = self._frames.send_eth(
+                    iface,
+                    dst_mac=_DST_MAC,
+                    src_mac=_SRC_MAC,
                     ethertype=_ETHERTYPE,
                     payload=eth_payload,
-                    iface=iface,
-                    src_mac=_SRC_MAC,
-                    dst_mac=_DST_MAC,
                 )
                 if not ok:
                     print(f"[eth-cyclic] send failed on {iface} (gateway unreachable?)")
@@ -211,19 +214,22 @@ class EthCyclicSenderNode(CanNode):
 
     def run(self) -> None:
         self._bus.run_background(names=[_BUS_SIGNAL])
-        super().run()
+        self._frames.subscribe(self.on_frame, bus_types=["CAN", "CANFD"],
+                               iface_filter=self._iface_filter)
+        self._frames.run()
 
     def stop(self) -> None:
         self._stop_cyclic()
         self._bus.stop()
-        super().stop()
+        self._frames.stop()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="BoAt Ethernet cyclic sender node")
-    parser.add_argument("--address", default="localhost:50051")
+    # default None so BOAT_HOST decides -- see BoAtClient.resolve_address
+    parser.add_argument("--address", default=None)
     args = parser.parse_args()
 
     node = EthCyclicSenderNode(address=args.address, iface_filter=_CAN_IFACE)

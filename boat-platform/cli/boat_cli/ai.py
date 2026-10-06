@@ -343,10 +343,21 @@ def _validate(code: str) -> str:
 
     import types
 
-    class _MockMsg:
-        can_id = 0x100; dlc = 2; data = bytes([0x01, 0x02]); flags = 0
-        ethertype = 0x0800; payload = b"\x00\x01"
+    class _MockCanMeta:
+        can_id = 0x100; dlc = 2; flags = 0; channel = 1
+
+    class _MockEthMeta:
+        ethertype = 0x0800; vlan_id = 0
         src_mac = b"\x00" * 6; dst_mac = b"\xff" * 6
+        src_ip = b""; dst_ip = b""; ip_version = 4; flags = 0
+
+    class _MockMsg:
+        """Stands in for a unified boat.v1.Frame as well as a bus signal and
+        a PDU, so one object can be handed to every callback shape."""
+        # Unified Frame: metadata lives under .can / .eth, bytes under .payload.
+        bus_type = 1  # Frame.CAN
+        can = _MockCanMeta(); eth = _MockEthMeta()
+        payload = b"\x00\x01"
         iface = "vcan0"; timestamp_ns = 0
         name = "test.signal"; number_value = 0.0; string_value = ""
         bool_value = False; bytes_value = b""
@@ -369,9 +380,8 @@ def _validate(code: str) -> str:
 
     mocks: dict[str, types.ModuleType] = {}
     for mod_name, attr, cls in [
-        ("boat.can_node", "CanNode", _mock_base),
+        ("boat.frame_node", "FrameNode", _mock_base),
         ("boat.bus_node", "BusNode", _mock_base),
-        ("boat.ethernet_node", "EthernetNode", _mock_base),
         ("boat.pdu_node", "PduNode", _mock_base),
     ]:
         mod = types.ModuleType(mod_name)
@@ -394,7 +404,9 @@ def _validate(code: str) -> str:
                 return f"{type(exc).__name__} in {obj.__name__}.__init__: {exc}"
             mock_msg = _MockMsg()
             for method, args in [
-                ("on_frame", (mock_msg, "vcan0")),
+                # FrameNode hands its callback one Frame; the old per-bus
+                # nodes passed (frame, iface).
+                ("on_frame", (mock_msg,)),
                 ("on_signal", (mock_msg,)),
                 ("on_pdu", (mock_msg,)),
             ]:

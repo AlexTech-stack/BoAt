@@ -16,13 +16,13 @@ Demonstrates:
 from __future__ import annotations
 
 from boat.bus_node import BusNode
-from boat.can_node import CanNode
+from boat.frame_node import FrameNode
 
 
-class DoorControlNode(CanNode):
+class DoorControlNode:
     def __init__(self) -> None:
-        super().__init__(address="localhost:50051", iface_filter="vcan0")
-        self._bus = BusNode(address="localhost:50051", node_id="door-control")
+        self._frames = FrameNode()
+        self._bus = BusNode(node_id="door-control")
         self._state = "closed"  # internal state persists across frames
 
         # Dispatch table: can_id → handler method
@@ -32,25 +32,30 @@ class DoorControlNode(CanNode):
             0x302: self._handle_status_query,
         }
 
-    def on_frame(self, frame, iface: str) -> None:
-        handler = self._handlers.get(frame.can_id)
+    def on_frame(self, frame) -> None:
+        handler = self._handlers.get(frame.can.can_id)
         if handler:
-            handler(frame, iface)
+            handler(frame)
 
-    def _handle_open(self, frame, iface: str) -> None:
+    def _handle_open(self, frame) -> None:
         self._state = "open"
         self._bus.publish("door.state", self._state)
-        self.send(can_id=0x310, data=bytes([0x01]), iface=iface)  # ACK open
+        self._frames.send_can(frame.iface, 0x310, bytes([0x01]))  # ACK open
 
-    def _handle_close(self, frame, iface: str) -> None:
+    def _handle_close(self, frame) -> None:
         self._state = "closed"
         self._bus.publish("door.state", self._state)
-        self.send(can_id=0x311, data=bytes([0x00]), iface=iface)  # ACK close
+        self._frames.send_can(frame.iface, 0x311, bytes([0x00]))  # ACK close
 
-    def _handle_status_query(self, frame, iface: str) -> None:
+    def _handle_status_query(self, frame) -> None:
         # Encode state as a single status byte: 0x01 = open, 0x00 = closed
         status = 0x01 if self._state == "open" else 0x00
-        self.send(can_id=0x312, data=bytes([status]), iface=iface)
+        self._frames.send_can(frame.iface, 0x312, bytes([status]))
+
+    def run(self) -> None:
+        self._frames.subscribe(self.on_frame, bus_types=["CAN", "CANFD"],
+                               iface_filter="vcan0")
+        self._frames.run()
 
 
 if __name__ == "__main__":

@@ -16,9 +16,9 @@ runner = CliRunner()
 
 PLUGIN_CODE = (
     '"""Example CAN node."""\n'
-    "from boat.can_node import CanNode\n\n"
-    "class MyPlugin(CanNode):\n"
-    "    def on_frame(self, frame, iface):\n"
+    "from boat.frame_node import FrameNode\n\n"
+    "class MyPlugin(FrameNode):\n"
+    "    def on_frame(self, frame):\n"
     "        pass\n\n"
     "if __name__ == '__main__':\n"
     "    MyPlugin().run()\n"
@@ -66,7 +66,7 @@ def test_ai_plugin(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert out_file.exists()
     content = out_file.read_text()
-    assert "CanNode" in content
+    assert "FrameNode" in content
 
 
 def test_ai_plugin_default_name() -> None:
