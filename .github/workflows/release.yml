@@ -1,3 +1,13 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+#
+# Relocated from boat-platform/.github/workflows/, where GitHub Actions never
+# saw it. Workflows are only discovered at the repository root.
+#
+# Triggers on a v*.*.* tag. The repository has no tags yet, so this has never
+# run -- push the first tag on a throwaway branch and check both jobs before
+# tagging a real release.
+
 name: release
 
 on:
@@ -8,14 +18,24 @@ on:
 jobs:
   package:
     runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: boat-platform
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ rpm
+        # Not installing cmake from apt: Ubuntu 22.04 ships 3.22 and the presets
+        # need 3.24+, so apt would shadow the runner's newer cmake.
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ rpm
+      - name: Verify toolchain versions
+        run: |
+          cmake --version
+          cargo --version
       - name: Configure + build
         run: cmake --preset release && cmake --build --preset release
       - name: Create package
-        run: cd build/release && cpack -G "TGZ;DEB;RPM"
+        working-directory: boat-platform/build/release
+        run: cpack -G "TGZ;DEB;RPM"
       - name: Verify package artifacts exist
         run: |
           ls build/release/*.tar.gz
@@ -25,10 +45,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-packages
+          # upload-artifact paths are relative to the workspace root, not to the
+          # job's working-directory.
           path: |
-            build/release/*.tar.gz
-            build/release/*.deb
-            build/release/*.rpm
+            boat-platform/build/release/*.tar.gz
+            boat-platform/build/release/*.deb
+            boat-platform/build/release/*.rpm
 
   docker-push:
     runs-on: ubuntu-22.04
@@ -36,10 +58,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+    defaults:
+      run:
+        working-directory: boat-platform
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++
       - name: Configure + build runtime binary
         run: cmake --preset release && cmake --build --preset release --target boat_gateway
       - name: Verify runtime binary exists for Dockerfile
@@ -57,8 +82,9 @@ jobs:
       - name: Build and push multi-arch runtime image
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: Dockerfile.runtime
+          # Dockerfile.runtime lives in boat-platform/ and expects it as context.
+          context: boat-platform
+          file: boat-platform/Dockerfile.runtime
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
