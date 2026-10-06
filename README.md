@@ -4,6 +4,8 @@
 
 A deterministic automotive simulation and testing platform for Software-in-the-Loop, Hardware-in-the-Loop, and CI/CD validation pipelines.
 
+**BoAt** is a name, not an acronym. The alternating capitals don't mean anything either.
+
 ---
 
 ## What is BoAt?
