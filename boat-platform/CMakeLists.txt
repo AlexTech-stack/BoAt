@@ -49,6 +49,12 @@ set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
 set(IOX2_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# gRPC_BUILD_TESTS does not reach its bundled third_party/re2, whose own
+# RE2_BUILD_TESTING defaults to ON. include(CTest) above enables testing
+# globally, so re2's add_test() calls land in *our* CTest project -- while
+# EXCLUDE_FROM_ALL on the gRPC subdirectory means their binaries are never
+# built. The result was 22 phantom "Not Run" failures in `ctest`.
+set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 # Tell gRPC to use find_package(protobuf) instead of its bundled third_party copy.
 # Combined with OVERRIDE_FIND_PACKAGE on the protobuf FetchContent below, this
 # redirects gRPC to the already-fetched protobuf and prevents duplicate gtest targets.
@@ -114,6 +120,21 @@ string(REPLACE
     "set(_gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR \"${_protobuf_src_dir}/src\")"
     _grpc_pb_content "${_grpc_pb_content}")
 file(WRITE "${_grpc_pb_cmake}" "${_grpc_pb_content}")
+
+# gRPC's bundled third_party/zlib registers its example programs as CTest tests
+# unconditionally -- there is no option to disable them, unlike re2's
+# RE2_BUILD_TESTING above. Under EXCLUDE_FROM_ALL their binaries are never
+# built, so they surfaced as 2 phantom "Not Run" failures in `ctest`. Strip the
+# add_test() calls; the executables themselves are harmless. Idempotent: on a
+# re-configure the strings are already gone and REPLACE is a no-op.
+set(_zlib_cmake "${grpc_SOURCE_DIR}/third_party/zlib/CMakeLists.txt")
+if(EXISTS "${_zlib_cmake}")
+  file(READ "${_zlib_cmake}" _zlib_content)
+  string(REPLACE "add_test(example example)" "" _zlib_content "${_zlib_content}")
+  string(REPLACE "add_test(example64 example64)" "" _zlib_content "${_zlib_content}")
+  file(WRITE "${_zlib_cmake}" "${_zlib_content}")
+endif()
+
 add_subdirectory("${grpc_SOURCE_DIR}" "${grpc_BINARY_DIR}" EXCLUDE_FROM_ALL)
 
 # iceoryx2 hardcodes WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} in its cargo build

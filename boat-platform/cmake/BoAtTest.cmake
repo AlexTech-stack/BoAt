@@ -3,6 +3,23 @@
 
 include_guard(GLOBAL)
 
+# ── boat_discover_tests ────────────────────────────────────────────────────────
+#
+# catch_discover_tests() plus the one property every BoAt test needs:
+# SKIP_RETURN_CODE. Catch2 exits 4 when every test case in the run was skipped,
+# which CTest otherwise reports as a plain failure -- so the HIL tests, which
+# skip by design unless BOAT_HIL_ENABLED is set, showed up as red entries in an
+# otherwise green run. Use this instead of catch_discover_tests() directly, so a
+# future SKIP() is reported as a skip rather than becoming a mystery failure.
+#
+# Extra arguments are appended inside the PROPERTIES list, so pass bare
+# key/value pairs (e.g. `boat_discover_tests(my_test TIMEOUT 300)`), never
+# another PROPERTIES keyword -- a second one would be read as a property name.
+#
+function(boat_discover_tests target_name)
+  catch_discover_tests(${target_name} PROPERTIES SKIP_RETURN_CODE 4 ${ARGN})
+endfunction()
+
 # ── add_boat_test ──────────────────────────────────────────────────────────────
 #
 # Creates a Catch2 test executable with the test harness.
@@ -28,5 +45,5 @@ function(add_boat_test target_name)
     boat_hil
     Catch2::Catch2WithMain
   )
-  catch_discover_tests(${target_name})
+  boat_discover_tests(${target_name})
 endfunction()
