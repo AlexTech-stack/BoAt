@@ -798,7 +798,31 @@ at `BOAT_NODE_TICK_MS`/`_US` rather than a hard-coded 1 ms.
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`.
-- Docker images pushed to `ghcr.io/boat-platform/boat-platform:*`.
+- Docker images are tagged `ghcr.io/<owner>/<repo>` lowercased, derived from `github.repository` in CI, i.e. `ghcr.io/alextech-stack/boat:*` for this repo.
+  GHCR namespaces follow the GitHub owner and the registry rejects uppercase, so the old
+  hardcoded `ghcr.io/boat-platform/boat-platform` would have been denied on the first tag.
+
+## Project meta files
+
+Beside `LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md` at the repo root:
+
+- `CONTRIBUTING.md` — prerequisites, both test invocations, the three ctest gotchas
+  (`boat_discover_tests`, `-R` matching case names not target names, third-party deps
+  registering their tests), the SPDX header rule, stub regeneration, the CLAUDE.md/AGENTS.md
+  dual-file rule, the determinism constraints, and the versioning policy (project semver
+  pre-1.0, the separately versioned plugin ABI, gRPC additive-where-possible).
+- `SECURITY.md` — private reporting, and the permissive-by-design defaults stated plainly:
+  the gRPC API is unauthenticated and plaintext unless TLS is enabled, the gateway `dlopen()`s
+  whatever plugin path it is given, and frame-send/replay write to real hardware when a physical
+  interface is open.
+- `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1 by reference.
+- `CHANGELOG.md` — Keep a Changelog. `[0.1.0]` describes the state at the first tag rather than
+  replaying the ~320 commits before it; breaking changes are marked **BREAKING**.
+- `.github/ISSUE_TEMPLATE/{bug_report,feature_request,config}.yml` and
+  `.github/PULL_REQUEST_TEMPLATE.md` — the PR checklist is where the dual-file rule is enforced
+  socially, since nothing fails when the two files disagree.
+
+If you change a fact one of these states, update it there too.
 
 ## License
 

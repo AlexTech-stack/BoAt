@@ -69,6 +69,13 @@ jobs:
         run: cmake --preset release && cmake --build --preset release --target boat_gateway
       - name: Verify runtime binary exists for Dockerfile
         run: ls build/release/src/gateway/grpc_gateway/boat_gateway
+      - name: Compute image name
+        # GHCR namespaces follow the GitHub owner, so a hardcoded
+        # ghcr.io/boat-platform/... is denied from any other account -- and the
+        # registry rejects uppercase, which `github.repository` contains. Derive
+        # and lowercase it so this works in whatever namespace the repo lives.
+        id: img
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
@@ -88,5 +95,5 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/boat-platform/boat-platform:${{ github.ref_name }}
-            ghcr.io/boat-platform/boat-platform:latest
+            ${{ steps.img.outputs.name }}:${{ github.ref_name }}
+            ${{ steps.img.outputs.name }}:latest

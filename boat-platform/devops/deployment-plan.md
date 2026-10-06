@@ -20,7 +20,7 @@
   - `linux/amd64`
   - `linux/arm64`
 - Build toolchain: Docker Buildx
-- Registry: `ghcr.io/boat-platform/boat-platform`
+- Registry: `ghcr.io/<owner>/<repo>` lowercased, derived in CI from `github.repository` (`ghcr.io/alextech-stack/boat` for this repo)
 
 ## Artifact Versioning
 

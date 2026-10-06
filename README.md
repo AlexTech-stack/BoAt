@@ -1,6 +1,11 @@
 # BoAt
 
-> **⚠ Work in Progress** — This project is under active development. APIs, configuration, and behavior may change without notice. Contributions and feedback welcome!
+> **Status: pre-1.0.** The gateway, the Python SDK/CLI and the plugin ABI are in active use and
+> covered by CI — 164 C++ tests and 538 Python tests, plus ASan, TSan, and a determinism check
+> run under CPU load. The gRPC surface and the C plugin ABI may still change between minor
+> versions: the ABI is versioned (currently **v9**) and a mismatched plugin is rejected at load
+> with a clear error rather than misbehaving at runtime. See [CHANGELOG.md](CHANGELOG.md) for
+> what has changed and [CONTRIBUTING.md](CONTRIBUTING.md) to get involved.
 
 A deterministic automotive simulation and testing platform for Software-in-the-Loop, Hardware-in-the-Loop, and CI/CD validation pipelines.
 
@@ -97,6 +102,20 @@ boat sim stop  <simulation_id>
 - [API specification](boat-platform/docs/api/api-specification.md)
 - [Project plan](boat-platform/project-plan.md)
 - [AGENTS.md](AGENTS.md) — Build, run, and development reference
+
+## Contributing
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the build, the test suites, and the house rules —
+including the two that are easy to break by accident: `CLAUDE.md` and `AGENTS.md` must never
+disagree, and nothing in core, scheduling or replay may introduce a clock, unseeded randomness
+or nondeterministic ordering.
+
+- [CHANGELOG.md](CHANGELOG.md) — what changed, and which changes were breaking
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [SECURITY.md](SECURITY.md) — how to report a vulnerability, and the permissive defaults you
+  should know about before deploying BoAt anywhere exposed
+- `backlog/*.md` — known gaps, gap analyses and incident write-ups, often more detailed than the
+  issue tracker. Worth grepping before assuming a rough edge is unknown.
 
 ## License
 

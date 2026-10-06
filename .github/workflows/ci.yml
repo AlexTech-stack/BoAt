@@ -202,6 +202,13 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Compute image name
+        # GHCR namespaces follow the GitHub owner, so a hardcoded
+        # ghcr.io/boat-platform/... is denied from any other account -- and the
+        # registry rejects uppercase, which `github.repository` contains. Derive
+        # and lowercase it so this works in whatever namespace the repo lives.
+        id: img
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
@@ -222,7 +229,7 @@ jobs:
           file: boat-platform/Dockerfile.runtime
           push: ${{ github.event_name == 'push' }}
           platforms: linux/amd64,linux/arm64
-          tags: ghcr.io/boat-platform/boat-platform:ci-${{ github.sha }}
+          tags: ${{ steps.img.outputs.name }}:ci-${{ github.sha }}
 
   hil-smoke:
     runs-on: ubuntu-22.04

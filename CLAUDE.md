@@ -25,6 +25,13 @@ The bulk of the code lives under `boat-platform/`. `admin_gui/` (PySide6 desktop
 ## License
 
 The project is **Apache-2.0** (`LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md` at the repo root).
+Community and release files sit beside them: `CONTRIBUTING.md` (build, test, and the house rules
+-- including the CLAUDE.md/AGENTS.md dual-file rule and the determinism constraints),
+`SECURITY.md` (reporting, plus an honest account of the permissive defaults: unauthenticated
+gRPC, arbitrary `.so` loading, replay writing to physical buses), `CODE_OF_CONDUCT.md`,
+`CHANGELOG.md` (Keep a Changelog; breaking changes marked), and `.github/ISSUE_TEMPLATE/` +
+`PULL_REQUEST_TEMPLATE.md`. **If you change a fact these state, update them too** -- the PR
+template's checklist is where contributors are reminded of the dual-file rule.
 
 - **New source files get a two-line SPDX header** matching the surrounding files — the
   comment prefix follows the language (`//`, `#`, `--`):
@@ -217,7 +224,7 @@ Each web service resolves the SDK via `sys.path.insert(0, ...)` relative to its 
 
 - **`vcan*` vs physical** driver selection is decided at gateway startup — new driver behavior usually belongs in `VirtualCanDriver` vs `PhysicalCanDriver`.
 - `add_boat_plugin()` (`cmake/BoAtPlugin.cmake`) is the macro for registering a new plugin target; it also copies an optional `<name>.schema.json` config sidecar next to the `.so`, which `admin_gui` reads to build per-key config fields. `BoAtProto.cmake` wraps protobuf generation.
-- Coverage: `gcovr --root . --exclude build/ --xml coverage.xml`. Packaging: `cpack -G "TGZ;DEB;RPM"`. Docker: `ghcr.io/boat-platform/boat-platform:*`.
+- Coverage: `gcovr --root . --exclude build/ --xml coverage.xml`. Packaging: `cpack -G "TGZ;DEB;RPM"`. Docker: images are tagged `ghcr.io/<owner>/<repo>` lowercased, derived from `github.repository` in CI -- so `ghcr.io/alextech-stack/boat:*` for this repo. It was hardcoded to `ghcr.io/boat-platform/...`, a namespace the repo does not live in, which GHCR would have denied on the first tag push.
 - System-test structure/conventions: `test/Structure.md`. Per-feature manual runbooks: `boat-platform/docs/testing/`. LLM cost-control guidance: `boat-platform/docs/ai/llm-cost-control.md`.
 - Open issues and incident write-ups live in `backlog/*.md` — worth grepping before assuming a rough edge is unknown.
 
