@@ -72,8 +72,6 @@ class TestTestCanBus:
         result = bus.send(0x100, b'\x01\x02')
         assert result is True
         mock_client.frame.SendFrame.assert_called_once()
-        # Nothing should reach the retired per-bus service.
-        mock_client.can.SendCanFrame.assert_not_called()
 
     def test_send_builds_a_unified_can_frame(self) -> None:
         """The field mapping is the part a mock cannot check for us."""
@@ -147,7 +145,6 @@ class TestTestEthBus:
         result = bus.send(dst_mac=b'\x00' * 6, ethertype=0x88B5, payload=b'test')
         assert result is True
         mock_client.frame.SendFrame.assert_called_once()
-        mock_client.ethernet.SendFrame.assert_not_called()
 
     def test_send_builds_a_unified_eth_frame(self) -> None:
         mock_client = MagicMock()

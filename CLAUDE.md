@@ -61,7 +61,7 @@ CLI commands, it is pre-v8 and no longer correct.
 
 5. **PduRouter is a plugin.** It lives in `src/plugins/pdu_router/` (`pdu_router.so`) and is loaded like any other plugin — it is *not* auto-loaded into the gateway core. PDU routing, transmission engine, groups, and deadline monitoring live there. gRPC PDU calls are **delegated** to the plugin. The five built-in plugins are `pdu_router`, `can_tp`, `someip`, `tcp`, `probe`.
 
-6. **`FrameService` gRPC + `boat frame` CLI.** A unified `FrameService` provides send/subscribe for **all** bus types. `boat frame send` / `boat frame subscribe` / `boat frame list-ifaces` are the CLI verbs. The old `boat can` / `boat eth` Typer commands are **removed outright** — not deprecated wrappers, gone (there is no `can.py`/`eth.py` in `boat_cli/`). There is no CLI hardware-detection command either; use `ip -d link show type can`. `proto/boat/v1/` holds **18 `.proto` files declaring 16 gRPC services**.
+6. **`FrameService` gRPC + `boat frame` CLI.** A unified `FrameService` provides send/subscribe for **all** bus types. `boat frame send` / `boat frame subscribe` / `boat frame list-ifaces` are the CLI verbs. The old `boat can` / `boat eth` Typer commands are **removed outright** — not deprecated wrappers, gone (there is no `can.py`/`eth.py` in `boat_cli/`). There is no CLI hardware-detection command either; use `ip -d link show type can`. The per-bus `CanService` / `EthernetService` are **deleted** too — their send, subscribe and interface-listing RPCs all live on `FrameService` now (`FrameService.ListInterfaces` replaced `CanService.ListBuses` + `EthernetService.ListInterfaces`), and the deprecated `CanNode` / `EthernetNode` SDK classes went with them. `proto/boat/v1/` holds **16 `.proto` files declaring 14 gRPC services**.
 
 7. **Plugin config is data-driven.** Plugins take JSON config appended to their path as a query string: `plugin.so?{"iface":"vcan0"}`. `BOAT_NODE_PLUGINS` is split brace-aware, so commas inside a `{...}` config don't split the entry. TCP's old dedicated C API was removed — TCP is now a config-driven, gateway-resident v9 plugin (`tcp.so?{"mode":"server","listen_port":8080,...}`).
 
@@ -104,7 +104,7 @@ Python SDK + CLI:
 
 ```bash
 pip install -e ./boat-platform/sdk/python[dev] && pip install -e ./boat-platform/cli
-pytest boat-platform/sdk/python/tests boat-platform/cli/tests -v
+pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests -v
 ```
 
 Toolchain: CMake **3.24+** (Ubuntu 22.04's 3.22 is too old), Ninja, g++/C++20, `libacl1-dev`, and a **Rust toolchain** (`cargo`) — build-time-only transitive dep of iceoryx2 (runtime SHM IPC for payloads >4KB).
@@ -172,7 +172,7 @@ same way. There is still no JSON *parser* in the C++ tree (plugin config is
 passed through verbatim and quoted, never re-parsed); `effective_config.cpp`
 only emits.
 
-Programmatic: `from boat.client import BoAtClient` / `from boat.frame_node import FrameNode` (e.g. `node.send_can("vcan0", 0x123, b"...")`). Every `*Node` class and `BoAtClient` resolve their gateway address the same way: explicit `address=` > `BOAT_HOST` env var > `localhost:50051` — which is what keeps node scripts portable across gateways. The `boat` CLI's `--host` flag follows the same order.
+Programmatic: `from boat.client import BoAtClient` / `from boat.frame_node import FrameNode` (e.g. `node.send_can("vcan0", 0x123, b"...")`). `FrameNode` is **composed, not subclassed** — `subscribe(callback, bus_types=[...], iface_filter="")` takes a callback, and the callback receives a unified `boat.v1.Frame` whose metadata is under `.can` / `.eth` and whose bytes are `.payload`. Every `*Node` class and `BoAtClient` resolve their gateway address the same way: explicit `address=` > `BOAT_HOST` env var > `localhost:50051` — which is what keeps node scripts portable across gateways. The `boat` CLI's `--host` flag follows the same order.
 
 Dispatch quirk: `python3 -m boat` routes `can|pdu|eth|db` to `boat/cmd.py` (one-shot, PDU-database-driven `can send`/`eth send` only — unrelated to the `boat` console script above, which has no `can`/`eth` subcommand), everything else to `boat/cli.py` (REPL).
 

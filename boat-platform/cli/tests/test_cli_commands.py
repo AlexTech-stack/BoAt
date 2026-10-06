@@ -78,25 +78,13 @@ def _fake_client() -> SimpleNamespace:
                             rx_state="IDLE", tx_state="IDLE"),
         ])),
     )
-    can = SimpleNamespace(
-        ListBuses=Mock(return_value=SimpleNamespace(
-            buses=[SimpleNamespace(iface="vcan0", driver="vcan",
-                                   state="unknown", fd_support=False, bitrate=0)]
-        )),
-        SendCanFrame=Mock(return_value=SimpleNamespace(accepted=True)),
-        SubscribeCanFrames=Mock(return_value=[]),
-    )
-    eth_stream = Mock()
-    eth_stream.__iter__ = Mock(return_value=iter([]))
-    eth_stream.cancel = Mock()
-    ethernet = SimpleNamespace(
-        ListInterfaces=Mock(return_value=SimpleNamespace(ifaces=["veth0", "veth1"])),
-        SendFrame=Mock(return_value=SimpleNamespace(accepted=True)),
-        SubscribeFrames=Mock(return_value=eth_stream),
-    )
+    # No `can`/`ethernet`: BoAtClient no longer exposes them, and a fake that
+    # offers attributes the real client lacks lets a test pass against code
+    # that would fail in production. Tests needing FrameService set .frame
+    # themselves.
     return SimpleNamespace(
         simulation=simulation, scenario=scenario, replay=replay, plugin=plugin,
-        node_plugin=node_plugin, can=can, can_tp=can_tp, ethernet=ethernet, close=lambda: None,
+        node_plugin=node_plugin, can_tp=can_tp, close=lambda: None,
     )
 
 
@@ -447,7 +435,7 @@ def test_trace_replay_applies_id_filter_and_shows_it_in_banner(tmp_path) -> None
         writer.on_message_received(can.Message(arbitration_id=0x200, data=[4], channel=4))
 
     fake_stub = Mock()
-    fake_stub.SendCanFrame = Mock(return_value=SimpleNamespace(accepted=True))
+    fake_stub.SendFrame = Mock(return_value=SimpleNamespace(accepted=True))
 
     with patch("boat.trace_replay.TraceReplayer._get_stub", return_value=fake_stub):
         result = runner.invoke(app, [
@@ -458,7 +446,8 @@ def test_trace_replay_applies_id_filter_and_shows_it_in_banner(tmp_path) -> None
     assert result.exit_code == 0
     assert "0x583" in result.output  # banner echoes the applied id filter
 
-    sent_ids = [call.args[0].frame.can_id for call in fake_stub.SendCanFrame.call_args_list]
+    # Unified Frame: the CAN id is under .can, not on the frame itself.
+    sent_ids = [call.args[0].frame.can.can_id for call in fake_stub.SendFrame.call_args_list]
     assert sent_ids == [0x583, 0x583]
 
 
@@ -635,8 +624,6 @@ def test_frame_list_ifaces_uses_frame_service() -> None:
     assert result.exit_code == 0
     assert "vcan0" in result.output and "veth0" in result.output
     assert "CAN" in result.output and "ETHERNET" in result.output
-    # The retired per-bus listing RPCs must not be consulted.
-    assert not fake_client.can.ListBuses.called
 
 
 def test_frame_send_auto_picks_iface_by_bus_type() -> None:

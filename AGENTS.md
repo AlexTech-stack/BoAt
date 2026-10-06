@@ -31,7 +31,7 @@
     - `tcp/` — TCP transport plugin (state machine only; transmits via the core Eth registry when gateway-resident)
     - `probe/` — gateway conformance probe (verifies delivery, declared_buses filtering, self-sent tagging, round-trip from inside the dispatch loop)
   - `src/replay/` — Replay engine
-  - `proto/boat/v1/` — 18 protobuf files declaring 16 gRPC services
+  - `proto/boat/v1/` — 16 protobuf files declaring 14 gRPC services
   - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
   - `sdk/cpp/include/boat/` — C++ SDK headers
     - `plugin.h` — Plugin ABI v9 (unified `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`)
@@ -205,8 +205,8 @@ node = FrameNode()              # or FrameNode("192.168.1.50:50052")
 node.send_can("vcan0", 0x123, b"hello")
 ```
 
-All `*Node` classes (`FrameNode`, `BusNode`, `CanNode`, `EthernetNode`, `PduNode`,
-`PduMessageNode`) and `BoAtClient` resolve their gateway address the same way:
+All `*Node` classes (`FrameNode`, `BusNode`, `PduNode`, `PduMessageNode`) and
+`BoAtClient` resolve their gateway address the same way:
 explicit `address=` argument > `BOAT_HOST` env var > `localhost:50051`. This is
 what keeps a node script portable across gateways/devices -- write it once with
 no address hardcoded, then `BOAT_HOST=192.168.1.50:50052 python my_node.py`

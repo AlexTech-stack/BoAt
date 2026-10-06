@@ -898,13 +898,13 @@ class TraceReplayer:
         if self._stub is not None:
             return self._stub
         try:
-            from boat.v1 import can_pb2_grpc
+            from boat.v1 import frame_pb2_grpc
         except ImportError as e:
             raise TraceReplayError(f"Cannot import boat gRPC stubs: {e}") from e
         # Via make_channel rather than grpc.insecure_channel directly, so a
         # TLS-enabled gateway is reachable here as well as from BoAtClient.
         channel     = make_channel(self.gateway)
-        self._stub  = can_pb2_grpc.CanServiceStub(channel)
+        self._stub  = frame_pb2_grpc.FrameServiceStub(channel)
         return self._stub
 
     def _iface_for_channel(self, channel: int) -> str:
@@ -959,7 +959,7 @@ class TraceReplayer:
             ``time.monotonic()`` when the last message was sent, or *None* if
             no messages were sent.
         """
-        from boat.v1 import can_pb2
+        from boat.v1 import frame_pb2
 
         sent            = 0
         prev_trace_ts: Optional[float] = None
@@ -1005,13 +1005,17 @@ class TraceReplayer:
                 if getattr(msg, "bitrate_switch", False):
                     flags |= _CANFD_BRS
 
-                frame = can_pb2.CanFrame(
-                    can_id       = msg.arbitration_id,
-                    dlc          = len(msg.data),
-                    data         = bytes(msg.data),
-                    timestamp_ns = int(msg.timestamp * 1_000_000_000),
+                frame = frame_pb2.Frame(
+                    bus_type     = (frame_pb2.Frame.CANFD if flags & _CANFD_FDF
+                                    else frame_pb2.Frame.CAN),
                     iface        = iface,
-                    flags        = flags,
+                    payload      = bytes(msg.data),
+                    timestamp_ns = int(msg.timestamp * 1_000_000_000),
+                    can          = frame_pb2.CanMetadata(
+                        can_id = msg.arbitration_id,
+                        dlc    = len(msg.data),
+                        flags  = flags,
+                    ),
                 )
 
                 if self.on_frame is not None:
@@ -1019,12 +1023,10 @@ class TraceReplayer:
 
                 # ── send ──────────────────────────────────────────────────────
                 try:
-                    stub.SendCanFrame(
-                        can_pb2.SendCanFrameRequest(
-                            simulation_id = self.simulation_id,
-                            frame         = frame,
-                        )
-                    )
+                    # SendFrameRequest has no simulation_id: FrameService
+                    # routes by interface, and no caller set it to anything
+                    # but "" here.
+                    stub.SendFrame(frame_pb2.SendFrameRequest(frame=frame))
                 except Exception as e:
                     raise TraceReplayError(
                         f"gRPC error sending frame {sent}: {e}"
