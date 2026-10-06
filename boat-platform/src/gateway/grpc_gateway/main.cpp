@@ -26,10 +26,8 @@
 #include "bus_service_impl.h"
 #include "can_bus_registry.h"
 #include "tick_authority.h"
-#include "can_service_impl.h"
 #include "debug_service_impl.h"
 #include "ethernet_bus_registry.h"
-#include "ethernet_service_impl.h"
 #include "frame_service_impl.h"
 #include "rpc_audit_interceptor.h"
 #include "rpc_audit_log.h"
@@ -632,7 +630,6 @@ int main() {
   };
 
   boat::gateway::BusServiceImpl      bus_impl(audit_log, signal_bus);
-  boat::gateway::EthernetServiceImpl ethernet_impl(ctx);
   boat::gateway::SimulationServiceImpl simulation_impl(sim, can_registry, eth_registry);
   boat::gateway::SignalServiceImpl signal_impl(ctx);
   boat::gateway::ScenarioServiceImpl scenario_impl(ctx);
@@ -642,7 +639,6 @@ int main() {
   boat::gateway::MetricsServiceImpl metrics_impl(ctx);
   boat::gateway::TraceServiceImpl trace_impl(ctx);
   boat::gateway::FaultServiceImpl fault_impl(ctx);
-  boat::gateway::CanServiceImpl can_impl(ctx);
   boat::gateway::PduServiceImpl pdu_impl(ctx);
   boat::gateway::CanTpServiceImpl can_tp_impl(ctx);
   boat::gateway::DebugServiceImpl debug_impl(audit_log, effective_config);
@@ -675,7 +671,6 @@ int main() {
       std::make_unique<boat::gateway::RpcAuditInterceptorFactory>(audit_log));
   builder.experimental().SetInterceptorCreators(std::move(interceptors));
   builder.RegisterService(&bus_impl);
-  builder.RegisterService(&ethernet_impl);
   builder.RegisterService(&simulation_impl);
   builder.RegisterService(&signal_impl);
   builder.RegisterService(&scenario_impl);
@@ -685,7 +680,6 @@ int main() {
   builder.RegisterService(&metrics_impl);
   builder.RegisterService(&trace_impl);
   builder.RegisterService(&fault_impl);
-  builder.RegisterService(&can_impl);
   builder.RegisterService(&pdu_impl);
   builder.RegisterService(&can_tp_impl);
   builder.RegisterService(&debug_impl);

@@ -24,7 +24,7 @@ import threading
 import time
 
 from boat.bus_node import BusNode
-from boat.can_node import CanNode
+from boat.frame_node import FrameNode
 
 _START_ID     = 0x111
 _STOP_ID      = 0x112
@@ -47,14 +47,17 @@ class _PayloadListener(BusNode):
             self._on_payload(signal.bytes_value)
 
 
-class CyclicSenderNode(CanNode):
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+class CyclicSenderNode:
+    """Composes a FrameNode rather than subclassing it: the unified node takes
+    a callback instead of an on_frame() override."""
+
+    def __init__(self, address: str | None = None, iface_filter: str = "") -> None:
+        self._frames = FrameNode(address)
+        self._iface_filter = iface_filter
         self._active = threading.Event()   # set = cyclic sending ON
         self._cyclic_thread: threading.Thread | None = None
         self._payload_lock = threading.Lock()
         self._payload = bytearray(_CYCLIC_DATA)
-        address = kwargs.get("address", "localhost:50051")
         self._bus = _PayloadListener(address=address, on_payload=self._update_payload)
 
     def _update_payload(self, data: bytes) -> None:
@@ -62,10 +65,10 @@ class CyclicSenderNode(CanNode):
             self._payload = bytearray(data)
         print(f"[cyclic] payload updated → {data.hex(':')}")
 
-    def on_frame(self, frame, iface: str) -> None:
-        if frame.can_id == _START_ID:
+    def on_frame(self, frame) -> None:
+        if frame.can.can_id == _START_ID:
             self._start_cyclic()
-        elif frame.can_id == _STOP_ID:
+        elif frame.can.can_id == _STOP_ID:
             self._stop_cyclic()
 
     # ── cyclic control ──────────────────────────────────────────────────────
@@ -92,7 +95,7 @@ class CyclicSenderNode(CanNode):
         while self._active.is_set():
             with self._payload_lock:
                 data = bytes(self._payload)
-            self.send(_CYCLIC_ID, data, iface=_CYCLIC_IFACE)
+            self._frames.send_can(_CYCLIC_IFACE, _CYCLIC_ID, data)
             # Sleep in small increments so stop is responsive
             deadline = time.monotonic() + _CYCLE_S
             while self._active.is_set() and time.monotonic() < deadline:
@@ -100,17 +103,20 @@ class CyclicSenderNode(CanNode):
 
     def run(self) -> None:
         self._bus.run_background(names=[_BUS_SIGNAL])
-        super().run()
+        self._frames.subscribe(self.on_frame, bus_types=["CAN", "CANFD"],
+                               iface_filter=self._iface_filter)
+        self._frames.run()
 
     def stop(self) -> None:
         self._stop_cyclic()
         self._bus.stop()
-        super().stop()
+        self._frames.stop()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="BoAt cyclic sender node")
-    parser.add_argument("--address", default="localhost:50051")
+    # default None so BOAT_HOST decides -- see BoAtClient.resolve_address
+    parser.add_argument("--address", default=None)
     args = parser.parse_args()
 
     node = CyclicSenderNode(address=args.address, iface_filter="vcan0")

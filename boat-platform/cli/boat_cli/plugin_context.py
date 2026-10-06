@@ -4,7 +4,7 @@
 """System prompt builder for `boat ai plugin`.
 
 Injects:
-  1. SDK class reference (CanNode, BusNode, EthernetNode, PduNode) — compact signatures.
+  1. SDK class reference (FrameNode, BusNode, PduNode) — compact signatures.
   2. One complete reference example per base class.
   3. Validation rules for generated code.
   4. Live gateway state (CAN buses, Ethernet interfaces, known bus signals).
@@ -21,17 +21,26 @@ _SDK_API_REFERENCE = """\
 
 Import paths and available methods — use ONLY what is listed here.
 
-### CanNode  (from boat.can_node import CanNode)
-CanNode(address="localhost:50051", iface_filter="", sim_id="")
-  iface_filter: "" = ALL interfaces.
-  .on_frame(frame, iface: str)  ← override this
-  .send(can_id: int, data: bytes, iface: str) -> bool
-  .run()             # blocks
-  .run_background()  # returns Thread
+### FrameNode  (from boat.frame_node import FrameNode)
+Unified node for every bus type. Compose it; do NOT subclass it -- it takes a
+callback rather than an on_frame() override.
+
+FrameNode(address=None, bus_types=None)   # address=None -> BOAT_HOST, then localhost:50051
+  .subscribe(callback, bus_types=["CAN","CANFD"], iface_filter="")
+        bus_types: CAN, CANFD, ETHERNET, TCP, PDU; None/[] = all.
+        iface_filter: "" = ALL interfaces.
+  .send_can(iface: str, can_id: int, data: bytes, is_fd=False, flags=0) -> bool
+  .send_eth(iface: str, dst_mac: bytes, src_mac: bytes, ethertype: int,
+            payload: bytes, vlan_id=0) -> bool
+  .run()   # blocks
   .stop()
 
-  frame fields: frame.can_id (int), frame.dlc (int), frame.data (bytes),
-                frame.iface (str), frame.flags (int)
+  callback receives one boat.v1.Frame:
+    frame.bus_type (enum), frame.iface (str), frame.payload (bytes),
+    frame.timestamp_ns (int)
+    CAN:      frame.can.can_id, frame.can.dlc, frame.can.flags
+    ETHERNET: frame.eth.ethertype, frame.eth.src_mac, frame.eth.dst_mac,
+              frame.eth.vlan_id
 
 ### BusNode  (from boat.bus_node import BusNode)
 BusNode(address="localhost:50051", node_id="")
@@ -44,16 +53,6 @@ BusNode(address="localhost:50051", node_id="")
   signal fields: signal.name (str), signal.number_value (float),
                  signal.string_value (str), signal.bool_value (bool),
                  signal.bytes_value (bytes), signal.timestamp_ns (int)
-
-### EthernetNode  (from boat.ethernet_node import EthernetNode)
-EthernetNode(address="localhost:50051", iface_filter="", ethertype_filter=0)
-  .on_frame(frame, iface: str)  ← override this
-  .send(ethertype: int, payload: bytes, iface, src_mac=b"", dst_mac=b"") -> bool
-  .run() / .run_background() / .stop()
-
-  frame fields: frame.iface (str), frame.src_mac (bytes), frame.dst_mac (bytes),
-                frame.ethertype (int), frame.payload (bytes),
-                frame.timestamp_ns (int)
 
 ### PduNode  (from boat.pdu_node import PduNode)
 PduNode(address="localhost:50051", pdu_ids=None)
@@ -71,8 +70,7 @@ PduNode(address="localhost:50051", pdu_ids=None)
 
 ### BoAtClient  (from boat.client import BoAtClient)
 BoAtClient(address="localhost:50051")
-  .can             → CanServiceStub
-  .ethernet        → EthernetServiceStub
+  .frame           → FrameServiceStub
   .pdu             → PduServiceStub
   .bus             → BusServiceStub
   .simulation      → SimulationServiceStub
@@ -90,16 +88,15 @@ _SYSTEM_INTRO = """\
 You are an expert BoAt platform plugin developer.
 
 BoAt is an automotive simulation platform. A BoAt plugin is a standalone Python
-script that connects to the gateway via gRPC. Plugins subclass one of the provided
-base classes, override a single callback, and call run() to start.
+script that connects to the gateway via gRPC. A plugin composes FrameNode (for
+frames on any bus) and/or subclasses BusNode/PduNode, then calls run() to start.
 
 Allowed imports — use NOTHING else:
-  from boat.can_node      import CanNode
+  from boat.frame_node    import FrameNode
   from boat.bus_node      import BusNode
-  from boat.ethernet_node import EthernetNode
   from boat.pdu_node      import PduNode
   from boat.client        import BoAtClient
-  from boat.v1            import can_pb2, bus_pb2, pdu_pb2, ethernet_pb2
+  from boat.v1            import frame_pb2, bus_pb2, pdu_pb2
   import threading        (stdlib — only for cyclic/timer logic)
   import time             (stdlib — only if absolutely needed)
 
@@ -112,8 +109,8 @@ FORBIDDEN — never use:
 Rules:
 1. Generate a single self-contained Python script.
 2. Only call methods defined in the SDK API Reference below.
-3. To listen on multiple interfaces at once, use iface_filter="" and check
-   the iface argument inside on_frame().
+3. To listen on multiple interfaces at once, pass iface_filter="" to
+   FrameNode.subscribe() and check frame.iface inside the callback.
 4. For cyclic/periodic sending use threading.Timer — follow the cyclic example.
 5. Always include `if __name__ == "__main__":` at the bottom.
 6. Add a one-line docstring at the top describing what the plugin does.
@@ -193,19 +190,19 @@ def _query_gateway(host: str) -> dict[str, Any]:
     try:
         import grpc
         from boat.client import BoAtClient
-        from boat.v1 import can_pb2, bus_pb2, ethernet_pb2
+        from boat.v1 import bus_pb2, frame_pb2
 
         client = BoAtClient(address=host)
         try:
-            resp = client.can.ListBuses(can_pb2.ListBusesRequest())
-            result["can_ifaces"] = [b.iface for b in resp.buses]
-        except Exception:
-            pass
-        try:
-            resp = client.ethernet.ListInterfaces(
-                ethernet_pb2.ListEthernetInterfacesRequest()
-            )
-            result["eth_ifaces"] = list(resp.ifaces)
+            resp = client.frame.ListInterfaces(frame_pb2.ListInterfacesRequest())
+            result["can_ifaces"] = [
+                i.iface for i in resp.interfaces
+                if i.bus_type in (frame_pb2.Frame.CAN, frame_pb2.Frame.CANFD)
+            ]
+            result["eth_ifaces"] = [
+                i.iface for i in resp.interfaces
+                if i.bus_type == frame_pb2.Frame.ETHERNET
+            ]
         except Exception:
             pass
         try:

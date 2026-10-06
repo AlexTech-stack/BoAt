@@ -27,7 +27,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from boat.client import BoAtClient
-from boat.v1 import bus_pb2, can_pb2, ethernet_pb2
+from boat.v1 import bus_pb2, frame_pb2
 from boat.pcapng import PcapngWriter, DLT_CAN_SOCKETCAN, DLT_EN10MB, pack_can_frame, pack_eth_frame
 try:
     import can as python_can
@@ -200,14 +200,14 @@ def _write_can(session: Session, frame: Any, ts: float) -> None:
         return
     ch = session._channel_map.get(frame.iface, 0)
     if session.fmt in ("asc", "blf"):
-        arb_id = frame.can_id & 0x1FFFFFFF
-        is_ext = bool(frame.can_id & _CAN_EFF_FLAG)
-        is_fd  = bool(frame.flags & 0x04)
-        is_brs = bool(frame.flags & 0x01)
+        arb_id = frame.can.can_id & 0x1FFFFFFF
+        is_ext = bool(frame.can.can_id & _CAN_EFF_FLAG)
+        is_fd  = bool(frame.can.flags & 0x04)
+        is_brs = bool(frame.can.flags & 0x01)
         msg = python_can.Message(
             timestamp        = ts,
             arbitration_id   = arb_id,
-            data             = bytes(frame.data[:frame.dlc]),
+            data             = bytes(frame.payload[:frame.can.dlc]),
             channel          = ch,
             is_extended_id   = is_ext,
             is_fd            = is_fd,
@@ -218,15 +218,18 @@ def _write_can(session: Session, frame: Any, ts: float) -> None:
         iface_id = session._pcapng_ifaces.get(frame.iface)
         if iface_id is None:
             return
-        w.write_can(iface_id, ts, frame.can_id, frame.dlc, bytes(frame.data[:frame.dlc]), frame.flags)
+        w.write_can(iface_id, ts, frame.can.can_id, frame.can.dlc,
+                    bytes(frame.payload[:frame.can.dlc]), frame.can.flags)
     else:
-        w.write(ts, frame.can_id, frame.dlc, bytes(frame.data[:frame.dlc]), frame.flags)
+        w.write(ts, frame.can.can_id, frame.can.dlc,
+                bytes(frame.payload[:frame.can.dlc]), frame.can.flags)
 def _run_can_sub(session: Session) -> None:
     client = stream = None
     try:
         client = BoAtClient(session.gateway)
-        stream = client.can.SubscribeCanFrames(
-            can_pb2.SubscribeCanFramesRequest(iface=""))
+        stream = client.frame.SubscribeFrames(
+            frame_pb2.SubscribeFramesRequest(
+                bus_types=[frame_pb2.Frame.CAN, frame_pb2.Frame.CANFD]))
         session._can_stream = stream
         for frame in stream:
             if session._stop.is_set():
@@ -249,8 +252,9 @@ def _run_eth_sub(session: Session) -> None:
     client = stream = None
     try:
         client = BoAtClient(session.gateway)
-        stream = client.ethernet.SubscribeFrames(
-            ethernet_pb2.SubscribeEthernetFramesRequest(iface="", ethertype=0))
+        stream = client.frame.SubscribeFrames(
+            frame_pb2.SubscribeFramesRequest(
+                bus_types=[frame_pb2.Frame.ETHERNET]))
         session._eth_stream = stream
         for frame in stream:
             if session._stop.is_set():
@@ -265,9 +269,11 @@ def _run_eth_sub(session: Session) -> None:
                 iface_id = session._pcapng_ifaces.get(frame.iface)
                 if iface_id is None:
                     continue
-                w.write_eth(iface_id, ts, frame.dst_mac, frame.src_mac, frame.ethertype, frame.payload)
+                w.write_eth(iface_id, ts, frame.eth.dst_mac, frame.eth.src_mac,
+                            frame.eth.ethertype, frame.payload)
             else:
-                w.write(ts, frame.dst_mac, frame.src_mac, frame.ethertype, frame.payload)
+                w.write(ts, frame.eth.dst_mac, frame.eth.src_mac,
+                        frame.eth.ethertype, frame.payload)
             session.eth_count += 1
     except Exception:
         pass
@@ -944,7 +950,7 @@ def api_gw_health():
     c = None
     try:
         c = BoAtClient(_DEFAULT_GW)
-        c.can.ListBuses(can_pb2.ListBusesRequest())
+        c.frame.ListInterfaces(frame_pb2.ListInterfacesRequest())
         return {"running": True}
     except Exception:
         return {"running": False}
@@ -956,8 +962,11 @@ def api_can_buses(gw: str = _DEFAULT_GW):
     c = None
     try:
         c = BoAtClient(gw)
-        resp = c.can.ListBuses(can_pb2.ListBusesRequest())
-        return {"ifaces": list(resp.ifaces)}
+        resp = c.frame.ListInterfaces(frame_pb2.ListInterfacesRequest(
+            bus_types=[frame_pb2.Frame.CAN]))
+        # ListBusesResponse's field was `buses`; `resp.ifaces` raised
+        # AttributeError into the bare except, so this always returned [].
+        return {"ifaces": [i.iface for i in resp.interfaces]}
     except Exception:
         return {"ifaces": []}
     finally:
@@ -968,8 +977,9 @@ def api_eth_ifaces(gw: str = _DEFAULT_GW):
     c = None
     try:
         c = BoAtClient(gw)
-        resp = c.ethernet.ListInterfaces(ethernet_pb2.ListEthernetInterfacesRequest())
-        return {"ifaces": list(resp.ifaces)}
+        resp = c.frame.ListInterfaces(frame_pb2.ListInterfacesRequest(
+            bus_types=[frame_pb2.Frame.ETHERNET]))
+        return {"ifaces": [i.iface for i in resp.interfaces]}
     except Exception:
         return {"ifaces": []}
     finally:

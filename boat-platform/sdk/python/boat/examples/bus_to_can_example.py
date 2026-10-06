@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from boat.bus_node import BusNode
 from boat.client import BoAtClient
-from boat.v1 import can_pb2
+from boat.v1 import frame_pb2
 
 
 class SetpointActuator(BusNode):
@@ -26,7 +26,8 @@ class SetpointActuator(BusNode):
         super().__init__(address="localhost:50051", node_id="setpoint-actuator")
         self._enabled = False
         # A separate gRPC client is used to send CAN frames from a BusNode.
-        self._can = BoAtClient(address="localhost:50051").can
+        # Leave the address unset so BOAT_HOST decides -- see BoAtClient.
+        self._frames = BoAtClient().frame
 
     def on_signal(self, signal) -> None:
         if signal.name == "actuator.enable":
@@ -36,8 +37,13 @@ class SetpointActuator(BusNode):
             # Clamp and scale: 0.0-100.0 % → 0-1000 (uint16 big-endian)
             raw = max(0, min(1000, int(signal.number_value * 10)))
             payload = raw.to_bytes(2, "big")
-            frame = can_pb2.CanFrame(can_id=0x400, dlc=2, data=payload, iface="vcan0")
-            self._can.SendCanFrame(can_pb2.SendCanFrameRequest(frame=frame))
+            frame = frame_pb2.Frame(
+                bus_type=frame_pb2.Frame.CAN,
+                iface="vcan0",
+                payload=payload,
+                can=frame_pb2.CanMetadata(can_id=0x400, dlc=2),
+            )
+            self._frames.SendFrame(frame_pb2.SendFrameRequest(frame=frame))
 
 
 if __name__ == "__main__":

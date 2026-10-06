@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from boat.client import BoAtClient
-from boat.v1 import bus_pb2, can_pb2, ethernet_pb2
+from boat.v1 import bus_pb2, frame_pb2
 from boat.pdu_db import PduDatabase
 _CANFD_FDF = 0x04
 _CANFD_BRS = 0x01
@@ -129,11 +129,8 @@ def _cyclic_can_sender(db_id: int, gateway: str, msg: dict, cycle_ms: int) -> No
             dlc = len(data)
             if client is None:
                 client = BoAtClient(gateway)
-            frame = can_pb2.CanFrame(
-                can_id=identifier, dlc=dlc, data=data,
-                iface=bus, flags=flags,
-            )
-            client.can.SendCanFrame(can_pb2.SendCanFrameRequest(frame=frame))
+            frame = _build_can_frame(identifier, data, bus, flags, dlc=dlc)
+            client.frame.SendFrame(frame_pb2.SendFrameRequest(frame=frame))
             with _CYCLIC_LOCK:
                 s = _CYCLIC_STATS.get(db_id, {"count": 0})
                 s["count"] = s.get("count", 0) + 1
@@ -175,11 +172,8 @@ def _cyclic_eth_sender(db_id: int, gateway: str, msg: dict, cycle_ms: int) -> No
             data = _build_frame_data(msg, db_id=db_id)
             if client is None:
                 client = BoAtClient(gateway)
-            frame = ethernet_pb2.EthernetFrame(
-                ethertype=ethertype, payload=data,
-                iface=bus, src_mac=src_mac, dst_mac=dst_mac,
-            )
-            client.ethernet.SendFrame(ethernet_pb2.SendEthernetFrameRequest(frame=frame))
+            frame = _build_eth_frame(ethertype, data, bus, src_mac, dst_mac)
+            client.frame.SendFrame(frame_pb2.SendFrameRequest(frame=frame))
             with _CYCLIC_LOCK:
                 s = _CYCLIC_STATS.get(db_id, {"count": 0})
                 s["count"] = s.get("count", 0) + 1
@@ -243,11 +237,46 @@ app = FastAPI()
 def api_gateway():
     return {"address": _DEFAULT_GW}
 
+
+# ── unified-frame builders ────────────────────────────────────────────────────
+# All four send paths below go through these, so the CanMetadata/EthMetadata
+# mapping exists once rather than being repeated (and able to drift) per
+# endpoint. CANFD is derived from the FDF flag so bus_type matches the flags.
+
+_CANFD_FDF_FLAG = 0x04
+
+
+def _build_can_frame(can_id: int, data: bytes, iface: str, flags: int = 0,
+                     dlc: int | None = None):
+    return frame_pb2.Frame(
+        bus_type=(frame_pb2.Frame.CANFD if flags & _CANFD_FDF_FLAG
+                  else frame_pb2.Frame.CAN),
+        iface=iface,
+        payload=data,
+        can=frame_pb2.CanMetadata(
+            can_id=can_id,
+            dlc=len(data) if dlc is None else dlc,
+            flags=flags,
+        ),
+    )
+
+
+def _build_eth_frame(ethertype: int, payload: bytes, iface: str,
+                     src_mac: bytes = b"", dst_mac: bytes = b""):
+    return frame_pb2.Frame(
+        bus_type=frame_pb2.Frame.ETHERNET,
+        iface=iface,
+        payload=payload,
+        eth=frame_pb2.EthMetadata(
+            ethertype=ethertype, src_mac=src_mac, dst_mac=dst_mac),
+    )
+
+
 @app.get("/api/gateway/health")
 def api_gw_health():
     try:
         c = _client(_DEFAULT_GW)
-        c.can.ListBuses(can_pb2.ListBusesRequest())
+        c.frame.ListInterfaces(frame_pb2.ListInterfacesRequest())
         return {"running": True}
     except Exception:
         return {"running": False}
@@ -256,17 +285,19 @@ def api_gw_health():
 @app.get("/api/can/buses")
 def api_can_buses(address: str = _DEFAULT_GW):
     try:
-        resp = _client(address).can.ListBuses(can_pb2.ListBusesRequest())
-        return {"ifaces": list(resp.ifaces)}
+        resp = _client(address).frame.ListInterfaces(
+            frame_pb2.ListInterfacesRequest(bus_types=[frame_pb2.Frame.CAN]))
+        # ListBusesResponse's field was `buses`; `resp.ifaces` raised
+        # AttributeError into the bare except, so this always returned [].
+        return {"ifaces": [i.iface for i in resp.interfaces]}
     except Exception:
         return {"ifaces": []}
 @app.get("/api/eth/ifaces")
 def api_eth_ifaces(address: str = _DEFAULT_GW):
     try:
-        resp = _client(address).ethernet.ListInterfaces(
-            ethernet_pb2.ListEthernetInterfacesRequest()
-        )
-        return {"ifaces": list(resp.ifaces)}
+        resp = _client(address).frame.ListInterfaces(
+            frame_pb2.ListInterfacesRequest(bus_types=[frame_pb2.Frame.ETHERNET]))
+        return {"ifaces": [i.iface for i in resp.interfaces]}
     except Exception:
         return {"ifaces": []}
 @app.get("/api/bus/signals")
@@ -301,13 +332,10 @@ def api_can_send(req: CanSendReq):
         raw = raw + bytes(byte_count - len(raw))  # zero-pad
     else:
         raw = raw[:byte_count]                     # truncate
-    frame = can_pb2.CanFrame(
-        can_id=can_id, dlc=byte_count, data=raw,
-        iface=req.iface, flags=flags,
-    )
+    frame = _build_can_frame(can_id, raw, req.iface, flags, dlc=byte_count)
     try:
-        resp = _client(req.address).can.SendCanFrame(
-            can_pb2.SendCanFrameRequest(frame=frame)
+        resp = _client(req.address).frame.SendFrame(
+            frame_pb2.SendFrameRequest(frame=frame)
         )
         return {"ok": bool(resp.accepted)}
     except grpc.RpcError as e:
@@ -331,13 +359,10 @@ def api_eth_send(req: EthSendReq):
         return {"ok": False, "detail": str(e)}
     if len(payload) > 1500:
         return {"ok": False, "detail": f"Payload too long ({len(payload)} > 1500 bytes)"}
-    frame = ethernet_pb2.EthernetFrame(
-        ethertype=etype, payload=payload,
-        iface=req.iface, src_mac=src, dst_mac=dst,
-    )
+    frame = _build_eth_frame(etype, payload, req.iface, src, dst)
     try:
-        resp = _client(req.address).ethernet.SendFrame(
-            ethernet_pb2.SendEthernetFrameRequest(frame=frame)
+        resp = _client(req.address).frame.SendFrame(
+            frame_pb2.SendFrameRequest(frame=frame)
         )
         return {"ok": bool(resp.accepted)}
     except grpc.RpcError as e:
@@ -540,16 +565,16 @@ def api_pdu_send(req: PduSendReq):
     dlc = len(data)
     try:
         if bt in ("CAN", "CANFD"):
-            frame = can_pb2.CanFrame(can_id=identifier, dlc=dlc, data=data, iface=bus, flags=flags)
-            _client(req.gateway).can.SendCanFrame(can_pb2.SendCanFrameRequest(frame=frame))
+            frame = _build_can_frame(identifier, data, bus, flags, dlc=dlc)
+            _client(req.gateway).frame.SendFrame(frame_pb2.SendFrameRequest(frame=frame))
         else:
             ethertype = msg.get("EtherType", 0x0800)
             src_mac_raw = msg.get("SrcMAC", "")
             dst_mac_raw = msg.get("DstMAC", "")
             src_mac = _parse_hex_bytes(src_mac_raw) if src_mac_raw else b""
             dst_mac = _parse_hex_bytes(dst_mac_raw) if dst_mac_raw else b""
-            frame = ethernet_pb2.EthernetFrame(ethertype=ethertype, payload=data, iface=bus, src_mac=src_mac, dst_mac=dst_mac)
-            _client(req.gateway).ethernet.SendFrame(ethernet_pb2.SendEthernetFrameRequest(frame=frame))
+            frame = _build_eth_frame(ethertype, data, bus, src_mac, dst_mac)
+            _client(req.gateway).frame.SendFrame(frame_pb2.SendFrameRequest(frame=frame))
         return {"ok": True, "db_id": req.db_id}
     except Exception as e:
         raise HTTPException(500, detail=str(e))

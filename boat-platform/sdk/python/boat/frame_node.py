@@ -113,8 +113,18 @@ class FrameNode:
     # ── Subscribe ──────────────────────────────────────────────────────
 
     def subscribe(self, callback: Callable[[frame_pb2.Frame], None],
-                  bus_types: Optional[List[str]] = None) -> None:
-        """Stream frames in a background thread."""
+                  bus_types: Optional[List[str]] = None,
+                  iface_filter: str = "") -> None:
+        """Stream frames in a background thread.
+
+        Args:
+            callback: called with each boat.v1.Frame received.
+            bus_types: names from CAN/CANFD/ETHERNET/TCP/PDU; empty = all.
+            iface_filter: restrict to one interface; "" = all. The gateway
+                rejects an interface it does not have with NOT_FOUND rather
+                than returning an empty stream, so a typo surfaces as an
+                error instead of a bus that looks quiet.
+        """
         bt_values: List[int] = []
         if bus_types:
             for bt in bus_types:
@@ -129,7 +139,7 @@ class FrameNode:
                     bt_values.append(bt_map[bt])
 
         def _run() -> None:
-            req = frame_pb2.SubscribeFramesRequest()
+            req = frame_pb2.SubscribeFramesRequest(iface_filter=iface_filter)
             if bt_values:
                 req.bus_types.extend(bt_values)
             # Auto-reconnects with capped exponential backoff on any stream

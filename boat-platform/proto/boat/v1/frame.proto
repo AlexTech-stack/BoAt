@@ -91,6 +91,29 @@ message SubscribeFramesRequest {
   string iface_filter = 2;              // empty = all
 }
 
+/* One interface the gateway has open, on either bus.
+
+   Supersedes CanService.ListBuses and EthernetService.ListInterfaces. The CAN
+   metadata fields come straight from CanBusInfo; Ethernet entries carry only
+   `iface` and `bus_type`, since ListEthernetInterfacesResponse never had more
+   than a name and the Ethernet registry holds no equivalent metadata. Read
+   `bus_type` before the rest -- an empty `driver` on an ETHERNET entry means
+   "not applicable", not "unknown". */
+message InterfaceInfo {
+  string        iface      = 1;  // interface name, e.g. "can0", "vcan0", "eth0"
+  Frame.BusType bus_type   = 2;  // CAN or ETHERNET
+  string        driver     = 3;  // CAN only: kernel driver, e.g. "peak_usb", "vcan"
+  string        state      = 4;  // CAN only: "up", "down", "unknown"
+  bool          fd_support = 5;  // CAN only: CAN FD capable (mtu >= 72)
+  uint32        bitrate    = 6;  // CAN only: nominal bitrate in bit/s, 0 if unknown
+}
+
+message ListInterfacesRequest {
+  repeated Frame.BusType bus_types = 1;  // empty = all
+}
+
+message ListInterfacesResponse { repeated InterfaceInfo interfaces = 1; }
+
 /* One message on the ingress half of StreamFrames.
 
    A client that bridges an external bus into the gateway sends `subscribe`
@@ -106,7 +129,17 @@ message StreamFramesRequest {
 
 service FrameService {
   rpc SendFrame(SendFrameRequest) returns (SendFrameResponse);
+
+  /* Stream frames off the gateway.
+
+     An `iface_filter` naming an interface neither registry has fails with
+     NOT_FOUND rather than returning an empty stream, matching SendFrame. A
+     typo'd interface is a configuration error, and a subscription that
+     silently never yields is indistinguishable from a quiet bus. */
   rpc SubscribeFrames(SubscribeFramesRequest) returns (stream Frame);
+
+  /* Every CAN and Ethernet interface the gateway has open. */
+  rpc ListInterfaces(ListInterfacesRequest) returns (ListInterfacesResponse);
 
   /* Bidirectional frame bridge.
 

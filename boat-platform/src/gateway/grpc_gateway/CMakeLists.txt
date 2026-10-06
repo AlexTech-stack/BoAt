@@ -5,9 +5,7 @@ add_executable(
   boat_gateway
   main.cpp
   bus_service_impl.cpp
-  can_service_impl.cpp
   debug_service_impl.cpp
-  ethernet_service_impl.cpp
   pdu_service_impl.cpp
   can_tp_service_impl.cpp
   simulation_service_impl.cpp

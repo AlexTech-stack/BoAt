@@ -166,11 +166,11 @@ class TestExpectTimeout:
         from boat.test.exceptions import TestTimeoutError
 
         client = MagicMock()
-        client.can.SubscribeCanFrames.return_value = iter([])
+        client.frame.SubscribeFrames.return_value = iter([])
         with pytest.raises(TestTimeoutError):
             self._can_bus(client).expect(can_id=0x999, timeout_ms=250)
 
-        _, kwargs = client.can.SubscribeCanFrames.call_args
+        _, kwargs = client.frame.SubscribeFrames.call_args
         assert kwargs["timeout"] == pytest.approx(0.25)
 
     def test_can_deadline_exceeded_becomes_test_timeout(self) -> None:
@@ -178,14 +178,14 @@ class TestExpectTimeout:
         from boat.test.exceptions import TestTimeoutError
 
         client = MagicMock()
-        client.can.SubscribeCanFrames.return_value = self._deadline_exceeded_stream()
+        client.frame.SubscribeFrames.return_value = self._deadline_exceeded_stream()
         with pytest.raises(TestTimeoutError):
             self._can_bus(client).expect(can_id=0x999, timeout_ms=200)
 
     def test_can_other_rpc_errors_still_surface(self) -> None:
         """A real failure must not be laundered into a timeout."""
         client = MagicMock()
-        client.can.SubscribeCanFrames.return_value = self._aborted_stream()
+        client.frame.SubscribeFrames.return_value = self._aborted_stream()
         with pytest.raises(RuntimeError, match="CAN subscribe error"):
             self._can_bus(client).expect(can_id=0x999, timeout_ms=200)
 
@@ -195,13 +195,13 @@ class TestExpectTimeout:
         from boat.test.exceptions import TestTimeoutError
 
         client = MagicMock()
-        client.ethernet.SubscribeFrames.return_value = iter([])
+        client.frame.SubscribeFrames.return_value = iter([])
         bus = TestEthBus(client, BusConfig(logical_name="eth0", type="virtual_eth",
                                            interface="veth0"))
         with pytest.raises(TestTimeoutError):
             bus.expect(ethertype=0x88B5, timeout_ms=250)
 
-        _, kwargs = client.ethernet.SubscribeFrames.call_args
+        _, kwargs = client.frame.SubscribeFrames.call_args
         assert kwargs["timeout"] == pytest.approx(0.25)
 
     def test_eth_deadline_exceeded_becomes_test_timeout(self) -> None:
@@ -210,7 +210,7 @@ class TestExpectTimeout:
         from boat.test.exceptions import TestTimeoutError
 
         client = MagicMock()
-        client.ethernet.SubscribeFrames.return_value = self._deadline_exceeded_stream()
+        client.frame.SubscribeFrames.return_value = self._deadline_exceeded_stream()
         bus = TestEthBus(client, BusConfig(logical_name="eth0", type="virtual_eth",
                                            interface="veth0"))
         with pytest.raises(TestTimeoutError):
@@ -230,9 +230,13 @@ class TestAssertFrameMatches:
         from boat.test.report import TestStepRecord
         return StepContext(TestStepRecord(id=1, name="step"))
 
-    class _Frame:
-        can_id = 0x100
-        data = b"\x01\x02"
+    @staticmethod
+    def _frame(can_id: int = 0x100, payload: bytes = b"\x01\x02"):
+        from boat.v1 import frame_pb2
+        return frame_pb2.Frame(
+            bus_type=frame_pb2.Frame.CAN, iface="vcan0", payload=payload,
+            can=frame_pb2.CanMetadata(can_id=can_id, dlc=len(payload)),
+        )
 
     def test_none_frame_records_fail(self) -> None:
         ctx = self._ctx()
@@ -243,12 +247,12 @@ class TestAssertFrameMatches:
 
     def test_matching_frame_records_pass(self) -> None:
         ctx = self._ctx()
-        ctx.assert_frame_matches(self._Frame(), can_id=0x100)
+        ctx.assert_frame_matches(self._frame(), can_id=0x100)
         assert ctx.record.assertions[-1].result == "PASS"
 
     def test_mismatch_reports_frame_as_actual(self) -> None:
         ctx = self._ctx()
-        ctx.assert_frame_matches(self._Frame(), can_id=0x999)
+        ctx.assert_frame_matches(self._frame(), can_id=0x999)
         record = ctx.record.assertions[-1]
         assert record.result == "FAIL"
         assert "0x100" in record.actual      # the frame is the *actual*

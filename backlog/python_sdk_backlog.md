@@ -23,25 +23,41 @@ private CA rather than skipping verification.
 Still open: `src/tests/hw_eth_test.py:59` builds its own `grpc.insecure_channel` — a manual
 hardware test script, not SDK code, and it hardcodes its gateway address too.
 
-## #2 — The unified-frame migration stopped at `frame_node.py`  🟠
+## #2 — The unified-frame migration stopped at `frame_node.py`  ✅ DONE
 
-Inside the SDK there are 13 legacy per-bus RPC call sites against 2 unified ones:
+**Closed 2026-10-06** on `frame_migration`. `CanService` and `EthernetService` no longer
+exist: protos, C++ implementations, gateway registrations, the generated Python stubs, and
+the deprecated `CanNode` / `EthernetNode` classes are all deleted. `proto/boat/v1/` is now
+16 files declaring 14 services.
 
-| Module | Service |
-|---|---|
-| `boat/frame_node.py` | `FrameService` |
-| `boat/can_node.py`, `boat/ethernet_node.py` | `CanService`/`EthernetService` — deprecated, warns |
-| `boat/test/bus.py` (7 sites) | `CanService`/`EthernetService` — **not** deprecated, no warning |
-| `boat/cli.py:66`, `boat/cmd.py:108`, `boat/cmd.py:178` | `CanService`/`EthernetService` |
+The count in the original entry (13 sites) was SDK-only and wrong by a factor of three --
+the real figure was ~42, with 22 of them in the untested `ui/` services and 18 being
+`ListBuses`/`ListInterfaces` calls that had no unified equivalent at all.
 
-The one that matters most is `boat/test/bus.py`: `TestCanBus`/`TestEthBus` are the bus layer
-the automated HIL runner (`boat test run`) drives, so the test framework exercises the path
-`CanNode` is deprecated *in favour of*, not the `FrameSink` path. `nodes/` was migrated; the
-harness was not.
+Two gateway-side gaps had to be closed first:
 
-Also unmigrated and still teaching the deprecated classes: 5 of 7 files in
-`sdk/python/boat/examples/`, both `demo/` nodes, and
-`scripts/listen_on_vcan0_for_id_0x300_as_soon_as_plugin.py`.
+- **`FrameService.ListInterfaces`** was added, because `boat frame list-ifaces` -- a
+  *unified* CLI verb -- was built on the two legacy listing RPCs. It returns one repeated
+  `InterfaceInfo` with a `Frame.BusType` discriminator plus the CAN metadata `CanBusInfo`
+  carried.
+- **`SubscribeFrames` now validates `iface_filter`**, returning `NOT_FOUND` instead of an
+  empty stream. Without that, migrating the test harness would have turned a typo'd
+  interface in `config/tests/env_*.json` from a clear error into a silent timeout.
+
+Found and fixed in passing, all pre-existing and all the same shape (an exception
+swallowed by a bare `except`):
+
+- `commander` `/api/can/buses`, `recorder` `/api/can-buses` and `system_dashboard`'s
+  topology read `resp.ifaces` from a `ListBusesResponse` whose field is `buses`. All three
+  had always returned an empty list; `system_dashboard`'s `connected` flag was permanently
+  False.
+- `debug`'s `/api/gateway/health` had a `return` inside a `finally`, which discards the
+  pending success return -- it reported the gateway down even when up.
+- `boat ai`'s generated-code validator called `on_frame(frame, iface)`, the old per-bus
+  signature, so it rejected valid `FrameNode` code outright.
+
+`ui/` gained its first tests (`ui/tests/`, 16 of them); 15 fail against the pre-migration
+code. `CLAUDE.md`'s documented pytest command now includes them.
 
 ## #3 — `boat ai` cannot generate current code  🟠
 

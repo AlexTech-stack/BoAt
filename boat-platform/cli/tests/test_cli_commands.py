@@ -78,25 +78,13 @@ def _fake_client() -> SimpleNamespace:
                             rx_state="IDLE", tx_state="IDLE"),
         ])),
     )
-    can = SimpleNamespace(
-        ListBuses=Mock(return_value=SimpleNamespace(
-            buses=[SimpleNamespace(iface="vcan0", driver="vcan",
-                                   state="unknown", fd_support=False, bitrate=0)]
-        )),
-        SendCanFrame=Mock(return_value=SimpleNamespace(accepted=True)),
-        SubscribeCanFrames=Mock(return_value=[]),
-    )
-    eth_stream = Mock()
-    eth_stream.__iter__ = Mock(return_value=iter([]))
-    eth_stream.cancel = Mock()
-    ethernet = SimpleNamespace(
-        ListInterfaces=Mock(return_value=SimpleNamespace(ifaces=["veth0", "veth1"])),
-        SendFrame=Mock(return_value=SimpleNamespace(accepted=True)),
-        SubscribeFrames=Mock(return_value=eth_stream),
-    )
+    # No `can`/`ethernet`: BoAtClient no longer exposes them, and a fake that
+    # offers attributes the real client lacks lets a test pass against code
+    # that would fail in production. Tests needing FrameService set .frame
+    # themselves.
     return SimpleNamespace(
         simulation=simulation, scenario=scenario, replay=replay, plugin=plugin,
-        node_plugin=node_plugin, can=can, can_tp=can_tp, ethernet=ethernet, close=lambda: None,
+        node_plugin=node_plugin, can_tp=can_tp, close=lambda: None,
     )
 
 
@@ -447,7 +435,7 @@ def test_trace_replay_applies_id_filter_and_shows_it_in_banner(tmp_path) -> None
         writer.on_message_received(can.Message(arbitration_id=0x200, data=[4], channel=4))
 
     fake_stub = Mock()
-    fake_stub.SendCanFrame = Mock(return_value=SimpleNamespace(accepted=True))
+    fake_stub.SendFrame = Mock(return_value=SimpleNamespace(accepted=True))
 
     with patch("boat.trace_replay.TraceReplayer._get_stub", return_value=fake_stub):
         result = runner.invoke(app, [
@@ -458,7 +446,8 @@ def test_trace_replay_applies_id_filter_and_shows_it_in_banner(tmp_path) -> None
     assert result.exit_code == 0
     assert "0x583" in result.output  # banner echoes the applied id filter
 
-    sent_ids = [call.args[0].frame.can_id for call in fake_stub.SendCanFrame.call_args_list]
+    # Unified Frame: the CAN id is under .can, not on the frame itself.
+    sent_ids = [call.args[0].frame.can.can_id for call in fake_stub.SendFrame.call_args_list]
     assert sent_ids == [0x583, 0x583]
 
 
@@ -608,3 +597,71 @@ def test_trace_score_mask_flag_is_recorded(tmp_path) -> None:
     ).output.strip().splitlines()[-1])
     assert on["search_mask_applied"] is True
     assert off["search_mask_applied"] is False
+
+
+# ── frame list-ifaces / iface auto-pick, via FrameService.ListInterfaces ─────
+
+def _iface_entry(name: str, bus_type, driver: str = "", state: str = "",
+                 fd: bool = False):
+    from boat.v1 import frame_pb2
+    return frame_pb2.InterfaceInfo(iface=name, bus_type=bus_type, driver=driver,
+                                   state=state, fd_support=fd)
+
+
+def test_frame_list_ifaces_uses_frame_service() -> None:
+    from boat.v1 import frame_pb2
+
+    fake_client = _fake_client()
+    fake_client.frame = SimpleNamespace(ListInterfaces=Mock(
+        return_value=SimpleNamespace(interfaces=[
+            _iface_entry("vcan0", frame_pb2.Frame.CAN, "vcan", "up", True),
+            _iface_entry("veth0", frame_pb2.Frame.ETHERNET),
+        ])))
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, ["frame", "list-ifaces"])
+
+    assert result.exit_code == 0
+    assert "vcan0" in result.output and "veth0" in result.output
+    assert "CAN" in result.output and "ETHERNET" in result.output
+
+
+def test_frame_send_auto_picks_iface_by_bus_type() -> None:
+    """Regression: the nested enum accessor is Frame.BusType.Value, not
+    Frame.Value -- getting it wrong raised AttributeError at request-build
+    time, which no mock-free test covered."""
+    from boat.v1 import frame_pb2
+
+    fake_client = _fake_client()
+    fake_client.frame = SimpleNamespace(
+        SendFrame=Mock(return_value=SimpleNamespace(accepted=True)),
+        ListInterfaces=Mock(return_value=SimpleNamespace(
+            interfaces=[_iface_entry("vcan0", frame_pb2.Frame.CAN)])),
+    )
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, [
+            "frame", "send", "--bus-type", "can", "--can-id", "0x123", "--data", "AABB",
+        ])
+
+    assert result.exit_code == 0, result.output
+    assert fake_client.frame.SendFrame.call_args[0][0].frame.iface == "vcan0"
+    req = fake_client.frame.ListInterfaces.call_args[0][0]
+    assert list(req.bus_types) == [frame_pb2.Frame.CAN]
+
+
+def test_frame_send_auto_pick_handles_no_interfaces() -> None:
+    fake_client = _fake_client()
+    fake_client.frame = SimpleNamespace(
+        SendFrame=Mock(return_value=SimpleNamespace(accepted=True)),
+        ListInterfaces=Mock(return_value=SimpleNamespace(interfaces=[])),
+    )
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, [
+            "frame", "send", "--bus-type", "can", "--can-id", "0x1", "--data", "AA",
+        ])
+
+    # Empty iface reaches the gateway, which is what rejects it -- the CLI must
+    # not crash while building the request.
+    assert fake_client.frame.SendFrame.call_args[0][0].frame.iface == ""

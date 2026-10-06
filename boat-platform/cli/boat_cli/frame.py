@@ -11,7 +11,6 @@ import sys
 import grpc
 import typer
 
-from boat.v1 import can_pb2
 from boat.v1 import frame_pb2
 
 from boat.client import BoAtClient
@@ -34,22 +33,17 @@ def _parse_int(value: str) -> int:
 
 def _pick_iface(client: BoAtClient, bus_type: str) -> str:
     """Return the first registered gateway interface when none is specified."""
-    if bus_type.upper() in ("CAN", "CANFD"):
-        try:
-            resp = client.can.ListBuses(can_pb2.ListBusesRequest())
-            if resp.buses:
-                return resp.buses[0].iface
-        except grpc.RpcError:
-            pass
-    elif bus_type.upper() == "ETHERNET":
-        try:
-            from boat.v1 import ethernet_pb2
-            resp = client.ethernet.ListInterfaces(ethernet_pb2.ListEthernetInterfacesRequest())
-            if resp.ifaces:
-                return resp.ifaces[0]
-        except (grpc.RpcError, AttributeError):
-            pass
-    return ""
+    want = bus_type.upper()
+    if want == "CANFD":
+        want = "CAN"
+    if want not in ("CAN", "ETHERNET"):
+        return ""
+    try:
+        resp = client.frame.ListInterfaces(frame_pb2.ListInterfacesRequest(
+            bus_types=[frame_pb2.Frame.BusType.Value(want)]))
+    except grpc.RpcError:
+        return ""
+    return resp.interfaces[0].iface if resp.interfaces else ""
 
 
 @frame_app.command("send")
@@ -213,25 +207,23 @@ def list_ifaces(ctx: typer.Context) -> None:
     client = ctx.obj["client"]
 
     try:
-        from boat.v1 import ethernet_pb2
-
-        can_resp = client.can.ListBuses(can_pb2.ListBusesRequest())
-        eth_resp = client.ethernet.ListInterfaces(
-            ethernet_pb2.ListEthernetInterfacesRequest())
+        resp = client.frame.ListInterfaces(frame_pb2.ListInterfacesRequest())
 
         from .output import print_table
 
+        # Ethernet entries carry only a name: the Ethernet registry holds no
+        # driver/state/fd metadata, which bus_type is what distinguishes from
+        # a CAN interface whose metadata happens to be unknown.
         rows = []
-        for bus in can_resp.buses:
+        for iface in resp.interfaces:
+            is_can = iface.bus_type in (frame_pb2.Frame.CAN, frame_pb2.Frame.CANFD)
             rows.append((
-                bus.iface,
-                "CAN",
-                bus.driver,
-                bus.state,
-                "yes" if bus.fd_support else "no",
+                iface.iface,
+                frame_pb2.Frame.BusType.Name(iface.bus_type),
+                iface.driver,
+                iface.state,
+                ("yes" if iface.fd_support else "no") if is_can else "",
             ))
-        for name in eth_resp.ifaces:
-            rows.append((name, "ETHERNET", "", "", ""))
 
         print_table(
             ["iface", "type", "driver", "state", "fd"],
