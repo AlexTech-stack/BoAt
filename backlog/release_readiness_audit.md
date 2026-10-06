@@ -394,8 +394,16 @@ reintroduced a `.can` call, and it documents an API that no longer exists.
 - `apt-get install` lists omit `cargo`, a documented build-time requirement (iceoryx2's Rust
   core). GitHub runners ship Rust, so this is a risk rather than a certain break — but it
   should be explicit rather than inherited from the image.
-- `libacl1-dev` is also omitted; `CMakeLists.txt:26-38` handles its absence by
-  `apt-get download`ing it into the build tree, so this one is genuinely covered.
+- `libacl1-dev` is also omitted. **I originally wrote that this one was "genuinely covered" by
+  the `apt-get download` fallback in `CMakeLists.txt:26-38`. That was wrong, and CI proved it.**
+  Nothing created the directory the fallback uses as `WORKING_DIRECTORY`, so `execute_process`
+  failed on every clean machine; the result was checked but never reported, so configure
+  succeeded and the build died ~1700 objects later on
+  `iceoryx_platform/acl.hpp:20: fatal error: sys/acl.h`. Fixed in both places: the package is
+  now installed by all seven building jobs (and both release jobs), and the fallback creates its
+  directory, reports a failed download, and raises `FATAL_ERROR` at configure time rather than
+  letting the build fail later with an error that names nothing relevant. Note this path cannot
+  be exercised on a machine that already has the header, which is why it went unnoticed.
 
 **S7 — Performance claims with no benchmark behind them.** `project-plan.md:51-52` commits to
 "≤1 ms jitter in simulated mode" and "≥1,000,000 events per second". There is **no benchmark

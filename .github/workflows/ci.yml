@@ -34,7 +34,7 @@ jobs:
         # Deliberately NOT installing cmake from apt: Ubuntu 22.04 ships 3.22 and
         # this project needs 3.24+, so apt would shadow the runner's newer cmake
         # with one too old to configure the presets.
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
       - name: Verify toolchain versions
         run: |
           cmake --version
@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
       - name: Configure and build with ASan
         run: cmake --preset asan && cmake --build --preset asan
       - name: Run ASan tests
@@ -137,7 +137,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain and gcovr
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ gcovr
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev gcovr
       - name: Configure and build with coverage
         run: cmake --preset coverage && cmake --build --preset coverage
       - name: Run coverage tests
@@ -168,7 +168,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
       - name: Configure and build with TSan
         run: cmake --preset tsan && cmake --build --preset tsan
       - name: Run TSan tests
@@ -183,7 +183,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
       - name: Configure and build
         run: cmake --preset release && cmake --build --preset release
       - name: Run determinism tests
@@ -225,7 +225,7 @@ jobs:
       # build step at all, which is why it failed with "boat_gateway: not found"
       # the first time CI ever executed.
       - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
       - name: Build the gateway binary
         run: cmake --preset release && cmake --build --preset release --target boat_gateway
       - name: Verify the binary exists for the Dockerfile
@@ -270,7 +270,7 @@ jobs:
       - name: Install toolchain and CAN utilities
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build g++ can-utils linux-modules-extra-$(uname -r) || true
+          sudo apt-get install -y ninja-build g++ libacl1-dev can-utils linux-modules-extra-$(uname -r) || true
       - name: Load vcan kernel module
         run: |
           sudo modprobe vcan

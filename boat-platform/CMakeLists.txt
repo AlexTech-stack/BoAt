@@ -30,18 +30,34 @@ if(NOT EXISTS "/usr/include/sys/acl.h")
   if(NOT EXISTS "${_acl_vendor}/usr/include/sys/acl.h")
     find_program(_apt_get apt-get REQUIRED)
     message(STATUS "sys/acl.h not found — downloading libacl1-dev into build tree")
+    # MAKE_DIRECTORY first: execute_process fails outright if WORKING_DIRECTORY
+    # does not exist, which is every clean checkout. This fallback had therefore
+    # never worked on a fresh machine -- and because the result was checked but
+    # never reported, configure succeeded and the build died ~1700 objects later
+    # on `iceoryx_platform/acl.hpp:20: fatal error: sys/acl.h`.
+    file(MAKE_DIRECTORY "${_acl_vendor}")
     execute_process(
       COMMAND ${_apt_get} download libacl1-dev
       WORKING_DIRECTORY "${_acl_vendor}"
-      RESULT_VARIABLE _acl_dl_result)
+      RESULT_VARIABLE _acl_dl_result
+      OUTPUT_VARIABLE _acl_dl_output
+      ERROR_VARIABLE  _acl_dl_output)
     if(_acl_dl_result EQUAL 0)
       file(GLOB _acl_deb "${_acl_vendor}/libacl1-dev*.deb")
       execute_process(COMMAND dpkg-deb -x "${_acl_deb}" "${_acl_vendor}")
+    else()
+      message(WARNING "apt-get download libacl1-dev failed: ${_acl_dl_output}")
     endif()
   endif()
   if(EXISTS "${_acl_vendor}/usr/include/sys/acl.h")
     include_directories(SYSTEM "${_acl_vendor}/usr/include")
     link_directories("${_acl_vendor}/usr/lib/x86_64-linux-gnu")
+  else()
+    # Fail here rather than thousands of compile steps later with a missing
+    # header that says nothing about the cause.
+    message(FATAL_ERROR
+      "iceoryx_hoofs needs sys/acl.h and it could not be found or vendored.\n"
+      "Install it:  sudo apt-get install -y libacl1-dev")
   endif()
 endif()
 
