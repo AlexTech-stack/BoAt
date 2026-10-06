@@ -38,11 +38,17 @@ jobs:
       - name: Verify toolchain versions
         run: |
           cmake --version
-          cmake -P /dev/stdin <<'EOF'
-          if(CMAKE_VERSION VERSION_LESS "3.24")
-            message(FATAL_ERROR "CMake 3.24+ required, found ${CMAKE_VERSION}")
-          endif()
-          EOF
+          # Plain shell, deliberately: `cmake -P /dev/stdin` with a heredoc needs
+          # a seekable file, and on a runner the heredoc is a pipe -- it fails
+          # with "Error while reading Byte-Order-Mark. File not seekable?".
+          # It passed locally only because bash happened to back that heredoc
+          # with a temp file.
+          have=$(cmake --version | head -1 | awk '{print $3}')
+          need=3.24
+          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -1)" != "$need" ]; then
+            echo "::error::CMake ${need}+ required, found ${have}"
+            exit 1
+          fi
           # iceoryx2's Rust core is a build-time dependency; runner images ship
           # cargo, so assert it rather than reinstalling it.
           cargo --version
@@ -57,11 +63,19 @@ jobs:
 
   python-tests:
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor declared by requires-python; 3.13 catches what the
+        # floor does not. Added because a test that read Typer's rendered --help
+        # passed on 3.14 locally and failed on 3.11 here -- a single-version job
+        # could not have shown that the two differ.
+        python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
       - name: Install Python packages
         run: |
           python -m pip install --upgrade pip
@@ -197,11 +211,25 @@ jobs:
 
   docker-build:
     runs-on: ubuntu-22.04
+    needs: build-and-test
     permissions:
       contents: read
       packages: write
+    defaults:
+      run:
+        working-directory: boat-platform
     steps:
       - uses: actions/checkout@v4
+      # Dockerfile.runtime COPYs build/release/.../boat_gateway out of the build
+      # context, so the binary has to exist before buildx runs. This job had no
+      # build step at all, which is why it failed with "boat_gateway: not found"
+      # the first time CI ever executed.
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++
+      - name: Build the gateway binary
+        run: cmake --preset release && cmake --build --preset release --target boat_gateway
+      - name: Verify the binary exists for the Dockerfile
+        run: ls build/release/src/gateway/grpc_gateway/boat_gateway
       - name: Compute image name
         # GHCR namespaces follow the GitHub owner, so a hardcoded
         # ghcr.io/boat-platform/... is denied from any other account -- and the

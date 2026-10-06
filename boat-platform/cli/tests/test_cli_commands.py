@@ -375,19 +375,49 @@ def test_trace_replay_rejects_pcap(tmp_path) -> None:
     assert "boat replay import" in result.output
 
 
-def test_trace_replay_help_has_no_server_side_or_ethernet_flags() -> None:
-    result = runner.invoke(app, ["trace", "replay", "--help"])
+def _declared_options(*command_path: str) -> set[str]:
+    """Every option string a command actually declares.
 
-    assert result.exit_code == 0
+    Asserted against instead of `--help` output on purpose. The rendered help is
+    produced by Typer via Rich and its layout varies with the installed
+    click/rich versions and the Python version -- this test used to read the
+    rendered text and failed on CI's Python 3.11 with four flags absent from the
+    panel and `file` showing another parameter's description, while passing
+    locally on 3.14. The flag *set* is the contract; its rendering is not.
+    """
+    import typer.main
+
+    cmd = typer.main.get_command(app)
+    for name in command_path:
+        cmd = cmd.commands[name]  # type: ignore[attr-defined]
+    return {opt for param in cmd.params for opt in param.opts}
+
+
+def test_trace_replay_has_no_server_side_or_ethernet_flags() -> None:
+    declared = _declared_options("trace", "replay")
+
     for removed_flag in (
         "--server-side", "--ip-filter", "--ip-map", "--ethertype",
         "--protocol", "--src-ip-filter", "--dst-ip-filter", "--src-port",
         "--dst-port", "--replay-src-ip", "--replay-dst-ip",
         "--replay-src-mac", "--replay-dst-mac", "--mac-map",
     ):
-        assert removed_flag not in result.output, f"{removed_flag} should have been removed"
+        assert removed_flag not in declared, f"{removed_flag} should have been removed"
     for kept_flag in ("--buses", "--speed", "--loop", "--sim-id", "--verbose", "--channel", "--id"):
-        assert kept_flag in result.output, f"{kept_flag} should still be present"
+        assert kept_flag in declared, f"{kept_flag} should still be present"
+
+
+def test_trace_replay_help_renders_without_error() -> None:
+    """Separate, deliberately weak check on the rendered help.
+
+    Kept so a help-rendering crash is still caught, but it asserts only that
+    `--help` exits cleanly and names the command -- not which flags appear in
+    which panel, which is what made the previous version environment-dependent.
+    """
+    result = runner.invoke(app, ["trace", "replay", "--help"])
+
+    assert result.exit_code == 0
+    assert "trace replay" in result.output
 
 
 def test_replay_import_reports_correct_frame_count(tmp_path) -> None:

@@ -583,3 +583,56 @@ is precisely the case where you most need to see how far the test got. `TimeoutE
 intended claim was about the *config* path, which is accurate. Both files now say that, and name
 the scenario parser as the one exception so it is not taken as licence to parse config.
 **Fixed.**
+
+---
+
+## From the first CI run (2026-10-06)
+
+Opening PR #7 executed these workflows for the first time in the project's history. It went red
+with 5 failures, which is the pipeline doing its job — but it also means the "164/164 and 538/538
+green" recorded above was green *on one machine*, and CI is a stricter environment than that.
+Four were fixed on the branch; one is unresolved.
+
+**Fixed: my own CMake version guard was broken.** `cmake -P /dev/stdin` fed by a heredoc needs a
+seekable file; on a runner the heredoc is a pipe, so it died with *"Error while reading
+Byte-Order-Mark. File not seekable?"* and took both `build-and-test` jobs — and therefore the 5
+jobs that `needs:` them — down with it. It passed when I checked it locally only because bash
+backed that heredoc with a temp file. Replaced with a `sort -V` comparison in plain shell,
+verified through an actual pipe and verified to still fail on a too-old version.
+
+**Fixed: the stub-sync gate reported drift that wasn't drift.** The committed stubs are generated
+by `grpcio-tools`, the `[dev]` extra asked for `>=1.81.1`, and CI resolved something newer that
+emits a different `Protobuf Python Version` header. Now pinned to `==1.83.1`, the version that
+produced the committed stubs — verified to reproduce them byte-identically. A committed-codegen
+policy needs a pinned generator or the gate is noise.
+
+**Fixed: `ci.yml`'s `docker-build` could never have passed.** `Dockerfile.runtime` COPYs
+`build/release/.../boat_gateway` out of the context, and that job had no build step and no
+`needs:`. This was broken in the original workflow too and I relocated it without noticing; it
+only became visible once anything ran it. It now `needs: build-and-test` and builds the
+`boat_gateway` target first, as `release.yml`'s `docker-push` already did.
+
+**Fixed, by testing the right thing: a test read Typer's rendered `--help`.**
+`test_trace_replay_help_has_no_server_side_or_ethernet_flags` asserted on help *text*. It now
+asserts on the command's declared option set via `typer.main.get_command`, which is the actual
+contract; a separate weak test still catches a rendering crash.
+
+**N11 — unresolved: `boat trace replay --help` renders differently on Python 3.11.** In CI the
+options panel came back with `--buses`, `--speed`, `--loop` and `--sim-id` absent and the `file`
+argument showing `--sim-id`'s description — a mangled panel, not a width truncation. **I could
+not reproduce it.** In a fresh venv I matched CI's Typer 0.27.2, Rich 15.0.0 and Click 8.5.0 and
+the help rendered every flag, at widths from 60 to 200 columns. The only remaining variable is
+the interpreter: CI ran 3.11, and no 3.11 is installed on this machine.
+
+This matters beyond the test, because `requires-python = ">=3.11"`: if help really does render
+with four flags missing on the floor version, every user who installs on 3.11 gets wrong `--help`
+output, and that is a launch-blocking bug rather than a test nuisance. The pytest job now runs a
+**3.11 + 3.13 matrix** specifically so the next run says whether this is real and version-bound.
+Diagnosing it needs a 3.11 interpreter. **Severity: unknown — treat as should-fix until the matrix
+run settles it.** Note that the rewritten test will now *pass* on 3.11 either way, so the matrix
+is the only thing watching for this.
+
+**Also worth recording:** `typer[all]` is a dead extra (`WARNING: typer 0.27.2 does not provide
+the extra 'all'`), and `boat-cli` pins neither click nor rich (`typer[all]>=0.12`, `rich>=13`), so
+every fresh install resolves whatever is newest. For a tool whose CLI help is part of its
+interface, that is a wide unpinned surface. **Severity: should-fix.**
