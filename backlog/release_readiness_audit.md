@@ -626,11 +626,27 @@ the interpreter: CI ran 3.11, and no 3.11 is installed on this machine.
 
 This matters beyond the test, because `requires-python = ">=3.11"`: if help really does render
 with four flags missing on the floor version, every user who installs on 3.11 gets wrong `--help`
-output, and that is a launch-blocking bug rather than a test nuisance. The pytest job now runs a
-**3.11 + 3.13 matrix** specifically so the next run says whether this is real and version-bound.
-Diagnosing it needs a 3.11 interpreter. **Severity: unknown — treat as should-fix until the matrix
-run settles it.** Note that the rewritten test will now *pass* on 3.11 either way, so the matrix
-is the only thing watching for this.
+output, and that is a launch-blocking bug rather than a test nuisance.
+
+**Correction to my first attempt at settling this.** I added a 3.11 + 3.13 pytest matrix and said
+it would answer the question. It does not, and I should have caught that when I wrote it: the
+rewritten test reads the *declared option set*, which is interpreter-independent by construction,
+so it passes on 3.11 whether or not the rendering is broken. My own rewrite removed the only
+observer. `python-tests (3.11)` going green told us nothing about N11.
+
+**Settled by a dedicated probe instead.** `test_rendered_help_shows_every_declared_long_option`
+cross-checks Typer's rendered `--help` against the declared long options for the five
+option-heaviest commands (`pdu route`, `can-tp configure`, `replay import`, `frame send`,
+`trace replay`) — breadth on purpose, since a fault that drops four consecutive panel rows is
+unlikely to be confined to one command. It strips ANSI, collapses whitespace and tolerates Rich
+breaking a flag at a hyphen, so a wrap cannot masquerade as a missing flag, and on failure it
+reports the Python, Typer, Click and Rich versions alongside the missing set — enough to diagnose
+from one run. It passes 5/5 on 3.14 locally, so it is not a false-positive generator. The
+3.11 matrix entry now has something to fail on.
+
+**Severity: unknown pending that run** — if it fails on 3.11 the bug is real and user-facing, and
+the likely remedy is an upper pin on click/rich in `boat-cli`; if it passes, the original failure
+was particular to that first run and N11 closes.
 
 **Also worth recording:** `typer[all]` is a dead extra (`WARNING: typer 0.27.2 does not provide
 the extra 'all'`), and `boat-cli` pins neither click nor rich (`typer[all]>=0.12`, `rich>=13`), so

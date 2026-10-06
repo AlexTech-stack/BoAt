@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import can
+import pytest
 import grpc
 from typer.testing import CliRunner
 
@@ -695,3 +697,64 @@ def test_frame_send_auto_pick_handles_no_interfaces() -> None:
     # Empty iface reaches the gateway, which is what rejects it -- the CLI must
     # not crash while building the request.
     assert fake_client.frame.SendFrame.call_args[0][0].frame.iface == ""
+
+
+# ── Rendered-help probe ────────────────────────────────────────────────────────
+#
+# Deliberately asserts on Typer's *rendered* --help, which the tests above
+# avoid. It exists to answer one open question (N11 in
+# backlog/release_readiness_audit.md): on CI's Python 3.11, `boat trace replay
+# --help` came back with --buses/--speed/--loop/--sim-id absent from the panel
+# and the `file` argument showing --sim-id's description, while the same Typer
+# 0.27.2 / Click 8.5.0 / Rich 15.0.0 combination rendered every flag on 3.14.
+#
+# If help really drops flags on the floor interpreter declared by
+# requires-python, every user installing there gets wrong --help, so this is
+# worth a test that fails loudly rather than a note in a backlog file. The
+# option-heaviest commands are probed, because a rendering fault that drops four
+# consecutive rows is unlikely to be confined to one command.
+
+_HELP_PROBE_COMMANDS = [
+    ("pdu", "route"),
+    ("can-tp", "configure"),
+    ("replay", "import"),
+    ("frame", "send"),
+    ("trace", "replay"),
+]
+
+
+def _version_context() -> str:
+    import sys
+    import click
+    import rich
+    import typer
+
+    return (
+        f"python={sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} "
+        f"typer={typer.__version__} click={click.__version__} rich={rich.__version__}"
+    )
+
+
+@pytest.mark.parametrize("command_path", _HELP_PROBE_COMMANDS, ids=lambda p: " ".join(p))
+def test_rendered_help_shows_every_declared_long_option(command_path) -> None:
+    declared = {opt for opt in _declared_options(*command_path) if opt.startswith("--")}
+    assert declared, f"no long options found for {command_path!r} -- probe is miswired"
+
+    result = runner.invoke(app, [*command_path, "--help"])
+    assert result.exit_code == 0, f"--help exited {result.exit_code} ({_version_context()})"
+
+    # Strip ANSI and collapse whitespace: Rich wraps long flags across lines and
+    # pads with escape codes, so a naive substring check reports false missing.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    plain = re.sub(r"\s+", " ", plain)
+    # Rich may break a flag at a hyphen when the panel is narrow.
+    dehyphenated = plain.replace("- ", "-")
+
+    missing = sorted(
+        opt for opt in declared
+        if opt not in plain and opt not in dehyphenated
+    )
+    assert not missing, (
+        f"{' '.join(command_path)} --help omitted {missing} of {sorted(declared)} "
+        f"[{_version_context()}]\n--- rendered ---\n{plain}"
+    )
