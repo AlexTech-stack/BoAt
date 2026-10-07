@@ -98,14 +98,25 @@ TEST_CASE("UDS concurrent large SHM payloads stay correlated per client", "[inte
   std::string pa(kSize, 'A');
   std::string pb(kSize, 'B');
 
+  /* Results are recorded here and asserted on the main thread after the joins,
+     rather than REQUIRE'd inside the threads. Catch2's assertion machinery is
+     not thread-safe -- two threads asserting concurrently race on
+     RunContext::resetAssertionInfo/assertionPassed, which TSan reports as data
+     races inside catch_run_context.cpp. The race was in the test framework, not
+     in the code under test, but it still failed the tsan job and it drowned out
+     the real finding in this file. */
   std::atomic<bool> go{false};
+  std::atomic<bool> c1_connected{false}, c1_sent{false};
+  std::atomic<bool> c2_connected{false}, c2_sent{false};
   std::thread t1([&] {
     while (!go.load()) {
       std::this_thread::yield();
     }
     boat::ipc::UdsClient c1;
-    REQUIRE(c1.Connect(socket_path));
-    REQUIRE(c1.SendQueryStateCommand(pa).ok());
+    c1_connected.store(c1.Connect(socket_path));
+    if (c1_connected.load()) {
+      c1_sent.store(c1.SendQueryStateCommand(pa).ok());
+    }
     c1.Disconnect();
   });
   std::thread t2([&] {
@@ -113,13 +124,20 @@ TEST_CASE("UDS concurrent large SHM payloads stay correlated per client", "[inte
       std::this_thread::yield();
     }
     boat::ipc::UdsClient c2;
-    REQUIRE(c2.Connect(socket_path));
-    REQUIRE(c2.SendQueryStateCommand(pb).ok());
+    c2_connected.store(c2.Connect(socket_path));
+    if (c2_connected.load()) {
+      c2_sent.store(c2.SendQueryStateCommand(pb).ok());
+    }
     c2.Disconnect();
   });
   go.store(true);
   t1.join();
   t2.join();
+
+  REQUIRE(c1_connected.load());
+  REQUIRE(c1_sent.load());
+  REQUIRE(c2_connected.load());
+  REQUIRE(c2_sent.load());
 
   server.Stop();
   REQUIRE(received.size() == 2);

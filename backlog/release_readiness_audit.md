@@ -817,3 +817,49 @@ shows more than before: the IPC control transport (18 reports, the biggest clust
 But races reported in the replay path deserve a proper look rather than a shrug, given that
 reproducibility is the product's central claim. **Severity: should-fix, and the determinism-path
 races first.**
+
+---
+
+## N19 — the UDS "re-entrant lock" was two different things, neither of them re-entrancy
+
+I labelled this a re-entrant lock from a stack I had over-filtered. **That was wrong**, and
+checking it properly first is the only reason the real bugs were found. For the record, what is
+*not* true: `EvictOldestLocked()` is called under the lock and correctly does not lock; there are
+three lock sites in the file and none nests; `ShmSubscriber::Close()` does join its poll thread,
+and `~UdsServer()` calls `Stop()`, which closes the subscriber before clearing the queues. The
+lifetime discipline was already right.
+
+Reproducing locally under TSan — now possible because the N15 dependency bump fixed the CMake 4
+blocker — settled it. Each UDS test run **alone** is clean; run **together** the binary exits 66
+with 10 data races. So the failure is real and reproducible, just not the thing TSan's
+`double lock of a mutex` label pointed at.
+
+**N19a — data race and file-descriptor reuse hazard in `UdsServer::Stop()`.** `FIXED.` `Stop()`
+did `shutdown()`, `close()`, `listen_fd_ = -1`, **and only then joined the accept thread**.
+`AcceptLoop()` reads `listen_fd_` on every iteration in `::accept(listen_fd_, ...)`, so the write
+at `uds_server.cpp:85` raced that read. The race is the smaller half: closing before the join
+means the accept thread could call `accept()` on a descriptor that had already been closed, and
+whose number may by then have been handed to something else in the process. Reordered to
+`shutdown()` → join → `close()`/clear, so the descriptor is only mutated once there is no other
+reader. Verified: `uds_server.cpp` race reports **4 → 0**.
+
+**N19b — the tests asserted from spawned threads.** `FIXED.` The remaining 9 races were all
+inside Catch2's own `catch_run_context.cpp`
+(`RunContext::resetAssertionInfo`, `assertionPassed`), reached from
+`test_ipc_control_transport.cpp:107-119`: *"UDS concurrent large SHM payloads stay correlated per
+client"* called `REQUIRE` from two `std::thread`s, and Catch2's assertion machinery is not
+thread-safe. A test-framework race rather than a product one, but it still failed the `tsan` job
+and it masked N19a. The threads now record outcomes into atomics and the assertions happen on the
+main thread after the joins. A repo-wide check found this file to be the only place that asserts
+from a spawned thread (4 assertions).
+
+Result: the UDS binary is **TSan-clean** — exit 0, 0 data races, 0 double locks, 28/28 assertions.
+
+**Still unexplained: the `double lock of a mutex` reports do not reproduce locally at all** — 0
+locally, both per-test and all-together, against 6 UDS and 2 CanTp reports in CI on the same
+commit. They are timing-sensitive and CI's runners are smaller. So I cannot say whether they are
+a real rare defect or a TSan bookkeeping artefact, and I am not going to guess a fourth time: my
+previous three readings of that label were each wrong about the mechanism. What can be said is
+that the CanTp fix in `6eeb365` did what it claimed — `Location is stack of thread` went **4 → 0**
+and the mutex now lives on the heap — while the double-lock count was unchanged, which means the
+two were never the same issue. **Severity: unknown; needs a reproduction before any fix.**
