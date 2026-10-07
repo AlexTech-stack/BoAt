@@ -85,14 +85,14 @@ FetchContent_Declare(
 FetchContent_Declare(
   protobuf
   GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
-  GIT_TAG v27.3
+  GIT_TAG v31.1
   OVERRIDE_FIND_PACKAGE
 )
 
 FetchContent_Declare(
   gRPC
   GIT_REPOSITORY https://github.com/grpc/grpc.git
-  GIT_TAG v1.65.0
+  GIT_TAG v1.75.0
 )
 
 FetchContent_Declare(

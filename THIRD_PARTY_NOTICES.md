@@ -17,8 +17,8 @@ Declared via CMake `FetchContent` in `boat-platform/CMakeLists.txt` and
 
 | Component | Version | License |
 | --- | --- | --- |
-| [gRPC](https://github.com/grpc/grpc) | v1.65.0 | Apache-2.0 |
-| [Protocol Buffers](https://github.com/protocolbuffers/protobuf) | v27.3 | BSD-3-Clause |
+| [gRPC](https://github.com/grpc/grpc) | v1.75.0 | Apache-2.0 |
+| [Protocol Buffers](https://github.com/protocolbuffers/protobuf) | v31.1 | BSD-3-Clause |
 | [spdlog](https://github.com/gabime/spdlog) | v1.14.1 | MIT |
 | [iceoryx2](https://github.com/eclipse-iceoryx/iceoryx2) | v0.4.1 | Apache-2.0 OR MIT |
 | [Eclipse iceoryx](https://github.com/eclipse-iceoryx/iceoryx) (`iceoryx_hoofs`, pulled in by iceoryx2) | transitive | Apache-2.0 |

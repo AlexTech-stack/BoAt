@@ -11,7 +11,15 @@ The plugin ABI is versioned separately from the project; see
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- Bumped gRPC v1.65.0 → **v1.75.0** and Protocol Buffers v27.3 → **v31.1**, so the project
+  configures under **CMake 4.x**. gRPC's bundled c-ares declared
+  `cmake_minimum_required(VERSION 3.1.0)` up to and including v1.74.1, and CMake 4.0 removed
+  compatibility with minimums below 3.5 — so a clean checkout could not configure on any CMake
+  4 host. v1.75.0 is the first release whose c-ares uses `3.5.0...3.10.0`. The two move together
+  because `gRPC_PROTOBUF_PROVIDER "package"` points gRPC at the separately fetched protobuf,
+  and v1.75.0 pins v31.1.
 
 ## [0.1.0] — 2026-10-06
 

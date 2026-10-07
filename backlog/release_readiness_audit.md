@@ -718,3 +718,51 @@ investigation rather than a guess:
 
 Until those land, `tsan` stays red. Worth being explicit that this is not a regression: both
 jobs were red before this branch existed — they had simply never run, so nobody could see it.
+
+---
+
+## N15 — the project did not build under CMake 4.x. `FIXED.`
+
+Found while trying to verify the N13 leak fix locally: `cmake --preset asan` failed on this
+machine with
+
+```
+CMake Error at .../grpc-src/third_party/cares/cares/CMakeLists.txt:1:
+  Compatibility with CMake < 3.5 has been removed from CMake.
+```
+
+gRPC's bundled c-ares declared `cmake_minimum_required(VERSION 3.1.0)`, and CMake **4.0**
+removed support for minimums below 3.5. A clean checkout therefore could not configure on any
+CMake 4 host — and CMake 4.0 shipped in 2025, so that is current distros, not a future problem.
+`CMakePresets.json` declares 3.24 as the floor, which is true, but nothing stated the ceiling.
+
+Two things disguised it. CI passes because GitHub's runners still ship CMake 3.x — so this
+would have broken the moment the runner images moved. And `build/debug` on the maintainer's
+machine carries `CMAKE_POLICY_VERSION_MINIMUM:UNINITIALIZED=3.5` in its **cache**, set by hand
+at some point; that value appears in no tracked file, so the build worked locally for one
+person via a workaround nobody else had.
+
+**Fixed by bumping, not by overriding the policy**, so the problem is actually gone rather than
+suppressed. gRPC **v1.65.0 → v1.75.0**, the first release whose c-ares uses
+`3.5.0...3.10.0`; v1.74.1 and everything before it is still on `3.1.0`. Protocol Buffers
+**v27.3 → v31.1** moves with it, because `gRPC_PROTOBUF_PROVIDER "package"` points gRPC at the
+separately fetched copy and v1.75.0 pins v31.1 — four major protobuf versions, which is the
+real risk in this change and why it was built rather than just configured.
+
+Verified on CMake 4.2.3 from a cold build directory: configure clean (337 s), build clean
+(2680/2680, no protobuf 27→31 source breakage in BoAt's own code), `ctest` **164/164 with and
+without `BOAT_HIL_ENABLED=1`**, and **zero** phantom tests — the re2 and zlib `add_test`
+suppressions from N-earlier still bite against the new gRPC, which was not a given since the
+zlib one is a literal string replace that would silently no-op if upstream had reworded it.
+
+Incidentally answered: zlib in v1.75.0 is still `cmake_minimum_required(VERSION 2.4.4...3.15.0)`
+and CMake 4 accepts it. A sub-3.5 minimum is only rejected in the bare form; the range form is
+the sanctioned remedy. c-ares really was the only blocker.
+
+**N16 — `FetchContent_Populate` is deprecated, and that is the next version of this.** The same
+configure emits `Calling FetchContent_Populate(sqlite3) is deprecated ... the ability to call it
+with declared details will be removed completely in a future version` (CMP0169).
+`CMakeLists.txt` uses it in three places — the gRPC patch block, the iceoryx2 patch block, and
+sqlite3. Today a warning; on removal it becomes exactly the breakage N15 just was. The two patch
+blocks cannot simply become `FetchContent_MakeAvailable` because they exist to rewrite the
+fetched sources *before* `add_subdirectory`. **Severity: should-fix, before it becomes urgent.**
