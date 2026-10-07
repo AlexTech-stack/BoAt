@@ -21,8 +21,14 @@ namespace boat::hil {
  *   veth1  →  239.255.0.2 : 51001
  *   ...
  *
- * IP_MULTICAST_LOOP is enabled so that frames sent on this machine are also
- * delivered to subscribers on the same machine.
+ * IP_MULTICAST_LOOP is *disabled* (see Open()): EthernetBusRegistry dispatches
+ * sent frames to subscribers directly via DispatchRx, so looping them back
+ * through the socket would double-deliver every frame. One consequence worth
+ * knowing: a datagram sent here is therefore not delivered to any socket on
+ * this host, including another process's -- only to other machines.
+ *
+ * ReadFrame() uses a 100 ms SO_RCVTIMEO and returns false on expiry, so an
+ * idle interface yields a steady stream of false rather than blocking.
  *
  * Frame serialisation (16-byte header + payload):
  *   [6]  src_mac

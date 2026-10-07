@@ -1,7 +1,7 @@
 # API Specification
 
 All protobuf service files are defined under `proto/boat/v1/`, package `boat.v1`.
-16 gRPC services across 18 `.proto` files.
+14 gRPC services across 16 `.proto` files, 64 RPCs in total.
 
 ### `simulation.proto` — SimulationService (9 RPCs)
 
@@ -82,31 +82,24 @@ Replay session identity: `StartReplay` returns `ReplayControlResponse.replay_id`
 | `InjectFault` | Unary | Schedule fault injection for simulation |
 | `ListFaults` | Unary | Paginated fault event listing |
 
-### `frame.proto` — FrameService (3 RPCs)
+### `frame.proto` — FrameService (4 RPCs)
 
 | Method | Type | Description |
 |---|---|---|
 | `SendFrame` | Unary | Transmit a unified BoatFrame (CAN, CANFD, Ethernet, TCP, PDU) |
 | `SubscribeFrames` | Server-streaming | Stream incoming frames by bus type filter |
 | `StreamFrames` | Bidirectional-streaming | Send and receive frames over one long-lived stream |
+| `ListInterfaces` | Unary | List every CAN and Ethernet interface the gateway has open, with per-interface metadata |
 
-Unified frame send/subscribe endpoint that replaces the older `CanService` and `EthernetService` for new development. The `Frame` message carries a `bus_type` discriminator (CAN, CANFD, ETHERNET, TCP, PDU) and per-bus metadata in a `oneof` block.
+The one send/subscribe endpoint for every bus type. The `Frame` message carries a `bus_type` discriminator (CAN, CANFD, ETHERNET, TCP, PDU) and per-bus metadata in a `oneof` block.
 
-### `can.proto` — CanService (3 RPCs)
+`CanService` (`can.proto`) and `EthernetService` (`ethernet.proto`) were **deleted**, not deprecated — `FrameService` absorbed all six of their RPCs:
 
-| Method | Type | Description |
-|---|---|---|
-| `SendCanFrame` | Unary | Transmit a CAN/CAN FD frame on a registered interface |
-| `SubscribeCanFrames` | Server-streaming | Stream incoming CAN frames (with optional interface filter) |
-| `ListBuses` | Unary | List registered CAN interfaces with metadata (driver, state, FD support, bitrate) |
-
-### `ethernet.proto` — EthernetService (3 RPCs)
-
-| Method | Type | Description |
-|---|---|---|
-| `SendFrame` | Unary | Transmit an Ethernet frame |
-| `SubscribeFrames` | Server-streaming | Stream incoming Ethernet frames |
-| `ListInterfaces` | Unary | List registered Ethernet interfaces |
+| Deleted RPC | Replacement |
+|---|---|
+| `CanService.SendCanFrame`, `EthernetService.SendFrame` | `FrameService.SendFrame` with `bus_type` set |
+| `CanService.SubscribeCanFrames`, `EthernetService.SubscribeFrames` | `FrameService.SubscribeFrames` with `bus_types` / `iface_filter` |
+| `CanService.ListBuses`, `EthernetService.ListInterfaces` | `FrameService.ListInterfaces` |
 
 ### `bus.proto` — BusService (2 RPCs)
 

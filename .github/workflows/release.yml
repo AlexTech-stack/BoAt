@@ -1,0 +1,99 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+#
+# Relocated from boat-platform/.github/workflows/, where GitHub Actions never
+# saw it. Workflows are only discovered at the repository root.
+#
+# Triggers on a v*.*.* tag. The repository has no tags yet, so this has never
+# run -- push the first tag on a throwaway branch and check both jobs before
+# tagging a real release.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  package:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: boat-platform
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        # Not installing cmake from apt: Ubuntu 22.04 ships 3.22 and the presets
+        # need 3.24+, so apt would shadow the runner's newer cmake.
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev rpm
+      - name: Verify toolchain versions
+        run: |
+          cmake --version
+          cargo --version
+      - name: Configure + build
+        run: cmake --preset release && cmake --build --preset release
+      - name: Create package
+        working-directory: boat-platform/build/release
+        run: cpack -G "TGZ;DEB;RPM"
+      - name: Verify package artifacts exist
+        run: |
+          ls build/release/*.tar.gz
+          ls build/release/*.deb
+          ls build/release/*.rpm
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          # upload-artifact paths are relative to the workspace root, not to the
+          # job's working-directory.
+          path: |
+            boat-platform/build/release/*.tar.gz
+            boat-platform/build/release/*.deb
+            boat-platform/build/release/*.rpm
+
+  docker-push:
+    runs-on: ubuntu-22.04
+    needs: package
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: boat-platform
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
+      - name: Configure + build runtime binary
+        run: cmake --preset release && cmake --build --preset release --target boat_gateway
+      - name: Verify runtime binary exists for Dockerfile
+        run: ls build/release/src/gateway/grpc_gateway/boat_gateway
+      - name: Compute image name
+        # GHCR namespaces follow the GitHub owner, so a hardcoded
+        # ghcr.io/boat-platform/... is denied from any other account -- and the
+        # registry rejects uppercase, which `github.repository` contains. Derive
+        # and lowercase it so this works in whatever namespace the repo lives.
+        id: img
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push multi-arch runtime image
+        uses: docker/build-push-action@v5
+        with:
+          # Dockerfile.runtime lives in boat-platform/ and expects it as context.
+          context: boat-platform
+          file: boat-platform/Dockerfile.runtime
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.img.outputs.name }}:${{ github.ref_name }}
+            ${{ steps.img.outputs.name }}:latest

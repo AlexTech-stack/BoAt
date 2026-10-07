@@ -1,0 +1,11 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/AlexTech-stack/BoAt/security/advisories/new
+    about: Report privately, not as a public issue. See SECURITY.md.
+  - name: Known gaps and backlogs
+    url: https://github.com/AlexTech-stack/BoAt/tree/master/backlog
+    about: Open issues, gap analyses and incident write-ups — worth checking before filing.

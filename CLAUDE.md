@@ -25,6 +25,13 @@ The bulk of the code lives under `boat-platform/`. `admin_gui/` (PySide6 desktop
 ## License
 
 The project is **Apache-2.0** (`LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md` at the repo root).
+Community and release files sit beside them: `CONTRIBUTING.md` (build, test, and the house rules
+-- including the CLAUDE.md/AGENTS.md dual-file rule and the determinism constraints),
+`SECURITY.md` (reporting, plus an honest account of the permissive defaults: unauthenticated
+gRPC, arbitrary `.so` loading, replay writing to physical buses), `CODE_OF_CONDUCT.md`,
+`CHANGELOG.md` (Keep a Changelog; breaking changes marked), and `.github/ISSUE_TEMPLATE/` +
+`PULL_REQUEST_TEMPLATE.md`. **If you change a fact these state, update them too** -- the PR
+template's checklist is where contributors are reminded of the dual-file rule.
 
 - **New source files get a two-line SPDX header** matching the surrounding files — the
   comment prefix follows the language (`//`, `#`, `--`):
@@ -84,13 +91,30 @@ cmake --preset debug && cmake --build --preset debug
 # Gateway binary:
 build/debug/src/gateway/grpc_gateway/boat_gateway
 
-# C++ tests (Catch2 via ctest)
-ctest --preset release --output-on-failure
+# C++ tests (Catch2 via ctest) — a test preset exists per configure preset
+ctest --preset debug                       # 164 tests; 7 HIL ones Skipped unless BOAT_HIL_ENABLED=1
+BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 164 run
 ctest --test-dir build/debug -R TestName --timeout 30 --output-on-failure   # single test
 ctest --test-dir build/debug -N                                             # list tests
 ```
 
+Every test preset sets `timeout` and **`noTestsAction: "error"`**. That last one matters:
+plain `ctest -R <filter>` exits **0** when the filter matches nothing, which is how two CI
+gates (`-R boat_hil_smoke`, `-R boat_determinism_seed`) passed for months while running zero
+tests. `catch_discover_tests` registers Catch2 **test-case names**, not target names — so
+filter on the case name ("Virtual CAN HIL smoke flow"), or on `-R HIL`, never on the binary.
+
+Register tests with **`boat_discover_tests()`** (`cmake/BoAtTest.cmake`), not
+`catch_discover_tests()` directly: it adds `SKIP_RETURN_CODE 4`, without which a Catch2
+`SKIP()` is reported as a ctest *failure*.
+
 Test-binary naming: `boat_unit_*`, `boat_integration_*`, `boat_hil_*`, `boat_determinism_{seed,replay}`. `src/tests/unit/test_frame.cpp` (`boat_unit_frame`) is a good reference for the unified frame model.
+
+**CI lives in `.github/workflows/` at the repository root**, not under `boat-platform/` —
+GitHub only discovers workflows at the root, and these sat unread in `boat-platform/.github/`
+for the project's whole history. The C++ project root is `boat-platform/`, so build jobs set
+`working-directory: boat-platform` and the Docker jobs set `context: boat-platform`; the
+Python job deliberately runs from the repo root because `ui/tests` lives there.
 
 **Three different things are called "test" here** — be precise about which you mean:
 `ctest`/`pytest` (tests of the codebase itself); `test/*.md` (the **manual**, hand-verified
@@ -99,6 +123,13 @@ release sign-off record — never update those verdicts programmatically); and
 `EnvironmentConfig` + a `ManifestConfig` drive `TestSuiteRunner`, which spins up or connects
 to a gateway, runs each test file as a subprocess, and writes JSON/JUnit/HTML reports —
 `boat_cli/test.py`, `config/tests/{env,manifest}_*.json`).
+
+**Relative paths inside a manifest or environment config resolve against that file's own
+directory**, not the caller's working directory — `ManifestConfig.resolve()` /
+`EnvironmentConfig.resolve_path()`, each falling back to the CWD so older project-root-relative
+manifests still load. That is what makes `boat test run <manifest>` work from anywhere; it
+used to only work from `boat-platform/`. A configured `gateway.binary` that cannot be found
+now raises instead of silently not starting a gateway.
 
 Python SDK + CLI:
 
@@ -142,7 +173,7 @@ Key env vars (`src/gateway/grpc_gateway/main.cpp` is the authoritative list):
 Subcommands (`cli/boat_cli/main.py`): `ai`, `sim`, `scenario`, `replay`, `plugin`, `can-tp`, `frame`, `pdu`, `db`, `test`, `trace`, `config`.
 
 ```bash
-boat sim init|start|pause|step|stop
+boat sim create --scenario <id>|start|pause|step|state|stop|reset|list|watch   # `create`, not `init`
 boat frame send --bus-type can --can-id 0x123 --iface vcan0 --data AABBCCDD   # unified send
 boat frame subscribe --bus-types can                                          # unified subscribe
 boat frame list-ifaces                      # list CAN + Ethernet interfaces the gateway sees
@@ -168,9 +199,11 @@ interface actually opened, each plugin's verbatim config and load result, and a
 its configuration next to the trace it produced. The document deliberately
 carries **no timestamp or hostname** — two identically configured runs must emit
 byte-identical JSON, or it cannot be diffed to prove they were configured the
-same way. There is still no JSON *parser* in the C++ tree (plugin config is
+same way. No JSON *parser* is involved in the config path (plugin config is
 passed through verbatim and quoted, never re-parsed); `effective_config.cpp`
-only emits.
+only emits. The tree does contain one hand-rolled JSON parser, in
+`src/core/scenario/scenario_loader.cpp`, used solely to load scenario documents
+-- don't take it as licence to parse config.
 
 Programmatic: `from boat.client import BoAtClient` / `from boat.frame_node import FrameNode` (e.g. `node.send_can("vcan0", 0x123, b"...")`). `FrameNode` is **composed, not subclassed** — `subscribe(callback, bus_types=[...], iface_filter="")` takes a callback, and the callback receives a unified `boat.v1.Frame` whose metadata is under `.can` / `.eth` and whose bytes are `.payload`. Every `*Node` class and `BoAtClient` resolve their gateway address the same way: explicit `address=` > `BOAT_HOST` env var > `localhost:50051` — which is what keeps node scripts portable across gateways. The `boat` CLI's `--host` flag follows the same order.
 
@@ -191,7 +224,7 @@ Each web service resolves the SDK via `sys.path.insert(0, ...)` relative to its 
 
 - **`vcan*` vs physical** driver selection is decided at gateway startup — new driver behavior usually belongs in `VirtualCanDriver` vs `PhysicalCanDriver`.
 - `add_boat_plugin()` (`cmake/BoAtPlugin.cmake`) is the macro for registering a new plugin target; it also copies an optional `<name>.schema.json` config sidecar next to the `.so`, which `admin_gui` reads to build per-key config fields. `BoAtProto.cmake` wraps protobuf generation.
-- Coverage: `gcovr --root . --exclude build/ --xml coverage.xml`. Packaging: `cpack -G "TGZ;DEB;RPM"`. Docker: `ghcr.io/boat-platform/boat-platform:*`.
+- Coverage: `gcovr --root . --exclude build/ --xml coverage.xml`. Packaging: `cpack -G "TGZ;DEB;RPM"`. Docker: images are tagged `ghcr.io/<owner>/<repo>` lowercased, derived from `github.repository` in CI -- so `ghcr.io/alextech-stack/boat:*` for this repo. It was hardcoded to `ghcr.io/boat-platform/...`, a namespace the repo does not live in, which GHCR would have denied on the first tag push.
 - System-test structure/conventions: `test/Structure.md`. Per-feature manual runbooks: `boat-platform/docs/testing/`. LLM cost-control guidance: `boat-platform/docs/ai/llm-cost-control.md`.
 - Open issues and incident write-ups live in `backlog/*.md` — worth grepping before assuming a rough edge is unknown.
 

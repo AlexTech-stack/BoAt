@@ -120,15 +120,39 @@ boat frame send --bus-type ethernet --ethertype 0x0800 --dst-ip 10.0.0.1 --data 
 ## Test
 
 ```bash
-# C++ (Catch2)
-ctest --preset release --output-on-failure
+# C++ (Catch2) — one test preset per configure preset: debug, release, asan, tsan, coverage
+ctest --preset debug                     # 164 tests; the 7 HIL ones report Skipped
+BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 164 actually run
 ctest --test-dir build/debug -R TestName --timeout 30 --output-on-failure
 ctest --test-dir build/debug -N  # list tests
 
-# Python SDK + CLI
-pip install -e ./sdk/python[dev] && pip install -e ./cli
-pytest sdk/python/tests cli/tests -v
+# Python SDK + CLI (run from the REPO ROOT: ui/tests lives there, not under boat-platform/)
+pip install -e ./boat-platform/sdk/python[dev] && pip install -e ./boat-platform/cli
+pip install -r ui/requirements.txt       # ui/ services import fastapi/uvicorn/pydantic
+pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests -v   # 538 tests
 ```
+
+Three things that made `ctest` lie, all now fixed — don't reintroduce them:
+
+- **Register with `boat_discover_tests()`** (`cmake/BoAtTest.cmake`), never
+  `catch_discover_tests()` directly. It adds `SKIP_RETURN_CODE 4`; without it a Catch2
+  `SKIP()` is reported as a ctest **failure**, which is how the 7 HIL tests showed up as 7
+  red entries in an otherwise green run.
+- **`-R` filters match Catch2 test-case names, not target names.** `-R boat_hil_smoke` and
+  `-R boat_determinism_seed` both match *zero* tests, and plain `ctest` exits **0** on a
+  zero-match filter — so two CI gates reported success while running nothing. Every test
+  preset now sets `noTestsAction: "error"`. Filter on the case name, or on `-R HIL`.
+- **Third-party deps must not register their tests.** `gRPC_BUILD_TESTS=OFF` does not reach
+  gRPC's bundled `third_party/re2` (whose `RE2_BUILD_TESTING` defaults ON) or its `zlib`
+  (which calls `add_test` unconditionally, with no option at all). `CMakeLists.txt` forces
+  `RE2_BUILD_TESTING=OFF` and patches zlib's `add_test` lines out. They were 22 phantom
+  "Not Run" failures, because `EXCLUDE_FROM_ALL` means their binaries never get built.
+
+**CI lives in `.github/workflows/` at the repository root.** It previously sat in
+`boat-platform/.github/workflows/`, which GitHub Actions never reads — so it had never run
+once, which is why the above could rot undetected. The C++ project root is `boat-platform/`,
+so build jobs set `working-directory: boat-platform` and Docker jobs `context: boat-platform`.
+`release.yml` fires on a `v*.*.*` tag and the repo has no tags yet, so it is still unproven.
 
 Test binary naming: `boat_unit_*` (unit), `boat_integration_*`, `boat_hil_*`, `boat_determinism_*`.
 
@@ -168,7 +192,17 @@ repo -- worth being precise about which one is meant:**
    spins up (or connects to, if `gateway.binary` is left unset) one
    gateway per run, executes each test file with a timeout
    (sequentially or `--parallel N`), and writes a JSON/JUnit/HTML/
-   optional-Allure report per test. `boat test list-environments/
+   optional-Allure report per test.
+   **Relative paths inside a manifest or env config resolve against that
+   file's own directory**, not the caller's CWD -- `ManifestConfig.resolve()`
+   and `EnvironmentConfig.resolve_path()`, both falling back to the CWD so
+   older project-root-relative manifests keep loading, and each test
+   subprocess runs with `cwd` set to the manifest's directory. Before that,
+   `boat test run config/tests/manifest_can_loopback.json` only worked from
+   `boat-platform/`: from anywhere else it died with "Config not found", and
+   an unresolvable `gateway.binary` was skipped **silently**, so no gateway
+   started and the test failed with an opaque connection error instead. A
+   `gateway.binary` that cannot be found now raises. `boat test list-environments/
    show-config/validate-config/check-env/run`. As of 2026-08-17 this had
    never actually been executed end-to-end in this repo -- verifying it
    for real surfaced and fixed two genuine bugs (a preflight check that
@@ -192,7 +226,7 @@ bash boat-platform/sdk/python/boat/stubs/generate_stubs.sh
 
 # CLI
 boat --help
-boat sim init|start|pause|step|stop
+boat sim create --scenario <id>|start|pause|step|state|stop|reset|list|watch   # `create`, not `init`
 boat frame send|subscribe|list-ifaces
 boat scenario create|validate|get|list
 
@@ -685,9 +719,11 @@ boat config show -o effective-config.json                 # DebugService.GetEffe
 - A plugin's config is emitted as a JSON **string**, not an inlined object. The
   gateway never parses plugin config, and quoting it is the only way to guarantee
   the document stays well-formed whatever the operator passed.
-- There is still **no JSON parser** in the C++ tree, by choice — `effective_config.cpp`
+- **No JSON parser is involved in the config path**, by choice — `effective_config.cpp`
   only *emits*, which needs nothing but string escaping (`JsonEscape`). Don't pull in
-  a JSON dependency to "improve" this without a reason that needs parsing.
+  a JSON dependency to "improve" this without a reason that needs parsing. (The tree
+  does have one hand-rolled parser, `src/core/scenario/scenario_loader.cpp`, for scenario
+  documents only — it is not a precedent for config.)
 - Validation is warn-not-fatal: a plugin that fails to load, or an interface that
   fails to open, still leaves the gateway running (a bench that dies over one
   optional plugin is worse) but is now recorded rather than scrolling past on stderr.
@@ -762,7 +798,31 @@ at `BOAT_NODE_TICK_MS`/`_US` rather than a hard-coded 1 ms.
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`.
-- Docker images pushed to `ghcr.io/boat-platform/boat-platform:*`.
+- Docker images are tagged `ghcr.io/<owner>/<repo>` lowercased, derived from `github.repository` in CI, i.e. `ghcr.io/alextech-stack/boat:*` for this repo.
+  GHCR namespaces follow the GitHub owner and the registry rejects uppercase, so the old
+  hardcoded `ghcr.io/boat-platform/boat-platform` would have been denied on the first tag.
+
+## Project meta files
+
+Beside `LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md` at the repo root:
+
+- `CONTRIBUTING.md` — prerequisites, both test invocations, the three ctest gotchas
+  (`boat_discover_tests`, `-R` matching case names not target names, third-party deps
+  registering their tests), the SPDX header rule, stub regeneration, the CLAUDE.md/AGENTS.md
+  dual-file rule, the determinism constraints, and the versioning policy (project semver
+  pre-1.0, the separately versioned plugin ABI, gRPC additive-where-possible).
+- `SECURITY.md` — private reporting, and the permissive-by-design defaults stated plainly:
+  the gRPC API is unauthenticated and plaintext unless TLS is enabled, the gateway `dlopen()`s
+  whatever plugin path it is given, and frame-send/replay write to real hardware when a physical
+  interface is open.
+- `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1 by reference.
+- `CHANGELOG.md` — Keep a Changelog. `[0.1.0]` describes the state at the first tag rather than
+  replaying the ~320 commits before it; breaking changes are marked **BREAKING**.
+- `.github/ISSUE_TEMPLATE/{bug_report,feature_request,config}.yml` and
+  `.github/PULL_REQUEST_TEMPLATE.md` — the PR checklist is where the dual-file rule is enforced
+  socially, since nothing fails when the two files disagree.
+
+If you change a fact one of these states, update it there too.
 
 ## License
 

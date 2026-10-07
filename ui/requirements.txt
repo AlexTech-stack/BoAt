@@ -1,0 +1,10 @@
+# Runtime dependencies of the standalone ui/ FastAPI services.
+#
+# The SDK itself (boat-py, which brings grpcio and protobuf) is resolved by each
+# service via sys.path relative to its own script, so it is deliberately not
+# listed here -- install it with `pip install -e ./boat-platform/sdk/python`.
+#
+# Licenses for these are recorded in THIRD_PARTY_NOTICES.md.
+fastapi
+uvicorn
+pydantic

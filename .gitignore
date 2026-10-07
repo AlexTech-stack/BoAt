@@ -2,6 +2,9 @@
 boat-platform/build/
 
 # Python
+# setuptools leaves these behind on any `pip install` from the source tree
+boat-platform/sdk/python/build/
+boat-platform/cli/build/
 **/__pycache__/
 .claude/
 *.pyc
@@ -13,6 +16,9 @@ boat-platform/build/
 *.db
 *.db-shm
 *.db-wal
+
+# Generated test-suite reports (`boat test run` writes these next to the CWD)
+reports/
 
 # Recorded trace files (runtime data)
 boat-platform/traces/

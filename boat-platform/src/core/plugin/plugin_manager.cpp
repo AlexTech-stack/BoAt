@@ -220,6 +220,18 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
         fn_shared.get());
     handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
+  /* Colliding on an existing key is intended -- two instances configured for
+     the same iface are a real bus-level conflict and "second wins" is the
+     chosen behaviour -- but the displaced handle still has to be destroyed.
+     Assigning over the map entry simply dropped it, so the first instance
+     leaked its BoatPlugin and never had destroy_fn or dlclose called.
+     Unload() is precisely the right sequence (erase, drop services, drain
+     busy_count_, destroy outside the locks) and returns immediately when the
+     key is absent, which is the common case. Its services_ compare-and-erase
+     was written for exactly this situation: the new instance registered its
+     services above, overwriting the old entry, so comparing by pointer leaves
+     the new registration untouched while clearing only a genuinely stale one. */
+  Unload(handle.name);
   {
     std::lock_guard<std::mutex> lock(mutex_);
     plugins_[handle.name] = handle;
@@ -285,6 +297,43 @@ void PluginManager::DestroyHandle(PluginHandle& handle) noexcept {
 #endif
   handle.plugin = nullptr;
   handle.dl_handle = nullptr;
+}
+
+PluginManager::~PluginManager() {
+  /* Same sequence as Unload(), applied to everything at once: drop the
+     handles out of both maps so nothing new can reach them, drain the
+     callbacks already in flight, then destroy outside every lock. The lock
+     order matters -- mutex_ and services_mutex_ are taken one at a time,
+     never nested, matching Unload(). */
+  std::vector<PluginHandle> to_destroy;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& entry : plugins_) to_destroy.push_back(std::move(entry.second));
+    plugins_.clear();
+  }
+  {
+    // Unload() compares-and-erases because a newer instance may have taken
+    // over a service name. Here the whole manager is going away, so every
+    // registration it owns goes with it.
+    std::lock_guard<std::mutex> lock(services_mutex_);
+    services_.clear();
+  }
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    /* Waiting is only safe when this thread is not itself inside a plugin
+       callback -- busy_count_ would include us and never reach 0. Reaching
+       here with t_busy_depth > 0 means the manager is being destroyed from
+       within one of its own plugins' callbacks, which is a caller bug; hang
+       is the worse failure, so skip the drain and accept the risk rather
+       than deadlock a shutting-down gateway. */
+    if (t_busy_depth == 0) {
+      busy_cv_.wait(lock, [this] { return busy_count_ == 0; });
+    }
+    // A concurrent Unload() may have handed a handle off while we drained.
+    for (auto& handle : pending_destroy_) to_destroy.push_back(std::move(handle));
+    pending_destroy_.clear();
+  }
+  for (auto& handle : to_destroy) DestroyHandle(handle);
 }
 
 void PluginManager::Unload(const std::string& name) {

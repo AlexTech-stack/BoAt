@@ -34,7 +34,12 @@ bool SignalRouter::SpscRingBuffer::Pop(SignalEvent& out) {
   return true;
 }
 
-SignalRouter::SignalRouter() : dispatcher_thread_(&SignalRouter::DispatchLoop, this) {}
+SignalRouter::SignalRouter() {
+  // Started here, not in the member-init list: the thread must not run until
+  // every member it touches is constructed. See the note on
+  // dispatcher_thread_'s declaration.
+  dispatcher_thread_ = std::thread(&SignalRouter::DispatchLoop, this);
+}
 
 SignalRouter::~SignalRouter() {
   running_.store(false, std::memory_order_release);

@@ -1,0 +1,294 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+#
+# GitHub Actions only discovers workflows in `.github/workflows/` at the
+# REPOSITORY ROOT. This file previously lived in `boat-platform/.github/`, where
+# it was never run -- which is why `ctest` was able to stay red for so long.
+#
+# The C++ project root is `boat-platform/`, not the repo root, so the jobs that
+# build it set `working-directory: boat-platform`. The Python job deliberately
+# runs from the repo root instead, because `ui/tests` lives there while the SDK
+# and CLI tests live under `boat-platform/`.
+
+name: ci
+
+on:
+  push:
+    branches: [main, master, "release/*"]
+  pull_request:
+    branches: [main, master, "release/*"]
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: boat-platform
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        # Deliberately NOT installing cmake from apt: Ubuntu 22.04 ships 3.22 and
+        # this project needs 3.24+, so apt would shadow the runner's newer cmake
+        # with one too old to configure the presets.
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
+      - name: Verify toolchain versions
+        run: |
+          cmake --version
+          # Plain shell, deliberately: `cmake -P /dev/stdin` with a heredoc needs
+          # a seekable file, and on a runner the heredoc is a pipe -- it fails
+          # with "Error while reading Byte-Order-Mark. File not seekable?".
+          # It passed locally only because bash happened to back that heredoc
+          # with a temp file.
+          have=$(cmake --version | head -1 | awk '{print $3}')
+          need=3.24
+          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -1)" != "$need" ]; then
+            echo "::error::CMake ${need}+ required, found ${have}"
+            exit 1
+          fi
+          # iceoryx2's Rust core is a build-time dependency; runner images ship
+          # cargo, so assert it rather than reinstalling it.
+          cargo --version
+      - name: Configure
+        run: cmake --preset release
+      - name: Build
+        run: cmake --build --preset release
+      - name: Test
+        run: ctest --preset release
+      - name: Fail fast when gateway artifact missing
+        run: test -f build/release/src/gateway/grpc_gateway/boat_gateway
+
+  python-tests:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor declared by requires-python; 3.13 catches what the
+        # floor does not. Added because a test that read Typer's rendered --help
+        # passed on 3.14 locally and failed on 3.11 here -- a single-version job
+        # could not have shown that the two differ.
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install ./boat-platform/sdk/python[dev]
+          pip install ./boat-platform/cli
+          # The ui/ services import fastapi/uvicorn/pydantic at module level and
+          # ui/tests imports the services, so their deps are needed here too.
+          pip install -r ui/requirements.txt
+      - name: Run Python tests
+        # ui/tests was missing from this list even though it is part of the
+        # documented pytest invocation -- and it is the only coverage the ui/
+        # services have.
+        run: pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests -v
+
+  proto-stubs-in-sync:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install codegen tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ./boat-platform/sdk/python[dev]
+      - name: Regenerate stubs
+        run: bash boat-platform/sdk/python/boat/stubs/generate_stubs.sh
+      - name: Fail if the committed stubs are stale
+        # The generated stubs under sdk/python/boat/stubs/boat/v1/ are committed
+        # and must stay in sync with proto/. Nothing enforced that before, so an
+        # edited .proto could ship with stubs describing the previous surface.
+        run: |
+          if ! git diff --exit-code -- boat-platform/sdk/python/boat/stubs; then
+            echo "::error::Committed protoc stubs are out of sync with proto/. Run boat-platform/sdk/python/boat/stubs/generate_stubs.sh and commit the result."
+            exit 1
+          fi
+
+  asan-build:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    defaults:
+      run:
+        working-directory: boat-platform
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
+      - name: Configure and build with ASan
+        run: cmake --preset asan && cmake --build --preset asan
+      - name: Run ASan tests
+        run: ctest --preset asan
+
+  coverage:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    defaults:
+      run:
+        working-directory: boat-platform
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain and gcovr
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev gcovr
+      - name: Configure and build with coverage
+        run: cmake --preset coverage && cmake --build --preset coverage
+      - name: Run coverage tests
+        run: ctest --preset coverage
+      - name: Generate coverage report
+        run: gcovr --root . --exclude build/ --xml coverage.xml
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: boat-platform/coverage.xml
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: boat-platform/coverage.xml
+          # Was `true`, which fails this job on any repo without a CODECOV_TOKEN
+          # secret configured -- including every fork. Coverage reporting should
+          # not be able to fail a build.
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  tsan:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    defaults:
+      run:
+        working-directory: boat-platform
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
+      - name: Configure and build with TSan
+        run: cmake --preset tsan && cmake --build --preset tsan
+      - name: Run TSan tests
+        run: ctest --preset tsan
+
+  determinism-check:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    defaults:
+      run:
+        working-directory: boat-platform
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
+      - name: Configure and build
+        run: cmake --preset release && cmake --build --preset release
+      - name: Run determinism tests
+        # This used to be `-R boat_determinism_seed`, which matched ZERO tests:
+        # catch_discover_tests registers Catch2 *test-case names*, not target
+        # names. ctest exits 0 on a zero-match filter, so that gate reported
+        # success while running nothing. The test presets now set
+        # noTestsAction=error so an empty filter fails instead of passing.
+        #
+        # Gating on the seed test alone also only pinned the PRNG -- it links
+        # just boat_core. "Replay ..." are the system-level cases: they drive a
+        # trace through ReplayController -> FrameSink -> CanBusRegistry ->
+        # driver twice and assert frame content/ordering AND tick attribution.
+        run: ctest --preset release -R "Deterministic seeds reproduce replay sequence|^Replay (puts bit-identical|attributes frames)"
+      - name: Run the replay determinism tests under CPU oversubscription
+        # Tick attribution is only an interesting claim if it survives a loaded
+        # host: on an idle runner a broken implementation still passes. This is
+        # the load that used to fail 0/6 before replay and the node plugins were
+        # folded into one TickAuthority.
+        run: |
+          nproc
+          for _ in $(seq 1 "$(nproc)"); do (while :; do :; done) & done
+          trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
+          ctest --preset release -R "^Replay (puts bit-identical|attributes frames)"
+
+  docker-build:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: boat-platform
+    steps:
+      - uses: actions/checkout@v4
+      # Dockerfile.runtime COPYs build/release/.../boat_gateway out of the build
+      # context, so the binary has to exist before buildx runs. This job had no
+      # build step at all, which is why it failed with "boat_gateway: not found"
+      # the first time CI ever executed.
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
+      - name: Build the gateway binary
+        run: cmake --preset release && cmake --build --preset release --target boat_gateway
+      - name: Verify the binary exists for the Dockerfile
+        run: ls build/release/src/gateway/grpc_gateway/boat_gateway
+      - name: Compute image name
+        # GHCR namespaces follow the GitHub owner, so a hardcoded
+        # ghcr.io/boat-platform/... is denied from any other account -- and the
+        # registry rejects uppercase, which `github.repository` contains. Derive
+        # and lowercase it so this works in whatever namespace the repo lives.
+        id: img
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and optionally push multi-arch runtime image
+        uses: docker/build-push-action@v5
+        with:
+          # Dockerfile.runtime lives in boat-platform/ and expects that as its
+          # build context; `context: .` would be the repo root here.
+          context: boat-platform
+          file: boat-platform/Dockerfile.runtime
+          push: ${{ github.event_name == 'push' }}
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.img.outputs.name }}:ci-${{ github.sha }}
+
+  hil-smoke:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    defaults:
+      run:
+        working-directory: boat-platform
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain and CAN utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build g++ libacl1-dev can-utils linux-modules-extra-$(uname -r) || true
+      - name: Load vcan kernel module
+        run: |
+          sudo modprobe vcan
+          sudo ip link add dev vcan0 type vcan
+          sudo ip link set up vcan0
+      - name: Configure and build
+        run: cmake --preset release && cmake --build --preset release
+      - name: Run HIL tests
+        env:
+          BOAT_HIL_ENABLED: "1"
+          BOAT_VCAN_IFACE: "vcan0"
+        # Was `-R boat_hil_smoke`, which matched ZERO tests: the registered names
+        # are Catch2 test-case names ("Virtual CAN HIL smoke flow"), not target
+        # names, and ctest exits 0 on a zero-match filter -- so this job reported
+        # success without running a single test. `-R HIL` matches all 7 CAN and
+        # Ethernet HIL cases, and noTestsAction=error in the preset makes a
+        # future rename fail loudly instead of silently emptying the gate.
+        run: ctest --preset release -R HIL
+      - name: Teardown vcan
+        if: always()
+        run: sudo ip link delete vcan0 || true

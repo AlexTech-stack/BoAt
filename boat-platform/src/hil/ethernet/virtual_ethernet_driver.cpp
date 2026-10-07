@@ -102,6 +102,16 @@ bool VirtualEthernetDriver::Open() {
   const unsigned char loop = 0;
   setsockopt(sock_, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop));
 
+  // Receive timeout so the RX thread can check its running_ flag periodically.
+  // EthernetBusRegistry's rx_thread is a `while (running) { ReadFrame(...) }`
+  // loop, so without this a blocked recvfrom() never returns and the thread
+  // cannot be stopped -- closing the socket does not reliably wake it. Both
+  // sibling drivers (socket_can_driver.cpp, raw_socket_ethernet_driver.cpp)
+  // already set this; this one was the outlier.
+  struct timeval tv{};
+  tv.tv_usec = 100000;  // 100 ms
+  setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
   // Keep TTL local to avoid leaking onto the network.
   const unsigned char ttl = 1;
   setsockopt(sock_, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));

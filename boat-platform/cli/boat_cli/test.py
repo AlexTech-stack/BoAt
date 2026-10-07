@@ -269,8 +269,16 @@ def run(
     if matrix:
         env_paths = [p.strip() for p in matrix.split(",") if p.strip()]
     else:
-        env_path = config_override or manifest.environment_config
-        if not env_path:
+        if config_override:
+            # A path the user typed: resolve it against their working directory,
+            # as any other CLI argument would be.
+            env_path = config_override
+        elif manifest.environment_config:
+            # A path from inside the manifest: resolve it against the manifest's
+            # own directory, so `boat test run <manifest>` works from anywhere
+            # rather than only from boat-platform/.
+            env_path = manifest.resolve(manifest.environment_config)
+        else:
             print_error("No environment config specified in manifest or --config")
             sys.exit(1)
         env_paths = [env_path]

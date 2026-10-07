@@ -954,16 +954,29 @@ remember setcap does not survive rebuilds. Virtual <code>veth</code> pairs need
 neither.</div></details>
 
 <details class="faq-item"><summary>Are <code>boat can</code> and <code>boat eth</code> gone?</summary>
-<div class="faq-body">They still work but are deprecated thin wrappers. Since ABI v8 all
-bus types share one frame model, so <code>boat frame send</code> /
-<code>boat frame subscribe</code> with <code>--bus-type</code>/<code>--bus-types</code>
-is the primary interface.</div></details>
+<div class="faq-body"><strong>Yes — removed outright, not deprecated.</strong> There is no
+<code>can.py</code>/<code>eth.py</code> in <code>boat_cli/</code> any more, and the
+<code>CanService</code>/<code>EthernetService</code> gRPC services and the
+<code>CanNode</code>/<code>EthernetNode</code> SDK classes went with them. All bus types
+share one frame model, so use <code>boat frame send</code> /
+<code>boat frame subscribe</code> with <code>--bus-type</code>/<code>--bus-types</code>, and
+<code>boat frame list-ifaces</code> in place of the old per-bus listings. (Unrelated and
+still present: <code>python3 -m boat can send</code>, a separate one-shot
+PDU-database-driven dispatcher in <code>boat/cmd.py</code>.)</div></details>
 
 <details class="faq-item"><summary>How deterministic is "deterministic"?</summary>
-<div class="faq-body">Bit-identical: the <code>boat_determinism_seed</code> test runs the
-same seeded scenario twice and asserts byte-for-byte equal output. This holds as long as
-plugins don't introduce unseeded randomness or wall-clock dependence — the same rule the
-core codebase enforces on itself.</div></details>
+<div class="faq-body">Bit-identical, and two tests cover it.
+<code>boat_determinism_seed</code> runs the same seed twice and asserts byte-for-byte equal
+output — but it links only <code>boat_core</code>, so it pins the PRNG rather than the
+product claim. <code>boat_determinism_replay</code> is the system-level one: it drives a
+trace through <code>ReplayController</code> → <code>FrameSink</code> →
+<code>CanBusRegistry</code> → driver twice and diffs what actually reached the wire. Frame
+content, ordering, <em>and</em> which tick each frame was attributed to are all asserted
+identical, including under CPU load (verified 10/10 under 2× oversubscription). What is
+<em>not</em> promised is wall-clock timing: a loaded host makes a tick happen later, it
+never changes which frames that tick contains. This holds as long as plugins don't introduce
+unseeded randomness or read a clock of their own — since ABI v9 a plugin that needs time
+gets it from the host via <code>set_time_source</code>.</div></details>
 
 <details class="faq-item"><summary>Can I open BoAt's trace files in Wireshark?</summary>
 <div class="faq-body"><code>.pcapng</code> and <code>.pcap</code> — yes, directly,

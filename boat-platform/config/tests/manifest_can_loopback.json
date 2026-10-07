@@ -2,13 +2,13 @@
   "schema_version": "1.0",
   "name": "can-loopback-routing-suite",
   "description": "Verifies the routing time of a gateway DUT that relays can0<->can1 on real hardware: payload integrity, routing time (each Frame's own server-side timestamp_ns, rx minus tx -- pure gateway API, no raw sockets), and no drops -- using can0/can1 wired onto one shared physical bus as a DUT-free stand-in. A methodology check, not a performance benchmark -- the default 5ms bound is deliberately loose.",
-  "environment_config": "config/tests/env_can_loopback.json",
+  "environment_config": "env_can_loopback.json",
   "tests": [
     {
       "id": "TC_CANLOOP_001",
       "name": "can0->can1 routing: payload, routing time, no drops",
       "description": "100 sequence-tagged frames injected via the gateway's FrameService.SendFrame on can0, observed via FrameService.SubscribeFrames on both can0 and can1; routing time is each frame's own timestamp_ns on can1 minus on can0.",
-      "file": "python3 config/tests/can_loopback_routing_test.py --address localhost:50067 --tx-iface can0 --rx-iface can1 --count 100",
+      "file": "python3 can_loopback_routing_test.py --address localhost:50067 --tx-iface can0 --rx-iface can1 --count 100",
       "timeout_s": 30
     }
   ]

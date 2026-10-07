@@ -4,7 +4,7 @@
 
 - Root path: `proto/boat/v1/`
 - Package namespace: `boat.v1`
-- 18 proto files defining 16 gRPC services:
+- 16 proto files defining 14 gRPC services, 64 RPCs in total:
 
 | File | Service | RPCs |
 |---|---|---|
@@ -16,9 +16,7 @@
 | `metrics.proto` | MetricsService | 2 |
 | `trace.proto` | TraceService | 4 |
 | `fault.proto` | FaultService | 2 |
-| `frame.proto` | FrameService | 3 |
-| `can.proto` | CanService | 3 |
-| `ethernet.proto` | EthernetService | 3 |
+| `frame.proto` | FrameService | 4 |
 | `bus.proto` | BusService | 2 |
 | `pdu.proto` | PduService | 10 |
 | `debug.proto` | DebugService | 2 |
@@ -27,26 +25,16 @@
 | `common.proto` | — | Shared messages (PaginationRequest, UUID, etc.) |
 | `control.proto` | — | Control messages (StartCommand, etc.) |
 
+> `can.proto` / `CanService` and `ethernet.proto` / `EthernetService` were
+> **deleted**. `FrameService` carries their send, subscribe and
+> interface-listing RPCs for every bus type.
+
 ## Service-to-Method Map
 
 ### BusService (`bus.proto`)
 
 - `Publish`
 - `Subscribe` (server streaming)
-
-### CanService (`can.proto`)
-
-- `SendCanFrame` — returns `CanBusInfo` per interface (driver, state, FD support, bitrate)
-
-```protobuf
-message CanBusInfo {
-  string iface      = 1;
-  string driver     = 2;  // e.g. "peak_usb", "vcan"
-  string state      = 3;  // "up", "down", "unknown"
-  bool   fd_support = 4;
-  uint32 bitrate    = 5;
-}
-```
 
 ### CanTpService (`can_tp.proto`)
 
@@ -73,12 +61,6 @@ environment at startup, as a JSON document -- byte-identical to what
 identically configured gateways return identical documents and the artifact
 can be diffed. `boat config show` is the CLI front end.
 
-### EthernetService (`ethernet.proto`)
-
-- `SendFrame`
-- `SubscribeFrames` (server streaming)
-- `ListInterfaces`
-
 ### FaultService (`fault.proto`)
 
 - `InjectFault`
@@ -89,10 +71,28 @@ can be diffed. `boat config show` is the CLI front end.
 - `SendFrame`
 - `SubscribeFrames` (server streaming)
 - `StreamFrames` (bidirectional streaming)
+- `ListInterfaces`
 
 The unified send/subscribe path for every bus type (`can`, `canfd`, `eth`, `tcp`,
 `pdu`). A `tcp` send returns `UNIMPLEMENTED` (TCP is driven through the TCP
 plugin's connection API); a `pdu` send is dispatched to the `pdu_router` plugin.
+
+`ListInterfaces` supersedes the deleted `CanService.ListBuses` and
+`EthernetService.ListInterfaces`, returning one repeated `InterfaceInfo` across
+both registries. Read `bus_type` before the rest: an empty `driver` on an
+`ETHERNET` entry means "not applicable", not "unknown", since the Ethernet
+registry holds no equivalent metadata.
+
+```protobuf
+message InterfaceInfo {
+  string        iface      = 1;  // "can0", "vcan0", "eth0"
+  Frame.BusType bus_type   = 2;  // CAN or ETHERNET
+  string        driver     = 3;  // CAN only: e.g. "peak_usb", "vcan"
+  string        state      = 4;  // CAN only: "up", "down", "unknown"
+  bool          fd_support = 5;  // CAN only: CAN FD capable (mtu >= 72)
+  uint32        bitrate    = 6;  // CAN only: nominal bit/s, 0 if unknown
+}
+```
 
 ### MetricsService (`metrics.proto`)
 

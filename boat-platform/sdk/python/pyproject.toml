@@ -25,7 +25,14 @@ dependencies = [
 dev = [
   "pytest>=8.0",
   "pytest-asyncio",
-  "grpcio-tools>=1.81.1",
+  # Pinned, not `>=`: the stubs under boat/stubs/boat/v1/ are committed, and CI
+  # fails the build if regenerating them produces a diff. Different
+  # grpcio-tools versions emit different output (the "Protobuf Python Version"
+  # header, among other things), so an unpinned generator makes that gate
+  # report drift that isn't drift -- which is exactly what it did the first
+  # time CI ran. Bump this deliberately, and commit the regenerated stubs in
+  # the same change.
+  "grpcio-tools==1.83.1",
 ]
 # Reading .asc/.blf CAN traces (boat.trace_analyzer, boat.trace_replay). Both
 # guard the import and say to install this extra; .pcap/.pcapng go through

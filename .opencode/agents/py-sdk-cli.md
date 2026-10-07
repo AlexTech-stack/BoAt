@@ -16,7 +16,7 @@ You are the Python SDK and CLI agent for the BoAt platform. You handle all Pytho
 ## SDK location
 
 - `boat-platform/sdk/python/` — `boat-py` package
-- Key modules: `boat/client.py` (BoAtClient gRPC wrapper), `boat/pdu_db.py` (PduDatabase parser), `boat/scenario.py` (ScenarioBuilder), `boat/nodes/` (BusNode, CanNode, EthernetNode), `boat/trace/` (recorder, replay, analyzer, reverse engineer)
+- Key modules (all flat under `boat/`, there is no `nodes/` or `trace/` package): `boat/client.py` (BoAtClient gRPC wrapper), `boat/pdu_db.py` (PduDatabase parser), `boat/scenario_builder.py` (ScenarioBuilder), the node classes `boat/frame_node.py` (FrameNode — all bus types), `boat/bus_node.py`, `boat/pdu_node.py`, `boat/pdu_message_node.py`, and the trace modules `boat/trace_replay.py`, `boat/trace_recorder.py`, `boat/trace_analyzer.py`. `CanNode`/`EthernetNode` were deleted with CanService/EthernetService — use `FrameNode` (recorder, replay, analyzer, reverse engineer)
 - Stubs: `boat/stubs/` (pre-generated gRPC stubs)
 
 ## CLI location

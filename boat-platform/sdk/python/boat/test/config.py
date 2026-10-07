@@ -144,11 +144,33 @@ class EnvironmentConfig:
     dut: Optional[DutConfig] = None
     plugins: list[PluginRef] = field(default_factory=list)
 
+    # Directory this config was loaded from, or None for from_dict(). A relative
+    # `gateway.binary` resolves against it -- see resolve_path().
+    base_dir: Optional[str] = None
+
     @classmethod
     def from_file(cls, path: str) -> EnvironmentConfig:
         with open(path) as f:
             d = json.load(f)
-        return cls.from_dict(d)
+        cfg = cls.from_dict(d)
+        cfg.base_dir = os.path.dirname(os.path.abspath(path))
+        return cfg
+
+    def resolve_path(self, rel_path: str) -> str:
+        """Resolve a path from this config against the config's own directory.
+
+        Same rule as ManifestConfig.resolve: absolute paths pass through, a
+        relative path is tried against `base_dir` first and falls back to the
+        caller's working directory. `gateway.binary` used to be resolved against
+        the working directory alone, so `boat test run` only started a gateway
+        when invoked from boat-platform/ -- and failed *silently* elsewhere.
+        """
+        if os.path.isabs(rel_path) or not self.base_dir:
+            return rel_path
+        candidate = os.path.normpath(os.path.join(self.base_dir, rel_path))
+        if os.path.exists(candidate):
+            return candidate
+        return rel_path
 
     @classmethod
     def from_dict(cls, d: dict) -> EnvironmentConfig:
@@ -251,12 +273,35 @@ class ManifestConfig:
     setup: list[ManifestAction] = field(default_factory=list)
     teardown: list[ManifestAction] = field(default_factory=list)
     tests: list[ManifestTestEntry] = field(default_factory=list)
+    # Directory the manifest was loaded from, or None for from_dict(). Relative
+    # paths inside a manifest -- `environment_config` and each test's `file` --
+    # resolve against this, not against the caller's working directory, so a
+    # suite directory is self-contained and `boat test run <manifest>` works
+    # from anywhere. It previously only worked when run from boat-platform/.
+    base_dir: Optional[str] = None
 
     @classmethod
     def from_file(cls, path: str) -> ManifestConfig:
         with open(path) as f:
             d = json.load(f)
-        return cls.from_dict(d)
+        manifest = cls.from_dict(d)
+        manifest.base_dir = os.path.dirname(os.path.abspath(path))
+        return manifest
+
+    def resolve(self, rel_path: str) -> str:
+        """Resolve a path from this manifest against the manifest's directory.
+
+        An absolute path is returned unchanged. A relative path is resolved
+        against `base_dir`; if nothing is there, it falls back to the caller's
+        working directory so manifests written against the old project-root
+        convention keep working.
+        """
+        if os.path.isabs(rel_path) or not self.base_dir:
+            return rel_path
+        candidate = os.path.join(self.base_dir, rel_path)
+        if os.path.exists(candidate):
+            return candidate
+        return rel_path
 
     @classmethod
     def from_dict(cls, d: dict) -> ManifestConfig:

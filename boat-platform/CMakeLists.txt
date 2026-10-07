@@ -30,18 +30,34 @@ if(NOT EXISTS "/usr/include/sys/acl.h")
   if(NOT EXISTS "${_acl_vendor}/usr/include/sys/acl.h")
     find_program(_apt_get apt-get REQUIRED)
     message(STATUS "sys/acl.h not found — downloading libacl1-dev into build tree")
+    # MAKE_DIRECTORY first: execute_process fails outright if WORKING_DIRECTORY
+    # does not exist, which is every clean checkout. This fallback had therefore
+    # never worked on a fresh machine -- and because the result was checked but
+    # never reported, configure succeeded and the build died ~1700 objects later
+    # on `iceoryx_platform/acl.hpp:20: fatal error: sys/acl.h`.
+    file(MAKE_DIRECTORY "${_acl_vendor}")
     execute_process(
       COMMAND ${_apt_get} download libacl1-dev
       WORKING_DIRECTORY "${_acl_vendor}"
-      RESULT_VARIABLE _acl_dl_result)
+      RESULT_VARIABLE _acl_dl_result
+      OUTPUT_VARIABLE _acl_dl_output
+      ERROR_VARIABLE  _acl_dl_output)
     if(_acl_dl_result EQUAL 0)
       file(GLOB _acl_deb "${_acl_vendor}/libacl1-dev*.deb")
       execute_process(COMMAND dpkg-deb -x "${_acl_deb}" "${_acl_vendor}")
+    else()
+      message(WARNING "apt-get download libacl1-dev failed: ${_acl_dl_output}")
     endif()
   endif()
   if(EXISTS "${_acl_vendor}/usr/include/sys/acl.h")
     include_directories(SYSTEM "${_acl_vendor}/usr/include")
     link_directories("${_acl_vendor}/usr/lib/x86_64-linux-gnu")
+  else()
+    # Fail here rather than thousands of compile steps later with a missing
+    # header that says nothing about the cause.
+    message(FATAL_ERROR
+      "iceoryx_hoofs needs sys/acl.h and it could not be found or vendored.\n"
+      "Install it:  sudo apt-get install -y libacl1-dev")
   endif()
 endif()
 
@@ -49,6 +65,12 @@ set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
 set(IOX2_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# gRPC_BUILD_TESTS does not reach its bundled third_party/re2, whose own
+# RE2_BUILD_TESTING defaults to ON. include(CTest) above enables testing
+# globally, so re2's add_test() calls land in *our* CTest project -- while
+# EXCLUDE_FROM_ALL on the gRPC subdirectory means their binaries are never
+# built. The result was 22 phantom "Not Run" failures in `ctest`.
+set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 # Tell gRPC to use find_package(protobuf) instead of its bundled third_party copy.
 # Combined with OVERRIDE_FIND_PACKAGE on the protobuf FetchContent below, this
 # redirects gRPC to the already-fetched protobuf and prevents duplicate gtest targets.
@@ -63,14 +85,14 @@ FetchContent_Declare(
 FetchContent_Declare(
   protobuf
   GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
-  GIT_TAG v27.3
+  GIT_TAG v31.1
   OVERRIDE_FIND_PACKAGE
 )
 
 FetchContent_Declare(
   gRPC
   GIT_REPOSITORY https://github.com/grpc/grpc.git
-  GIT_TAG v1.65.0
+  GIT_TAG v1.75.0
 )
 
 FetchContent_Declare(
@@ -114,6 +136,21 @@ string(REPLACE
     "set(_gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR \"${_protobuf_src_dir}/src\")"
     _grpc_pb_content "${_grpc_pb_content}")
 file(WRITE "${_grpc_pb_cmake}" "${_grpc_pb_content}")
+
+# gRPC's bundled third_party/zlib registers its example programs as CTest tests
+# unconditionally -- there is no option to disable them, unlike re2's
+# RE2_BUILD_TESTING above. Under EXCLUDE_FROM_ALL their binaries are never
+# built, so they surfaced as 2 phantom "Not Run" failures in `ctest`. Strip the
+# add_test() calls; the executables themselves are harmless. Idempotent: on a
+# re-configure the strings are already gone and REPLACE is a no-op.
+set(_zlib_cmake "${grpc_SOURCE_DIR}/third_party/zlib/CMakeLists.txt")
+if(EXISTS "${_zlib_cmake}")
+  file(READ "${_zlib_cmake}" _zlib_content)
+  string(REPLACE "add_test(example example)" "" _zlib_content "${_zlib_content}")
+  string(REPLACE "add_test(example64 example64)" "" _zlib_content "${_zlib_content}")
+  file(WRITE "${_zlib_cmake}" "${_zlib_content}")
+endif()
+
 add_subdirectory("${grpc_SOURCE_DIR}" "${grpc_BINARY_DIR}" EXCLUDE_FROM_ALL)
 
 # iceoryx2 hardcodes WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} in its cargo build

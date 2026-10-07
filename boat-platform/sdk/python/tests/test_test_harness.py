@@ -3,6 +3,8 @@
 
 from unittest.mock import MagicMock, patch, PropertyMock
 
+import os
+
 import pytest
 
 from boat.test.config import (
@@ -200,3 +202,59 @@ class TestHarnessDutStart:
 
 
 # We skip gateway start/stop tests since they require a real binary or subprocess mocking.
+
+
+class TestGatewayBinaryResolution:
+    """A configured-but-unfindable gateway.binary used to be ignored silently.
+
+    `_GatewayManager.start()` did `if binary and os.path.isfile(binary)` and fell
+    straight through when the path missed, so no gateway was started and the test
+    failed later with an opaque connection error. The path was also resolved
+    against the caller's working directory, so `boat test run` only started a
+    gateway when invoked from boat-platform/.
+    """
+
+    def _cfg(self, tmp_path, binary):
+        import json
+        p = tmp_path / "env.json"
+        p.write_text(json.dumps({
+            "schema_version": "1.0",
+            "name": "env",
+            "gateway": {"address": "localhost:50051", "binary": binary},
+            "buses": {},
+        }))
+        return EnvironmentConfig.from_file(str(p))
+
+    def test_missing_binary_raises_instead_of_silently_skipping(self, tmp_path) -> None:
+        mgr = _GatewayManager(self._cfg(tmp_path, "nope/boat_gateway"))
+        with pytest.raises(FileNotFoundError) as exc:
+            mgr.start()
+        # The message must name both what was configured and what was tried,
+        # since the two differ once the path is resolved.
+        assert "nope/boat_gateway" in str(exc.value)
+
+    def test_no_binary_configured_is_not_an_error(self, tmp_path) -> None:
+        # Attaching to an already-running gateway is a supported mode.
+        import json
+        p = tmp_path / "env.json"
+        p.write_text(json.dumps({
+            "schema_version": "1.0",
+            "name": "env",
+            "gateway": {"address": "localhost:50051"},
+            "buses": {},
+        }))
+        mgr = _GatewayManager(EnvironmentConfig.from_file(str(p)))
+        assert mgr.start() == "localhost:50051"
+
+    def test_relative_binary_found_next_to_config(self, tmp_path) -> None:
+        gw = tmp_path / "boat_gateway"
+        gw.write_text("#!/bin/sh\nsleep 30\n")
+        gw.chmod(0o755)
+        mgr = _GatewayManager(self._cfg(tmp_path, "boat_gateway"))
+        with patch("boat.test.harness.subprocess.Popen") as popen, \
+             patch.object(_GatewayManager, "_wait_for_ready"):
+            mgr.start()
+        # Resolved to the absolute sibling path, not left as "boat_gateway" for
+        # the working directory to (fail to) resolve.
+        assert popen.call_args[0][0][0].endswith("boat_gateway")
+        assert os.path.isabs(popen.call_args[0][0][0])

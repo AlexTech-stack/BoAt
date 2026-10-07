@@ -79,14 +79,26 @@ void UdsServer::Stop() {
     return;
   }
 
+  /* shutdown() is what unblocks a blocked accept(), but the descriptor itself
+     has to stay valid and unchanged until the accept thread is joined:
+     AcceptLoop() reads listen_fd_ on every iteration. Closing and clearing it
+     here, before the join, was a data race on listen_fd_ (TSan: the write at
+     this line against the read in AcceptLoop) and -- more seriously than the
+     race -- a file-descriptor reuse hazard, since the accept thread could call
+     accept() on a descriptor that had already been closed and whose number may
+     since have been handed to something else entirely. */
   if (listen_fd_ >= 0) {
     ::shutdown(listen_fd_, SHUT_RDWR);
-    ::close(listen_fd_);
-    listen_fd_ = -1;
   }
 
   if (accept_thread_.joinable()) {
     accept_thread_.join();
+  }
+
+  // Joined: nothing else reads listen_fd_ any more, so it is safe to mutate.
+  if (listen_fd_ >= 0) {
+    ::close(listen_fd_);
+    listen_fd_ = -1;
   }
 
   for (auto& thread : client_threads_) {

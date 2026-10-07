@@ -322,8 +322,7 @@
     <li class="section-head"><a href="#">Python SDK</a></li>
     <li><a href="#sdk-client">BoAtClient</a></li>
     <li><a href="#sdk-pdunode">PduNode</a></li>
-    <li><a href="#sdk-cannode">CanNode</a></li>
-    <li><a href="#sdk-ethnode">EthernetNode</a></li>
+    <li><a href="#sdk-framenode">FrameNode</a></li>
     <li><a href="#sdk-busnode">BusNode</a></li>
     <li><a href="#sdk-message">Message</a></li>
     <li><a href="#sdk-pdudb">PduDatabase</a></li>
@@ -374,8 +373,8 @@
 <!-- ═══ INTRODUCTION ═══ -->
 <h2 id="intro">Introduction</h2>
 <p>
-  BoAt (<strong>Bo</strong>ard <strong>A</strong>utomotive <strong>T</strong>esting) is an open platform for
-  simulating and testing automotive ECU networks. A single C++ gateway process exposes
+  BoAt is an open platform for simulating and testing automotive ECU networks.
+  A single C++ gateway process exposes
   every bus as a gRPC service — virtual or physical — so you can send frames, subscribe to
   live data, inject faults, replay traces and orchestrate full simulation scenarios from
   any language that has a gRPC client.
@@ -399,7 +398,7 @@
   ┌─────────────────────────────────────────────────────┐
   │              BoAt Gateway  (:50051 gRPC)             │
   │                                                     │
-  │  FrameService  CanService  PduService  ...          │
+  │  FrameService  PduService  CanTpService  ...        │
   │       │                                             │
   │  FrameSink ──────────── single frame→wire sink      │
   │       │            ▲                                 │
@@ -423,7 +422,7 @@
 </p>
 
 <p>
-  <strong>ABI v8:</strong> the core owns the stateless transport substrate — the single
+  <strong>Core vs plugins:</strong> the core owns the stateless transport substrate — the single
   <code>FrameSink</code> is the only path a frame reaches a bus, and every producer
   (plugins, replay, <code>FrameService.SendFrame</code>) transmits through it. Inbound frames
   are dispatched to plugins' <code>on_frame</code>, filtered to the bus types each plugin
@@ -440,7 +439,7 @@
 
 <h3>PDU Router (plugin)</h3>
 <p>
-  As of ABI v8 the <code>PduRouter</code> is a runtime plugin (<code>pdu_router.so</code>), not
+  The <code>PduRouter</code> is a runtime plugin (<code>pdu_router.so</code>), not
   gateway-core logic. It registers itself as the <code>IPduRouter</code> service, and
   <code>PduServiceImpl</code> delegates to it via <code>FindService("pdu_router")</code>. It maps
   32-bit PDU IDs to physical transports; routes are added at runtime via <code>ConfigureRoute</code>.
@@ -1013,9 +1012,8 @@ boat --show-completion</code></pre>
 client = BoAtClient(<span class="st">"localhost:50051"</span>)
 
 <span class="cm"># Access any gRPC stub directly:</span>
-client.can           <span class="cm"># CanServiceStub</span>
+client.frame         <span class="cm"># FrameServiceStub (all bus types)</span>
 client.pdu           <span class="cm"># PduServiceStub</span>
-client.ethernet      <span class="cm"># EthernetServiceStub</span>
 client.simulation    <span class="cm"># SimulationServiceStub</span>
 client.signal        <span class="cm"># SignalServiceStub</span>
 client.scenario      <span class="cm"># ScenarioServiceStub</span>
@@ -1084,38 +1082,70 @@ node.stop()</code></pre>
   <div class="method-desc">Returns a list of <code>PduRoute</code> proto objects from the gateway.</div>
 </div>
 
-<!-- ═══ SDK CANNODE ═══ -->
-<h2 id="sdk-cannode">Python SDK — CanNode</h2>
+<!-- ═══ SDK FRAMENODE ═══ -->
+<h2 id="sdk-framenode">Python SDK — FrameNode</h2>
 
-<pre><code><span class="kw">from</span> boat.can_node <span class="kw">import</span> CanNode
+<p>The one frame node class, for every bus type. <code>CanNode</code> and
+<code>EthernetNode</code> were <strong>deleted</strong> along with the
+<code>CanService</code>/<code>EthernetService</code> gRPC services — if you have code
+importing <code>boat.can_node</code> or <code>boat.ethernet_node</code>, it needs porting
+to this.</p>
 
-<span class="kw">class</span> <span class="cn">MyCanNode</span>(CanNode):
-    <span class="kw">def</span> on_frame(<span class="nm">self</span>, frame, iface: str) -> <span class="kw">None</span>:
-        <span class="nm">print</span>(f<span class="st">"CAN {iface}  id=0x{frame.can_id:X}  data={bytes(frame.data[:frame.dlc]).hex()}"</span>)
+<p><code>FrameNode</code> is <strong>composed, not subclassed</strong>: you pass a callback
+to <code>subscribe()</code> rather than overriding <code>on_frame</code>. The callback
+receives a unified <code>boat.v1.Frame</code> whose per-bus metadata is under
+<code>.can</code> / <code>.eth</code> and whose bytes are <code>.payload</code>.</p>
 
-node = MyCanNode(iface_filter=<span class="st">"vcan0"</span>)
-node.send(can_id=<span class="nm">0x7B</span>, data=bytes([<span class="nm">0xDE</span>, <span class="nm">0xAD</span>, <span class="nm">0xBE</span>, <span class="nm">0xEF</span>]), iface=<span class="st">"vcan0"</span>)
-node.run()</code></pre>
+<pre><code><span class="kw">from</span> boat.frame_node <span class="kw">import</span> FrameNode
+
+node = FrameNode()                      <span class="cm"># address=None → BOAT_HOST, else localhost:50051</span>
+
+<span class="kw">def</span> on_frame(frame):
+    <span class="kw">if</span> frame.bus_type <span class="kw">in</span> (frame.CAN, frame.CANFD):
+        <span class="nm">print</span>(f<span class="st">"CAN {frame.iface}  id=0x{frame.can.can_id:X}  data={frame.payload.hex()}"</span>)
+    <span class="kw">elif</span> frame.bus_type == frame.ETHERNET:
+        <span class="nm">print</span>(f<span class="st">"ETH {frame.iface}  etype=0x{frame.eth.ethertype:04X}  len={len(frame.payload)}"</span>)
+
+node.subscribe(on_frame, bus_types=[<span class="st">"CAN"</span>, <span class="st">"CANFD"</span>], iface_filter=<span class="st">"vcan0"</span>)
+
+node.send_can(<span class="st">"vcan0"</span>, <span class="nm">0x7B</span>, bytes([<span class="nm">0xDE</span>, <span class="nm">0xAD</span>, <span class="nm">0xBE</span>, <span class="nm">0xEF</span>]))
+node.send_eth(<span class="st">"veth0"</span>, dst_mac=b<span class="st">"\xff"</span>*<span class="nm">6</span>, src_mac=b<span class="st">"\x02"</span>+b<span class="st">"\x00"</span>*<span class="nm">5</span>,
+              ethertype=<span class="nm">0x88B5</span>, payload=bytes([<span class="nm">1</span>,<span class="nm">2</span>,<span class="nm">3</span>]))
+node.run()                              <span class="cm"># block until stop()</span></code></pre>
 
 <h4>Constructor</h4>
 <table>
   <tr><th>Parameter</th><th>Default</th><th>Description</th></tr>
-  <tr><td><code>address</code></td><td><code>"localhost:50051"</code></td><td>Gateway gRPC address</td></tr>
-  <tr><td><code>iface_filter</code></td><td><code>""</code> (all)</td><td>Only receive frames from this interface</td></tr>
-  <tr><td><code>sim_id</code></td><td><code>""</code></td><td>Simulation ID passed with sent frames</td></tr>
+  <tr><td><code>address</code></td><td><code>None</code></td><td>Gateway gRPC address. <code>None</code> means: <code>BOAT_HOST</code> env var, else <code>localhost:50051</code>. Leaving it <code>None</code> is what makes a node script portable across gateways.</td></tr>
+  <tr><td><code>bus_types</code></td><td><code>None</code> (all)</td><td>Default bus-type filter, overridable per <code>subscribe()</code> call</td></tr>
 </table>
 
-<!-- ═══ SDK ETHNODE ═══ -->
-<h2 id="sdk-ethnode">Python SDK — EthernetNode</h2>
-<pre><code><span class="kw">from</span> boat.ethernet_node <span class="kw">import</span> EthernetNode
+<h4>Methods</h4>
+<div class="method-block">
+  <div class="method-sig">send(frame: boat.v1.Frame) → bool</div>
+  <div class="method-desc">Send a pre-built unified <code>Frame</code>. Returns whether the gateway accepted it; raises on a transport error rather than swallowing it.</div>
+</div>
+<div class="method-block">
+  <div class="method-sig">send_can(iface, can_id, data, is_fd=False, flags=0) → bool</div>
+  <div class="method-desc">Build and send a CAN or CAN FD frame. <code>is_fd=True</code> sets <code>bus_type</code> to <code>CANFD</code>; <code>dlc</code> is taken from <code>len(data)</code>.</div>
+</div>
+<div class="method-block">
+  <div class="method-sig">send_eth(iface, dst_mac, src_mac, ethertype, payload, vlan_id=0) → bool</div>
+  <div class="method-desc">Build and send an Ethernet frame.</div>
+</div>
+<div class="method-block">
+  <div class="method-sig">subscribe(callback, bus_types=None, iface_filter="") → None</div>
+  <div class="method-desc">Stream frames to <code>callback</code> on a background thread. <code>bus_types</code> are names from <code>CAN</code>/<code>CANFD</code>/<code>ETHERNET</code>/<code>TCP</code>/<code>PDU</code>; empty means all. An <code>iface_filter</code> naming an interface the gateway does not have fails with <code>NOT_FOUND</code>, so a typo surfaces as an error rather than a bus that looks quiet.</div>
+</div>
+<div class="method-block">
+  <div class="method-sig">run() / stop()</div>
+  <div class="method-desc">Block until stopped / stop the subscribe thread.</div>
+</div>
 
-<span class="kw">class</span> <span class="cn">MyEthNode</span>(EthernetNode):
-    <span class="kw">def</span> on_frame(<span class="nm">self</span>, frame, iface: str) -> <span class="kw">None</span>:
-        <span class="nm">print</span>(f<span class="st">"ETH {iface}  etype=0x{frame.ethertype:04X}  len={len(frame.payload)}"</span>)
-
-node = MyEthNode(iface_filter=<span class="st">"veth0"</span>, ethertype_filter=<span class="nm">0x88B5</span>)
-node.send(ethertype=<span class="nm">0x88B5</span>, payload=bytes([<span class="nm">1</span>,<span class="nm">2</span>,<span class="nm">3</span>]), iface=<span class="st">"veth0"</span>)
-node.run()</code></pre>
+<p class="note">There is deliberately no <code>send_tcp()</code>. TCP is
+connection-oriented, so <code>FrameService.SendFrame</code> rejects a TCP frame with
+<code>UNIMPLEMENTED</code> by design — drive TCP through the <code>tcp.so</code> plugin's
+own connection API instead.</p>
 
 <!-- ═══ SDK BUSNODE ═══ -->
 <h2 id="sdk-busnode">Python SDK — BusNode</h2>
@@ -1325,24 +1355,33 @@ python3 -m boat can send --msg Motor_1 --sig MotorSpeed=100 --sig Clamp15=1 \
 boat frame subscribe --bus-types can --iface vcan0</code></pre>
 
 <h3>Via Python SDK</h3>
+
+<p>The high-level way is <a href="#sdk-framenode"><code>FrameNode</code></a>
+(<code>node.send_can("vcan0", 0x7B, b"...")</code>). Below is the raw gRPC equivalent, for
+when you want the <code>Frame</code> message itself. Note the shape: <code>bus_type</code>
+and <code>iface</code> live on the <code>Frame</code>, the bytes are
+<code>payload</code>, and the CAN-specific fields are in the <code>can</code>
+submessage.</p>
+
 <pre><code><span class="kw">from</span> boat.client <span class="kw">import</span> BoAtClient
-<span class="kw">from</span> boat.v1 <span class="kw">import</span> can_pb2
+<span class="kw">from</span> boat.v1 <span class="kw">import</span> frame_pb2
 
 c = BoAtClient()
 
 <span class="cm"># Send</span>
-c.can.SendCanFrame(can_pb2.SendCanFrameRequest(
-    frame=can_pb2.CanFrame(
-        can_id=<span class="nm">0x7B</span>,
-        dlc=<span class="nm">4</span>,
-        data=bytes([<span class="nm">0xDE</span>, <span class="nm">0xAD</span>, <span class="nm">0xBE</span>, <span class="nm">0xEF</span>]),
+c.frame.SendFrame(frame_pb2.SendFrameRequest(
+    frame=frame_pb2.Frame(
+        bus_type=frame_pb2.Frame.CAN,
         iface=<span class="st">"vcan0"</span>,
+        payload=bytes([<span class="nm">0xDE</span>, <span class="nm">0xAD</span>, <span class="nm">0xBE</span>, <span class="nm">0xEF</span>]),
+        can=frame_pb2.CanMetadata(can_id=<span class="nm">0x7B</span>, dlc=<span class="nm">4</span>),
     )
 ))
 
 <span class="cm"># Subscribe (streaming)</span>
-<span class="kw">for</span> frame <span class="kw">in</span> c.can.SubscribeCanFrames(can_pb2.SubscribeCanFramesRequest(iface=<span class="st">"vcan0"</span>)):
-    <span class="nm">print</span>(f<span class="st">"id=0x{frame.can_id:X} data={bytes(frame.data[:frame.dlc]).hex()}"</span>)</code></pre>
+req = frame_pb2.SubscribeFramesRequest(bus_types=[frame_pb2.Frame.CAN], iface_filter=<span class="st">"vcan0"</span>)
+<span class="kw">for</span> frame <span class="kw">in</span> c.frame.SubscribeFrames(req):
+    <span class="nm">print</span>(f<span class="st">"id=0x{frame.can.can_id:X} data={frame.payload.hex()}"</span>)</code></pre>
 
 <!-- ═══ HOW-TO PDU ═══ -->
 <h2 id="howto-pdu">How-To: Send a PDU over IP/UDP</h2>
@@ -1677,9 +1716,7 @@ boat trace replay traces/motor_test_*.asc --buses vcan0 --speed 2.0</code></pre>
 
 <table>
   <tr><th>Service</th><th>Proto file</th><th>Key RPCs</th></tr>
-  <tr><td>FrameService <em>(v8, unified)</em></td><td>frame.proto</td><td>SendFrame, SubscribeFrames — one send/subscribe surface for all bus types (CAN/CANFD/ETHERNET/PDU/TCP)</td></tr>
-  <tr><td>CanService <em>(legacy)</em></td><td>can.proto</td><td>SendCanFrame, SubscribeCanFrames, ListBuses</td></tr>
-  <tr><td>EthernetService <em>(legacy)</em></td><td>ethernet.proto</td><td>SendFrame, SubscribeFrames, ListInterfaces</td></tr>
+  <tr><td>FrameService <em>(unified)</em></td><td>frame.proto</td><td>SendFrame, SubscribeFrames, StreamFrames, ListInterfaces — one surface for all bus types (CAN/CANFD/ETHERNET/PDU/TCP). Replaced the deleted CanService and EthernetService, ListInterfaces absorbing CanService.ListBuses + EthernetService.ListInterfaces</td></tr>
   <tr><td>PduService</td><td>pdu.proto</td><td>SendPdu, SubscribePdus, ConfigureRoute, ListRoutes, ConfigureContainer, ConfigureGroup, EnableGroup, DisableGroup, ListGroups, RemoveRoute</td></tr>
   <tr><td>SimulationService</td><td>simulation.proto</td><td>Create/Start/Pause/Step/Reset/Stop/GetState/Watch/ListSimulations</td></tr>
   <tr><td>SignalService</td><td>signal.proto</td><td>InjectSignal, SubscribeSignals, GetSignalHistory</td></tr>
@@ -1690,7 +1727,9 @@ boat trace replay traces/motor_test_*.asc --buses vcan0 --speed 2.0</code></pre>
   <tr><td>ReplayService</td><td>replay.proto</td><td>StartReplay, SeekReplay, StreamReplay</td></tr>
   <tr><td>PluginService</td><td>plugin.proto</td><td>RegisterPlugin, ListPlugins, GetPluginInfo, UnloadPlugin</td></tr>
   <tr><td>MetricsService</td><td>metrics.proto</td><td>GetMetrics, StreamMetrics</td></tr>
-  <tr><td>DebugService</td><td>debug.proto</td><td>StreamEvents (RPC audit log, all calls)</td></tr>
+  <tr><td>CanTpService</td><td>can_tp.proto</td><td>Configure, Send, ListSessions, RemoveSession, Subscribe, SubscribeErrors (ISO 15765-2)</td></tr>
+  <tr><td>NodePluginService</td><td>node_plugin.proto</td><td>Load/Unload/List for the always-on node PluginManager scope</td></tr>
+  <tr><td>DebugService</td><td>debug.proto</td><td>StreamEvents (RPC audit log), GetEffectiveConfig</td></tr>
 </table>
 
 <h3>Watching the RPC Audit Log</h3>
