@@ -6,6 +6,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -22,6 +23,30 @@ uint64_t NowNsCanTp() {
 }
 
 constexpr char kCanTpServicePrefix[] = "can_tp:";
+
+/* State shared between a subscribe stream and the plugin callbacks feeding it.
+   Heap-owned, and captured into the callback *by value* as a shared_ptr.
+
+   These were stack locals of the RPC handler captured by reference, which is a
+   use-after-free: UnsubscribeAll() removes the subscription from the plugin,
+   but it does not wait for a callback already in flight.
+   CanTpPlugin::NotifySubscribers() snapshots the matching callbacks under its
+   lock, releases the lock, and only then invokes them -- so a callback taken
+   from a snapshot made before the unsubscribe can still be running on the
+   frame-dispatch thread while the handler returns and tears down the frame it
+   is writing into. TSan reported it as "double lock of a mutex" whose
+   "location is stack of thread T10", which is what a reused dead stack frame
+   looks like once the mutex's own state is garbage.
+
+   Owning the state here means a late callback writes into a live object, and
+   the last reference to drop frees it -- whether that is the handler or the
+   straggling callback. */
+template <typename Event>
+struct SubscriberQueue {
+  std::mutex              mutex;
+  std::condition_variable cv;
+  std::vector<Event>      queue;
+};
 }  // namespace
 
 CanTpServiceImpl::CanTpServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
@@ -410,9 +435,7 @@ grpc::Status CanTpServiceImpl::Subscribe(
     ctx_.audit_log.Push(std::move(ev));
   }
 
-  std::mutex                          queue_mutex;
-  std::condition_variable             queue_cv;
-  std::vector<boat::v1::CanTpRxEvent> queue;
+  auto shared = std::make_shared<SubscriberQueue<boat::v1::CanTpRxEvent>>();
 
   std::vector<std::pair<std::string, boat::core::ICanTp::SubId>> subs;
   subs.reserve(targets.size());
@@ -422,17 +445,17 @@ grpc::Status CanTpServiceImpl::Subscribe(
     if (!can_tp) continue;  // unloaded between resolution and here
     const auto sub_id = can_tp->Subscribe(
         nsdu_ids,
-        [&queue_mutex, &queue_cv, &queue, iface](uint32_t nsdu_id, const std::vector<uint8_t>& payload) {
+        [shared, iface](uint32_t nsdu_id, const std::vector<uint8_t>& payload) {
           boat::v1::CanTpRxEvent ev;
           ev.set_iface(iface);
           ev.set_nsdu_id(nsdu_id);
           ev.set_data(payload.data(), payload.size());
           ev.set_timestamp_ns(NowNsCanTp());
           {
-            std::lock_guard<std::mutex> lock(queue_mutex);
-            queue.push_back(std::move(ev));
+            std::lock_guard<std::mutex> lock(shared->mutex);
+            shared->queue.push_back(std::move(ev));
           }
-          queue_cv.notify_one();
+          shared->cv.notify_one();
         });
     subs.emplace_back(iface, sub_id);
   }
@@ -440,10 +463,10 @@ grpc::Status CanTpServiceImpl::Subscribe(
   while (!context->IsCancelled()) {
     std::vector<boat::v1::CanTpRxEvent> pending;
     {
-      std::unique_lock<std::mutex> lock(queue_mutex);
-      queue_cv.wait_for(lock, std::chrono::milliseconds(50),
-                        [&queue] { return !queue.empty(); });
-      pending.swap(queue);
+      std::unique_lock<std::mutex> lock(shared->mutex);
+      shared->cv.wait_for(lock, std::chrono::milliseconds(50),
+                          [&shared] { return !shared->queue.empty(); });
+      pending.swap(shared->queue);
     }
     for (const auto& ev : pending) {
       if (!writer->Write(ev)) {
@@ -511,9 +534,7 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
     ctx_.audit_log.Push(std::move(ev));
   }
 
-  std::mutex                             queue_mutex;
-  std::condition_variable                queue_cv;
-  std::vector<boat::v1::CanTpErrorEvent> queue;
+  auto shared = std::make_shared<SubscriberQueue<boat::v1::CanTpErrorEvent>>();
 
   std::vector<std::pair<std::string, boat::core::ICanTp::SubId>> subs;
   subs.reserve(targets.size());
@@ -523,7 +544,7 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
     if (!can_tp) continue;  // unloaded between resolution and here
     const auto sub_id = can_tp->SubscribeErrors(
         nsdu_ids,
-        [&queue_mutex, &queue_cv, &queue, iface](const boat::core::CanTpErrorEvent& err) {
+        [shared, iface](const boat::core::CanTpErrorEvent& err) {
           boat::v1::CanTpErrorEvent ev;
           ev.set_iface(iface);
           ev.set_nsdu_id(err.nsdu_id);
@@ -531,10 +552,10 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
           ev.set_message(err.message);
           ev.set_timestamp_ns(NowNsCanTp());
           {
-            std::lock_guard<std::mutex> lock(queue_mutex);
-            queue.push_back(std::move(ev));
+            std::lock_guard<std::mutex> lock(shared->mutex);
+            shared->queue.push_back(std::move(ev));
           }
-          queue_cv.notify_one();
+          shared->cv.notify_one();
         });
     subs.emplace_back(iface, sub_id);
   }
@@ -542,10 +563,10 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
   while (!context->IsCancelled()) {
     std::vector<boat::v1::CanTpErrorEvent> pending;
     {
-      std::unique_lock<std::mutex> lock(queue_mutex);
-      queue_cv.wait_for(lock, std::chrono::milliseconds(50),
-                        [&queue] { return !queue.empty(); });
-      pending.swap(queue);
+      std::unique_lock<std::mutex> lock(shared->mutex);
+      shared->cv.wait_for(lock, std::chrono::milliseconds(50),
+                          [&shared] { return !shared->queue.empty(); });
+      pending.swap(shared->queue);
     }
     for (const auto& ev : pending) {
       if (!writer->Write(ev)) {

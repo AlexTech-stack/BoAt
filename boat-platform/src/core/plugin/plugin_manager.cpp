@@ -220,6 +220,18 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
         fn_shared.get());
     handle.publisher_contexts.push_back(std::static_pointer_cast<void>(fn_shared));
   }
+  /* Colliding on an existing key is intended -- two instances configured for
+     the same iface are a real bus-level conflict and "second wins" is the
+     chosen behaviour -- but the displaced handle still has to be destroyed.
+     Assigning over the map entry simply dropped it, so the first instance
+     leaked its BoatPlugin and never had destroy_fn or dlclose called.
+     Unload() is precisely the right sequence (erase, drop services, drain
+     busy_count_, destroy outside the locks) and returns immediately when the
+     key is absent, which is the common case. Its services_ compare-and-erase
+     was written for exactly this situation: the new instance registered its
+     services above, overwriting the old entry, so comparing by pointer leaves
+     the new registration untouched while clearing only a genuinely stale one. */
+  Unload(handle.name);
   {
     std::lock_guard<std::mutex> lock(mutex_);
     plugins_[handle.name] = handle;

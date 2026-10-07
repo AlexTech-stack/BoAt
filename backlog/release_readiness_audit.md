@@ -766,3 +766,54 @@ with declared details will be removed completely in a future version` (CMP0169).
 sqlite3. Today a warning; on removal it becomes exactly the breakage N15 just was. The two patch
 blocks cannot simply become `FetchContent_MakeAvailable` because they exist to rewrite the
 fetched sources *before* `add_subdirectory`. **Severity: should-fix, before it becomes urgent.**
+
+---
+
+## After the fixes: what run 37592677977 showed
+
+`00d45a8` took **ASan from 11 failing tests to 1**, and removed the `SignalRouter` race entirely
+— `signal_router.cpp` went from **164 race-report mentions to 1**. Both N12 and N13 are
+confirmed fixed by CI, not just locally. The two sanitizer jobs stay red, but for fewer and
+better-understood reasons.
+
+**N17 — the plugin-collision overwrite leaked the displaced instance.** `FIXED.` The one ASan
+failure left was *"PluginManager still collides two instances with an identical iface"*.
+`plugin_manager.cpp:225` did `plugins_[handle.name] = handle;` — when two plugins collide on a
+key, the second overwrites the first and the displaced handle is simply dropped: no
+`destroy_fn`, no `dlclose`. The N13 destructor could not help, because an overwritten handle
+never reaches the destructor. Colliding is intended behaviour and the test is right to assert
+it; "second wins" just should not mean "first is abandoned". Fixed by calling `Unload()` before
+the insert — it is exactly the right sequence, returns immediately when the key is absent, and
+its `services_` compare-and-erase was written for this case: the new instance has already
+registered its services, so comparing by pointer leaves that registration alone and clears only
+a genuinely stale one.
+
+**N18 — use-after-free of stack memory in both CanTp subscribe streams.** `FIXED.` TSan labelled
+this *"double lock of a mutex"*, which undersells it. The report's own detail gives it away:
+`Location is stack of thread T10`, and the mutex was created at `can_tp_service_impl.cpp:443` —
+inside the RPC handler. `Subscribe()` and `SubscribeErrors()` each declared `queue_mutex`,
+`queue_cv` and `queue` as **stack locals** and captured them **by reference** into the callback
+registered with the plugin. `UnsubscribeAll()` removes the subscription but does not wait for a
+callback already in flight: `CanTpPlugin::NotifySubscribers()` snapshots the matching callbacks
+under its lock, releases the lock, then invokes them — so a callback from a snapshot taken
+before the unsubscribe can still be running on the frame-dispatch thread while the handler
+returns and destroys the frame it is writing into. The "double lock" is what a reused dead stack
+frame looks like once the mutex's own state is garbage.
+
+Fixed by moving the state into a heap-owned `SubscriberQueue<Event>` held by `shared_ptr` and
+captured **by value**, so a late callback writes into a live object and the last reference to
+drop frees it — handler or straggling callback, whichever finishes second. Both streams had the
+identical defect; fixing only the one TSan happened to report would have left the other.
+
+Verified against the bumped dependency stack: build clean, `ctest` **164/164 with and without
+`BOAT_HIL_ENABLED=1`**, including the two tests that exercise these paths.
+
+**Still open — the N14 set, now unmasked and larger.** With the `SignalRouter` noise gone, TSan
+shows more than before: the IPC control transport (18 reports, the biggest cluster),
+`CanTpRxEvent` protobuf messages shared across the streaming RPC (6), and — newly visible —
+`tick_timer.cpp:204-205` and `uds_server.cpp:85,172`. TSan's failing set also includes tests
+**102 and 103**, the two determinism cases. Worth stating precisely: the real
+`determinism-check` job **passes**, CPU-oversubscription rerun included, so the property holds.
+But races reported in the replay path deserve a proper look rather than a shrug, given that
+reproducibility is the product's central claim. **Severity: should-fix, and the determinism-path
+races first.**
