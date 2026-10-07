@@ -2,6 +2,9 @@
 boat-platform/build/
 
 # Python
+# setuptools leaves these behind on any `pip install` from the source tree
+boat-platform/sdk/python/build/
+boat-platform/cli/build/
 **/__pycache__/
 .claude/
 *.pyc

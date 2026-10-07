@@ -660,3 +660,61 @@ was particular to that first run and N11 closes.
 the extra 'all'`), and `boat-cli` pins neither click nor rich (`typer[all]>=0.12`, `rich>=13`), so
 every fresh install resolves whatever is newest. For a tool whose CLI help is part of its
 interface, that is a wide unpinned surface. **Severity: should-fix.**
+
+---
+
+## What the first green build found (2026-10-07)
+
+Run `37463931460` on `2bd75d1` was the first in which `build-and-test` passed, which finally let
+the six downstream jobs run. Four of them — `coverage`, `determinism-check` (including the
+CPU-oversubscription rerun), `docker-build` and `hil-smoke` — passed on their **first ever
+execution**. The two sanitizer jobs failed, and both failures are real defects in BoAt, not
+third-party noise.
+
+**N11 is closed, and my diagnosis of it was wrong.** The rendered-help probe ran on Python 3.11
+and passed all five commands. Help is not broken on 3.11. What actually failed on the first run
+was the old test's naive substring match against ANSI-laden, Rich-wrapped output; I then read a
+*truncated* pytest assertion repr and concluded four rows were missing from the panel when they
+were present but unmatched. There was no user-facing bug. The probe was still worth adding —
+it is what proved the negative, and it is written to survive wrapping and colour.
+
+**N12 — undefined behaviour in `SignalRouter`.** `FIXED.` `signal_router.h` declared
+`dispatcher_thread_` *before* `next_handle_`, `subscriptions_` and `subscriptions_mutex_`, and
+the constructor started it in the member-init list:
+
+```cpp
+SignalRouter::SignalRouter() : dispatcher_thread_(&SignalRouter::DispatchLoop, this) {}
+```
+
+Members initialise in declaration order, so the dispatch thread began running `DispatchLoop()`
+— which locks `subscriptions_mutex_` and reads `subscriptions_` — **before those members were
+constructed**. That is undefined behaviour in the gateway, not only in tests; TSan surfaced it
+as a race between `DispatchLoop()`'s lock and the mutex's own constructor. The destructor
+already joined correctly, so this was purely an ordering fault. Fixed by starting the thread in
+the constructor *body* and moving the member declaration last so the mistake is harder to repeat.
+
+**N13 — `PluginManager` had no destructor.** `FIXED.` Every ASan assertion passed; LeakSanitizer
+failed 11 binaries on exit, with leaks tracing to `boat_plugin_create` via
+`PluginManager::Load`. `Unload()` calls `destroy_fn` properly, but nothing did so for plugins
+still loaded when the manager died. The leak was the minor part: the real consequence is that
+**`destroy_fn` never ran at gateway shutdown**, so a plugin with genuine teardown (flushing,
+closing sockets, stopping threads) silently never got it. The new `~PluginManager()` repeats
+`Unload()`'s sequence over everything at once — drop the handles out of both maps, drain
+`busy_count_`, then destroy outside every lock, taking `mutex_` and `services_mutex_` one at a
+time as `Unload()` does. It declines to wait when `t_busy_depth > 0`, since the manager being
+destroyed from inside its own plugin's callback is a caller bug for which deadlocking a
+shutting-down gateway is the worse failure.
+
+**N14 — two further TSan races, NOT fixed.** Out of scope for the above and needing real
+investigation rather than a guess:
+
+- `boat::v1::CanTpRxEvent` protobuf messages are serialised by gRPC on one thread while another
+  touches them. The reports surface inside protobuf (`TaggedStringPtr::as_int`,
+  `CachedSize::Set`, `EpsCopyOutputStream::WriteStringMaybeAliased`) but the raced object is
+  BoAt's, in the CanTp subscribe path. **Severity: should-fix** — a shared mutable protobuf
+  message across a streaming RPC is a genuine correctness hazard, not a sanitiser artefact.
+- An unsynchronised `std::unordered_map` lookup (`_M_find_before_node`) racing a write in
+  `boat_integration_ipc_control_transport`. **Severity: should-fix.**
+
+Until those land, `tsan` stays red. Worth being explicit that this is not a regression: both
+jobs were red before this branch existed — they had simply never run, so nobody could see it.
