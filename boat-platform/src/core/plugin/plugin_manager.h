@@ -118,6 +118,17 @@ class ServiceRef {
 
 class PluginManager {
  public:
+  PluginManager() = default;
+
+  /* Unloads whatever is still loaded. Without this, a plugin that outlived
+     its manager never had destroy_fn called at all -- so a plugin with real
+     teardown (flushing, closing sockets, stopping threads) silently did not
+     get it at gateway shutdown, and LeakSanitizer flagged every instance. */
+  ~PluginManager();
+
+  PluginManager(const PluginManager&) = delete;
+  PluginManager& operator=(const PluginManager&) = delete;
+
   void SetPublisher(SignalPublishFn fn);
   void SetBusPublisher(BusPublishFn fn);
   void SetPduPublisher(PduPublishFn fn);

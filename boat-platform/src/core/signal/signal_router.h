@@ -73,11 +73,20 @@ class SignalRouter {
   void DispatchLoop();
 
   std::atomic<bool> running_{true};
-  std::thread dispatcher_thread_;
   std::atomic<SubscriptionHandle> next_handle_{1};
   std::vector<std::shared_ptr<Subscription>> subscriptions_;
   mutable std::mutex subscriptions_mutex_;
   FaultInjector* fault_injector_{nullptr};
+
+  /* Declared LAST, and started in the constructor *body* -- never in the
+     member-init list. Members initialise in declaration order, so a thread
+     started before this point runs DispatchLoop() against members that do not
+     exist yet: it locks subscriptions_mutex_ and reads subscriptions_, both of
+     which were still unconstructed. That is undefined behaviour, and TSan
+     reported it as a race between DispatchLoop()'s lock and the mutex's own
+     constructor. Keep this declaration last so the mistake is harder to make
+     again. */
+  std::thread dispatcher_thread_;
 };
 
 }  // namespace boat::core
