@@ -941,3 +941,95 @@ Worth noting what this says about the gate: it failed for the wrong reason, but 
 release whose packages were versioned 0.1.0 under a 0.1.1 tag. Had it only checked globs, as the
 original did, that mismatch would have shipped. The version assertion it never reached is the one
 that would have caught it.
+
+---
+
+## Plan reconciliation and backlog migration (2026-10-08)
+
+Two structural items closed, both of which this audit had recommended and neither of which
+was a code change.
+
+### `project-plan.md` rewritten against the tree
+
+The audit swept user-facing documentation (workstream B) and did not touch `project-plan.md`,
+on the grounds that it is a planning document rather than a doc a new user follows. That was
+a mistake: `README.md:103` links it under "Learn more", so a public visitor reads it, and by
+the time it was read properly it was the stalest document in the repository.
+
+What was wrong with it, beyond the two items the audit had already filed as S7 and S8:
+
+- **The 18-month milestone schedule.** Work the plan placed in months 16–18 (M5 HIL, M6 GA)
+  was complete by month 6. Every date in the table was misleading, and in the unusual
+  direction. Replaced with four version milestones carrying entry conditions and **no
+  dates**, since dates on a single-contributor project with no external commitments were
+  decoration while the ordering was doing the real work.
+- **The risk register's "Mitigation" column described the unmitigated state.** It was an
+  accurate risk analysis mislabelled as a mitigation plan — and the mislabelling had a
+  cost: R02, R04 and R08 had all been *closed* by work done earlier in this session and
+  still read as live. Column renamed to "Status". Two risks added (R13 sanitizer-only
+  concurrency defects, R14 untested surfaces) because both describe failure modes the
+  project has already experienced rather than anticipated ones.
+- **Epic status was unrecorded.** E10 (distributed sim / HLA) had not been started at all;
+  E2's "Python bindings" deliverable was never built and the substantial Python *client*
+  SDK that exists got no credit for it; E5's metrics half shipped while the dashboard
+  integration half did not; E9's anomaly detection was never built.
+- **FR6 fault injection** reads as delivered. The engine is complete — five fault types,
+  seeded through `DeterminismEngine`, wired into `signal_router.cpp:94` — and has no CLI,
+  SDK or UI surface, so it is unreachable in practice. Of everything on the open list this
+  has the best ratio of user-visible value to remaining work, and it was invisible because
+  nothing was tracking it.
+- **Two user flows could not be run as written.** `boat sim run --scenario regression.yaml
+  --assert assertions.yaml` has never existed in any form (the real verb is
+  `boat test run <manifest.json>`), and `boat replay seek` requires `--replay-id`, which the
+  flow omitted. Both now match the CLI, and every flow in the file has been run.
+- **TimescaleDB** was listed as optional storage. It was never implemented, is not planned,
+  and had already propagated into `docs/diagrams/class-diagrams.md:126` as a
+  `TimescaleEventStore` class that does not exist. Removed from the constraints rather than
+  left as an aspiration, since leaving it there is how the phantom class got written.
+- **"Team Roles" listed ten disciplines** — Project Manager, Lead Developer, AI Engineer,
+  UX/UI Designer and so on — which reads as a ten-person organisation. The project has one
+  principal contributor. Retitled "Roles the work covers" and stated plainly, because the
+  original would have given a prospective contributor a false impression of the capacity
+  behind the backlog, which is the opposite of what a public plan should do.
+
+### `backlog/` migrated to GitHub Issues
+
+The audit's N5 recommended publishing the known-gaps backlogs rather than letting visitors
+find them. The sharper problem was that **GitHub had zero issues and zero milestones** while
+~25 real open items sat in markdown. A visitor reading "no open issues" concludes the
+project is either finished or abandoned; a `good first issue` label existed and nothing
+carried it.
+
+Filed **35 issues** (#10–#44) across four milestones, with area, kind and priority labels.
+Each carries file:line evidence and links back to the backlog file holding the full
+write-up. `backlog/README.md` is new and maps each file to the issues that now track its
+open items, so the directory reads as evidence rather than as a competing queue — the issue
+template's "Known gaps and backlogs" link already pointed visitors here, at thirteen files
+with no index.
+
+Nothing was deleted from `backlog/`. The files carry reasoning, dead ends and corrected
+first drafts that an issue body would bury, and several are more useful for the wrong
+hypotheses they record than for their conclusions.
+
+### One source for project status. `FIXED.`
+
+`CLAUDE.md:23` carried `**Status: Work In Progress.**` while `README.md:3` said pre-1.0 and
+`AGENTS.md` said nothing — three files disagreeing about the project's status, in the two
+files whose opening paragraphs state that they must never disagree. Worse than a stale line:
+"changes without notice" and "versioned ABI, mismatched plugin rejected at load, see
+CHANGELOG" are different contracts, and a plugin author who read the wrong one planned
+differently.
+
+Resolved by removing the statement from **both** agent files rather than synchronising it.
+Each now points at `README.md` as the single source, and says why. Three copies of one
+sentence had already drifted into three different promises, so a fourth synchronisation would
+have bought nothing — the structural fix is that there is only one copy to get wrong. Closes
+[#12](https://github.com/AlexTech-stack/BoAt/issues/12).
+
+The same reasoning retires `test/foundIssues.md`. It held one open consumer-reported bug
+(`dbc2boatjson.py` double-scaling DBC min/max) plus four that `58a0b8c` had already fixed
+with tests. The open one is now [#11](https://github.com/AlexTech-stack/BoAt/issues/11),
+carrying the full reproduction and the reporter's environment, and the file is deleted. It was
+untracked, which is why the bug sat unfixed for nine days: nobody could see it. A consumer
+report that lives outside both version control and the issue tracker is a report nobody
+received.
