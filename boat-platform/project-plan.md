@@ -64,10 +64,11 @@ Built and in use:
 Test baseline at `v0.1.1`: **164 C++ cases** (100% passing in debug and release; 7 HIL cases
 skipped without `BOAT_HIL_ENABLED=1`) and **544 Python cases** (536 passing, 8 skipped).
 
-Known not to be green: the **TSan job fails 6 of 164** — a UDS/IPC concurrency cluster
-([#10](https://github.com/AlexTech-stack/BoAt/issues/10)). Every other job passes. This is
-the one thing standing between the project and a green pipeline, and it is the entry
-condition for the next milestone.
+Known not to be green: the **TSan job fails 6–7 of 164** — a UDS/IPC concurrency cluster
+([#10](https://github.com/AlexTech-stack/BoAt/issues/10)). The failing set is not stable
+between runs, so any count is a lower bound. Every other job passes. This is the one thing
+standing between the project and a green pipeline, and it is the entry condition for the next
+milestone.
 
 ## Roadmap
 
@@ -253,7 +254,7 @@ live. The column is now **Status**, and it says what is true.
 | R10 | iceoryx2 API instability on upgrade | **Open, accepted.** Pinned to v0.4.1. The `ShmPublisher`/`ShmSubscriber` wrappers limit the blast radius. Upstream is pre-1.0 with no C++ API stability promise |
 | R11 | Plugin ABI breakage | **Open, by design.** ABI v9 is checked at `dlopen` (`plugin_manager.cpp:113`) and a mismatch is rejected outright. This prevents silent breakage at the cost of a hard error with no fallback. What is missing is the *policy* — how ABI changes are proposed and announced → [#15](https://github.com/AlexTech-stack/BoAt/issues/15), [#24](https://github.com/AlexTech-stack/BoAt/issues/24) |
 | R12 | vcan-only CI misses hardware-specific failures | **Open, accepted.** CI runs on `vcan0`. Bus-off recovery, error frames, arbitration timing and cable faults are never exercised. HIL tests need a self-hosted runner with physical hardware. [#22](https://github.com/AlexTech-stack/BoAt/issues/22) would at least make the controller state visible when hardware *is* attached |
-| R13 | Concurrency defects found only under sanitizers and only under load | **Open.** TSan fails 6 of 164 on `master`, concentrated in UDS/IPC. Three rounds of point fixes each found and fixed a real defect and each revealed more behind it, which is the signal that the remaining work is a synchronisation design rather than more patching → [#10](https://github.com/AlexTech-stack/BoAt/issues/10) |
+| R13 | Concurrency defects found only under sanitizers and only under load | **Open.** TSan fails 6–7 of 164, concentrated in UDS/IPC, and the failing set varies between runs on identical code. Four diagnoses so far: three found and fixed a real defect and were each followed by more reports, and the fourth — that the unguarded `client_threads_` vector was the place to start — was undercut by a *single-client* test joining the failures. The signal is that the remaining work is a synchronisation design rather than a fifth point fix → [#10](https://github.com/AlexTech-stack/BoAt/issues/10) |
 | R14 | Untested surfaces carry undetected defects | **Open, demonstrated.** `admin_gui/`, `tools/`, `nodes/` and `demo/` have no tests. `tools/dbc2boatjson.py` has a consumer-reported correctness bug that produces silently wrong signal ranges — an untested converter, with a bug, found by someone else → [#11](https://github.com/AlexTech-stack/BoAt/issues/11), [#17](https://github.com/AlexTech-stack/BoAt/issues/17) |
 
 R13 and R14 are new. Both describe failure modes the project has already experienced rather

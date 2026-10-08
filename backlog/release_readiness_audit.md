@@ -1033,3 +1033,33 @@ carrying the full reproduction and the reporter's environment, and the file is d
 untracked, which is why the bug sat unfixed for nine days: nobody could see it. A consumer
 report that lives outside both version control and the issue tracker is a report nobody
 received.
+
+### N19 addendum — the TSan failing set is not stable (2026-10-08)
+
+PR #45 is Markdown-only; no compilable file is touched. Its CI run
+([37785144456](https://github.com/AlexTech-stack/BoAt/actions/runs/37785144456)) nonetheless
+failed **7 of 164** under TSan against the 6 that failed on `master` about an hour earlier,
+adding case **72 — "UDS control payload at 4 KB threshold is delivered via SHM"**.
+
+Two consequences.
+
+**The count is a sample, not a property.** Every "N of 164" figure for this cluster —
+including the ones written into `project-plan.md` and `CONTRIBUTING.md` earlier today, now
+corrected — is a lower bound from one run. A fix cannot be verified against a moving target,
+so establishing the real width of the set (a loop on a low-core machine) has to come before
+any fix is called verified.
+
+**Case 72 undercuts the diagnosis offered in #10.** It is a *single-client* test: one
+`UdsServer`, one `UdsClient`, one 4 KB payload
+(`src/tests/integration/test_ipc_control_transport.cpp:56-80`). The unguarded
+`client_threads_` vector that #10 named as the starting point is not meaningfully exercised
+by one connection — one `emplace_back`, one join, no concurrent iteration — so it cannot be
+what fails here. Something in the SHM path itself is racy with no concurrent client at all.
+The vector race is real and worth fixing; it is simply not sufficient.
+
+That makes four diagnoses of this cluster, three of which identified and fixed a genuine
+defect and were each followed by more reports, and a fourth that was narrowed incorrectly.
+The recurring error is mine and it has the same shape every time: reading the most legible
+item in a report as the explanation for the whole report. Recorded here rather than acted on,
+because a fifth point fix aimed at whichever case failed most recently is exactly the move
+the previous four argue against.

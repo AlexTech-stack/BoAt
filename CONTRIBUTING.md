@@ -26,9 +26,10 @@ is the plan of record and says plainly which requirements are not met.
 
 Two things worth knowing before you pick something up:
 
-- **`master` is not currently green.** The TSan job fails 6 of 164 tests
-  ([#10](https://github.com/AlexTech-stack/BoAt/issues/10)). Every other job passes. If your
-  change is unrelated and TSan is the only red job, that is the known failure and not you.
+- **`master` is not currently green.** The TSan job fails 6–7 of 164 tests, and the set is
+  flaky rather than fixed ([#10](https://github.com/AlexTech-stack/BoAt/issues/10)). Every
+  other job passes. If TSan is the only red job, that is the known failure and not you —
+  check the failing case names against #10 before assuming otherwise.
 - **If you find something while working on something else**, a one-line issue is welcome even
   without a fix. Several of the most useful entries in `backlog/` started that way, and two
   of the bugs fixed this year were reported by people using BoAt from another project rather
