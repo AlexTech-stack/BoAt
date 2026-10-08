@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "boat-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "Typer-based CLI for BoAt platform"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Alexander Günther", email = "alexander.guenther@tuta.io" }]

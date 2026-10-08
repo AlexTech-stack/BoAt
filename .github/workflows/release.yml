@@ -46,31 +46,31 @@ jobs:
         run: |
           set -eux
           cd build/release
-          ls -lh boat-platform-*.tar.gz boat-platform-*.deb boat-platform-*.rpm
+          ls -lh boat-platform[-_]*.tar.gz boat-platform[-_]*.deb boat-platform[-_]*.rpm
 
           # Exactly one of each, and nothing calling itself a Source tarball.
-          test "$(ls -1 boat-platform-*.tar.gz | wc -l)" -eq 1
-          test "$(ls -1 boat-platform-*.deb     | wc -l)" -eq 1
-          test "$(ls -1 boat-platform-*.rpm     | wc -l)" -eq 1
+          test "$(ls -1 boat-platform[-_]*.tar.gz | wc -l)" -eq 1
+          test "$(ls -1 boat-platform[-_]*.deb     | wc -l)" -eq 1
+          test "$(ls -1 boat-platform[-_]*.rpm     | wc -l)" -eq 1
           if ls *-Source.tar.gz >/dev/null 2>&1; then
             echo "::error::a -Source tarball was produced; CPack is misconfigured"
             exit 1
           fi
 
           # The DEB must declare itself as boat-platform at this version.
-          pkg=$(dpkg-deb -f boat-platform-*.deb Package)
-          ver=$(dpkg-deb -f boat-platform-*.deb Version)
+          pkg=$(dpkg-deb -f boat-platform[-_]*.deb Package)
+          ver=$(dpkg-deb -f boat-platform[-_]*.deb Version)
           echo "deb declares: $pkg $ver"
           test "$pkg" = "boat-platform"
           case "$ver" in ${GITHUB_REF_NAME#v}*) ;; *) echo "::error::deb version $ver does not match tag ${GITHUB_REF_NAME}"; exit 1 ;; esac
 
           # And it must actually contain the gateway.
-          dpkg-deb -c boat-platform-*.deb | grep -q 'bin/boat_gateway'
+          dpkg-deb -c boat-platform[-_]*.deb | grep -q 'bin/boat_gateway'
 
           # A sanity ceiling: the install set is one static binary plus five
           # small plugins and a header. Anything near a gigabyte means CPack has
           # swept up the build tree again.
-          for f in boat-platform-*.tar.gz boat-platform-*.deb boat-platform-*.rpm; do
+          for f in boat-platform[-_]*.tar.gz boat-platform[-_]*.deb boat-platform[-_]*.rpm; do
             sz=$(stat -c%s "$f")
             echo "$f: $sz bytes"
             test "$sz" -lt 900000000
@@ -82,9 +82,9 @@ jobs:
           # upload-artifact paths are relative to the workspace root, not to the
           # job's working-directory.
           path: |
-            boat-platform/build/release/boat-platform-*.tar.gz
-            boat-platform/build/release/boat-platform-*.deb
-            boat-platform/build/release/boat-platform-*.rpm
+            boat-platform/build/release/boat-platform[-_]*.tar.gz
+            boat-platform/build/release/boat-platform[-_]*.deb
+            boat-platform/build/release/boat-platform[-_]*.rpm
       - name: Attach the packages to the GitHub release
         # upload-artifact alone leaves them as workflow artifacts: behind a
         # login, expiring with retention, and absent from the release page.
@@ -93,9 +93,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${GITHUB_REF_NAME}" \
-            build/release/boat-platform-*.tar.gz \
-            build/release/boat-platform-*.deb \
-            build/release/boat-platform-*.rpm \
+            build/release/boat-platform[-_]*.tar.gz \
+            build/release/boat-platform[-_]*.deb \
+            build/release/boat-platform[-_]*.rpm \
             --clobber
 
   docker-push:
