@@ -20,7 +20,7 @@ BoAt is a deterministic automotive simulation and testing platform (SIL/HIL/CI).
 
 The bulk of the code lives under `boat-platform/`. `admin_gui/` (PySide6 desktop client) and `ui/` + `tools/` (FastAPI web services) sit at the repo root. `boat-platform/docs/architecture/system-architecture.md` covers the architecture in depth.
 
-> **Status: Work In Progress.** APIs, config, and behavior change without notice.
+> **Project status is stated in one place: [`README.md`](README.md).** Neither this file nor its sibling carries a status or stability line — three copies of that statement had already drifted into three different promises, which is the thing the dual-file rule exists to prevent. The README is the single source; `CHANGELOG.md` records what changed and `boat-platform/project-plan.md` says which requirements are unmet.
 
 ## License
 
@@ -226,11 +226,11 @@ Each web service resolves the SDK via `sys.path.insert(0, ...)` relative to its 
 - `add_boat_plugin()` (`cmake/BoAtPlugin.cmake`) is the macro for registering a new plugin target; it also copies an optional `<name>.schema.json` config sidecar next to the `.so`, which `admin_gui` reads to build per-key config fields. `BoAtProto.cmake` wraps protobuf generation.
 - Coverage: `gcovr --root . --exclude build/ --xml coverage.xml`. Packaging: `cpack -G "TGZ;DEB;RPM"`. Docker: images are tagged `ghcr.io/<owner>/<repo>` lowercased, derived from `github.repository` in CI -- so `ghcr.io/alextech-stack/boat:*` for this repo. It was hardcoded to `ghcr.io/boat-platform/...`, a namespace the repo does not live in, which GHCR would have denied on the first tag push.
 - System-test structure/conventions: `test/Structure.md`. Per-feature manual runbooks: `boat-platform/docs/testing/`. LLM cost-control guidance: `boat-platform/docs/ai/llm-cost-control.md`.
-- Open issues and incident write-ups live in `backlog/*.md` — worth grepping before assuming a rough edge is unknown.
+- **Open work lives in [GitHub Issues](https://github.com/AlexTech-stack/BoAt/issues)**, labelled by area (`area:*`), kind and priority (`P0`-`P3`), and grouped into four version milestones (v0.2.0 Green and honest / v0.3.0 Measured / v0.4.0 Robust under failure / v1.0.0 Stable surfaces). `backlog/*.md` holds the longer-form evidence behind them -- gap analyses, incident write-ups and design rationale -- and `backlog/README.md` maps each file to the issues tracking its open items. Grep both before assuming a rough edge is unknown; the files are often more useful for the dead ends they record than for their conclusions. `boat-platform/project-plan.md` is the plan of record and states which requirements are unmet.
 
 ## AUTOSAR spec reference
 
-Specs live under `spec/` (symlinked, **gitignored** — populate per machine): `spec/latest/` (PDFs), `spec/text/` (flat UTF-8), `spec/search.db` (SQLite FTS5), `spec/GUIDE.md`. Query `search.db` (FTS5 `docs MATCH`) to find the right document, then `grep` the matching `spec/text/*.txt`. Open gap analyses are in `backlog/`.
+Specs live under `spec/` (symlinked, **gitignored** — populate per machine): `spec/latest/` (PDFs), `spec/text/` (flat UTF-8), `spec/search.db` (SQLite FTS5), `spec/GUIDE.md`. Query `search.db` (FTS5 `docs MATCH`) to find the right document, then `grep` the matching `spec/text/*.txt`. Open gap analyses are in `backlog/` (see `backlog/pdu_gap_analysis.md`, tracked by issue #35).
 
 ## Specialized subagents
 

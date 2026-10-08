@@ -7,6 +7,34 @@ it true. The rest is ordinary.
 Contributions are accepted under the [Apache License 2.0](LICENSE) (§5), the same licence the
 project ships under.
 
+## Where to start
+
+Open work is in [GitHub Issues](https://github.com/AlexTech-stack/BoAt/issues), grouped into
+four [milestones](https://github.com/AlexTech-stack/BoAt/milestones) and labelled by area
+(`area:*`), kind and priority (`P0`–`P3`).
+
+- **[`good first issue`](https://github.com/AlexTech-stack/BoAt/issues?q=is%3Aopen+label%3A%22good+first+issue%22)**
+  — self-contained, well specified, and a reasonable way to read through one part of the tree.
+- **[`help wanted`](https://github.com/AlexTech-stack/BoAt/issues?q=is%3Aopen+label%3A%22help+wanted%22)**
+  — where an extra pair of eyes would make the most difference.
+
+Issues carry `file:line` evidence and link to [`backlog/`](backlog/) for the longer analysis
+behind them — gap assessments, incident write-ups, and in several cases a record of the wrong
+hypotheses that cost time first. [`backlog/README.md`](backlog/README.md) maps the files to
+the issues that track them. [`boat-platform/project-plan.md`](boat-platform/project-plan.md)
+is the plan of record and says plainly which requirements are not met.
+
+Two things worth knowing before you pick something up:
+
+- **`master` is not currently green.** The TSan job fails 6–7 of 164 tests, and the set is
+  flaky rather than fixed ([#10](https://github.com/AlexTech-stack/BoAt/issues/10)). Every
+  other job passes. If TSan is the only red job, that is the known failure and not you —
+  check the failing case names against #10 before assuming otherwise.
+- **If you find something while working on something else**, a one-line issue is welcome even
+  without a fix. Several of the most useful entries in `backlog/` started that way, and two
+  of the bugs fixed this year were reported by people using BoAt from another project rather
+  than working on it.
+
 ## Getting set up
 
 **Prerequisites.** CMake **3.24+** (Ubuntu 22.04's 3.22 is too old), Ninja, a C++20 g++, and a
