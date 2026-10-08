@@ -18,6 +18,8 @@ on:
 jobs:
   package:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write        # gh release upload
     defaults:
       run:
         working-directory: boat-platform
@@ -36,11 +38,43 @@ jobs:
       - name: Create package
         working-directory: boat-platform/build/release
         run: cpack -G "TGZ;DEB;RPM"
-      - name: Verify package artifacts exist
+      - name: Verify the packages are ours
+        # Checked by NAME, not by glob. v0.1.0 shipped c-ares_1.34.5-1_amd64.deb,
+        # c-ares-1.34.5-1.src.rpm and an 8.6 GB -Source.tar.gz of the whole
+        # working tree, because `ls build/release/*.deb` happily matched a .deb
+        # that was not BoAt's. CPACK_PACKAGE_FILE_NAME is pinned, so assert it.
         run: |
-          ls build/release/*.tar.gz
-          ls build/release/*.deb
-          ls build/release/*.rpm
+          set -eux
+          cd build/release
+          ls -lh boat-platform-*.tar.gz boat-platform-*.deb boat-platform-*.rpm
+
+          # Exactly one of each, and nothing calling itself a Source tarball.
+          test "$(ls -1 boat-platform-*.tar.gz | wc -l)" -eq 1
+          test "$(ls -1 boat-platform-*.deb     | wc -l)" -eq 1
+          test "$(ls -1 boat-platform-*.rpm     | wc -l)" -eq 1
+          if ls *-Source.tar.gz >/dev/null 2>&1; then
+            echo "::error::a -Source tarball was produced; CPack is misconfigured"
+            exit 1
+          fi
+
+          # The DEB must declare itself as boat-platform at this version.
+          pkg=$(dpkg-deb -f boat-platform-*.deb Package)
+          ver=$(dpkg-deb -f boat-platform-*.deb Version)
+          echo "deb declares: $pkg $ver"
+          test "$pkg" = "boat-platform"
+          case "$ver" in ${GITHUB_REF_NAME#v}*) ;; *) echo "::error::deb version $ver does not match tag ${GITHUB_REF_NAME}"; exit 1 ;; esac
+
+          # And it must actually contain the gateway.
+          dpkg-deb -c boat-platform-*.deb | grep -q 'bin/boat_gateway'
+
+          # A sanity ceiling: the install set is one static binary plus five
+          # small plugins and a header. Anything near a gigabyte means CPack has
+          # swept up the build tree again.
+          for f in boat-platform-*.tar.gz boat-platform-*.deb boat-platform-*.rpm; do
+            sz=$(stat -c%s "$f")
+            echo "$f: $sz bytes"
+            test "$sz" -lt 900000000
+          done
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -48,9 +82,21 @@ jobs:
           # upload-artifact paths are relative to the workspace root, not to the
           # job's working-directory.
           path: |
-            boat-platform/build/release/*.tar.gz
-            boat-platform/build/release/*.deb
-            boat-platform/build/release/*.rpm
+            boat-platform/build/release/boat-platform-*.tar.gz
+            boat-platform/build/release/boat-platform-*.deb
+            boat-platform/build/release/boat-platform-*.rpm
+      - name: Attach the packages to the GitHub release
+        # upload-artifact alone leaves them as workflow artifacts: behind a
+        # login, expiring with retention, and absent from the release page.
+        # v0.1.0's release had no downloadable packages for that reason.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            build/release/boat-platform-*.tar.gz \
+            build/release/boat-platform-*.deb \
+            build/release/boat-platform-*.rpm \
+            --clobber
 
   docker-push:
     runs-on: ubuntu-22.04

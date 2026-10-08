@@ -12,7 +12,10 @@ include(GNUInstallDirs)
 include(BoAtPlugin)
 include(BoAtTest)
 include(BoAtProto)
-include(Packaging)
+# NOTE: include(Packaging) is deliberately at the BOTTOM of this file, not here.
+# See cmake/Packaging.cmake for why -- CPack's config is written to the shared
+# top-level binary dir and the last include(CPack) wins, so ours has to run
+# after every dependency's.
 include(FetchContent)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -226,3 +229,8 @@ add_subdirectory(src/hil)
 if(BOAT_BUILD_TESTS AND BUILD_TESTING)
   add_subdirectory(src/tests)
 endif()
+
+# Last, on purpose: must run after every add_subdirectory() above so that
+# BoAt's CPack configuration is the one written to CPackConfig.cmake rather
+# than a fetched dependency's. See cmake/Packaging.cmake.
+include(Packaging)
