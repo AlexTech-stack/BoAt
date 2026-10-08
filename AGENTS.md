@@ -9,6 +9,8 @@
 > other; the source code is authoritative over both. This file is the longer of the two and
 > carries operational detail `CLAUDE.md` only summarizes.
 
+> **Project status is stated in one place: [`README.md`](README.md).** Neither this file nor its sibling carries a status or stability line — three copies of that statement had already drifted into three different promises, which is the thing the dual-file rule exists to prevent. The README is the single source; `CHANGELOG.md` records what changed and `boat-platform/project-plan.md` says which requirements are unmet.
+
 ## Repository structure
 
 - **`boat-platform/`** — Main platform (C++20, CMake+Ninja, gRPC)
@@ -801,6 +803,10 @@ at `BOAT_NODE_TICK_MS`/`_US` rather than a hard-coded 1 ms.
 - Docker images are tagged `ghcr.io/<owner>/<repo>` lowercased, derived from `github.repository` in CI, i.e. `ghcr.io/alextech-stack/boat:*` for this repo.
   GHCR namespaces follow the GitHub owner and the registry rejects uppercase, so the old
   hardcoded `ghcr.io/boat-platform/boat-platform` would have been denied on the first tag.
+
+## Open work and known gaps
+
+**Open work lives in [GitHub Issues](https://github.com/AlexTech-stack/BoAt/issues)**, labelled by area (`area:*`), kind and priority (`P0`-`P3`), and grouped into four version milestones (v0.2.0 Green and honest / v0.3.0 Measured / v0.4.0 Robust under failure / v1.0.0 Stable surfaces). `backlog/*.md` holds the longer-form evidence behind them -- gap analyses, incident write-ups and design rationale -- and `backlog/README.md` maps each file to the issues tracking its open items. Grep both before assuming a rough edge is unknown; the files are often more useful for the dead ends they record than for their conclusions. `boat-platform/project-plan.md` is the plan of record and states which requirements are unmet.
 
 ## Project meta files
 
