@@ -100,7 +100,7 @@ boat sim stop  <simulation_id>
 - [Project overview](boat-platform/docs/project.html)
 - [Architecture](boat-platform/docs/architecture/system-architecture.md)
 - [API specification](boat-platform/docs/api/api-specification.md)
-- [Project plan](boat-platform/project-plan.md)
+- [Project plan](boat-platform/project-plan.md) — the plan of record: what is built, what is not, and what is committed next
 - [AGENTS.md](AGENTS.md) — Build, run, and development reference
 
 ## Contributing
@@ -109,6 +109,12 @@ boat sim stop  <simulation_id>
 including the two that are easy to break by accident: `CLAUDE.md` and `AGENTS.md` must never
 disagree, and nothing in core, scheduling or replay may introduce a clock, unseeded randomness
 or nondeterministic ordering.
+
+Open work is in **[GitHub Issues](https://github.com/AlexTech-stack/BoAt/issues)**, grouped into
+four [milestones](https://github.com/AlexTech-stack/BoAt/milestones) and labelled by area and
+priority. [`good first issue`](https://github.com/AlexTech-stack/BoAt/issues?q=is%3Aopen+label%3A%22good+first+issue%22)
+marks the self-contained ones. Issues link to [`backlog/`](backlog/) for the longer analysis
+behind them.
 
 - [CHANGELOG.md](CHANGELOG.md) — what changed, and which changes were breaking
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
