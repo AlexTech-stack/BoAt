@@ -863,3 +863,57 @@ previous three readings of that label were each wrong about the mechanism. What 
 that the CanTp fix in `6eeb365` did what it claimed — `Location is stack of thread` went **4 → 0**
 and the mutex now lives on the heap — while the double-lock count was unchanged, which means the
 two were never the same issue. **Severity: unknown; needs a reproduction before any fix.**
+
+---
+
+## N20 — the v0.1.0 release packages were not BoAt. `FIXED.`
+
+`release.yml` succeeded on its first ever run and produced three files. None of them was BoAt:
+
+```
+boat-platform-0.1.0-Source.tar.gz   8.6 GB -- the working tree, build/ included
+c-ares_1.34.5-1_amd64.deb                  -- c-ares, not BoAt
+c-ares-1.34.5-1.src.rpm                    -- c-ares source RPM, not BoAt
+```
+
+**Cause.** `include(CPack)` writes `${CMAKE_BINARY_DIR}/CPackConfig.cmake` — the *top-level*
+binary directory, shared by every subproject — so the last `include(CPack)` to run wins the
+file. `cmake/Packaging.cmake` was included at `CMakeLists.txt:15`, before any dependency;
+gRPC's bundled c-ares sets `CPACK_PACKAGE_NAME` to its own `PROJECT_NAME` and calls
+`include(CPack)` itself at its line 776, reached via `add_subdirectory(grpc)` at line 154. So
+c-ares' configuration clobbered BoAt's. Directly visible in any existing build directory:
+`grep CPACK_PACKAGE_NAME build/debug/CPackConfig.cmake` → `"c-ares"`, vendor
+`"Daniel Stenberg"`.
+
+**Why it shipped.** The release job verified with `ls build/release/*.deb`. A `.deb` did exist,
+so the check passed. A glob confirms that *something* was produced, never that it was the right
+thing — and this is the second time in this audit that a gate passed while testing nothing
+useful (see the `-R boat_hil_smoke` filters matching zero tests).
+
+**Fixed in three places.** `include(Packaging)` moved to the very bottom of the top-level
+`CMakeLists.txt`, after every `add_subdirectory`, so BoAt's CPack config is written last — with
+a note at the old site explaining why it is not there. `Packaging.cmake` now sets the
+version fields explicitly rather than inheriting whatever a dependency left behind, pins
+`CPACK_PACKAGE_FILE_NAME` so the output is predictable and checkable, sets
+`CPACK_STRIP_FILES` (the gateway links statically and most of its few hundred MB is symbol
+table), and gives the source generator ignore patterns so it can no longer tar up `build/`.
+Verified by reconfiguring: `CPACK_PACKAGE_NAME "boat-platform"`, version `0.1.0`, file name
+`boat-platform-0.1.0-Linux-x86_64`.
+
+And the gate now checks by **name**: exactly one of each `boat-platform-*` artifact, no
+`-Source` tarball, `dpkg-deb -f` must report `Package: boat-platform` at the tag's version, the
+`.deb` must contain `bin/boat_gateway`, and each file must be under 900 MB.
+
+**Also fixed: packages never reached the release page.** `actions/upload-artifact` makes them
+workflow artifacts — behind a login, expiring with retention, invisible on the release. A
+`gh release upload --clobber` step now attaches them, with `contents: write` added to the job.
+
+**What the v0.1.0 release actually contains.** No assets at all, which is the one mercy here:
+nothing wrong is publicly downloadable from the release page, only the bogus 8.6 GB workflow
+artifact. The Docker image is built by `Dockerfile.runtime` copying the gateway binary directly
+and does **not** go through CPack, so `ghcr.io/alextech-stack/boat:v0.1.0` should be sound —
+though that has not been verified, because the available token lacks `read:packages`.
+
+**Recommendation: cut `v0.1.1` once this lands**, rather than retagging `v0.1.0`. Retagging a
+published tag is hostile to anyone who already fetched it, and a point release costs nothing
+when the only defect is the packaging job.
