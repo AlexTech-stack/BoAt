@@ -917,3 +917,27 @@ though that has not been verified, because the available token lacks `read:packa
 **Recommendation: cut `v0.1.1` once this lands**, rather than retagging `v0.1.0`. Retagging a
 published tag is hostile to anyone who already fetched it, and a point release costs nothing
 when the only defect is the packaging job.
+
+### N20 follow-up — the first v0.1.1 attempt failed, for two more reasons
+
+The packaging fix itself **worked**: `cpack` produced
+`boat-platform-0.1.0-Linux-x86_64.tar.gz`, `boat-platform_0.1.0_amd64.deb` and
+`boat-platform-0.1.0-1.x86_64.rpm`. All three are BoAt. But the job still failed, and both
+causes are worth recording.
+
+**My own gate had a glob bug.** `CPACK_DEBIAN_FILE_NAME DEB-DEFAULT` produces Debian's
+convention — `name_version_arch.deb`, with **underscores** — while the TGZ and RPM follow
+`CPACK_PACKAGE_FILE_NAME` with hyphens. The gate globbed `boat-platform-*.deb` and died on its
+first `ls`. Fixed to `boat-platform[-_]*`, verified by running the assertions against the exact
+filenames the failed run produced.
+
+**The version was never bumped.** `project(boat_platform VERSION 0.1.0)` still said 0.1.0, so the
+packages were stamped 0.1.0 under a `v0.1.1` tag — and both `pyproject.toml` files were likewise
+stale, against CONTRIBUTING.md's own rule that they move together. Bumped to 0.1.1;
+`BOAT_VERSION` is derived from `PROJECT_VERSION` so the gateway's `boat config show` follows
+automatically.
+
+Worth noting what this says about the gate: it failed for the wrong reason, but it **did** stop a
+release whose packages were versioned 0.1.0 under a 0.1.1 tag. Had it only checked globs, as the
+original did, that mismatch would have shipped. The version assertion it never reached is the one
+that would have caught it.
