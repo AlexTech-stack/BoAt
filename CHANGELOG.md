@@ -11,15 +11,30 @@ The plugin ABI is versioned separately from the project; see
 
 ## [Unreleased]
 
-### Changed
+Nothing yet.
 
-- Bumped gRPC v1.65.0 → **v1.75.0** and Protocol Buffers v27.3 → **v31.1**, so the project
-  configures under **CMake 4.x**. gRPC's bundled c-ares declared
-  `cmake_minimum_required(VERSION 3.1.0)` up to and including v1.74.1, and CMake 4.0 removed
-  compatibility with minimums below 3.5 — so a clean checkout could not configure on any CMake
-  4 host. v1.75.0 is the first release whose c-ares uses `3.5.0...3.10.0`. The two move together
-  because `gRPC_PROTOBUF_PROVIDER "package"` points gRPC at the separately fetched protobuf,
-  and v1.75.0 pins v31.1.
+## [0.1.1] — 2026-10-08
+
+Packaging fix. No change to the gateway, the SDK, the CLI or the plugin ABI — if you are not
+installing from a `.deb`/`.rpm`/`.tar.gz`, `v0.1.0` and `v0.1.1` are the same software.
+
+### Fixed
+
+- **The `v0.1.0` release packages were not BoAt.** `cpack` produced
+  `c-ares_1.34.5-1_amd64.deb`, `c-ares-1.34.5-1.src.rpm`, and an 8.6 GB
+  `boat-platform-0.1.0-Source.tar.gz` of the entire working tree including `build/`.
+  `include(CPack)` writes `CPackConfig.cmake` into the shared top-level binary directory, so the
+  last `include(CPack)` wins; `cmake/Packaging.cmake` was included before the dependencies, and
+  gRPC's bundled c-ares calls `include(CPack)` itself and clobbered it. `include(Packaging)` now
+  runs last, the version fields are set explicitly, `CPACK_PACKAGE_FILE_NAME` is pinned, binaries
+  are stripped, and the source generator can no longer sweep up `build/`.
+  `v0.1.0`'s release page carried no assets, so nothing incorrect was ever downloadable from it.
+- **Release packages are now attached to the GitHub release.** They were only being uploaded as
+  workflow artifacts — behind a login, expiring with retention, and absent from the release page.
+- The release job verified its output with `ls build/release/*.deb`, which passed on a `.deb`
+  that was not ours. It now checks by name and content: one of each `boat-platform-*` artifact,
+  no `-Source` tarball, `dpkg-deb -f` reporting `Package: boat-platform` at the tag's version,
+  `bin/boat_gateway` present inside the `.deb`, and a size ceiling.
 
 ## [0.1.0] — 2026-10-06
 
@@ -80,6 +95,14 @@ record for anything before it.
 
 ### Changed
 
+- Bumped gRPC v1.65.0 → **v1.75.0** and Protocol Buffers v27.3 → **v31.1**, so the project
+  configures under **CMake 4.x**. gRPC's bundled c-ares declared
+  `cmake_minimum_required(VERSION 3.1.0)` up to and including v1.74.1, and CMake 4.0 removed
+  compatibility with minimums below 3.5 — so a clean checkout could not configure on any CMake
+  4 host. v1.75.0 is the first release whose c-ares uses `3.5.0...3.10.0`. The two move together
+  because `gRPC_PROTOBUF_PROVIDER "package"` points gRPC at the separately fetched protobuf,
+  and v1.75.0 pins v31.1.
+
 - **BREAKING** — Plugin ABI **v9** hands each plugin the host clock via `set_time_source`
   (`BoatNowNsFn`, monotonic nanoseconds, real or virtual under `BOAT_TIME_SOURCE=virtual`). A
   plugin that needs time must read it there instead of calling `steady_clock::now()`. CAN-TP, TCP
@@ -138,5 +161,6 @@ record for anything before it.
   environment config now resolve against that file's own directory, and an unfindable
   `gateway.binary` raises instead of silently starting no gateway.
 
-[Unreleased]: https://github.com/AlexTech-stack/BoAt/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/AlexTech-stack/BoAt/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/AlexTech-stack/BoAt/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/AlexTech-stack/BoAt/releases/tag/v0.1.0
