@@ -160,7 +160,13 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   tsan:
-    runs-on: ubuntu-22.04
+    # 24.04 for g++-13/libtsan 14. The g++-11 libtsan shipped on 22.04
+    # mis-models pthread_cond_timedwait: a fully mutex-protected queue gets a
+    # phantom "double lock of a mutex" and data races downstream of it, which
+    # is what made tests 70/73/74 red. Reproduced with the CI's own g++-11 and
+    # isolated in a standalone reproducer; see release_readiness_audit.md N19.
+    # Functional coverage on 22.04 stays in build-and-test.
+    runs-on: ubuntu-24.04
     needs: build-and-test
     defaults:
       run:
@@ -169,6 +175,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
+      - name: Lower ASLR entropy for TSan
+        # Stock kernels on this image can ship vm.mmap_rnd_bits=32, at which
+        # any TSan binary aborts at startup with "unexpected memory mapping"
+        # -- including the TSan-instrumented protoc the build itself runs.
+        # 28 is the value TSan's shadow layout needs; harmless if already 28.
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
       - name: Configure and build with TSan
         run: cmake --preset tsan && cmake --build --preset tsan
       - name: Run TSan tests
