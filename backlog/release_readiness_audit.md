@@ -855,14 +855,48 @@ from a spawned thread (4 assertions).
 
 Result: the UDS binary is **TSan-clean** — exit 0, 0 data races, 0 double locks, 28/28 assertions.
 
-**Still unexplained: the `double lock of a mutex` reports do not reproduce locally at all** — 0
-locally, both per-test and all-together, against 6 UDS and 2 CanTp reports in CI on the same
-commit. They are timing-sensitive and CI's runners are smaller. So I cannot say whether they are
-a real rare defect or a TSan bookkeeping artefact, and I am not going to guess a fourth time: my
-previous three readings of that label were each wrong about the mechanism. What can be said is
-that the CanTp fix in `6eeb365` did what it claimed — `Location is stack of thread` went **4 → 0**
-and the mutex now lives on the heap — while the double-lock count was unchanged, which means the
-two were never the same issue. **Severity: unknown; needs a reproduction before any fix.**
+**RESOLVED (2026-10-09): it was a GCC-11 libtsan bug, not a BoAt defect.** The reports were
+finally reproduced locally with the CI's own compiler: a second TSan tree configured with
+`-DCMAKE_CXX_COMPILER=g++-11` (Ubuntu 24.04 host; `vm.mmap_rnd_bits=28` is required for any TSan
+binary to start there). Pinned to two cores with two spinner processes, the CanTp test fails on
+the first iteration, exit 66; the same test built with g++-13 is clean over 150+ runs. Tests
+73/74 behave identically: red under g++-11 (their timeout wait is `uds_server.cpp:220`), 30/30
+and 20/20 clean under g++-13 under the same load.
+
+The decisive artifact contains no BoAt code at all — a heap `{mutex, cv, vector}`, one thread
+looping `unique_lock` + `cv.wait_for(1ms)` + `swap`, another locking, pushing, notifying:
+
+```cpp
+// g++-11 -fsanitize=thread -g -O1 -pthread tsan_cv_repro.cpp -o tsan_cv_repro
+struct Q { std::mutex m; std::condition_variable cv; std::vector<int> v; };
+int main() {
+  auto q = std::make_shared<Q>();
+  std::thread handler([q] {
+    for (int i = 0; i < 200; ++i) {
+      std::vector<int> pending;
+      { std::unique_lock<std::mutex> lock(q->m);
+        q->cv.wait_for(lock, std::chrono::milliseconds(1));
+        pending.swap(q->v); }
+    }
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(3));
+  { std::lock_guard<std::mutex> lock(q->m); q->v.push_back(42); q->cv.notify_one(); }
+  handler.join();
+}
+```
+
+g++-11 + TSan reports `double lock of a mutex` at the `lock_guard` (the thread is the *second*
+one ever to lock it) and then a burst of data races between the two protected accesses; g++-13
+is clean 50/50. The `wait_until(deadline, pred)` form used by `UdsServer` reproduces the same
+way. libtsan 11 mis-models `pthread_cond_timedwait`: when a second thread locks the mutex while
+the waiter is inside the wait, the mutex's shadow owner is corrupted, the locking thread is
+reported as double-locking, and every access the mutex protects loses its happens-before edge.
+That is exactly the shape of all six reports — the mutex was never broken.
+
+Fix: the `tsan` CI job now runs on ubuntu-24.04 (g++-13 / libtsan 14), where the pattern is
+clean; the 22.04 functional matrix is unchanged. No product code changed, because there was no
+product defect. The label that had absorbed three wrong readings was real in its symptoms and
+entirely in the sanitizer runtime.
 
 ---
 
@@ -941,3 +975,28 @@ Worth noting what this says about the gate: it failed for the wrong reason, but 
 release whose packages were versioned 0.1.0 under a 0.1.1 tag. Had it only checked globs, as the
 original did, that mismatch would have shipped. The version assertion it never reached is the one
 that would have caught it.
+
+---
+
+## N21 — `TimerfdTickTimer::Stop()` closes its fd out from under the tick thread. **OPEN.**
+
+The three remaining TSan failures — 91 `Phases cannot be added under a running clock`, 102 and
+103, the replay determinism cases — are **not** the N19 false positive: they fail identically
+under g++-11 and g++-13, always at `tick_timer.cpp:204-205`.
+
+`TickAuthority::Stop()` (`tick_authority.cpp:97`) calls `timer_->Stop()` **before** joining the
+loop thread (line 99). `TimerfdTickTimer::Stop()` then runs `::close(fd_); fd_ = -1;`
+(`tick_timer.cpp:204-205`) while the loop thread is — or is about to be — inside
+`WaitForNextTick()`, which reads `fd_` and blocks in `::read(fd_)` (lines 163/168). Two defects
+in one: an unsynchronized `int fd_` raced between the two threads, and the fd-lifetime hazard
+from N19a — `close()` does not reliably wake a blocked `read()`, and once the descriptor number
+is recycled the blocked read can consume from an unrelated object. The same path runs on gateway
+shutdown (`main.cpp:740`), so this is not test-only. `VirtualTickTimer` documents itself
+thread-safe (mutex + atomic); `TimerfdTickTimer` has no such discipline, despite `TickTimer`'s
+own contract permitting `Stop()` from another thread while a wait is in flight.
+
+Tracked as a separate issue. Fix direction: honour that contract without closing under a reader
+— make `Stop()` signal through the timerfd itself (arm it to expire immediately so the blocked
+read returns, then let the loop observe `running_ == false`), and close the descriptor only once
+the authority has joined; alternatively join before the close on the synchronous shutdown path,
+at the cost of up to one tick of stop latency.
