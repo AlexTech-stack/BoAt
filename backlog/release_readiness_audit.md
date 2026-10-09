@@ -418,23 +418,22 @@ abstraction layer" as a portability target. `src/core/plugin/plugin_manager.cpp:
 throughout. State Linux-only; keep the others as aspiration if you want, but label them.
 
 **S9 — Untested surfaces.** No tests for `admin_gui/` (4 modules), `tools/` (6 scripts),
-`nodes/`, or `demo/`. `tools/dbc2boatjson.py` is the clearest cost of this: it has an
-externally-reported bug (S10) and no test.
+`nodes/`, or `demo/`. `tools/dbc2boatjson.py` was the clearest cost of this: it had an
+externally-reported bug (S10) and no test. That one script now has a regression suite
+(`tools/tests/`), wired into CI — the other surfaces are still untested.
 
-**S10 — Open consumer-reported bug, living outside version control.**
-`test/foundIssues.md` #1: `tools/dbc2boatjson.py:253-254` applies factor and offset to a DBC
-`SG_` range that is **already in physical units**:
-```python
-phys_min = s["raw_min"] * s["factor"] + s["offset"]
-phys_max = s["raw_max"] * s["factor"] + s["offset"]
-```
-Every converted database carries wrong `Min`/`Max` whenever factor ≠ 1 or offset ≠ 0 — e.g.
-`VehicleSpeed` 0/400 km/h becomes 0.0/4.0, `OutsideTemp` -50/77.5 °C becomes -75.0/-11.25.
-Seven signals tabulated in the report. Found by a real consumer project (R80 restbus), which
-now works around it by reading ranges from the DBC directly.
-
-Note also that `test/foundIssues.md` is **untracked**. An externally-reported bug report is
-living outside version control, where nobody else can see it.
+**S10 — Consumer-reported bug: `dbc2boatjson.py` applied factor/offset to a DBC range that
+is already physical. `FIXED` (2026-10-09, issue #11).** The converter treated the `SG_`
+`[min|max]` values as raw and re-applied factor and offset, so every converted database
+carried wrong `Min`/`Max` whenever factor ≠ 1 or offset ≠ 0 — `VehicleSpeed` 0/400 km/h
+became 0.0/4.0, `OutsideTemp` -50/77.5 °C became -75.0/-11.25, seven signals tabulated in
+the report. The range is now passed through unscaled (parsed keys renamed `dbc_min`/
+`dbc_max`, regex comments no longer call it raw, `docs/howto/dbc2boatjson.md` states the
+correct rule), and `tools/tests/test_dbc2boatjson.py` pins all seven reported cases —
+7/7 fail against the old code, 7/7 pass against the fix. `tools/` had no tests before; the
+new suite is wired into the documented pytest invocation and the CI python job. The report
+itself no longer lives outside version control: it was tracked as issue #11, and the five
+sibling reports in the untracked `test/foundIssues.md` were fixed with tests in `58a0b8c`.
 
 **S11 — No community or release scaffolding.** Absent: `CONTRIBUTING.md`, `SECURITY.md`,
 `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, issue and PR templates, `SUPPORT.md`. **Zero git tags**;
@@ -536,7 +535,7 @@ platform actually needs.
 | 3 | B5, B6, B7 — doc truth fixes | ✅ **Done.** Both rewritten code examples run verbatim against a live gateway |
 | 4 | B8, S1 — make the documented flows actually runnable | ✅ **Done.** Example scenario ships; full sim lifecycle verified; `boat test run` works from anywhere |
 | 5 | S11 — community files, CHANGELOG, first tag | Next. `release.yml` fires on the first `v*.*.*` tag — check it works before announcing |
-| 6 | S10 + S9 — fix `dbc2boatjson.py`, add the regression test, track `foundIssues.md` | A reported bug outstanding at launch is worse than a known gap |
+| 6 | S10 + S9 — fix `dbc2boatjson.py`, add the regression test, track `foundIssues.md` | ✅ **Done.** `Min`/`Max` pass through unscaled; `tools/tests/test_dbc2boatjson.py` pins all seven reported cases and runs in CI |
 | 7 | S2, S4, S5, S7, S8 — remaining accuracy fixes | Cheap, and S7/S8 are claims worth not making. (S3 was folded into step 4.) |
 | 8 | N1–N10 | Polish. N5, N8 and N9 are the ones worth doing before any announcement |
 

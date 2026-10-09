@@ -126,10 +126,10 @@ BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 164 actual
 ctest --test-dir build/debug -R TestName --timeout 30 --output-on-failure
 ctest --test-dir build/debug -N  # list tests
 
-# Python SDK + CLI (run from the REPO ROOT: ui/tests lives there, not under boat-platform/)
+# Python SDK + CLI (run from the REPO ROOT: ui/tests and tools/tests live there, not under boat-platform/)
 pip install -e ./boat-platform/sdk/python[dev] && pip install -e ./boat-platform/cli
 pip install -r ui/requirements.txt       # ui/ services import fastapi/uvicorn/pydantic
-pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests -v   # 538 tests
+pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests -v   # 551 tests
 ```
 
 Three things that made `ctest` lie, all now fixed — don't reintroduce them:

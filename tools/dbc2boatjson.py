@@ -42,9 +42,9 @@ SG_RE = re.compile(
     r","
     r"([0-9.eE+\-]+)"                       # 8: offset
     r"\)\s*\["
-    r"([0-9.eE+\-]+)"                       # 9: min (raw)
+    r"([0-9.eE+\-]+)"                       # 9: min (physical)
     r"\|"
-    r"([0-9.eE+\-]+)"                       # 10: max (raw)
+    r"([0-9.eE+\-]+)"                       # 10: max (physical)
     r"\]\s*\""
     r"([^\"]*)"                             # 11: unit
     r"\"\s*(\S+)?"                          # 12: receiver (optional)
@@ -124,8 +124,10 @@ def parse_dbc(path: str) -> dict:
             sign = m.group(6)              # + or -
             factor = float(m.group(7))
             offset = float(m.group(8))
-            raw_min = float(m.group(9))
-            raw_max = float(m.group(10))
+            # The SG_ [min|max] range is already in physical units, so it is
+            # passed through to the JSON unscaled.
+            dbc_min = float(m.group(9))
+            dbc_max = float(m.group(10))
             unit = m.group(11)
             receiver = m.group(12) or ""
 
@@ -137,8 +139,8 @@ def parse_dbc(path: str) -> dict:
                 "sign": sign,
                 "factor": factor,
                 "offset": offset,
-                "raw_min": raw_min,
-                "raw_max": raw_max,
+                "dbc_min": dbc_min,
+                "dbc_max": dbc_max,
                 "unit": unit,
                 "receiver": receiver,
                 "is_muxor": is_muxor,
@@ -249,9 +251,9 @@ def build_boat_db(dbc: dict, *, bus: str = "CAN", bus_type: str = "CAN",
             # ByteOrder: 0=Intel, 1=Motorola
             byte_order = 0 if s["byte_order"] == 1 else 1
 
-            # Physical min/max from raw range
-            phys_min = s["raw_min"] * s["factor"] + s["offset"]
-            phys_max = s["raw_max"] * s["factor"] + s["offset"]
+            # DBC range is already physical -- pass it through unscaled.
+            phys_min = s["dbc_min"]
+            phys_max = s["dbc_max"]
 
             # Enum values from VAL_ entries
             enum_values = vals.get((addr, s["name"]))

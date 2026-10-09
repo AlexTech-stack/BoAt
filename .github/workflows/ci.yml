@@ -88,7 +88,7 @@ jobs:
         # ui/tests was missing from this list even though it is part of the
         # documented pytest invocation -- and it is the only coverage the ui/
         # services have.
-        run: pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests -v
+        run: pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests -v
 
   proto-stubs-in-sync:
     runs-on: ubuntu-22.04
