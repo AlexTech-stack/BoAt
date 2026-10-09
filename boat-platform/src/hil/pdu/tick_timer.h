@@ -49,7 +49,11 @@ class TickTimer {
    * stopped.  Timers implement via timerfd+TFD_TIMER_ABSTIME. */
   virtual bool WaitUntil(std::chrono::steady_clock::time_point deadline) = 0;
 
-  /* Stop the timer (may interrupt a blocked WaitForNextTick). */
+  /* Stop the timer (may interrupt a blocked WaitForNextTick).
+   *
+   * Thread-safe: callable from another thread while a wait is in flight. A
+   * blocked wait is interrupted and returns false, and every wait after
+   * Stop() returns false as well. */
   virtual void Stop() = 0;
 
   /* Current tick count (monotonic). */
@@ -74,40 +78,58 @@ class TickTimer {
 
 /* Portable fallback using std::this_thread::sleep_for/sleep_until.
  * Never selected by TickTimer::Create on Linux — retained so the
- * class hierarchy compiles on non-Linux platforms. */
+ * class hierarchy compiles on non-Linux platforms.
+ *
+ * Thread-safe like the timerfd backend: Stop() may be called from another
+ * thread while a wait is in flight. A sleep cannot be interrupted, so a wait
+ * already in progress finishes its sleep and then returns false. */
 class SleepTickTimer final : public TickTimer {
  public:
   bool Init(std::chrono::nanoseconds interval) override;
   bool WaitForNextTick() override;
   bool WaitUntil(std::chrono::steady_clock::time_point deadline) override;
   void Stop() override;
-  uint64_t TickCount() const override { return tick_count_; }
+  uint64_t TickCount() const override {
+    return tick_count_.load(std::memory_order_relaxed);
+  }
   std::chrono::nanoseconds Elapsed() const override;
 
  private:
-  std::chrono::nanoseconds  interval_{};
-  uint64_t                  tick_count_{0};
+  std::chrono::nanoseconds   interval_{};
+  std::atomic<std::uint64_t> tick_count_{0};
   std::chrono::steady_clock::time_point start_;
-  bool                      running_{false};
+  std::atomic<bool>          running_{false};
 };
 
 /* Sole backend on Linux: Linux timerfd with absolute-time scheduling.
- * Selected by TickTimer::Create for all intervals.  Drift-free. */
+ * Selected by TickTimer::Create for all intervals.  Drift-free.
+ *
+ * Thread-safe: Stop() may be called from another thread while a wait is in
+ * flight. It does not close the descriptor -- it arms the timer to expire
+ * immediately, which wakes the blocked read, and the wait returns false. The
+ * descriptor is closed by the destructor, which the owner may run only once
+ * no wait can be in flight any more (TickAuthority joins its tick thread
+ * first). */
 class TimerfdTickTimer final : public TickTimer {
  public:
-  ~TimerfdTickTimer() override { Stop(); }
+  ~TimerfdTickTimer() override;
 
   bool Init(std::chrono::nanoseconds interval) override;
   bool WaitForNextTick() override;
   bool WaitUntil(std::chrono::steady_clock::time_point deadline) override;
   void Stop() override;
-  uint64_t TickCount() const override { return tick_count_; }
+  uint64_t TickCount() const override {
+    return tick_count_.load(std::memory_order_relaxed);
+  }
   std::chrono::nanoseconds Elapsed() const override;
 
  private:
-  int                       fd_{-1};
-  std::chrono::nanoseconds  interval_{};
-  uint64_t                  tick_count_{0};
+  int                        fd_{-1};
+  std::atomic<bool>          stopped_{false};
+  // Serialises timerfd_settime between Stop()'s wake and WaitUntil()'s arm.
+  std::mutex                 arm_mutex_;
+  std::chrono::nanoseconds   interval_{};
+  std::atomic<std::uint64_t> tick_count_{0};
   std::chrono::steady_clock::time_point start_;
 };
 

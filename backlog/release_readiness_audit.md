@@ -978,7 +978,7 @@ that would have caught it.
 
 ---
 
-## N21 — `TimerfdTickTimer::Stop()` closes its fd out from under the tick thread. **OPEN.**
+## N21 — `TimerfdTickTimer::Stop()` closes its fd out from under the tick thread. **FIXED.**
 
 The three remaining TSan failures — 91 `Phases cannot be added under a running clock`, 102 and
 103, the replay determinism cases — are **not** the N19 false positive: they fail identically
@@ -995,8 +995,20 @@ shutdown (`main.cpp:740`), so this is not test-only. `VirtualTickTimer` document
 thread-safe (mutex + atomic); `TimerfdTickTimer` has no such discipline, despite `TickTimer`'s
 own contract permitting `Stop()` from another thread while a wait is in flight.
 
-Tracked as a separate issue. Fix direction: honour that contract without closing under a reader
-— make `Stop()` signal through the timerfd itself (arm it to expire immediately so the blocked
-read returns, then let the loop observe `running_ == false`), and close the descriptor only once
-the authority has joined; alternatively join before the close on the synchronous shutdown path,
-at the cost of up to one tick of stop latency.
+Tracked as issue #46. **Fixed.** `TimerfdTickTimer` now honours the contract its own interface
+and `VirtualTickTimer` already claimed. `Stop()` no longer closes the descriptor: it sets an
+atomic `stopped_` and arms the timerfd to expire 1 ns from now, which fires it and wakes a
+blocked `read()`. `WaitForNextTick()`/`WaitUntil()` re-check `stopped_` after the read, so that
+wake is reported as *false*, not as a tick; `WaitUntil()`'s arm and `Stop()`'s wake share a small
+mutex so the wake cannot be overwritten. The descriptor is written only by `Init()` (before any
+wait, per contract) and closed by the destructor after the owner has joined (`TickAuthority`
+joins before `timer_.reset()`) — one writer, no close under a reader. `tick_count_` went atomic,
+and `SleepTickTimer` + `VirtualTickTimer` got the same treatment (atomic stop state, post-lock
+re-check) in the same pass.
+
+Two new cases in `test_tick_timer.cpp` pin the contract: a 30 s wait interrupted by `Stop()`
+from another thread, for both `WaitForNextTick()` and `WaitUntil()`, each asserting a sub-2 s
+return with `false`. Verified on both local TSan trees (g++-11 and g++-13), 2 cores pinned plus
+load: #91 20/20 clean on each, #102/#103 5 iterations each on each, 0 warnings; and
+`boat_unit_tick_timer`, `boat_unit_tick_authority`, `boat_determinism_replay`,
+`boat_unit_plugin_time_source`, `boat_unit_tick_scheduler` all pass under both.
