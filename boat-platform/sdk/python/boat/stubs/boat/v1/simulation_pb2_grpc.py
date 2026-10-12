@@ -26,7 +26,23 @@ if _version_not_supported:
 
 
 class SimulationServiceStub:
-    """Missing associated documentation comment in .proto file."""
+    """Gateway simulation control.
+
+    *The gateway hosts one live simulation session at a time.**
+    `simulation_id` selects a stored scenario definition, not an independent
+    engine instance: `state` and `tick` live in one gateway-scoped context, so
+    every definition reports the one session's state, and `ListSimulations`
+    rows share it. Starting a second definition while one is RUNNING or PAUSED
+    fails with FAILED_PRECONDITION (`stop` or `reset` it first).
+
+    `ResetSimulation` is a clean slate: tick 0, the determinism engine's tick
+    memory cleared (so the next run may start at tick 1 again), the scenario's
+    bus subscriptions and plugins torn down, scheduled faults and queued events
+    dropped. It is valid from any state, and an idempotent success when
+    already idle. `CreateSimulation` rewinds the same way when no session is
+    live, so a definition always starts at tick 0; while a session is active it
+    stages the definition without touching the running engine. 
+    """
 
     def __init__(self, channel):
         """Constructor.
@@ -82,7 +98,23 @@ class SimulationServiceStub:
 
 
 class SimulationServiceServicer:
-    """Missing associated documentation comment in .proto file."""
+    """Gateway simulation control.
+
+    *The gateway hosts one live simulation session at a time.**
+    `simulation_id` selects a stored scenario definition, not an independent
+    engine instance: `state` and `tick` live in one gateway-scoped context, so
+    every definition reports the one session's state, and `ListSimulations`
+    rows share it. Starting a second definition while one is RUNNING or PAUSED
+    fails with FAILED_PRECONDITION (`stop` or `reset` it first).
+
+    `ResetSimulation` is a clean slate: tick 0, the determinism engine's tick
+    memory cleared (so the next run may start at tick 1 again), the scenario's
+    bus subscriptions and plugins torn down, scheduled faults and queued events
+    dropped. It is valid from any state, and an idempotent success when
+    already idle. `CreateSimulation` rewinds the same way when no session is
+    live, so a definition always starts at tick 0; while a session is active it
+    stages the definition without touching the running engine. 
+    """
 
     def CreateSimulation(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -127,7 +159,10 @@ class SimulationServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def WatchSimulation(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Streams **state changes**, not progress: an update is written on each
+        state-machine transition and nothing is sent while the simulation simply
+        runs. Poll `GetSimulationState` for the current tick. 
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -195,7 +230,23 @@ def add_SimulationServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class SimulationService:
-    """Missing associated documentation comment in .proto file."""
+    """Gateway simulation control.
+
+    *The gateway hosts one live simulation session at a time.**
+    `simulation_id` selects a stored scenario definition, not an independent
+    engine instance: `state` and `tick` live in one gateway-scoped context, so
+    every definition reports the one session's state, and `ListSimulations`
+    rows share it. Starting a second definition while one is RUNNING or PAUSED
+    fails with FAILED_PRECONDITION (`stop` or `reset` it first).
+
+    `ResetSimulation` is a clean slate: tick 0, the determinism engine's tick
+    memory cleared (so the next run may start at tick 1 again), the scenario's
+    bus subscriptions and plugins torn down, scheduled faults and queued events
+    dropped. It is valid from any state, and an idempotent success when
+    already idle. `CreateSimulation` rewinds the same way when no session is
+    live, so a definition always starts at tick 0; while a session is active it
+    stages the definition without touching the running engine. 
+    """
 
     @staticmethod
     def CreateSimulation(request,

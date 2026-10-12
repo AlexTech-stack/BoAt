@@ -845,6 +845,18 @@ run the same pipeline under one `tick_mutex_`, which also closes a latent race: 
 computing `clock_.tick() + 1` concurrently could claim the same tick, and
 `DeterminismEngine::BeforeTick` throws on a non-increasing tick. Simulation ticks now advance
 at `BOAT_NODE_TICK_MS`/`_US` rather than a hard-coded 1 ms.
+
+**One live simulation session.** `SimulationService` is shaped like it hosts many, but the
+gateway hosts exactly one: `simulation_id` selects a stored scenario definition, and `state`
+and `tick` live in the single gateway-scoped `SimulationContext`. `StartSimulation` on a
+different id while one is RUNNING/PAUSED is refused with `FAILED_PRECONDITION`;
+`ListSimulations` rows all report the one session's state. `ResetSimulation` is a clean slate
+-- `TickScheduler::Reset()` rewinds the clock and clears `DeterminismEngine`'s tick memory
+under `tick_mutex_`, the scenario's bus subscriptions and plugins are torn down, scheduled
+faults and queued events are dropped -- and `CreateSimulation` rewinds the same way when no
+session is live, so a new definition reports tick 0. Resetting only one of clock/engine is
+what produced the `tick must be monotonically increasing` INTERNAL a long-lived gateway used
+to hit; the pair must stay together.
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`.

@@ -11,7 +11,10 @@ message Simulation {
   string simulation_id = 1;
   string scenario_id = 2;
   SimulationState state = 3;
-  uint64 tick = 4;
+  uint64 tick = 4;  // Ticks elapsed in the gateway's one live session (0 after
+                     // ResetSimulation, and for a definition created while
+                     // idle). Shared by every simulation_id -- see the service
+                     // comment.
 }
 
 message CreateSimulationRequest { string scenario_id = 1; }
@@ -29,6 +32,22 @@ message ListSimulationsResponse {
   PaginationResponse page = 2;
 }
 
+/* Gateway simulation control.
+
+   **The gateway hosts one live simulation session at a time.**
+   `simulation_id` selects a stored scenario definition, not an independent
+   engine instance: `state` and `tick` live in one gateway-scoped context, so
+   every definition reports the one session's state, and `ListSimulations`
+   rows share it. Starting a second definition while one is RUNNING or PAUSED
+   fails with FAILED_PRECONDITION (`stop` or `reset` it first).
+
+   `ResetSimulation` is a clean slate: tick 0, the determinism engine's tick
+   memory cleared (so the next run may start at tick 1 again), the scenario's
+   bus subscriptions and plugins torn down, scheduled faults and queued events
+   dropped. It is valid from any state, and an idempotent success when
+   already idle. `CreateSimulation` rewinds the same way when no session is
+   live, so a definition always starts at tick 0; while a session is active it
+   stages the definition without touching the running engine. */
 service SimulationService {
   rpc CreateSimulation(CreateSimulationRequest) returns (SimulationResponse);
   rpc StartSimulation(StartSimulationRequest) returns (SimulationResponse);
@@ -37,6 +56,11 @@ service SimulationService {
   rpc ResetSimulation(ResetSimulationRequest) returns (SimulationResponse);
   rpc StopSimulation(StopSimulationRequest) returns (SimulationResponse);
   rpc GetSimulationState(GetSimulationStateRequest) returns (SimulationResponse);
+
+  /* Streams **state changes**, not progress: an update is written on each
+     state-machine transition and nothing is sent while the simulation simply
+     runs. Poll `GetSimulationState` for the current tick. */
   rpc WatchSimulation(GetSimulationStateRequest) returns (stream SimulationResponse);
+
   rpc ListSimulations(ListSimulationsRequest) returns (ListSimulationsResponse);
 }
