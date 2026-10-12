@@ -32,14 +32,31 @@ void TickScheduler::Stop() {
   paused_.store(false, std::memory_order_release);
 }
 
+void TickScheduler::Reset() {
+  // State first, then the same lock AdvanceTick/RunPipeline use: a tick phase
+  // already inside the pipeline finishes before the clock is rewound, and one
+  // that has not started yet re-reads running_ under the lock and bails.
+  running_.store(false, std::memory_order_release);
+  paused_.store(false, std::memory_order_release);
+  std::lock_guard<std::mutex> lock(tick_mutex_);
+  clock_.Reset();
+  determinism_.Reset();
+}
+
 void TickScheduler::Step(std::uint64_t n) {
   for (std::uint64_t i = 0; i < n; ++i) AdvanceTick();
 }
 
 void TickScheduler::TickIfRunning() {
+  /* The state check lives inside tick_mutex_ deliberately. Together with
+     Reset() taking the same lock, that is what stops this sequence: a phase
+     passes the running check, Stop()+Reset() rewind the clock and clear the
+     engine, then the phase advances the fresh clock to 1 and calls
+     BeforeTick(1) on a simulation that is supposed to be at rest. */
+  std::lock_guard<std::mutex> lock(tick_mutex_);
   if (!running_.load(std::memory_order_acquire)) return;
   if (paused_.load(std::memory_order_acquire)) return;
-  AdvanceTick();
+  RunPipeline(clock_.tick() + 1);
 }
 
 void TickScheduler::AdvanceTick() {

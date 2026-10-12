@@ -37,3 +37,18 @@ TEST_CASE("EventBus publish dispatch and unsubscribe behavior", "[unit][event_bu
   bus.Dispatch();
   REQUIRE(type_a_hits == 1);
 }
+
+TEST_CASE("EventBus Clear drops queued events but keeps subscriptions", "[unit][event_bus]") {
+  boat::core::EventBus bus;
+  int hits = 0;
+  bus.Subscribe(7, [&](const boat::core::BusEvent&) { ++hits; });
+
+  bus.Publish(boat::core::BusEvent{.type = 7, .payload = std::int64_t{1}, .tick = 1});
+  bus.Clear();
+  bus.Dispatch();
+  REQUIRE(hits == 0);
+
+  bus.Publish(boat::core::BusEvent{.type = 7, .payload = std::int64_t{2}, .tick = 2});
+  bus.Dispatch();
+  REQUIRE(hits == 1);
+}

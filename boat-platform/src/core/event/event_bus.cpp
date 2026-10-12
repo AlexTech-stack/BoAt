@@ -59,4 +59,10 @@ void EventBus::Dispatch() {
   }
 }
 
+void EventBus::Clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::queue<BusEvent> empty;
+  std::swap(queue_, empty);
+}
+
 }  // namespace boat::core

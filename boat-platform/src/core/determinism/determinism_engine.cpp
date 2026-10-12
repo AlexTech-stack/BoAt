@@ -19,6 +19,10 @@ void DeterminismEngine::BeforeTick(std::uint64_t tick) {
   last_tick_ = tick;
 }
 
+void DeterminismEngine::Reset() {
+  last_tick_ = std::numeric_limits<std::uint64_t>::max();
+}
+
 std::uint64_t DeterminismEngine::NextRandom() { return rng_(); }
 
 }  // namespace boat::core

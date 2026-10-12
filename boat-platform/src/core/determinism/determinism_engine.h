@@ -24,6 +24,14 @@ class DeterminismEngine {
   [[nodiscard]] std::uint64_t NextRandom();
   [[nodiscard]] std::uint64_t Seed() const { return seed_; }
 
+  /* Forget the last tick, so a rewound clock can start again from tick 1.
+     Without this, resetting the clock while this engine still remembers a
+     high-water tick makes the next BeforeTick() throw "tick must be
+     monotonically increasing" -- the two have to be reset together, which is
+     why TickScheduler::Reset() does both under its tick mutex. The RNG is
+     reseeded per tick from (seed ^ tick), so nothing else needs clearing. */
+  void Reset();
+
  private:
   std::uint64_t seed_;
   std::uint64_t last_tick_;
