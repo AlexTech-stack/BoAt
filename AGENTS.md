@@ -9,6 +9,27 @@
 > other; the source code is authoritative over both. This file is the longer of the two and
 > carries operational detail `CLAUDE.md` only summarizes.
 
+## Supported platforms
+
+**The gateway is Linux-only; the clients are OS-agnostic.** Split by which machine a component
+runs on:
+
+- **Gateway host — Linux only** (Ubuntu 22.04 / 24.04): `boat_gateway` and its `.so` plugins,
+  `ui/launcher_agent.py` and `ui/launcher.py` (they shell out to `ip`/`modprobe`/`sudo` and
+  read `/proc`), `boat test run` when it starts its own gateway (`boat/test/check.py` reads
+  `/sys/class/net`), and the `start_*.sh`/`stop_*.sh` scripts. The gateway is built on
+  SocketCAN/vcan, `AF_PACKET`, `timerfd` and `dlopen`; no Windows or macOS port is planned.
+  `boat-platform/CMakeLists.txt` fails at configure time when `CMAKE_SYSTEM_NAME` is not
+  `Linux`, and the `_WIN32` branches in `src/core/plugin/plugin_manager.cpp` are a deliberate
+  rejection, not an unfinished port.
+- **Clients — any OS** with Python 3.11+: the `boat-py` SDK, the `boat` CLI against a remote
+  gateway (`--host` / `BOAT_HOST`), `admin_gui/`, the other web UIs and `tools/` services, node
+  scripts, and offline tools (`boat trace score`, `tools/dbc2boatjson.py`). Pure Python with no
+  OS-specific code paths, but CI only exercises Linux.
+
+Canonical user-facing statement: `boat-platform/README.md#supported-platforms`. Don't add
+Windows-port scaffolding or docs that imply one.
+
 ## Repository structure
 
 - **`boat-platform/`** — Main platform (C++20, CMake+Ninja, gRPC)

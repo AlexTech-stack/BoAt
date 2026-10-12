@@ -53,8 +53,8 @@ OEM engineers, Tier-1 suppliers, open-source community contributors, CI/CD autom
 - Zero-copy IPC for payloads larger than 4 KB
 - Deterministic replay must be bit-exact
 - Plugin isolation with crash containment strategy
-- Primary OS target: Linux (Ubuntu 22.04 LTS and 24.04 LTS)
-- Portability target: macOS and Windows via abstraction layer
+- Gateway OS: Linux only (Ubuntu 22.04 LTS and 24.04 LTS) — no Windows or macOS port is planned
+- Client side (Python SDK, CLI, Admin GUI, web tools): OS-agnostic, talks to a Linux gateway over gRPC
 
 ## Constraints
 

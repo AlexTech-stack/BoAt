@@ -5,6 +5,19 @@ cmake_minimum_required(VERSION 3.24)
 
 project(boat_platform VERSION 0.1.1 LANGUAGES C CXX)
 
+# The gateway is Linux-only by design: SocketCAN/vcan, AF_PACKET, timerfd and
+# dlopen'd .so plugins have no Windows/macOS equivalent here, and no port is
+# planned. Fail at configure time with a clear message rather than ~hundreds
+# of objects later on a missing <linux/can.h>. The Python clients are
+# OS-agnostic and are not built by this project.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR
+    "BoAt's gateway builds on Linux only (CMAKE_SYSTEM_NAME is "
+    "'${CMAKE_SYSTEM_NAME}'). Run the gateway on a Linux host and use the "
+    "OS-agnostic Python SDK / CLI / Admin GUI from this machine instead. "
+    "See boat-platform/README.md#supported-platforms.")
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 include(CTest)

@@ -54,11 +54,12 @@ thread:
 
 ## Floating-point reproducibility
 
-If cross-platform determinism is required (e.g. running the same
-simulation on Windows and Linux):
+The gateway runs on Linux only, but determinism across *machines* still
+matters — the same simulation on two hosts with a different compiler,
+CPU or libm version. If that is required:
 
-- All plugins must use deterministic floating-point modes:
-  `/fp:strict` on MSVC, `-frounding-math` on GCC/Clang.
+- All plugins must use deterministic floating-point modes
+  (e.g. `-frounding-math` on GCC/Clang).
 - Avoid trigonometric and transcendental functions (`sin`, `cos`,
   `exp`, `log`) whose implementations differ across libm versions.
 - Prefer fixed-point arithmetic or deterministic polynomial

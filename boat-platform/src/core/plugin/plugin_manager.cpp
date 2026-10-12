@@ -7,6 +7,9 @@
 #include <stdexcept>
 #include <string>
 
+// The gateway is Linux-only (CMakeLists.txt refuses to configure elsewhere).
+// The _WIN32 branches in this file are a deliberate rejection, not an
+// unfinished port -- there is no plan to load plugins on Windows.
 #ifdef _WIN32
 #include <windows.h>
 #else

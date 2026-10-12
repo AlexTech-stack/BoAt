@@ -57,6 +57,14 @@ So a test may assert on tick numbers, not just on frame content and ordering. Th
 that is *not* promised is wall-clock timing: a tick happens later on a busy host, it just
 never contains different frames.
 
+## Platforms
+
+The **gateway runs on Linux only** (Ubuntu 22.04 / 24.04) — it is built on SocketCAN, `vcan`,
+`AF_PACKET` and `timerfd`, and no Windows or macOS port is planned. The **clients** (Python
+SDK, `boat` CLI, Admin GUI, web tools) are OS-agnostic and talk to a gateway over gRPC, so you
+can drive a Linux gateway from Windows or macOS. Details:
+[boat-platform/README.md — Supported platforms](boat-platform/README.md#supported-platforms).
+
 ## Quick start
 
 See [boat-platform/README.md](boat-platform/README.md) for build prerequisites, build & run instructions.

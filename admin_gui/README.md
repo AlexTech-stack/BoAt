@@ -27,6 +27,10 @@ python3 admin_gui/main.py
 
 Runs on any platform PySide6 supports (Windows, Linux, macOS) — it's a plain
 HTTP client, so it doesn't need to run on the same machine as any gateway.
+The **launcher agents it connects to, and the gateways they manage, run on
+Linux only** (see
+[Supported platforms](../boat-platform/README.md#supported-platforms)) — so
+from Windows or macOS you administer a remote Linux host, not a local one.
 
 **Linux only:** Qt6's `xcb` platform plugin additionally needs a *system*
 library that `pip install pyside6` does not provide:

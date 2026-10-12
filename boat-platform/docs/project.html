@@ -661,9 +661,11 @@
     <div class="section-label">Requirements</div>
     <h2>System requirements</h2>
     <p class="section-intro">
-      BoAt builds and runs on Linux (Ubuntu 22.04+ recommended). Windows and macOS are not supported
-      (SocketCAN and vcan are Linux-only). See <a href="README.md" style="color:var(--blue)">boat-platform/README.md</a>
-      for full prerequisites and build details.
+      The gateway builds and runs on Linux only (Ubuntu 22.04 / 24.04); no Windows or macOS port is planned
+      (SocketCAN, vcan, AF_PACKET and timerfd are Linux-only). The clients &mdash; Python SDK, CLI, Admin GUI
+      and web tools &mdash; are OS-agnostic and reach a Linux gateway over gRPC. See
+      <a href="README.md#supported-platforms" style="color:var(--blue)">boat-platform/README.md</a>
+      for the full split, prerequisites and build details.
     </p>
     <p>
       <strong>Minimal:</strong> CMake ≥ 3.24, Ninja, GCC ≥ 11, Python ≥ 3.11, libsqlite3-dev,

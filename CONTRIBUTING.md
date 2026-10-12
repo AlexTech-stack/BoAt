@@ -9,7 +9,9 @@ project ships under.
 
 ## Getting set up
 
-**Prerequisites.** CMake **3.24+** (Ubuntu 22.04's 3.22 is too old), Ninja, a C++20 g++, and a
+**Prerequisites.** A **Linux** host for anything C++ — the gateway is Linux-only and CMake
+refuses to configure elsewhere; the Python SDK/CLI/GUI work on any OS (see
+[Supported platforms](boat-platform/README.md#supported-platforms)). CMake **3.24+** (Ubuntu 22.04's 3.22 is too old), Ninja, a C++20 g++, and a
 Rust toolchain (`cargo`) — the last is a build-time-only dependency of iceoryx2's core.
 `libacl1-dev` is needed by `iceoryx_hoofs`; if it is not installed system-wide the build
 downloads it into the build tree for you.

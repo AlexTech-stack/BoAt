@@ -2,6 +2,25 @@
 
 Vehicle simulation gateway for CAN (FD) and Ethernet networks.
 
+## Supported platforms
+
+BoAt is split by *which machine a component runs on*:
+
+| Where it runs | OS | What |
+|---|---|---|
+| **Gateway host** | **Linux only** (Ubuntu 22.04 / 24.04 LTS) | `boat_gateway`, its `.so` plugins, the launcher agent (`ui/launcher_agent.py`) and local launcher (`ui/launcher.py`), `boat test run` when it starts its own gateway, and the `start_*.sh`/`stop_*.sh` scripts |
+| **Clients** | Any OS with Python 3.11+ | The `boat-py` SDK, the `boat` CLI pointed at a gateway (`--host` / `BOAT_HOST`), `admin_gui/`, the other web UIs and `tools/` services, node scripts, and offline tools such as `boat trace score` and `tools/dbc2boatjson.py` |
+
+The gateway is Linux-only by design, not by omission: it is built on SocketCAN and `vcan`,
+raw `AF_PACKET` sockets for Ethernet, `timerfd` for drift-free ticks, and `.so` plugins loaded
+with `dlopen`. None of these exist on Windows or macOS, and **no port is planned** — CMake
+refuses to configure on any other OS. The client side is pure Python with no OS-specific
+code paths, but CI only exercises it on Linux.
+
+Working from Windows: run the gateway on a Linux machine and point the SDK, CLI or Admin GUI
+at it over gRPC. WSL2 or a Linux VM may be enough for virtual buses (`vcan`) but is untested;
+physical CAN hardware needs a native Linux host.
+
 ## Prerequisites
 
 | Dependency | Minimum version | Install |

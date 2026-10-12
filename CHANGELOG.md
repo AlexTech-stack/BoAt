@@ -11,7 +11,19 @@ The plugin ABI is versioned separately from the project; see
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **Configuring the C++ project on a non-Linux host now fails immediately** with a message
+  pointing at the supported-platforms docs. It could never build there anyway (SocketCAN,
+  `AF_PACKET`, `timerfd`, `dlopen`), but used to fail much later on a missing system header.
+
+### Documentation
+
+- **Platform support is now stated explicitly: the gateway is Linux-only, the clients are
+  OS-agnostic.** New "Supported platforms" section in `boat-platform/README.md`, summarized in
+  the root README. Removed `project-plan.md`'s "Portability target: macOS and Windows", which
+  was never true, and the Windows/MSVC scenario in `docs/execution_pipeline.md`.
+  `admin_gui/README.md` now says the hosts it administers must be Linux.
 
 ## [0.1.1] — 2026-10-08
 

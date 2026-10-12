@@ -417,6 +417,15 @@ abstraction layer" as a portability target. `src/core/plugin/plugin_manager.cpp:
 "Plugin loading via dlopen/dlsym is not supported on Windows", and the CAN layer is SocketCAN
 throughout. State Linux-only; keep the others as aspiration if you want, but label them.
 
+> **Fixed.** Not kept as aspiration: the gateway is Linux-only and no port is planned.
+> `boat-platform/README.md` now has a canonical **Supported platforms** section splitting the
+> gateway host (Linux only) from the clients (SDK, CLI, Admin GUI, web tools — OS-agnostic),
+> summarized in the root README. `project-plan.md`, `docs/execution_pipeline.md` (whose
+> floating-point section described a Windows+Linux setup), `docs/project.html` and
+> `admin_gui/README.md` were brought in line. `CMakeLists.txt` now fails at configure time on
+> any non-Linux host, and the `_WIN32` stubs in `plugin_manager.cpp` are commented as a
+> deliberate rejection rather than an unfinished port.
+
 **S9 — Untested surfaces.** No tests for `admin_gui/` (4 modules), `tools/` (6 scripts),
 `nodes/`, or `demo/`. `tools/dbc2boatjson.py` was the clearest cost of this: it had an
 externally-reported bug (S10) and no test. That one script now has a regression suite
@@ -536,7 +545,7 @@ platform actually needs.
 | 4 | B8, S1 — make the documented flows actually runnable | ✅ **Done.** Example scenario ships; full sim lifecycle verified; `boat test run` works from anywhere |
 | 5 | S11 — community files, CHANGELOG, first tag | Next. `release.yml` fires on the first `v*.*.*` tag — check it works before announcing |
 | 6 | S10 + S9 — fix `dbc2boatjson.py`, add the regression test, track `foundIssues.md` | ✅ **Done.** `Min`/`Max` pass through unscaled; `tools/tests/test_dbc2boatjson.py` pins all seven reported cases and runs in CI |
-| 7 | S2, S4, S5, S7, S8 — remaining accuracy fixes | Cheap, and S7/S8 are claims worth not making. (S3 was folded into step 4.) |
+| 7 | S2, S4, S5, S7, S8 — remaining accuracy fixes | S8 ✅ **Done** (Linux-only gateway stated, CMake guard). The rest is cheap, and S7 is a claim worth not making. (S3 was folded into step 4.) |
 | 8 | N1–N10 | Polish. N5, N8 and N9 are the ones worth doing before any announcement |
 
 **Not done, and worth saying plainly:** B7's underlying recommendation — *generate* the

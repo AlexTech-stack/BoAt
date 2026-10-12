@@ -18,6 +18,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BoAt is a deterministic automotive simulation and testing platform (SIL/HIL/CI). Its core is a **tick-based simulation gateway** (`boat_gateway`, C++20) that bridges virtual and physical CAN/Ethernet networks, exposes a **gRPC API**, and is driven by a **Python SDK (`boat-py`) and CLI (`boat-cli`)**. Node/transport logic is loaded as **C-ABI `.so` plugins**.
 
+**Platforms: the gateway is Linux-only; the clients are OS-agnostic.** The gateway host
+(`boat_gateway`, its plugins, `ui/launcher_agent.py`, `ui/launcher.py`, `boat test run` when
+it starts its own gateway, the `start_*/stop_*.sh` scripts) needs Linux — SocketCAN/vcan,
+`AF_PACKET`, `timerfd`, `dlopen` — and no Windows/macOS port is planned;
+`boat-platform/CMakeLists.txt` fails at configure time on any other OS. The SDK, `boat` CLI
+against a remote gateway, `admin_gui/`, the other web UIs/tools and the node scripts are pure
+Python with no OS-specific paths (CI only exercises Linux). Canonical statement:
+`boat-platform/README.md#supported-platforms`. Don't add Windows-port scaffolding or docs that
+imply one.
+
 The bulk of the code lives under `boat-platform/`. `admin_gui/` (PySide6 desktop client) and `ui/` + `tools/` (FastAPI web services) sit at the repo root. `boat-platform/docs/architecture/system-architecture.md` covers the architecture in depth.
 
 > **Status: Work In Progress.** APIs, config, and behavior change without notice.
