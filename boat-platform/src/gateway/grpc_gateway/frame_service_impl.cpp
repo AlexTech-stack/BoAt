@@ -17,6 +17,7 @@
 #include "core/frame.h"
 #include "ethernet_bus_registry.h"
 #include "frame_sink.h"
+#include "subscriber_queue.h"
 
 namespace boat::gateway {
 namespace {
@@ -263,18 +264,43 @@ grpc::Status FrameServiceImpl::SubscribeFrames(
                         "interface not registered: " + iface_filter);
   }
 
-  std::mutex write_mutex;
-  FrameSubscription subscription(
-      ctx_, *request, [&write_mutex, writer](const boat::v1::Frame& proto) {
-        std::lock_guard<std::mutex> lock(write_mutex);
-        writer->Write(proto);
-      });
+  /* Callbacks run on the bus-dispatch threads and only enqueue; this handler
+     is the sole writer to `writer`. That is what makes teardown safe:
+     UnsubscribeFrame does not wait for an in-flight callback (the registry
+     snapshots its subscribers and invokes them after releasing the lock), so a
+     callback writing through a stack local after this handler returned was a
+     use-after-free -- see subscriber_queue.h. */
+  auto shared = std::make_shared<SubscriberQueue<boat::v1::Frame>>();
+  const auto close_queue = [shared] {
+    std::lock_guard<std::mutex> lock(shared->mutex);
+    shared->closed = true;
+  };
+  FrameSubscription subscription(ctx_, *request, [shared](const boat::v1::Frame& proto) {
+    {
+      std::lock_guard<std::mutex> lock(shared->mutex);
+      if (shared->closed) return;
+      shared->queue.push_back(proto);
+    }
+    shared->cv.notify_one();
+  });
 
-  // Wait for client disconnect; the subscription unsubscribes on scope exit.
   while (!context->IsCancelled()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::vector<boat::v1::Frame> pending;
+    {
+      std::unique_lock<std::mutex> lock(shared->mutex);
+      shared->cv.wait_for(lock, std::chrono::milliseconds(50),
+                          [&shared] { return !shared->queue.empty(); });
+      pending.swap(shared->queue);
+    }
+    for (const auto& frame : pending) {
+      if (!writer->Write(frame)) {
+        close_queue();
+        return grpc::Status::OK;
+      }
+    }
   }
 
+  close_queue();
   return grpc::Status::OK;
 }
 
@@ -326,10 +352,50 @@ grpc::Status FrameServiceImpl::StreamFrames(
     grpc::ServerContext* context,
     grpc::ServerReaderWriter<boat::v1::Frame, boat::v1::StreamFramesRequest>* stream) {
 
-  std::mutex write_mutex;
-  auto emit = [&write_mutex, stream](const boat::v1::Frame& proto) {
-    std::lock_guard<std::mutex> lock(write_mutex);
-    stream->Write(proto);
+  auto shared = std::make_shared<SubscriberQueue<boat::v1::Frame>>();
+
+  /* One dedicated writer thread owns every Write on this stream; the handler
+     thread below blocks in Read. Writes must not come from the bus-dispatch
+     threads: on teardown UnsubscribeFrame does not wait for an in-flight
+     callback, so a dispatch-thread Write after this handler returned would use
+     a dead stream. The writer drains the heap-owned queue and is joined before
+     any return -- see subscriber_queue.h. */
+  std::thread writer_thread([shared, stream, context] {
+    while (!context->IsCancelled()) {
+      std::vector<boat::v1::Frame> pending;
+      {
+        std::unique_lock<std::mutex> lock(shared->mutex);
+        shared->cv.wait_for(lock, std::chrono::milliseconds(50), [&shared] {
+          return !shared->queue.empty() || shared->closed;
+        });
+        if (shared->queue.empty() && shared->closed) break;
+        pending.swap(shared->queue);
+      }
+      for (const auto& frame : pending) {
+        if (!stream->Write(frame)) return;
+      }
+    }
+  });
+  struct WriterGuard {
+    std::shared_ptr<SubscriberQueue<boat::v1::Frame>> queue;
+    std::thread& thread;
+    ~WriterGuard() {
+      {
+        std::lock_guard<std::mutex> lock(queue->mutex);
+        queue->closed = true;
+      }
+      queue->cv.notify_all();
+      if (thread.joinable()) thread.join();
+    }
+  } writer_guard{shared, writer_thread};
+
+  auto emit = [shared](const boat::v1::Frame& proto) {
+    {
+      std::lock_guard<std::mutex> lock(shared->mutex);
+      if (shared->closed) return;
+      shared->queue.push_back(proto);
+    }
+    shared->cv.notify_one();
   };
 
   // Created on demand: a client that only pushes frames never subscribes, and

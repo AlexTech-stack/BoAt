@@ -89,6 +89,8 @@ add_executable(
   ../gateway/grpc_gateway/plugin_service_impl.cpp
   ../gateway/grpc_gateway/node_plugin_service_impl.cpp
   ../gateway/grpc_gateway/can_tp_service_impl.cpp
+  ../gateway/grpc_gateway/frame_service_impl.cpp
+  ../gateway/grpc_gateway/frame_sink.cpp
 )
 target_include_directories(boat_integration_gateway PRIVATE
   ${CMAKE_SOURCE_DIR}/src
@@ -248,6 +250,11 @@ add_executable(boat_unit_pdu_router unit/test_pdu_router.cpp)
 target_include_directories(boat_unit_pdu_router PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
 target_link_libraries(boat_unit_pdu_router PRIVATE boat_hil Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_pdu_router)
+
+add_executable(boat_unit_can_health unit/test_can_health.cpp)
+target_include_directories(boat_unit_can_health PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)
+target_link_libraries(boat_unit_can_health PRIVATE boat_hil Catch2::Catch2WithMain)
+boat_discover_tests(boat_unit_can_health)
 
 add_executable(boat_hil_smoke hil/test_hil.cpp)
 target_link_libraries(boat_hil_smoke PRIVATE boat_hil Catch2::Catch2WithMain)

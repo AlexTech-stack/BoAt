@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "rpc_audit_log.h"
+#include "subscriber_queue.h"
 
 namespace boat::gateway {
 
@@ -23,30 +24,6 @@ uint64_t NowNsCanTp() {
 }
 
 constexpr char kCanTpServicePrefix[] = "can_tp:";
-
-/* State shared between a subscribe stream and the plugin callbacks feeding it.
-   Heap-owned, and captured into the callback *by value* as a shared_ptr.
-
-   These were stack locals of the RPC handler captured by reference, which is a
-   use-after-free: UnsubscribeAll() removes the subscription from the plugin,
-   but it does not wait for a callback already in flight.
-   CanTpPlugin::NotifySubscribers() snapshots the matching callbacks under its
-   lock, releases the lock, and only then invokes them -- so a callback taken
-   from a snapshot made before the unsubscribe can still be running on the
-   frame-dispatch thread while the handler returns and tears down the frame it
-   is writing into. TSan reported it as "double lock of a mutex" whose
-   "location is stack of thread T10", which is what a reused dead stack frame
-   looks like once the mutex's own state is garbage.
-
-   Owning the state here means a late callback writes into a live object, and
-   the last reference to drop frees it -- whether that is the handler or the
-   straggling callback. */
-template <typename Event>
-struct SubscriberQueue {
-  std::mutex              mutex;
-  std::condition_variable cv;
-  std::vector<Event>      queue;
-};
 }  // namespace
 
 CanTpServiceImpl::CanTpServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
