@@ -1,11 +1,12 @@
 # BoAt
 
 > **Status: pre-1.0.** The gateway, the Python SDK/CLI and the plugin ABI are in active use and
-> covered by CI — 164 C++ tests and 538 Python tests, plus ASan, TSan, and a determinism check
-> run under CPU load. The gRPC surface and the C plugin ABI may still change between minor
-> versions: the ABI is versioned (currently **v9**) and a mismatched plugin is rejected at load
-> with a clear error rather than misbehaving at runtime. See [CHANGELOG.md](CHANGELOG.md) for
-> what has changed and [CONTRIBUTING.md](CONTRIBUTING.md) to get involved.
+> covered by CI — the full C++ (ctest) and Python (pytest) suites, plus ASan, TSan, and a
+> determinism check run under CPU load. The gRPC surface and the C plugin ABI may still change
+> between minor versions: the ABI is versioned (currently **v9**) and a mismatched plugin is
+> rejected at load with a clear error rather than misbehaving at runtime. See
+> [CHANGELOG.md](CHANGELOG.md) for what has changed and [CONTRIBUTING.md](CONTRIBUTING.md) to
+> get involved.
 
 A deterministic automotive simulation and testing platform for Software-in-the-Loop, Hardware-in-the-Loop, and CI/CD validation pipelines.
 
@@ -23,7 +24,7 @@ BoAt is a tick-based simulation gateway that bridges virtual and physical CAN/Et
 - **CAN & Ethernet HIL** — Supports both virtual (`vcan*`) and physical CAN interfaces (PEAK PCAN, Kvaser, gs_usb) via SocketCAN, plus virtual Ethernet over UDP multicast.
 - **Plugin SDK** — C ABI **v9** plugin interface built around a single unified `BoatFrame` type (CAN/CAN-FD/Ethernet/PDU/TCP). Plugins implement `on_tick`, `on_frame`, `set_frame_publisher`, and `declared_buses`. The core owns the stateless transport substrate: the single `FrameSink` is the only path a frame reaches a bus, and `PluginManager::DispatchFrame()` delivers inbound frames to plugins' `on_frame`, filtered to their declared bus types. `BOAT_CAN_FLAG_SELF_SENT` (0x08) / `BOAT_ETH_FLAG_SELF_SENT` (0x01) tag locally-sent frames to prevent self-loop. Load `.so` plugins at runtime with JSON config (`plugin.so?{...}`). Plugins own stateful conversations only — built-in set: PduRouter, CAN-TP (ISO 15765-2), TCP, Probe, and SOME/IP (request/response; service discovery is still a stub).
 - **Dual PluginManager architecture** — Two `PluginManager` instances with different lifetimes: an always-on node manager for persistent plugins like CAN-TP, and a simulation-scoped manager loaded per scenario. Both use the same ABI, and both are ticked by one `TickAuthority` rather than by clocks of their own.
-- **gRPC API** — 14 protobuf services across 16 `.proto` files (64 RPCs): Simulation, Signal, Scenario, Replay, Fault, Metrics, Trace, the unified **Frame** service (send/subscribe/list-interfaces for all bus types), CAN-TP, PDU, Plugin, NodePlugin, Debug, and the always-on BusService. The per-bus `CanService` and `EthernetService` were deleted — `FrameService` replaces both.
+- **gRPC API** — the `boat.v1` services (generated counts and the per-service table: [`boat-platform/docs/api/protobuf-definitions.md`](boat-platform/docs/api/protobuf-definitions.md)): Simulation, Signal, Scenario, Replay, Fault, Metrics, Trace, the unified **Frame** service (send/subscribe/list-interfaces for all bus types), CAN-TP, PDU, Plugin, NodePlugin, Debug, and the always-on BusService. The per-bus `CanService` and `EthernetService` were deleted — `FrameService` replaces both.
 - **Python SDK + CLI** — `boat-py` package with `BoAtClient`, `FrameNode`, `PduNode` classes. `boat-cli` with commands for sim, scenario, frame (unified send/subscribe), PDU, CAN-TP, replay, trace, and plugin management (the old `boat can`/`boat eth` commands were removed outright in the unified-frame migration — use `boat frame`).
 - **PDU routing** — AUTOSAR-inspired PDU router with I-PDU groups, cyclic/onChange/mixed transmission schedules, and COM signal packing (Intel/Motorola, E2E CRC).
 - **Event store & replay** — SQLite-backed event store. The replay controller reconstructs any prior simulation run — see [What "deterministic" means here](#what-deterministic-means-here) for which parts reproduce exactly.

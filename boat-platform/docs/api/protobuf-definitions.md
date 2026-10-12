@@ -4,27 +4,32 @@
 
 - Root path: `proto/boat/v1/`
 - Package namespace: `boat.v1`
+<!-- BEGIN GENERATED: proto-summary -->
 - 16 proto files defining 14 gRPC services, 64 RPCs in total:
 
 | File | Service | RPCs |
 |---|---|---|
-| `simulation.proto` | SimulationService | 9 |
-| `signal.proto` | SignalService | 3 |
-| `scenario.proto` | ScenarioService | 5 |
-| `replay.proto` | ReplayService | 8 |
-| `plugin.proto` | PluginService | 4 |
-| `metrics.proto` | MetricsService | 2 |
-| `trace.proto` | TraceService | 4 |
+| `bus.proto` | BusService | 2 |
+| `can_tp.proto` | CanTpService | 6 |
+| `common.proto` | — | — |
+| `control.proto` | — | — |
+| `debug.proto` | DebugService | 2 |
 | `fault.proto` | FaultService | 2 |
 | `frame.proto` | FrameService | 4 |
-| `bus.proto` | BusService | 2 |
-| `pdu.proto` | PduService | 10 |
-| `debug.proto` | DebugService | 2 |
-| `can_tp.proto` | CanTpService | 6 |
+| `metrics.proto` | MetricsService | 2 |
 | `node_plugin.proto` | NodePluginService | 3 |
-| `common.proto` | — | Shared messages (PaginationRequest, UUID, etc.) |
-| `control.proto` | — | Control messages (StartCommand, etc.) |
+| `pdu.proto` | PduService | 10 |
+| `plugin.proto` | PluginService | 4 |
+| `replay.proto` | ReplayService | 8 |
+| `scenario.proto` | ScenarioService | 5 |
+| `signal.proto` | SignalService | 3 |
+| `simulation.proto` | SimulationService | 9 |
+| `trace.proto` | TraceService | 4 |
+<!-- END GENERATED: proto-summary -->
 
+> `common.proto` holds shared messages (`PaginationRequest`, `UUID`, …);
+> `control.proto` holds the UDS control messages (`StartCommand`, …).
+>
 > `can.proto` / `CanService` and `ethernet.proto` / `EthernetService` were
 > **deleted**. `FrameService` carries their send, subscribe and
 > interface-listing RPCs for every bus type.
@@ -33,17 +38,21 @@
 
 ### BusService (`bus.proto`)
 
+<!-- BEGIN GENERATED: rpcs-BusService -->
 - `Publish`
 - `Subscribe` (server streaming)
+<!-- END GENERATED: rpcs-BusService -->
 
 ### CanTpService (`can_tp.proto`)
 
+<!-- BEGIN GENERATED: rpcs-CanTpService -->
 - `Configure`
 - `Send`
 - `ListSessions`
 - `RemoveSession`
 - `Subscribe` (server streaming)
 - `SubscribeErrors` (server streaming)
+<!-- END GENERATED: rpcs-CanTpService -->
 
 One instance is registered per interface, so the gateway resolves these to a
 specific CanTp plugin via `FindService("can_tp:" + iface)`. Requests that omit
@@ -52,8 +61,10 @@ when more than one is loaded.
 
 ### DebugService (`debug.proto`)
 
+<!-- BEGIN GENERATED: rpcs-DebugService -->
 - `StreamEvents` (server streaming)
 - `GetEffectiveConfig`
+<!-- END GENERATED: rpcs-DebugService -->
 
 `GetEffectiveConfig` returns the configuration the gateway resolved from its
 environment at startup, as a JSON document -- byte-identical to what
@@ -63,15 +74,19 @@ can be diffed. `boat config show` is the CLI front end.
 
 ### FaultService (`fault.proto`)
 
+<!-- BEGIN GENERATED: rpcs-FaultService -->
 - `InjectFault`
 - `ListFaults`
+<!-- END GENERATED: rpcs-FaultService -->
 
 ### FrameService (`frame.proto`)
 
+<!-- BEGIN GENERATED: rpcs-FrameService -->
 - `SendFrame`
 - `SubscribeFrames` (server streaming)
-- `StreamFrames` (bidirectional streaming)
 - `ListInterfaces`
+- `StreamFrames` (bidirectional streaming)
+<!-- END GENERATED: rpcs-FrameService -->
 
 The unified send/subscribe path for every bus type (`can`, `canfd`, `eth`, `tcp`,
 `pdu`). A `tcp` send returns `UNIMPLEMENTED` (TCP is driven through the TCP
@@ -96,20 +111,25 @@ message InterfaceInfo {
 
 ### MetricsService (`metrics.proto`)
 
+<!-- BEGIN GENERATED: rpcs-MetricsService -->
 - `GetMetrics`
 - `StreamMetrics` (server streaming)
+<!-- END GENERATED: rpcs-MetricsService -->
 
 ### NodePluginService (`node_plugin.proto`)
 
+<!-- BEGIN GENERATED: rpcs-NodePluginService -->
 - `ListNodePlugins`
 - `GetNodePluginInfo`
 - `UnloadNodePlugin`
+<!-- END GENERATED: rpcs-NodePluginService -->
 
 Scoped to the always-on node `PluginManager`, as opposed to `PluginService`,
 which addresses the simulation-scoped one.
 
 ### PduService (`pdu.proto`)
 
+<!-- BEGIN GENERATED: rpcs-PduService -->
 - `SendPdu`
 - `SubscribePdus` (server streaming)
 - `ConfigureRoute`
@@ -120,17 +140,21 @@ which addresses the simulation-scoped one.
 - `DisableGroup`
 - `ListGroups`
 - `RemoveRoute`
+<!-- END GENERATED: rpcs-PduService -->
 
 ### PluginService (`plugin.proto`)
 
+<!-- BEGIN GENERATED: rpcs-PluginService -->
 - `RegisterPlugin`
 - `ListPlugins`
 - `GetPluginInfo`
 - `UnloadPlugin`
+<!-- END GENERATED: rpcs-PluginService -->
 
 ### ReplayService (`replay.proto`)
 
-- `StartReplay` — returns `ReplayControlResponse.replay_id` (session key for subsequent calls)
+<!-- BEGIN GENERATED: rpcs-ReplayService -->
+- `StartReplay`
 - `SeekReplay`
 - `StreamReplay` (server streaming)
 - `PauseReplay`
@@ -138,23 +162,32 @@ which addresses the simulation-scoped one.
 - `StopReplay`
 - `ImportTraceData`
 - `StartReplayFromEvents`
+<!-- END GENERATED: rpcs-ReplayService -->
+
+`StartReplay` returns `ReplayControlResponse.replay_id` — the session key for
+subsequent calls.
 
 ### ScenarioService (`scenario.proto`)
 
+<!-- BEGIN GENERATED: rpcs-ScenarioService -->
 - `CreateScenario`
 - `GetScenario`
 - `ListScenarios`
 - `ValidateScenario`
 - `DeleteScenario`
+<!-- END GENERATED: rpcs-ScenarioService -->
 
 ### SignalService (`signal.proto`)
 
+<!-- BEGIN GENERATED: rpcs-SignalService -->
 - `InjectSignal`
 - `SubscribeSignals` (server streaming)
 - `GetSignalHistory`
+<!-- END GENERATED: rpcs-SignalService -->
 
 ### SimulationService (`simulation.proto`)
 
+<!-- BEGIN GENERATED: rpcs-SimulationService -->
 - `CreateSimulation`
 - `StartSimulation`
 - `PauseSimulation`
@@ -164,13 +197,16 @@ which addresses the simulation-scoped one.
 - `GetSimulationState`
 - `WatchSimulation` (server streaming)
 - `ListSimulations`
+<!-- END GENERATED: rpcs-SimulationService -->
 
 ### TraceService (`trace.proto`)
 
+<!-- BEGIN GENERATED: rpcs-TraceService -->
 - `GetTrace`
 - `ListTraces`
 - `StreamTrace` (server streaming)
 - `MarkStep`
+<!-- END GENERATED: rpcs-TraceService -->
 
 ## Shared Message Patterns
 
