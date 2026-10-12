@@ -6,6 +6,9 @@
 #ifdef __linux__
 
 #include <cerrno>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -18,7 +21,10 @@
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
+
+#include "can/can_health.h"
 
 namespace boat::hil {
 
@@ -47,6 +53,25 @@ std::uint8_t RoundUpToValidCanFdLen(std::uint8_t len) {
 
 SocketCanDriver::SocketCanDriver(std::string interface_name) : iface_(std::move(interface_name)) {}
 
+int SocketCanDriver::RequestedRxBufBytes(std::string* warning_out) {
+  const char* env = std::getenv("BOAT_CAN_RCVBUF");
+  if (env == nullptr || env[0] == '\0') {
+    return kDefaultRxBufBytes;
+  }
+  char* end = nullptr;
+  errno = 0;
+  const long parsed = std::strtol(env, &end, 10);
+  if (end == env || *end != '\0' || errno == ERANGE || parsed < 0 || parsed > INT_MAX) {
+    if (warning_out != nullptr) {
+      *warning_out = std::string("BOAT_CAN_RCVBUF='") + env +
+                     "' is not a valid byte count (0 = kernel default); using " +
+                     std::to_string(kDefaultRxBufBytes);
+    }
+    return kDefaultRxBufBytes;
+  }
+  return static_cast<int>(parsed);
+}
+
 bool SocketCanDriver::Open() {
   Close();
 
@@ -69,6 +94,47 @@ bool SocketCanDriver::Open() {
   // subscribers via CanBusRegistry::DispatchRx, so socket loopback is not needed and
   // would cause every sent frame to be double-delivered.
 
+  // Enlarge the receive buffer. The kernel default (~208 KB on a stock Ubuntu)
+  // is a few milliseconds of a loaded CAN FD bus, and the failure mode when it
+  // overflows is a silent frame drop. BOAT_CAN_RCVBUF tunes it (0 = leave the
+  // kernel default). The kernel caps the value at net.core.rmem_max, so read
+  // back what was actually applied rather than pretending the request took.
+  std::string rcvbuf_warning;
+  const int requested_rcvbuf = RequestedRxBufBytes(&rcvbuf_warning);
+  if (!rcvbuf_warning.empty()) {
+    std::fprintf(stderr, "[can:%s] %s\n", iface_.c_str(), rcvbuf_warning.c_str());
+  }
+  if (requested_rcvbuf > 0) {
+    (void)setsockopt(socket_fd_, SOL_SOCKET, SO_RCVBUF, &requested_rcvbuf,
+                     sizeof(requested_rcvbuf));
+    int effective = 0;
+    socklen_t effective_len = sizeof(effective);
+    if (getsockopt(socket_fd_, SOL_SOCKET, SO_RCVBUF, &effective, &effective_len) == 0 &&
+        effective < requested_rcvbuf) {
+      std::fprintf(stderr,
+                   "[can:%s] SO_RCVBUF requested %d bytes but the kernel applied %d "
+                   "(raise net.core.rmem_max for the full buffer)\n",
+                   iface_.c_str(), requested_rcvbuf, effective);
+    }
+  }
+
+  // Best-effort per-socket overflow reporting: when the kernel supports it,
+  // every received message carries a cumulative drop counter as ancillary
+  // data. Not all AF_CAN paths emit it, which is why GetBusHealth also reads
+  // the device-level rx_dropped over netlink.
+  const int enable_drop_reporting = 1;
+  (void)setsockopt(socket_fd_, SOL_SOCKET, SO_RXQ_OVFL, &enable_drop_reporting,
+                   sizeof(enable_drop_reporting));
+
+  // Ask for error frames explicitly instead of relying on the default mask, so
+  // bus-off and error-passive transitions are observable. ReadFrame()
+  // classifies them, counts them and never returns one as data.
+  const can_err_mask_t error_mask = CAN_ERR_TX_TIMEOUT | CAN_ERR_LOSTARB | CAN_ERR_CRTL |
+                                    CAN_ERR_PROT | CAN_ERR_TRX | CAN_ERR_ACK |
+                                    CAN_ERR_BUSOFF | CAN_ERR_BUSERROR | CAN_ERR_RESTARTED;
+  (void)setsockopt(socket_fd_, SOL_CAN_RAW, CAN_RAW_ERR_FILTER, &error_mask,
+                   sizeof(error_mask));
+
   struct timeval timeout {};
   timeout.tv_sec = 0;
   timeout.tv_usec = 100000;
@@ -85,7 +151,49 @@ bool SocketCanDriver::Open() {
     return false;
   }
 
+  rx_dropped_.store(0);
+  rx_error_frames_.store(0);
+  bus_off_events_.store(0);
+  last_drop_counter_.store(0);
+  {
+    std::lock_guard<std::mutex> lock(health_mutex_);
+    last_bus_state_ = "unknown";
+  }
+
   return true;
+}
+
+void SocketCanDriver::HandleErrorFrame(std::uint32_t can_id, const std::uint8_t* data,
+                                       std::size_t len) {
+  const CanErrorInfo info = ClassifyCanError(can_id, data, len);
+  rx_error_frames_.fetch_add(1);
+
+  std::string new_state;
+  if (info.bus_off) {
+    bus_off_events_.fetch_add(1);
+    new_state = "busoff";
+  } else if (info.restarted) {
+    new_state = "active";
+  } else if (info.error_passive) {
+    new_state = "error-passive";
+  } else if (info.error_warning) {
+    new_state = "error-warning";
+  }
+  if (new_state.empty()) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(health_mutex_);
+  // Rate-limited by construction: only transitions are logged, so a bus that
+  // stays bus-off produces one line rather than one per error frame.
+  if (new_state != last_bus_state_) {
+    std::fprintf(stderr,
+                 "[can:%s] controller state: %s -> %s (error frames=%llu, bus-off events=%llu)\n",
+                 iface_.c_str(), last_bus_state_.c_str(), new_state.c_str(),
+                 static_cast<unsigned long long>(rx_error_frames_.load()),
+                 static_cast<unsigned long long>(bus_off_events_.load()));
+    last_bus_state_ = new_state;
+  }
 }
 
 bool SocketCanDriver::ReadFrame(CanFrame& out_frame) {
@@ -95,16 +203,53 @@ bool SocketCanDriver::ReadFrame(CanFrame& out_frame) {
 
   // canfd_frame is large enough to hold both classic and FD frames.
   struct canfd_frame raw {};
-  const ssize_t bytes = read(socket_fd_, &raw, sizeof(raw));
+  struct iovec iov {};
+  iov.iov_base = &raw;
+  iov.iov_len = sizeof(raw);
+
+  alignas(struct cmsghdr) std::uint8_t control[CMSG_SPACE(sizeof(std::uint32_t))] = {};
+  struct msghdr message {};
+  message.msg_iov = &iov;
+  message.msg_iovlen = 1;
+  message.msg_control = control;
+  message.msg_controllen = sizeof(control);
+
+  const ssize_t bytes = recvmsg(socket_fd_, &message, 0);
   if (bytes < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       return false;
     }
     return false;
   }
+
+  // Best-effort per-socket overflow count (SO_RXQ_OVFL). The cmsg carries a
+  // cumulative counter, so accumulate the delta; a kernel that never emits it
+  // simply leaves this at zero, and GetBusHealth's netlink device counters are
+  // the visible number.
+  for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&message); cmsg != nullptr;
+       cmsg = CMSG_NXTHDR(&message, cmsg)) {
+    if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SO_RXQ_OVFL &&
+        cmsg->cmsg_len >= CMSG_LEN(sizeof(std::uint32_t))) {
+      std::uint32_t counter = 0;
+      std::memcpy(&counter, CMSG_DATA(cmsg), sizeof(counter));
+      const std::uint64_t previous = last_drop_counter_.exchange(counter);
+      if (counter > previous) {
+        rx_dropped_.fetch_add(counter - previous);
+      }
+    }
+  }
+
   // Accept either a classic frame (sizeof(can_frame)) or an FD frame.
   if (bytes != static_cast<ssize_t>(sizeof(struct can_frame)) &&
       bytes != static_cast<ssize_t>(sizeof(struct canfd_frame))) {
+    return false;
+  }
+
+  // Error frames are not data: classify, count, log transitions, drop. Without
+  // this the CAN_ERR_FLAG masking below would deliver them as a bogus numeric
+  // ID with a payload made of error bits.
+  if ((raw.can_id & CAN_ERR_FLAG) != 0) {
+    HandleErrorFrame(raw.can_id, raw.data, sizeof(raw.data));
     return false;
   }
 
@@ -214,6 +359,37 @@ CanInterfaceInfo SocketCanDriver::GetInfo() const {
   }
 
   return info;
+}
+
+CanBusHealth SocketCanDriver::GetBusHealth() const {
+  CanBusHealth health;
+  health.rx_dropped = rx_dropped_.load();
+  health.error_frames = rx_error_frames_.load();
+  health.bus_off_events = bus_off_events_.load();
+  {
+    std::lock_guard<std::mutex> lock(health_mutex_);
+    health.state = last_bus_state_;
+  }
+
+  // The kernel is the authority on controller state and error counters; the
+  // runtime error-frame tracking above is what remains when netlink reports
+  // nothing (e.g. vcan, or a query failure).
+  CanLinkStatus status;
+  if (QueryCanLinkStatus(iface_, &status) && status.found) {
+    if (status.has_stats) {
+      health.device_rx_dropped = status.rx_dropped;
+      health.device_rx_errors = status.rx_errors;
+    }
+    if (status.has_can_info) {
+      if (status.state_code != 0xFFFFFFFFu) {
+        health.state_code = status.state_code;
+        health.state = status.state;
+      }
+      health.tec = status.tec;
+      health.rec = status.rec;
+    }
+  }
+  return health;
 }
 
 }  // namespace boat::hil

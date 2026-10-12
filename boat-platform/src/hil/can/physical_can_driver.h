@@ -20,6 +20,7 @@ class PhysicalCanDriver : public IHalDriver {
   bool WriteFrame(const CanFrame& frame) override;
   void Close() override;
   CanInterfaceInfo GetInfo() const override;
+  CanBusHealth GetBusHealth() const override;
 
  private:
   static bool IsPhysicalInterface(const std::string& iface);

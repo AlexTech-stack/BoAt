@@ -61,6 +61,11 @@ class CanBusRegistry {
      Returns default-constructed CanInterfaceInfo if iface is unknown. */
   CanInterfaceInfo GetInterfaceInfo(const std::string& iface) const;
 
+  /* Runtime health (drops, error frames, controller state) for a registered
+     interface. Returns a default-constructed CanBusHealth -- state "unknown" --
+     if iface is unknown or its driver cannot observe the bus. */
+  CanBusHealth GetInterfaceHealth(const std::string& iface) const;
+
   void StopAll();
 
  private:
@@ -70,6 +75,9 @@ class CanBusRegistry {
     std::string iface;
     std::unique_ptr<HilBridge> bridge;
     CanInterfaceInfo info;
+    // The bridge owns the driver; this shared copy exists so health queries can
+    // outlive the lock (a netlink read must not run under bridges_mutex_).
+    std::shared_ptr<IHalDriver> driver;
   };
 
   struct Subscription {
