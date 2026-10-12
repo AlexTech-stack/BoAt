@@ -142,8 +142,8 @@ boat frame send --bus-type ethernet --ethertype 0x0800 --dst-ip 10.0.0.1 --data 
 
 ```bash
 # C++ (Catch2) — one test preset per configure preset: debug, release, asan, tsan, coverage
-ctest --preset debug                     # 164 tests; the 7 HIL ones report Skipped
-BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 164 actually run
+ctest --preset debug                     # 166 tests; the 7 HIL ones report Skipped
+BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 166 actually run
 ctest --test-dir build/debug -R TestName --timeout 30 --output-on-failure
 ctest --test-dir build/debug -N  # list tests
 

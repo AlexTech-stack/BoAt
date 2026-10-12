@@ -37,7 +37,7 @@ sudo ip link add vcan0 type vcan && sudo ip link set vcan0 up
 ## Running the tests
 
 ```bash
-cd boat-platform && ctest --preset debug            # 164 tests
+cd boat-platform && ctest --preset debug            # 166 tests
 # 7 of those are HIL tests and report Skipped unless you opt in:
 BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug
 ```

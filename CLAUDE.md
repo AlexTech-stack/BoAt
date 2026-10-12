@@ -102,8 +102,8 @@ cmake --preset debug && cmake --build --preset debug
 build/debug/src/gateway/grpc_gateway/boat_gateway
 
 # C++ tests (Catch2 via ctest) — a test preset exists per configure preset
-ctest --preset debug                       # 164 tests; 7 HIL ones Skipped unless BOAT_HIL_ENABLED=1
-BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 164 run
+ctest --preset debug                       # 166 tests; 7 HIL ones Skipped unless BOAT_HIL_ENABLED=1
+BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 166 run
 ctest --test-dir build/debug -R TestName --timeout 30 --output-on-failure   # single test
 ctest --test-dir build/debug -N                                             # list tests
 ```

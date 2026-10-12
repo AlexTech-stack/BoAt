@@ -11,6 +11,16 @@ The plugin ABI is versioned separately from the project; see
 
 ## [Unreleased]
 
+### Fixed
+
+- **Re-configuring an existing build dir failed after a dependency bump** with
+  `Failed to unstash changes in .../_deps/grpc-src`. `CMakeLists.txt` patches files inside
+  FetchContent's git checkouts, and the update step stashes those edits and pops them back
+  after checking out the new tag — which conflicts once the tag changes a patched file (the
+  gRPC v1.65 → v1.75 bump did). Patched files are now reset to upstream before FetchContent
+  updates and re-patched afterwards. The gRPC `cmake/protobuf.cmake` patch is removed: v1.75
+  no longer contains the line it replaced, so it had silently become a no-op.
+
 ### Changed
 
 - **Configuring the C++ project on a non-Linux host now fails immediately** with a message

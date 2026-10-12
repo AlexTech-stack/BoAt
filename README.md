@@ -1,7 +1,7 @@
 # BoAt
 
 > **Status: pre-1.0.** The gateway, the Python SDK/CLI and the plugin ABI are in active use and
-> covered by CI — 164 C++ tests and 538 Python tests, plus ASan, TSan, and a determinism check
+> covered by CI — 166 C++ tests and 551 Python tests, plus ASan, TSan, and a determinism check
 > run under CPU load. The gRPC surface and the C plugin ABI may still change between minor
 > versions: the ABI is versioned (currently **v9**) and a mismatched plugin is rejected at load
 > with a clear error rather than misbehaving at runtime. See [CHANGELOG.md](CHANGELOG.md) for
