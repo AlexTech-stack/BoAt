@@ -16,6 +16,14 @@ HTTP API, and each agent only ever touches processes on its own machine. See
 `AGENTS.md`'s "Launcher Agent" section and `backlog/launcher_agent_backlog.md`
 for the architecture rationale and current scope/gaps.
 
+**Reaching an agent from another machine is opt-in.** `ui/launcher_agent.py`
+binds `127.0.0.1` by default, because its API is unauthenticated remote
+process execution — anyone who can reach it can spawn gateways and scripts on
+that host. To administer a remote host, start its agent with
+`BOAT_AGENT_BIND=0.0.0.0` on a trusted network (see `SECURITY.md`), then add
+that host here by its real address. Agents on the same machine as this app
+work with the default loopback bind.
+
 ## Install & run
 
 ```bash
