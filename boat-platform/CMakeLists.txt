@@ -132,33 +132,63 @@ FetchContent_Declare(
 # is redirected to our FetchContent copy via OVERRIDE_FIND_PACKAGE.
 FetchContent_MakeAvailable(spdlog protobuf tomlplusplus)
 
-# gRPC needs patching before add_subdirectory: when using gRPC_PROTOBUF_PROVIDER
-# "package", gRPC's cmake/protobuf.cmake calls:
-#   get_target_property(_gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR protobuf::libprotoc
-#                       INTERFACE_INCLUDE_DIRECTORIES)
-# libprotoc only sets $<BUILD_INTERFACE:...> on libprotobuf (not libprotoc), so
-# the property is NOTFOUND and protoc can't find well-known .proto files.
-# Fix: replace that line with a direct use of protobuf_SOURCE_DIR, which is in
-# scope because FetchContent_MakeAvailable(protobuf) already ran above.
+# The gRPC and iceoryx2 patches below edit files *inside* FetchContent's git
+# checkouts. ExternalProject's update step stashes local edits, checks out the
+# pinned tag, then pops the stash -- under every GIT_REMOTE_UPDATE_STRATEGY, so
+# PATCH_COMMAND does not escape it either. That works while the tag is
+# unchanged, but the first tag bump that touches a patched file makes the pop
+# conflict, and every existing build dir then fails to configure with "Failed
+# to unstash changes in .../grpc-src" (the v1.65 -> v1.75 bump did exactly
+# that). So reset each patched file to its committed state *before*
+# FetchContent updates the checkout, and let the code below re-apply the patch.
+find_package(Git REQUIRED)
+function(boat_unpatch_dep name)
+  string(TOUPPER "${name}" _upper)
+  if(FETCHCONTENT_SOURCE_DIR_${_upper})
+    return()  # A user-supplied tree: no update step runs, and it isn't ours to reset.
+  endif()
+  string(TOLOWER "${name}" _lower)
+  set(_src "${FETCHCONTENT_BASE_DIR}/${_lower}-src")
+  foreach(_rel IN LISTS ARGN)
+    if(NOT EXISTS "${_src}/${_rel}")
+      continue()  # Fresh build dir: nothing checked out yet, nothing to reset.
+    endif()
+    get_filename_component(_dir "${_src}/${_rel}" DIRECTORY)
+    get_filename_component(_file "${_rel}" NAME)
+    # `git -C <dir>` resolves the repo that owns <dir>, so a file inside a
+    # submodule (gRPC's third_party/zlib) is reset in that submodule.
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${_dir}" checkout -- "${_file}"
+      RESULT_VARIABLE _rc ERROR_VARIABLE _err)
+    if(NOT _rc EQUAL 0)
+      message(WARNING "Could not reset patched dependency file ${_src}/${_rel} "
+                      "before updating it: ${_err}")
+    endif()
+  endforeach()
+endfunction()
+
+# cmake/protobuf.cmake is no longer patched (see below), but build dirs last
+# configured against gRPC v1.65 still carry that edit and must have it reset
+# before they can update.
+boat_unpatch_dep(gRPC cmake/protobuf.cmake third_party/zlib/CMakeLists.txt)
+boat_unpatch_dep(iceoryx2 iceoryx2-ffi/c/CMakeLists.txt)
+
+# gRPC <= v1.65 needed cmake/protobuf.cmake patched: it read the well-known
+# .proto include dir off protobuf::libprotoc, which has none. v1.75 reads it
+# off ${_gRPC_PROTOBUF_LIBRARIES} instead, so the patch's search string no
+# longer exists and it had silently become a no-op -- removed rather than kept
+# as dead code.
 FetchContent_GetProperties(grpc)
 if(NOT grpc_POPULATED)
   FetchContent_Populate(grpc)
 endif()
-FetchContent_GetProperties(protobuf SOURCE_DIR _protobuf_src_dir)
-set(_grpc_pb_cmake "${grpc_SOURCE_DIR}/cmake/protobuf.cmake")
-file(READ "${_grpc_pb_cmake}" _grpc_pb_content)
-string(REPLACE
-    "get_target_property(_gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR protobuf::libprotoc INTERFACE_INCLUDE_DIRECTORIES)"
-    "set(_gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR \"${_protobuf_src_dir}/src\")"
-    _grpc_pb_content "${_grpc_pb_content}")
-file(WRITE "${_grpc_pb_cmake}" "${_grpc_pb_content}")
 
 # gRPC's bundled third_party/zlib registers its example programs as CTest tests
 # unconditionally -- there is no option to disable them, unlike re2's
 # RE2_BUILD_TESTING above. Under EXCLUDE_FROM_ALL their binaries are never
 # built, so they surfaced as 2 phantom "Not Run" failures in `ctest`. Strip the
-# add_test() calls; the executables themselves are harmless. Idempotent: on a
-# re-configure the strings are already gone and REPLACE is a no-op.
+# add_test() calls; the executables themselves are harmless. The file is reset
+# to upstream by boat_unpatch_dep() above, so this applies to a clean copy.
 set(_zlib_cmake "${grpc_SOURCE_DIR}/third_party/zlib/CMakeLists.txt")
 if(EXISTS "${_zlib_cmake}")
   file(READ "${_zlib_cmake}" _zlib_content)
