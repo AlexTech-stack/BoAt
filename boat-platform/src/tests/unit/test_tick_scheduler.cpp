@@ -159,3 +159,60 @@ TEST_CASE("A TickAuthority phase drives the simulation pipeline",
   authority.StepFor(10);
   REQUIRE(clock.tick() == 10);
 }
+
+TEST_CASE("Reset rewinds the clock and re-arms the determinism engine",
+          "[unit][tick_scheduler][determinism]") {
+  boat::core::SimClock clock(11);
+  boat::core::EventBus event_bus;
+  boat::core::DeterminismEngine determinism(11);
+  boat::core::TickScheduler scheduler(clock, event_bus, determinism);
+
+  std::vector<std::uint64_t> ticks;
+  scheduler.SetOnTickHook([&ticks](std::uint64_t t) { ticks.push_back(t); });
+
+  scheduler.Start();
+  for (int i = 0; i < 6; ++i) scheduler.TickIfRunning();
+  REQUIRE(clock.tick() == 6);
+
+  scheduler.Reset();
+  REQUIRE(clock.tick() == 0);
+  REQUIRE_FALSE(scheduler.IsRunning());
+
+  // A reset scheduler is at rest: the phase must not tick it.
+  for (int i = 0; i < 3; ++i) scheduler.TickIfRunning();
+  REQUIRE(clock.tick() == 0);
+
+  // Tick 1 again. Without DeterminismEngine::Reset() this throws
+  // "tick must be monotonically increasing" -- the coupling the backlog
+  // entry about a gateway refusing new simulations after a run describes.
+  scheduler.Start();
+  for (int i = 0; i < 2; ++i) scheduler.TickIfRunning();
+  REQUIRE(clock.tick() == 2);
+  REQUIRE(ticks == std::vector<std::uint64_t>({1, 2, 3, 4, 5, 6, 1, 2}));
+}
+
+TEST_CASE("Reset leaves no room for a tick that already passed the running check",
+          "[unit][tick_scheduler][determinism]") {
+  /* The tick phase and Reset() run on different threads in the gateway. A
+     phase that read `running_` just before Stop()+Reset() used to be free to
+     advance the freshly rewound clock to 1 after the reset had completed --
+     the check now happens under tick_mutex_, the same lock Reset() takes, so
+     a post-reset tick is impossible. Repeated because the window is a few
+     instructions wide. */
+  boat::core::SimClock clock(13);
+  boat::core::EventBus event_bus;
+  boat::core::DeterminismEngine determinism(13);
+  boat::core::TickScheduler scheduler(clock, event_bus, determinism);
+
+  for (int round = 0; round < 200; ++round) {
+    scheduler.Start();
+    std::thread phase([&scheduler] {
+      for (int i = 0; i < 50; ++i) scheduler.TickIfRunning();
+    });
+    scheduler.Reset();
+    phase.join();
+    // Reset was the last state change; nothing may have ticked after it.
+    REQUIRE(clock.tick() == 0);
+  }
+  REQUIRE_FALSE(scheduler.IsRunning());
+}

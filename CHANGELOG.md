@@ -43,6 +43,16 @@ The plugin ABI is versioned separately from the project; see
   `MetricsService.StreamMetrics` now use a heap-owned subscriber queue captured by value; the
   bidirectional stream writes from a dedicated writer thread that is joined before the handler
   returns.
+- **`ResetSimulation` now means reset, and one simulation is active at a time.** It stopped
+  the scheduler and reported `IDLE` without touching the clock, so a reset simulation kept
+  its tick and a definition created afterwards inherited it — a long-lived gateway could even
+  refuse to start anything with `INTERNAL: tick must be monotonically increasing`.
+  `TickScheduler::Reset()` rewinds the clock and clears the determinism engine's tick memory
+  under the same lock the tick pipeline uses; `ResetSimulation` additionally tears down the
+  scenario's registry subscriptions and plugins and drops scheduled faults and queued events,
+  and it now works from RUNNING/PAUSED instead of failing. `CreateSimulation` starts a fresh
+  definition at tick 0 when no session is live, and `StartSimulation` on a *different*
+  definition while one is active is refused rather than silently driving the shared session.
 
 ### Changed
 

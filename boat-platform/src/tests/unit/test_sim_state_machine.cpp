@@ -29,3 +29,20 @@ TEST_CASE("SimStateMachine transition rules and observers", "[unit][sim_state_ma
     REQUIRE_FALSE(sm.RemoveObserver(token));
   }
 }
+
+TEST_CASE("A running or paused simulation can go directly to IDLE",
+          "[unit][sim_state_machine]") {
+  using boat::core::SimState;
+  boat::core::SimStateMachine sm;
+
+  // ResetSimulation needs this edge: via STOPPED it returned
+  // FAILED_PRECONDITION for a live simulation.
+  REQUIRE(sm.Transition(SimState::RUNNING));
+  REQUIRE(sm.Transition(SimState::IDLE));
+  REQUIRE(sm.Current() == SimState::IDLE);
+
+  REQUIRE(sm.Transition(SimState::RUNNING));
+  REQUIRE(sm.Transition(SimState::PAUSED));
+  REQUIRE(sm.Transition(SimState::IDLE));
+  REQUIRE(sm.Current() == SimState::IDLE);
+}

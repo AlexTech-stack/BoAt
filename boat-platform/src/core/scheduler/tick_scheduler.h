@@ -44,6 +44,14 @@ class TickScheduler {
   void Resume();
   void Stop();
 
+  /* Stop and rewind: tick 0, and the determinism engine's tick memory cleared
+     so tick 1 is accepted again. Serialised against the tick pipeline via
+     tick_mutex_, and the scheduler is left stopped -- a reset is not a restart.
+     Resetting the clock without the engine (or vice versa) is the coupling
+     that used to make a long-lived gateway throw
+     "tick must be monotonically increasing" on the next run. */
+  void Reset();
+
   /* Advance exactly n ticks on the calling thread, regardless of running or
      paused state. Serialised against the tick phase, so stepping a running
      simulation cannot interleave two ticks onto the same tick number. */

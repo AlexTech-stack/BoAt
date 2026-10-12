@@ -7,9 +7,17 @@ Both items below are **pre-existing behaviour**, not regressions. Neither is
 obviously wrong for single-simulation bench use; both are surprising enough to
 mislead a client author, and the API shape actively invites the wrong assumption.
 
+> **Resolved (2026-10-12).** The model is now explicit and enforced: one live
+> session per gateway, documented in `simulation.proto` and the agent files;
+> `StartSimulation` on a different id while one is active is refused with
+> `FAILED_PRECONDITION`; `ResetSimulation` rewinds the clock *and* the
+> determinism engine's tick memory and tears the run down; `CreateSimulation`
+> starts a fresh definition at tick 0 when nothing is live. The client-author
+> note at the end is also fixed in `simulation.proto`.
+
 ---
 
-## 🔴 Simulation state is global, not per-simulation
+## ✅ Simulation state is global, not per-simulation — resolved as one documented session
 
 `CreateSimulation` mints a fresh id and stores a `ScenarioDef` per id in the
 `simulations_` map, so the service looks multi-simulation: every RPC takes a
@@ -75,7 +83,7 @@ skip once the clock has advanced.
 
 ---
 
-## 🟡 `ResetSimulation` does not rewind the tick
+## ✅ `ResetSimulation` does not rewind the tick — resolved
 
 `ResetSimulation` stops the scheduler and transitions the state machine to `IDLE`,
 but never touches the clock:
@@ -132,3 +140,7 @@ the name reads like a general-purpose watch, and the first two clients written
 against it (the companion app, and this note's author) both got it wrong. Worth a
 comment in `simulation.proto` at minimum; a periodic keepalive write, or an
 explicit `tick` field in the transition payload, would remove the trap.
+
+**Resolved (2026-10-12).** `simulation.proto`'s `WatchSimulation` doc comment now
+states that it streams state changes and that the tick must be polled via
+`GetSimulationState`. A periodic keepalive remains a possible future change.

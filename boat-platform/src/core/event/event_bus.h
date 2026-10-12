@@ -45,6 +45,11 @@ class EventBus {
   void Unsubscribe(SubscriptionHandle handle);
   void Dispatch();
 
+  /* Drop everything queued but not yet dispatched. Subscriptions stay:
+     this is the reset half of "a fresh run must not see events published by
+     the previous one", not a teardown. */
+  void Clear();
+
  private:
   struct HandlerEntry {
     SubscriptionHandle handle;
