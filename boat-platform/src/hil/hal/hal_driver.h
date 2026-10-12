@@ -29,6 +29,25 @@ struct CanInterfaceInfo {
   std::uint32_t bitrate;     // nominal bitrate in bit/s, 0 if unknown
 };
 
+/* Runtime health of a CAN bus, as far as the driver can see it. Counters are
+ * monotonic since the interface was opened; the state and error counters are
+ * a snapshot (netlink for physical CAN, error frames recorded at runtime).
+ *
+ * Before this existed, a bus that had gone bus-off and a bus that was merely
+ * idle looked identical from the outside: frames stopped arriving and nothing
+ * said why. */
+struct CanBusHealth {
+  std::uint64_t rx_dropped = 0;         // per-socket RX overflow (SO_RXQ_OVFL), best-effort
+  std::uint64_t device_rx_dropped = 0;  // device-level rx_dropped (netlink IFLA_STATS64)
+  std::uint64_t device_rx_errors = 0;   // device-level rx_errors (netlink IFLA_STATS64)
+  std::uint64_t error_frames = 0;       // CAN error frames observed on this socket
+  std::uint64_t bus_off_events = 0;     // transitions into bus-off observed at runtime
+  std::uint32_t tec = 0;                // controller TX error counter (netlink)
+  std::uint32_t rec = 0;                // controller RX error counter (netlink)
+  std::uint32_t state_code = 0xFFFFFFFFu;  // Linux CAN_STATE_* value; 0xFFFFFFFF = unreported
+  std::string   state = "unknown";         // "active" | "error-warning" | "error-passive" | "busoff" | ...
+};
+
 class IHalDriver {
  public:
   virtual bool Open() = 0;
@@ -36,6 +55,12 @@ class IHalDriver {
   virtual bool WriteFrame(const CanFrame& frame) = 0;
   virtual void Close() = 0;
   virtual CanInterfaceInfo GetInfo() const = 0;
+
+  /* Snapshot of bus health. The default is "nothing known", which is what a
+     driver that cannot observe its bus should report rather than zeros that
+     look like a healthy bus. */
+  [[nodiscard]] virtual CanBusHealth GetBusHealth() const { return {}; }
+
   virtual ~IHalDriver() = default;
 };
 

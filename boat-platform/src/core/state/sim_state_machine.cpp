@@ -12,8 +12,12 @@ namespace boat::core {
 namespace {
 const std::unordered_map<SimState, std::unordered_set<SimState>> kTransitions = {
     {SimState::IDLE, {SimState::RUNNING}},
-    {SimState::RUNNING, {SimState::PAUSED, SimState::STOPPED, SimState::ERROR}},
-    {SimState::PAUSED, {SimState::RUNNING, SimState::STOPPED, SimState::ERROR}},
+    // RUNNING/PAUSED -> IDLE directly: `boat sim reset` means exactly that,
+    // and routing it through STOPPED made ResetSimulation fail with
+    // FAILED_PRECONDITION for a live simulation (IDLE was only reachable from
+    // STOPPED or ERROR). One transition, one observer event.
+    {SimState::RUNNING, {SimState::PAUSED, SimState::STOPPED, SimState::ERROR, SimState::IDLE}},
+    {SimState::PAUSED, {SimState::RUNNING, SimState::STOPPED, SimState::ERROR, SimState::IDLE}},
     {SimState::STOPPED, {SimState::IDLE}},
     {SimState::ERROR, {SimState::IDLE}},
 };

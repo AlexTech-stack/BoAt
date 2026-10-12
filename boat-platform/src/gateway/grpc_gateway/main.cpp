@@ -271,6 +271,20 @@ int main() {
     return v != nullptr && std::string(v) == "1";
   }();
 
+  // The CAN drivers resolve this themselves in Open() (same helper), so the
+  // artifact records exactly what they apply -- including "the kernel capped
+  // it below the request", which lands in warnings via the driver's stderr.
+  {
+    std::string rcvbuf_warning;
+    effective_config.can_rcvbuf_bytes =
+        boat::hil::SocketCanDriver::RequestedRxBufBytes(&rcvbuf_warning);
+    effective_config.can_rcvbuf_resolved_from =
+        std::getenv("BOAT_CAN_RCVBUF") != nullptr ? "BOAT_CAN_RCVBUF" : "default";
+    if (!rcvbuf_warning.empty()) {
+      effective_config.warnings.push_back(rcvbuf_warning);
+    }
+  }
+
   boat::gateway::RpcAuditLog audit_log;
   // Gateway bootstrap uses a fixed seed so startup behavior is deterministic across environments.
   boat::core::SimulationContext sim(kGatewayDeterminismSeed);

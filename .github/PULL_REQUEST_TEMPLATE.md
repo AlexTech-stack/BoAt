@@ -6,7 +6,7 @@
 ## How you verified it
 
 <!-- The commands you actually ran, with their result. "Tests pass" is less useful than
-     "ctest --preset debug: 164/164; pytest: 538 passed". If you could not verify something
+     "ctest --preset debug: all passed; pytest: all passed". If you could not verify something
      (no physical CAN adapter, for instance), say so. -->
 
 ## Checklist
@@ -16,6 +16,8 @@
 - [ ] New source files carry the two-line SPDX header
 - [ ] If I edited a `.proto`, I ran `boat-platform/sdk/python/boat/stubs/generate_stubs.sh` and committed the result
 - [ ] If I added a dependency, I added it to `THIRD_PARTY_NOTICES.md`
+- [ ] If this is a breaking change, it links its accepted RFC issue (see
+      [CONTRIBUTING.md](CONTRIBUTING.md#breaking-changes-and-rfcs))
 - [ ] **If I changed a fact stated in `CLAUDE.md` or `AGENTS.md`, I changed it in BOTH.** They
       describe the same repository for different audiences and must never disagree — nothing
       fails when they do, which is why this is on the list.

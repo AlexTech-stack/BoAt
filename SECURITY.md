@@ -52,6 +52,15 @@ gateway as root.
 accept paths and shell out. They are development tools meant for `localhost`. Do not expose
 them.
 
+**`ui/launcher_agent.py` is remote process execution, not just a dashboard.** It starts,
+stops and deletes `boat_gateway` instances on its host and runs node scripts, taking the
+gateway binary path, the script path, its arguments and its environment from the request
+(`BOAT_NODE_PLUGINS` is a path to a `.so` the gateway will `dlopen`). Anyone who can reach
+its port can run code on that machine. It binds `127.0.0.1` by default; `BOAT_AGENT_BIND`
+(e.g. `0.0.0.0`) is an explicit opt-in for a federated `admin_gui` setup, and belongs only
+on a trusted network. This is the one service whose exposure is qualitatively different
+from the others, and it is the reason that default changed (issue #39).
+
 ## In scope
 
 Reports are most useful where BoAt fails to hold a boundary it claims to hold:

@@ -1,0 +1,79 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+
+name: RFC (breaking change)
+description: Propose a breaking change before implementing it.
+labels: ["rfc"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for anything that would make existing code stop compiling or
+        working without changing it — see "Breaking changes and RFCs" in `CONTRIBUTING.md`
+        for the definition per surface. Additive changes do not need an RFC; a normal
+        issue or PR is enough.
+
+        The RFC is where the decision and its reasoning are recorded. An implementing PR
+        links this issue, and the change also lands in `CHANGELOG.md` under
+        `Changed`/`Removed` with a `!` commit subject.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What the breaking change is, in a few sentences.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: surfaces
+    attributes:
+      label: Surfaces affected
+      options:
+        - label: gRPC API (`proto/boat/v1/`)
+        - label: C plugin ABI (`BOAT_PLUGIN_ABI_VERSION`)
+        - label: Python SDK (`boat-py`)
+        - label: CLI (`boat-cli`)
+        - label: Documented semantics / behaviour
+
+  - type: textarea
+    id: breaks
+    attributes:
+      label: What breaks, and for whom
+      description: |
+        Be concrete: which service/RPC, vtable entry, class, command or guarantee, and who
+        is calling it today — in-tree callers, out-of-tree plugins, SDK users, scripts.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why it is worth breaking
+      description: The problem this solves, and why an additive alternative does not.
+    validations:
+      required: true
+
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration path
+      description: What an existing user or plugin author has to change, step by step. "Recompile" counts, but say so.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including keeping the old surface as a deprecated wrapper, if that was possible.
+    validations:
+      required: false
+
+  - type: textarea
+    id: notice
+    attributes:
+      label: Urgency and notice
+      description: Is there a reason this cannot wait for the next minor release?
+    validations:
+      required: false

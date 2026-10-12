@@ -39,6 +39,10 @@ bool CanBusRegistry::Add(const std::string& iface, std::shared_ptr<IHalDriver> d
   // Capture interface metadata before the driver is moved into the bridge.
   auto info = driver->GetInfo();
 
+  // Keep a shared copy for GetInterfaceHealth(): the bridge owns the driver,
+  // and a netlink health read must not run under bridges_mutex_.
+  auto health_driver = driver;
+
   auto bridge = std::make_unique<HilBridge>(std::move(driver), bus);
 
   // Capture iface by value so the lambda stays valid after Add() returns.
@@ -49,7 +53,8 @@ bool CanBusRegistry::Add(const std::string& iface, std::shared_ptr<IHalDriver> d
   bridge->Start();
 
   std::lock_guard<std::mutex> lock(bridges_mutex_);
-  bridges_[iface] = BridgeEntry{iface, std::move(bridge), std::move(info)};
+  bridges_[iface] =
+      BridgeEntry{iface, std::move(bridge), std::move(info), std::move(health_driver)};
   return true;
 }
 
@@ -146,6 +151,23 @@ CanInterfaceInfo CanBusRegistry::GetInterfaceInfo(const std::string& iface) cons
     return {};
   }
   return it->second.info;
+}
+
+CanBusHealth CanBusRegistry::GetInterfaceHealth(const std::string& iface) const {
+  std::shared_ptr<IHalDriver> driver;
+  {
+    std::lock_guard<std::mutex> lock(bridges_mutex_);
+    const auto it = bridges_.find(iface);
+    if (it == bridges_.end()) {
+      return {};
+    }
+    driver = it->second.driver;
+  }
+  if (!driver) {
+    return {};
+  }
+  // Outside the lock: a netlink query can block for up to ~1s.
+  return driver->GetBusHealth();
 }
 
 void CanBusRegistry::DispatchRx(const CanFrame& frame, const std::string& iface) {

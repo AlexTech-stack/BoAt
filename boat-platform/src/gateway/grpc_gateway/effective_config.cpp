@@ -76,6 +76,8 @@ std::string EffectiveConfig::ToJson() const {
     os << BoolStr(can_interfaces_opened[i]);
   }
   os << "],\n";
+  os << "    \"can_rcvbuf_bytes\": " << can_rcvbuf_bytes << ",\n";
+  os << "    \"can_rcvbuf_resolved_from\": \"" << JsonEscape(can_rcvbuf_resolved_from) << "\",\n";
   os << "    \"ethernet\": ";
   AppendStringArray(os, eth_interfaces);
   os << ",\n";

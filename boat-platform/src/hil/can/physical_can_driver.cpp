@@ -39,6 +39,10 @@ CanInterfaceInfo PhysicalCanDriver::GetInfo() const {
   return info_;
 }
 
+CanBusHealth PhysicalCanDriver::GetBusHealth() const {
+  return driver_.GetBusHealth();
+}
+
 bool PhysicalCanDriver::ReadInterfaceInfo() {
   info_ = {};
   info_.bitrate = 0;

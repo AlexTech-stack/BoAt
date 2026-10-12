@@ -13,6 +13,18 @@ The plugin ABI is versioned separately from the project; see
 
 ### Added
 
+- **CAN bus health is observable.** `SocketCanDriver` requests a larger `SO_RCVBUF`
+  (`BOAT_CAN_RCVBUF`, default 4 MiB, `0` = kernel default) and says so when the kernel capped
+  it; RX drop counts (`SO_RXQ_OVFL`, device-level `rx_dropped`/`rx_errors` from netlink) and
+  error frames — bus-off, error-passive, error-warning, restarted — are counted instead of
+  being dropped silently, and controller state plus TEC/REC come from netlink. All of it is
+  exposed as `can.<iface>.*` points through `MetricsService`, and the requested buffer is
+  recorded in the effective-config artifact. A bus that has gone bus-off no longer looks
+  identical to one that is merely idle.
+- **`tools/gen_proto_docs.py`** generates the proto file/service/RPC tables in
+  `docs/api/protobuf-definitions.md` from `proto/boat/v1/`; a `doc-facts-in-sync` CI job fails
+  when the committed document is stale. The hand-typed totals are no longer maintained
+  anywhere in the docs.
 - **arm64 (aarch64) release packages.** Releases now ship `.tar.gz`, `.deb` and `.rpm` for
   both amd64 and arm64 (Raspberry Pi OS 64-bit, Jetson, Graviton, NXP i.MX8/S32G-class
   boards), not only an image.
@@ -55,12 +67,35 @@ The plugin ABI is versioned separately from the project; see
   gRPC v1.65 → v1.75 bump did). Patched files are now reset to upstream before FetchContent
   updates and re-patched afterwards. The gRPC `cmake/protobuf.cmake` patch is removed: v1.75
   no longer contains the line it replaced, so it had silently become a no-op.
+- **Streaming subscriptions could write into a dead RPC handler** (use-after-free). Producers
+  snapshot their subscriber callbacks and invoke them after releasing the lock, and
+  `Unsubscribe` does not wait for a callback already in flight, so a callback racing a
+  handler's return wrote into captured stack locals — including, in `FrameService`, the gRPC
+  writer itself. `PduService.SubscribePdus`, `FrameService.SubscribeFrames`/`StreamFrames` and
+  `MetricsService.StreamMetrics` now use a heap-owned subscriber queue captured by value; the
+  bidirectional stream writes from a dedicated writer thread that is joined before the handler
+  returns.
+- **`ResetSimulation` now means reset, and one simulation is active at a time.** It stopped
+  the scheduler and reported `IDLE` without touching the clock, so a reset simulation kept
+  its tick and a definition created afterwards inherited it — a long-lived gateway could even
+  refuse to start anything with `INTERNAL: tick must be monotonically increasing`.
+  `TickScheduler::Reset()` rewinds the clock and clears the determinism engine's tick memory
+  under the same lock the tick pipeline uses; `ResetSimulation` additionally tears down the
+  scenario's registry subscriptions and plugins and drops scheduled faults and queued events,
+  and it now works from RUNNING/PAUSED instead of failing. `CreateSimulation` starts a fresh
+  definition at tick 0 when no session is live, and `StartSimulation` on a *different*
+  definition while one is active is refused rather than silently driving the shared session.
 
 ### Changed
 
 - **Configuring the C++ project on a non-Linux host now fails immediately** with a message
   pointing at the supported-platforms docs. It could never build there anyway (SocketCAN,
   `AF_PACKET`, `timerfd`, `dlopen`), but used to fail much later on a missing system header.
+- **BREAKING: `ui/launcher_agent.py` binds `127.0.0.1` by default.** Reaching the agent's API
+  is equivalent to remote process execution on its host (it spawns gateways and node scripts
+  from caller-supplied paths), so that is no longer the default. A federated admin setup that
+  administers this host from another machine must start the agent with
+  `BOAT_AGENT_BIND=0.0.0.0`, on a trusted network; `SECURITY.md` names the exposure.
 
 ### Documentation
 
@@ -69,6 +104,13 @@ The plugin ABI is versioned separately from the project; see
   the root README. Removed `project-plan.md`'s "Portability target: macOS and Windows", which
   was never true, and the Windows/MSVC scenario in `docs/execution_pipeline.md`.
   `admin_gui/README.md` now says the hosts it administers must be Linux.
+- Project status is stated once (pre-1.0) in the README and referenced from `CLAUDE.md` and
+  `AGENTS.md`, instead of three files disagreeing; the stale "v8 ABI" references are corrected
+  and `guidebook.html`'s callout updated.
+- The RFC process `project-plan.md` required now exists: what counts as breaking per surface,
+  an issue template, and the acceptance/notice rules, linked from `CONTRIBUTING.md`.
+- `frame.proto` documents that `SELF_SENT` marks the transmitting gateway, not the originating
+  client — a bridge cannot use it to suppress only its own echo.
 
 ## [0.1.1] — 2026-10-08
 

@@ -51,10 +51,19 @@ only reconfigure or toggle up/down.
 
 Usage:
     python3 ui/launcher_agent.py
-    # REST API on http://0.0.0.0:8090
+    # REST API on http://127.0.0.1:8090 by default; set BOAT_AGENT_BIND=0.0.0.0
+    # to reach it from another host.
 
 Environment:
     BOAT_AGENT_PORT       — HTTP port for this agent (default 8090)
+    BOAT_AGENT_BIND       — address to bind (default 127.0.0.1, loopback only).
+                            Reaching this API is equivalent to running code on
+                            this host: it spawns gateway binaries and node
+                            scripts from caller-supplied paths. Listening on a
+                            routable interface is therefore an explicit opt-in
+                            -- set BOAT_AGENT_BIND=0.0.0.0 when admin_gui on
+                            another machine has to reach this agent, and never
+                            on an untrusted network.
     BOAT_AGENT_BASE_PORT  — first gRPC port to try when auto-allocating
                             (default 50051, matches boat_gateway's own default)
     BOAT_GATEWAY_BIN      — path to boat_gateway binary (default build/debug)
@@ -100,6 +109,7 @@ _PROJECT_ROOT   = Path(__file__).resolve().parent.parent / "boat-platform"
 _DEFAULT_GW_BIN = str(_PROJECT_ROOT / "build" / "debug" / "src" / "gateway" / "grpc_gateway" / "boat_gateway")
 _GW_BIN_DEFAULT = os.environ.get("BOAT_GATEWAY_BIN", _DEFAULT_GW_BIN)
 _AGENT_PORT     = int(os.environ.get("BOAT_AGENT_PORT", "8090"))
+_AGENT_BIND     = os.environ.get("BOAT_AGENT_BIND", "127.0.0.1")
 _BASE_PORT      = int(os.environ.get("BOAT_AGENT_BASE_PORT", "50051"))
 _LOG_LINES      = 500
 _NODES_DIR      = _PROJECT_ROOT / "nodes"
@@ -1863,7 +1873,10 @@ def api_can_config(name: str, req: CanConfigRequest):
 
 
 if __name__ == "__main__":
-    print(f"BoAt Launcher Agent → http://0.0.0.0:{_AGENT_PORT}")
+    print(f"BoAt Launcher Agent → http://{_AGENT_BIND}:{_AGENT_PORT}")
+    if _AGENT_BIND not in ("127.0.0.1", "localhost", "::1"):
+        print(f"WARNING: listening on {_AGENT_BIND}; anyone who can reach this port "
+              "can run processes on this host (see SECURITY.md)")
     print(f"Default gateway binary: {_GW_BIN_DEFAULT}")
     print(f"Base gRPC port for auto-allocation: {_BASE_PORT}")
-    uvicorn.run(app, host="0.0.0.0", port=_AGENT_PORT, log_level="warning")
+    uvicorn.run(app, host=_AGENT_BIND, port=_AGENT_PORT, log_level="warning")
