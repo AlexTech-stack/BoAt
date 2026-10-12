@@ -5,10 +5,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <deque>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
 #include <vector>
+
+#include "subscriber_queue.h"
 
 namespace boat::gateway {
 namespace {
@@ -61,8 +65,12 @@ grpc::Status SignalServiceImpl::InjectSignal(grpc::ServerContext*, const boat::v
 grpc::Status SignalServiceImpl::SubscribeSignals(grpc::ServerContext* context,
                                                  const boat::v1::SubscribeSignalsRequest* request,
                                                  grpc::ServerWriter<boat::v1::SignalValue>* writer) {
-  std::mutex queue_mutex;
-  std::vector<boat::v1::SignalValue> queue;
+  /* Heap-owned and captured by value: the router's dispatch thread invokes the
+     callback after Unsubscribe has released the subscription, so a stack-local
+     queue here was a use-after-free -- see subscriber_queue.h. */
+  auto shared = MakeSubscriberQueue<boat::v1::SignalValue>(
+      &ctx_.stream_drops, stream_metrics::kSignalsSubscribe,
+      ctx_.stream_queue_capacity);
   std::vector<boat::core::SignalRouter::SubscriptionHandle> handles;
   handles.reserve(request->names_size());
 
@@ -76,7 +84,7 @@ grpc::Status SignalServiceImpl::SubscribeSignals(grpc::ServerContext* context,
     };
     auto handle = ctx_.sim.signal_router().Subscribe(
         signal_id, std::move(predicate),
-        [&queue_mutex, &queue, name](const boat::core::SignalEvent& event) {
+        [shared, name](const boat::core::SignalEvent& event) {
           boat::v1::SignalValue value;
           value.set_name(name);
           value.set_tick(event.tick);
@@ -89,24 +97,30 @@ grpc::Status SignalServiceImpl::SubscribeSignals(grpc::ServerContext* context,
           } else if (const auto* text = std::get_if<std::string>(&event.value)) {
             value.set_string_value(*text);
           }
-          std::lock_guard<std::mutex> lock(queue_mutex);
-          queue.push_back(std::move(value));
+          std::size_t dropped = 0;
+          {
+            std::lock_guard<std::mutex> lock(shared->mutex);
+            dropped = shared->Push(std::move(value));
+          }
+          shared->ReportDrop(dropped);
+          shared->cv.notify_one();
         });
     handles.push_back(handle);
   }
 
   while (!context->IsCancelled()) {
-    std::vector<boat::v1::SignalValue> pending;
+    std::deque<boat::v1::SignalValue> pending;
     {
-      std::lock_guard<std::mutex> lock(queue_mutex);
-      pending.swap(queue);
+      std::unique_lock<std::mutex> lock(shared->mutex);
+      shared->cv.wait_for(lock, std::chrono::milliseconds(50),
+                          [&shared] { return !shared->queue.empty(); });
+      pending.swap(shared->queue);
     }
     for (const auto& value : pending) {
       if (!writer->Write(value)) {
         break;
       }
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
   for (const auto handle : handles) {

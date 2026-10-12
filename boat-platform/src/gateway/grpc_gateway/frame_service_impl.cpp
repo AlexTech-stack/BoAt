@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -269,23 +270,29 @@ grpc::Status FrameServiceImpl::SubscribeFrames(
      UnsubscribeFrame does not wait for an in-flight callback (the registry
      snapshots its subscribers and invokes them after releasing the lock), so a
      callback writing through a stack local after this handler returned was a
-     use-after-free -- see subscriber_queue.h. */
-  auto shared = std::make_shared<SubscriberQueue<boat::v1::Frame>>();
+     use-after-free -- see subscriber_queue.h. The queue is bounded; a client
+     that cannot keep up loses the oldest frames and the count is exposed as
+     grpc.frames.subscribe.dropped. */
+  auto shared = MakeSubscriberQueue<boat::v1::Frame>(
+      &ctx_.stream_drops, stream_metrics::kFramesSubscribe,
+      ctx_.stream_queue_capacity);
   const auto close_queue = [shared] {
     std::lock_guard<std::mutex> lock(shared->mutex);
     shared->closed = true;
   };
   FrameSubscription subscription(ctx_, *request, [shared](const boat::v1::Frame& proto) {
+    std::size_t dropped = 0;
     {
       std::lock_guard<std::mutex> lock(shared->mutex);
       if (shared->closed) return;
-      shared->queue.push_back(proto);
+      dropped = shared->Push(proto);
     }
+    shared->ReportDrop(dropped);
     shared->cv.notify_one();
   });
 
   while (!context->IsCancelled()) {
-    std::vector<boat::v1::Frame> pending;
+    std::deque<boat::v1::Frame> pending;
     {
       std::unique_lock<std::mutex> lock(shared->mutex);
       shared->cv.wait_for(lock, std::chrono::milliseconds(50),
@@ -352,7 +359,9 @@ grpc::Status FrameServiceImpl::StreamFrames(
     grpc::ServerContext* context,
     grpc::ServerReaderWriter<boat::v1::Frame, boat::v1::StreamFramesRequest>* stream) {
 
-  auto shared = std::make_shared<SubscriberQueue<boat::v1::Frame>>();
+  auto shared = MakeSubscriberQueue<boat::v1::Frame>(
+      &ctx_.stream_drops, stream_metrics::kFramesStream,
+      ctx_.stream_queue_capacity);
 
   /* One dedicated writer thread owns every Write on this stream; the handler
      thread below blocks in Read. Writes must not come from the bus-dispatch
@@ -362,7 +371,7 @@ grpc::Status FrameServiceImpl::StreamFrames(
      any return -- see subscriber_queue.h. */
   std::thread writer_thread([shared, stream, context] {
     while (!context->IsCancelled()) {
-      std::vector<boat::v1::Frame> pending;
+      std::deque<boat::v1::Frame> pending;
       {
         std::unique_lock<std::mutex> lock(shared->mutex);
         shared->cv.wait_for(lock, std::chrono::milliseconds(50), [&shared] {
@@ -390,11 +399,13 @@ grpc::Status FrameServiceImpl::StreamFrames(
   } writer_guard{shared, writer_thread};
 
   auto emit = [shared](const boat::v1::Frame& proto) {
+    std::size_t dropped = 0;
     {
       std::lock_guard<std::mutex> lock(shared->mutex);
       if (shared->closed) return;
-      shared->queue.push_back(proto);
+      dropped = shared->Push(proto);
     }
+    shared->ReportDrop(dropped);
     shared->cv.notify_one();
   };
 

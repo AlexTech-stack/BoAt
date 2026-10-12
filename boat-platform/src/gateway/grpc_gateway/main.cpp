@@ -285,6 +285,8 @@ int main() {
     }
   }
 
+  boat::gateway::ResolveStreamQueueCapacity(&effective_config);
+
   boat::gateway::RpcAuditLog audit_log;
   // Gateway bootstrap uses a fixed seed so startup behavior is deterministic across environments.
   boat::core::SimulationContext sim(kGatewayDeterminismSeed);
@@ -641,9 +643,11 @@ int main() {
       .frame_sink = frame_sink,
       .audit_log = audit_log,
       .effective_config = effective_config,
+      .stream_queue_capacity = effective_config.stream_queue_capacity,
   };
 
-  boat::gateway::BusServiceImpl      bus_impl(audit_log, signal_bus);
+  boat::gateway::BusServiceImpl      bus_impl(audit_log, signal_bus,
+                                              ctx.stream_drops, ctx.stream_queue_capacity);
   boat::gateway::SimulationServiceImpl simulation_impl(sim, can_registry, eth_registry);
   boat::gateway::SignalServiceImpl signal_impl(ctx);
   boat::gateway::ScenarioServiceImpl scenario_impl(ctx);
@@ -655,7 +659,8 @@ int main() {
   boat::gateway::FaultServiceImpl fault_impl(ctx);
   boat::gateway::PduServiceImpl pdu_impl(ctx);
   boat::gateway::CanTpServiceImpl can_tp_impl(ctx);
-  boat::gateway::DebugServiceImpl debug_impl(audit_log, effective_config);
+  boat::gateway::DebugServiceImpl debug_impl(audit_log, effective_config,
+                                             ctx.stream_drops, ctx.stream_queue_capacity);
   boat::gateway::FrameServiceImpl frame_impl(ctx);
 
   const int grpc_port = ResolveGrpcPort(&effective_config);

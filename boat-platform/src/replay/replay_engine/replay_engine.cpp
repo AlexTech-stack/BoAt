@@ -349,7 +349,7 @@ void ReplayController::DispatchRecord(const boat::v1::Frame& pf, std::uint64_t t
   // ── Push to internal queue (StreamReplay) ─────────────────────────────
   {
     std::lock_guard<std::mutex> lock(event_queue_mutex_);
-    event_queue_.push_back({tick, proto_bytes});
+    PushEventLocked(tick, proto_bytes);
   }
 
   // ── Store in event store ──────────────────────────────────────────────
@@ -491,7 +491,26 @@ void ReplayController::PumpDueRecords(std::uint64_t authority_tick) {
 
 void ReplayController::PushEvent(std::uint64_t tick, std::string payload) {
   std::lock_guard<std::mutex> lock(event_queue_mutex_);
+  PushEventLocked(tick, std::move(payload));
+}
+
+void ReplayController::PushEventLocked(std::uint64_t tick, std::string payload) {
+  if (event_queue_.size() >= kMaxStreamEvents) {
+    event_queue_.pop_front();
+    ++dropped_events_;
+    if (dropped_events_ == 1 || dropped_events_ % 1000 == 0) {
+      std::fprintf(stderr,
+                   "[Replay] StreamReplay backlog full: dropped %llu event(s) "
+                   "total -- client cannot keep up\n",
+                   static_cast<unsigned long long>(dropped_events_));
+    }
+  }
   event_queue_.push_back({tick, std::move(payload)});
+}
+
+std::uint64_t ReplayController::DroppedEventCount() const {
+  std::lock_guard<std::mutex> lock(event_queue_mutex_);
+  return dropped_events_;
 }
 
 std::vector<ReplayController::ReplayEventEntry> ReplayController::ConsumeEvents() {

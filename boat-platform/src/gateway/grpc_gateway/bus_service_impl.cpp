@@ -5,6 +5,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <thread>
@@ -139,23 +141,34 @@ grpc::Status BusServiceImpl::Subscribe(
     audit_log_.Push(std::move(ev));
   }
 
-  std::mutex queue_mutex;
-  std::vector<boat::v1::BusSignal> queue;
+  /* Heap-owned and captured by value: SignalBus::Publish snapshots its
+     callbacks and invokes them after releasing the lock, and Unsubscribe does
+     not wait for one in flight -- a stack-local queue here was the same
+     use-after-free the other streaming RPCs had (see subscriber_queue.h). */
+  auto shared = MakeSubscriberQueue<boat::v1::BusSignal>(
+      &stream_drops_, stream_metrics::kBusSubscribe, stream_queue_capacity_);
 
   const auto sub_id = signal_bus_.Subscribe(
       names,
-      [&queue_mutex, &queue](const boat::core::BusSignal& core_sig) {
+      [shared](const boat::core::BusSignal& core_sig) {
         boat::v1::BusSignal proto_sig;
         ProtoFromBusSignal(core_sig, proto_sig);
-        std::lock_guard<std::mutex> lock(queue_mutex);
-        queue.push_back(std::move(proto_sig));
+        std::size_t dropped = 0;
+        {
+          std::lock_guard<std::mutex> lock(shared->mutex);
+          dropped = shared->Push(std::move(proto_sig));
+        }
+        shared->ReportDrop(dropped);
+        shared->cv.notify_one();
       });
 
   while (!context->IsCancelled()) {
-    std::vector<boat::v1::BusSignal> pending;
+    std::deque<boat::v1::BusSignal> pending;
     {
-      std::lock_guard<std::mutex> lock(queue_mutex);
-      pending.swap(queue);
+      std::unique_lock<std::mutex> lock(shared->mutex);
+      shared->cv.wait_for(lock, std::chrono::milliseconds(50),
+                          [&shared] { return !shared->queue.empty(); });
+      pending.swap(shared->queue);
     }
     for (const auto& sig : pending) {
       if (!writer->Write(sig)) {
@@ -171,7 +184,6 @@ grpc::Status BusServiceImpl::Subscribe(
       ev.summary    = SignalSummary(sig);
       audit_log_.Push(std::move(ev));
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
   signal_bus_.Unsubscribe(sub_id);

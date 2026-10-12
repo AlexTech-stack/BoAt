@@ -4,9 +4,13 @@
 #include "debug_service_impl.h"
 
 #include <chrono>
+#include <deque>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
+
+#include "subscriber_queue.h"
 
 namespace boat::gateway {
 
@@ -17,11 +21,15 @@ grpc::Status DebugServiceImpl::StreamEvents(
 
   const std::string filter = request->method_filter();
 
-  std::mutex                    queue_mutex;
-  std::vector<boat::v1::RpcEvent> queue;
+  /* Heap-owned and captured by value: RpcAuditLog::Push snapshots its callbacks
+     and invokes them after releasing the lock, and Unsubscribe does not wait
+     for one in flight -- a stack-local queue (and a by-reference `filter`) here
+     was the same use-after-free the other streaming RPCs had. */
+  auto shared = MakeSubscriberQueue<boat::v1::RpcEvent>(
+      &stream_drops_, stream_metrics::kDebugEvents, stream_queue_capacity_);
 
   const auto sub_id = log_.Subscribe(
-      [&queue_mutex, &queue, &filter](const RpcEvent& ev) {
+      [shared, filter](const RpcEvent& ev) {
         if (!filter.empty() &&
             ev.method.find(filter) == std::string::npos) {
           return;
@@ -37,15 +45,22 @@ grpc::Status DebugServiceImpl::StreamEvents(
         proto.set_status_code(ev.status_code);
         proto.set_status_message(ev.status_message);
         proto.set_summary(ev.summary);
-        std::lock_guard<std::mutex> lock(queue_mutex);
-        queue.push_back(std::move(proto));
+        std::size_t dropped = 0;
+        {
+          std::lock_guard<std::mutex> lock(shared->mutex);
+          dropped = shared->Push(std::move(proto));
+        }
+        shared->ReportDrop(dropped);
+        shared->cv.notify_one();
       });
 
   while (!context->IsCancelled()) {
-    std::vector<boat::v1::RpcEvent> pending;
+    std::deque<boat::v1::RpcEvent> pending;
     {
-      std::lock_guard<std::mutex> lock(queue_mutex);
-      pending.swap(queue);
+      std::unique_lock<std::mutex> lock(shared->mutex);
+      shared->cv.wait_for(lock, std::chrono::milliseconds(50),
+                          [&shared] { return !shared->queue.empty(); });
+      pending.swap(shared->queue);
     }
     for (const auto& ev : pending) {
       if (!writer->Write(ev)) {
@@ -53,7 +68,6 @@ grpc::Status DebugServiceImpl::StreamEvents(
         return grpc::Status::OK;
       }
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
   log_.Unsubscribe(sub_id);
