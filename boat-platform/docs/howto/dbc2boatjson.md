@@ -134,7 +134,9 @@ SG_ ENGINE_RPM : 7|16@0+ (1,0) [0|65535] "rpm" XXX
 | `-` | `"Signed"` |
 | `+`, size > 1 | `"Unsigned"` |
 
-**Min/Max**: converted from raw to physical via `raw × factor + offset`.
+**Min/Max**: taken from the DBC range as-is — the `SG_` `[min|max]` values are already in
+physical units. (Factor and offset are *not* applied to them; doing so would scale the
+range a second time.)
 
 ### Multiplexed signals
 

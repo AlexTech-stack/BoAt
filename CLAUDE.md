@@ -135,7 +135,7 @@ Python SDK + CLI:
 
 ```bash
 pip install -e ./boat-platform/sdk/python[dev] && pip install -e ./boat-platform/cli
-pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests -v
+pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests -v   # 551 tests
 ```
 
 Toolchain: CMake **3.24+** (Ubuntu 22.04's 3.22 is too old), Ninja, g++/C++20, `libacl1-dev`, and a **Rust toolchain** (`cargo`) — build-time-only transitive dep of iceoryx2 (runtime SHM IPC for payloads >4KB).

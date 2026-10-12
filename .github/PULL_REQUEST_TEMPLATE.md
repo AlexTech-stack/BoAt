@@ -12,7 +12,7 @@
 ## Checklist
 
 - [ ] `cd boat-platform && ctest --preset debug` passes
-- [ ] `pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests` passes (from the repo root)
+- [ ] `pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests` passes (from the repo root)
 - [ ] New source files carry the two-line SPDX header
 - [ ] If I edited a `.proto`, I ran `boat-platform/sdk/python/boat/stubs/generate_stubs.sh` and committed the result
 - [ ] If I added a dependency, I added it to `THIRD_PARTY_NOTICES.md`

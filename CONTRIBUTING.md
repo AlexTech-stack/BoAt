@@ -41,8 +41,8 @@ BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug
 ```
 
 ```bash
-# from the repository root — ui/tests lives here, not under boat-platform/
-pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests -v   # 538 tests
+# from the repository root — ui/tests and tools/tests live here, not under boat-platform/
+pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests -v   # 551 tests
 ```
 
 Both suites should be fully green before you open a PR. CI runs them, plus ASan, TSan,
