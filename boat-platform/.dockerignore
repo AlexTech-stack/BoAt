@@ -1,0 +1,9 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+#
+# No Dockerfile here compiles anything from the context: Dockerfile.runtime only
+# COPYs dist/<arch>/boat_gateway, and Dockerfile.build / Dockerfile.dev take the
+# source as a bind mount. Without this file, every `docker build` shipped the
+# whole build/ tree (gigabytes of FetchContent checkouts) to the daemon.
+*
+!dist/

@@ -63,16 +63,26 @@ Jobs:
       - set BOAT_HIL_ENABLED=1
       - run tests/hil smoke suite
 
+  portable-build:   # reusable: .github/workflows/portable-build.yml
+    matrix: amd64 on ubuntu-24.04, arm64 on ubuntu-24.04-arm (native, no QEMU)
+    steps:
+      - build Dockerfile.build (AlmaLinux 8, glibc 2.28)
+      - cmake --preset release + build + ctest inside it
+      - packaging/check-portable-binary.sh (ELF arch, glibc/libstdc++ baseline, allowed libs)
+      - start the gateway on ten distro images
+      - upload dist/<arch>/boat_gateway (+ packages on release)
+
   docker-build:
     steps:
-      - docker buildx build --platform linux/amd64,linux/arm64
+      - download both portable-* artifacts into dist/
+      - docker buildx build --platform linux/amd64,linux/arm64 (COPY dist/<TARGETARCH>/...)
       - push to ghcr.io/<owner>/<repo>:<tag>, lowercased and derived from github.repository
 
   release:
     trigger: tag v*.*.*
     steps:
-      - build release artifacts
-      - cpack (DEB + RPM + TGZ)
+      - portable-build with packaging (amd64 + arm64)
+      - verify package names, metadata and binary architecture
       - create GitHub Release with artifacts
       - push Docker image with semver tag
 ```

@@ -15,10 +15,11 @@ You are the DevOps and CI/CD agent for the BoAt platform. You handle CI pipeline
 
 ## CI/CD workflows
 
-Location: `boat-platform/.github/workflows/`
+Location: `.github/workflows/` at the repository root (not under `boat-platform/`)
 
 - `ci.yml` — Build-and-test (2 OS), Python tests, ASan, Coverage (Codecov), TSan, Determinism, Docker build, HIL smoke
-- `release.yml` — Package (TGZ/DEB/RPM), multi-arch Docker push (amd64/arm64) to ghcr.io
+- `portable-build.yml` — reusable: native amd64 + arm64 builds in `Dockerfile.build` (AlmaLinux 8, glibc 2.28), binary checks, distro smoke start; the only source of shipped binaries
+- `release.yml` — Package (TGZ/DEB/RPM) for amd64 + arm64, multi-arch Docker push to ghcr.io, both from `portable-build.yml`
 
 ## Docker
 
@@ -26,7 +27,8 @@ Location: `boat-platform/`
 
 - `docker-compose.yml` — 3 services: boat-gateway, boat-agent, boat-store
 - `Dockerfile.dev` — Ubuntu 22.04 + build tools + CMake 3.28 + Rust
-- `Dockerfile.runtime` — Minimal runtime with boat_gateway binary
+- `Dockerfile.build` — AlmaLinux 8 + gcc-toolset-14 portable build environment (produces every shipped binary)
+- `Dockerfile.runtime` — Minimal runtime; COPYs `dist/<TARGETARCH>/boat_gateway`, compiles nothing
 
 ## Packaging
 

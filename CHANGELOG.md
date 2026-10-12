@@ -11,7 +11,42 @@ The plugin ABI is versioned separately from the project; see
 
 ## [Unreleased]
 
+### Added
+
+- **arm64 (aarch64) release packages.** Releases now ship `.tar.gz`, `.deb` and `.rpm` for
+  both amd64 and arm64 (Raspberry Pi OS 64-bit, Jetson, Graviton, NXP i.MX8/S32G-class
+  boards), not only an image.
+
 ### Fixed
+
+- **The `linux/arm64` container image contained an x86-64 `boat_gateway`** (#51) and failed
+  with `exec format error` on every arm64 host. CI built the binary once on an x86 runner and
+  `Dockerfile.runtime` COPYed that one file into both platforms. Binaries are now built
+  natively per architecture (arm64 on an arm64 runner) and the Dockerfile copies
+  `dist/<TARGETARCH>/boat_gateway`, so a missing platform fails the build instead of
+  shipping. **Every previously published arm64 image is affected**, including `v0.1.1`,
+  `latest` and all `ci-*` tags — pull the next release on arm64.
+- **Release binaries did not run on older or non-Ubuntu distributions.** Built on an Ubuntu
+  22.04 runner, they required glibc 2.35, so they failed to load on RHEL/Rocky/Alma 8 and 9,
+  Debian 11 and Ubuntu 20.04. They are now built in an AlmaLinux 8 container (glibc 2.28,
+  `Dockerfile.build`) and run on Debian 10+, Ubuntu 20.04+, RHEL-family 8+, Fedora and
+  openSUSE; CI starts the gateway on ten such images before publishing.
+- **The RPM could not be installed, and every package carried ~1080 stray files.** protobuf's
+  install rules (and through them Abseil's and utf8_range's) ran into BoAt's install tree, so
+  all three packages shipped protobuf/absl/upb headers, static libraries, CMake configs,
+  `.pc` files and `/usr/bin/protoc` (which collides with a distro `protobuf-compiler`) — and
+  rpmbuild turned the `.pc` files into ~200 `Requires: pkgconfig(absl_*)` that no repository
+  provides. Those installs are now disabled; a package holds the gateway, the five plugins and
+  `boat/plugin.h`, and the release job fails on anything else.
+- **Plugin install path is fixed at `/usr/lib/boat/plugins`** regardless of the build host's
+  libdir, so it does not move to `lib64` now that packages are built on AlmaLinux.
+- **The `.deb` declared unversioned dependencies** (`libc6`, `libstdc++6`), so apt would
+  install it where the binary could not load. It now requires `libc6 (>= 2.28)`,
+  `libstdc++6 (>= 8)` and `libacl1`.
+- **The build failed on glibc < 2.34** with `undefined reference to pthread_create` /
+  `dlopen`: targets using threads or `dlopen` relied on those living in libc, which is only
+  true since glibc 2.34. `boat_core`, every plugin and the bundled sqlite3 now link
+  `Threads::Threads` / `${CMAKE_DL_LIBS}` explicitly.
 
 - **Re-configuring an existing build dir failed after a dependency bump** with
   `Failed to unstash changes in .../_deps/grpc-src`. `CMakeLists.txt` patches files inside

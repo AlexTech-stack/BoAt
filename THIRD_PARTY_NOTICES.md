@@ -88,6 +88,14 @@ from `boat-platform/Dockerfile.runtime` (base: `ubuntu:22.04`) ship a
 redistribution must therefore carry those components' licenses and notices in
 addition to this repository's [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
+Those binaries are built in `boat-platform/Dockerfile.build` with AlmaLinux 8's
+`gcc-toolset-14`, which links the parts of libstdc++ newer than the system's
+GCC 8 (`libstdc++_nonshared.a`) and, where referenced, `libatomic.a` statically
+into the binary. Both are GCC runtime libraries under **GPL-3.0 with the GCC
+Runtime Library Exception**, which permits this without affecting the
+licensing of the resulting binary. glibc, the shared libstdc++ and `libacl`
+are used from the target system, not shipped.
+
 ## Not third-party
 
 `tools/wireshark/*.lua` are BoAt's own dissector scripts, interpreted by

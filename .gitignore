@@ -1,5 +1,6 @@
 # Build output
 boat-platform/build/
+boat-platform/dist/
 
 # Python
 # setuptools leaves these behind on any `pip install` from the source tree

@@ -1,0 +1,65 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+#
+# Portable build environment for the binaries we ship (release packages and the
+# runtime container image). AlmaLinux 8 is the oldest baseline we target, glibc
+# 2.28: a binary built here runs on RHEL/Rocky/Alma 8+, Debian 10+, Ubuntu
+# 20.04+, SLES 15, Fedora and Arch -- one build per architecture instead of one
+# per distribution. A binary built on an Ubuntu 22.04 runner needs glibc 2.35
+# and does not start on RHEL 9 (2.34).
+#
+# gcc-toolset-14 gives C++20 while keeping the system libstdc++ (GCC 8) as the
+# runtime dependency: symbols newer than GCC 8 are linked statically from the
+# toolset's libstdc++_nonshared.a. packaging/check-portable-binary.sh enforces
+# both baselines on the output.
+#
+# Builds natively for whatever platform it runs on -- CI uses an arm64 runner
+# for aarch64 rather than QEMU, which would take hours for gRPC.
+#
+#   docker build -f Dockerfile.build -t boat-build .
+#   docker run --rm -v "$PWD":/src -w /src boat-build \
+#     sh -c 'cmake --preset release && cmake --build --preset release'
+
+FROM almalinux:8
+
+# clang-devel: iceoryx2's Rust FFI runs bindgen, which needs libclang.
+# rpm-build: CPack's RPM generator. The DEB generator needs no dpkg.
+RUN dnf -y install \
+      gcc-toolset-14-gcc-c++ gcc-toolset-14-libstdc++-devel gcc-toolset-14-binutils gcc-toolset-14-libatomic-devel \
+      git python3.11 python3.11-pip clang-devel libacl-devel perl file which tar xz \
+      rpm-build \
+    && dnf clean all
+
+# EL8 ships CMake 3.26 in AppStream today, but pip pins what we test against
+# independently of the distro, and brings Ninja (not in EL8's default repos).
+RUN python3.11 -m pip install --no-cache-dir 'cmake>=3.24,<4' ninja
+
+# Rust is a build-time-only dependency of iceoryx2.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain stable
+
+# Equivalent of `source /opt/rh/gcc-toolset-14/enable`, which a non-interactive
+# `docker run` would never source.
+ENV PATH=/opt/rh/gcc-toolset-14/root/usr/bin:/root/.cargo/bin:/usr/local/bin:${PATH} \
+    LD_LIBRARY_PATH=/opt/rh/gcc-toolset-14/root/usr/lib64 \
+    CC=gcc CXX=g++ \
+    LDFLAGS=-L/opt/boat-static-libs
+
+# iceoryx links `-latomic`, which with this toolset resolves to the shared system
+# libatomic.so.1 -- absent from minimal Debian/Ubuntu images -- although GCC on
+# x86_64/aarch64 inlines every atomic we use and never calls into it. A search
+# directory holding only the static archive makes `-latomic` link from that
+# instead: nothing is pulled in unless referenced, and no runtime dependency
+# remains. (`-Wl,--as-needed` also drops it, but breaks other links: -ldl/-lrt
+# precede the static archives that need them, and on glibc 2.28 dlopen/shm_open
+# live in those libraries.) CMake reads LDFLAGS once, at first configure.
+RUN mkdir -p /opt/boat-static-libs \
+    && ln -s "$(gcc -print-file-name=libatomic.a)" /opt/boat-static-libs/libatomic.a \
+    && test -f /opt/boat-static-libs/libatomic.a
+
+# Git refuses to operate on a bind-mounted checkout owned by another uid
+# ("dubious ownership"), which breaks FetchContent's and the version script's
+# git calls.
+RUN git config --global --add safe.directory '*'
+
+WORKDIR /src

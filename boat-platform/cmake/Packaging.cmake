@@ -39,7 +39,19 @@ set(CPACK_GENERATOR "TGZ;DEB;RPM")
 set(CPACK_STRIP_FILES ON)
 
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Alexander Günther <alexander.guenther@tuta.io>")
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libstdc++6, libc6")
+# The floors are the portable-build baseline (Dockerfile.build: AlmaLinux 8,
+# glibc 2.28, GCC 8's libstdc++), which packaging/check-portable-binary.sh
+# enforces on the binary. An unversioned dependency let apt install the package
+# on a system that then failed at load time. The RPM needs no equivalent:
+# rpmbuild derives `Requires: libc.so.6(GLIBC_2.28)` etc. from the ELF itself.
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.28), libstdc++6 (>= 8), libacl1")
+# CPack takes the Debian architecture from `dpkg --print-architecture` and falls
+# back to i386 when dpkg is absent -- which it is in the AlmaLinux build image.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+  set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "arm64")
+endif()
 set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_RPM_PACKAGE_LICENSE "Apache-2.0")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Engineering")

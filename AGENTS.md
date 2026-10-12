@@ -173,7 +173,9 @@ Three things that made `ctest` lie, all now fixed — don't reintroduce them:
 `boat-platform/.github/workflows/`, which GitHub Actions never reads — so it had never run
 once, which is why the above could rot undetected. The C++ project root is `boat-platform/`,
 so build jobs set `working-directory: boat-platform` and Docker jobs `context: boat-platform`.
-`release.yml` fires on a `v*.*.*` tag and the repo has no tags yet, so it is still unproven.
+`release.yml` fires on a `v*.*.*` tag. It ran for v0.1.0 and v0.1.1, but was restructured
+after them (portable per-architecture builds, issue #51), so its current shape is unproven until
+the next tag.
 
 Test binary naming: `boat_unit_*` (unit), `boat_integration_*`, `boat_hil_*`, `boat_determinism_*`.
 
@@ -818,7 +820,25 @@ computing `clock_.tick() + 1` concurrently could claim the same tick, and
 at `BOAT_NODE_TICK_MS`/`_US` rather than a hard-coded 1 ms.
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
-- Release packaging: `cpack -G "TGZ;DEB;RPM"`.
+- Release packaging: `cpack -G "TGZ;DEB;RPM"`. **Everything shipped -- the TGZ/DEB/RPM and
+  the container image -- is built by `.github/workflows/portable-build.yml`**, natively per
+  architecture (amd64 on `ubuntu-24.04`, arm64 on `ubuntu-24.04-arm`) inside
+  `boat-platform/Dockerfile.build` (AlmaLinux 8, glibc 2.28, gcc-toolset-14), and called by both
+  `ci.yml` and `release.yml`. The result runs on any distribution with glibc >= 2.28 and GCC 8's
+  libstdc++; `packaging/check-portable-binary.sh` enforces that baseline, the ELF architecture
+  and the allowed `NEEDED` libraries, and the job then starts the gateway on ten distro images.
+  Don't build release artifacts on an Ubuntu runner directly: that binary needs the runner's
+  glibc (2.35 on 22.04) and fails to load on RHEL 9 (2.34).
+- `Dockerfile.runtime` compiles nothing; it COPYs `dist/<TARGETARCH>/boat_gateway`. It used to
+  COPY one `build/release/...` binary, so buildx put the same x86-64 file into the linux/arm64
+  image too (issue #51). `boat-platform/.dockerignore` keeps the context to `dist/`.
+- Build portability on glibc < 2.34: `pthread_*`, `dlopen` and `shm_open` live in separate
+  `libpthread`/`libdl`/`librt` there, so a target that uses them must link `Threads::Threads` /
+  `${CMAKE_DL_LIBS}` explicitly (`boat_core` and `add_boat_plugin()` export Threads). On newer
+  glibc a missing link goes unnoticed; the portable build catches it.
+- Fetched deps must not install into our tree: `protobuf_INSTALL`, `ABSL_ENABLE_INSTALL` and
+  `utf8_range_ENABLE_INSTALL` are forced OFF. Without that CPack shipped ~1080 protobuf/absl/upb
+  files, and their `.pc` files made the RPM require `pkgconfig(absl_*)`, i.e. uninstallable.
 - Docker images are tagged `ghcr.io/<owner>/<repo>` lowercased, derived from `github.repository` in CI, i.e. `ghcr.io/alextech-stack/boat:*` for this repo.
   GHCR namespaces follow the GitHub owner and the registry rejects uppercase, so the old
   hardcoded `ghcr.io/boat-platform/boat-platform` would have been denied on the first tag.
