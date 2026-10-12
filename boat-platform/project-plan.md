@@ -105,7 +105,7 @@ OEM engineers, Tier-1 suppliers, open-source community contributors, CI/CD autom
 ## Governance
 
 - Work management via GitHub Issues and Milestones
-- RFC process required for breaking changes
+- RFC process required for breaking changes (see [CONTRIBUTING.md](../CONTRIBUTING.md#breaking-changes-and-rfcs))
 - Semantic versioning for all release artifacts and APIs
 
 ## Definition of Done

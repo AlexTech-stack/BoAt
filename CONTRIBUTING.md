@@ -37,14 +37,14 @@ sudo ip link add vcan0 type vcan && sudo ip link set vcan0 up
 ## Running the tests
 
 ```bash
-cd boat-platform && ctest --preset debug            # 164 tests
+cd boat-platform && ctest --preset debug            # full C++ suite
 # 7 of those are HIL tests and report Skipped unless you opt in:
 BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug
 ```
 
 ```bash
 # from the repository root — ui/tests and tools/tests live here, not under boat-platform/
-pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests -v   # 551 tests
+pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests -v   # full Python suite
 ```
 
 Both suites should be fully green before you open a PR. CI runs them, plus ASan, TSan,
@@ -140,6 +140,32 @@ BoAt is **pre-1.0**. Expect the following:
 - **The gRPC surface** (`proto/boat/v1/`) grows additively where possible. Removing a service
   or an RPC is a breaking change and gets a `!`. Deletions are real: `CanService` and
   `EthernetService` were removed outright rather than left as deprecated wrappers.
+
+## Breaking changes and RFCs
+
+A **breaking change** is anything that makes existing code stop compiling or working against a
+new release without changing it:
+
+- removing or renaming a gRPC service, RPC or field in `proto/boat/v1/`;
+- changing the plugin ABI vtable or the meaning of an existing entry (`BOAT_PLUGIN_ABI_VERSION`);
+- removing or renaming a `boat-py` class or method, or a `boat-cli` command or flag;
+- changing documented semantics in a way that makes a previously correct caller wrong.
+
+Additive changes — a new RPC, a new optional field, a new CLI command — are not breaking and
+do not need an RFC.
+
+To propose one, open an issue with the **RFC** template
+([`.github/ISSUE_TEMPLATE/rfc.yml`](.github/ISSUE_TEMPLATE/rfc.yml)). The RFC is where the
+*decision* is recorded; the implementing PR links it, and the change also appears in
+[CHANGELOG.md](CHANGELOG.md) under `Changed`/`Removed` with a `!` commit subject.
+
+The maintainer accepts or declines the RFC in the issue. While the project is pre-1.0 there is
+no fixed public comment period and no deprecation shim is promised: deletions are real, as
+`CanService`/`EthernetService` were. What is promised is the record — an accepted RFC stays
+open until its PR lands, and a breaking change does not ship in the release that first
+accepted its RFC, but waits at least until the next minor version. A plugin ABI bump always
+means every out-of-tree plugin must be recompiled, so it needs a specific reason beyond
+"cleanup".
 
 ## Questions
 
