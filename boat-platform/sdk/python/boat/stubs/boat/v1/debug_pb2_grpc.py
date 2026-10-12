@@ -51,6 +51,8 @@ class DebugServiceServicer:
 
     def StreamEvents(self, request, context):
         """Subscribe to a live stream of all RPC events observed by the gateway.
+        Bounded backlog per subscriber: a slow client loses the oldest events,
+        counted as `grpc.debug.stream_events.dropped` by MetricsService.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

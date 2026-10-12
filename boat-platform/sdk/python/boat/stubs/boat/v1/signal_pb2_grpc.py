@@ -61,7 +61,10 @@ class SignalServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def SubscribeSignals(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Stream signal values. Bounded backlog per subscriber: a slow client loses
+        the oldest values, counted as `grpc.signals.subscribe.dropped` by
+        MetricsService.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')

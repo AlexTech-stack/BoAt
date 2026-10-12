@@ -780,6 +780,40 @@ boat config show -o effective-config.json                 # DebugService.GetEffe
   The one previously *fatal* case is fixed: a non-numeric port in
   `BOAT_ETH_INTERFACES` used to throw `std::invalid_argument` out of `main()` from an
   unguarded `std::stoul`; it is now reported and the entry skipped.
+- `stream_queue_capacity` (`BOAT_STREAM_QUEUE_CAPACITY`, default 4096, max 1,000,000)
+  and its `resolved_from` — see the next section for what it bounds.
+
+### gRPC streaming backpressure
+
+Every streaming RPC (frames, PDUs, bus signals, signal router values, CanTp RX/errors,
+metrics, debug audit, replay) hands each subscriber a **bounded** queue and drops the
+**oldest** events once it is full (issue #21). Before this, a fast producer plus a slow
+client grew the process until it was OOM-killed, and `ReplayController` queued every
+replayed frame forever even with no subscriber. Blocking the producer instead was
+rejected on purpose: the callbacks run on bus-dispatch threads, so backpressure would
+stall hardware RX for every other subscriber. A consumer that needs lossless capture
+should use the gateway's own trace recording, not a client stream.
+
+- `subscriber_queue.h` (heap-owned, bounded, drop-oldest) is the one queue
+  implementation all handlers use. `StreamDropRegistry` counts per-stream overflow;
+  `BOAT_STREAM_QUEUE_CAPACITY` sets the cap (resolution into `EffectiveConfig`).
+- The metrics stream is the exception: it **conflates by metric name**
+  (latest-value-wins) so a slow consumer sees the current value of every series
+  rather than a stale tail.
+- Drops surface as cumulative `grpc.<stream>.dropped` points (`stream_metrics::` in
+  `stream_drop_registry.h`) through `GetMetrics` and `StreamMetrics` — zeros included,
+  so "no drops" and "does not report" are distinguishable. Replay's count comes from
+  `ReplayController::DroppedEventCount()` rather than the registry.
+- The first drop and every 1000th log one `[Gateway] stream '...': dropped N event(s)`
+  line on stderr, so a stalled client leaves a diagnostic, not just a metric.
+- `bus_service_impl`, `signal_service_impl` and `debug_service_impl` were still using
+  the stack-local queue captured by reference that #49's UAF fix converted elsewhere
+  (`SignalBus::Publish`, `SignalRouter` dispatch and `RpcAuditLog::Push` all invoke
+  callbacks after releasing their own lock, and `Unsubscribe` does not wait). They now
+  use the same heap-owned queue; the teardown integration test races all five streams.
+- Tests: `boat_unit_subscriber_queue` (birth/drop/conflate/unbounded) and the
+  `boat_integration_gateway` case that overflows a real TCP subscriber (in-process
+  channels don't apply transport flow control) and asserts the metric.
 
 ### Tick timer backends
 

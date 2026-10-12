@@ -60,6 +60,10 @@ message ReplayControlResponse {
 service ReplayService {
   rpc StartReplay(StartReplayRequest) returns (ReplayControlResponse);
   rpc SeekReplay(SeekReplayRequest) returns (ReplayControlResponse);
+  // Stream the frames a running replay delivers. The backlog is bounded
+  // (ReplayController::kMaxStreamEvents): a client that cannot keep up loses
+  // the oldest events, counted as `grpc.replay.stream.dropped` via
+  // MetricsService.
   rpc StreamReplay(StreamReplayRequest) returns (stream ReplayEvent);
   rpc PauseReplay(PauseReplayRequest) returns (ReplayControlResponse);
   rpc ResumeReplay(ResumeReplayRequest) returns (ReplayControlResponse);

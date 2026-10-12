@@ -66,6 +66,8 @@ message GetEffectiveConfigResponse {
 
 service DebugService {
   // Subscribe to a live stream of all RPC events observed by the gateway.
+  // Bounded backlog per subscriber: a slow client loses the oldest events,
+  // counted as `grpc.debug.stream_events.dropped` by MetricsService.
   rpc StreamEvents(StreamRpcEventsRequest) returns (stream RpcEvent);
 
   // The configuration this gateway resolved from its environment at startup.
