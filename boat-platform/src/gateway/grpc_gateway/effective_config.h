@@ -58,6 +58,14 @@ struct EffectiveConfig {
   std::vector<std::string> eth_interfaces;
   std::vector<bool>        eth_interfaces_opened;
 
+  /* SO_RCVBUF bytes requested for every CAN socket: BOAT_CAN_RCVBUF, or the
+     driver default when unset. 0 means "leave the kernel default". Recorded
+     because a bench whose kernel capped the request at net.core.rmem_max is
+     exactly the kind of thing this artifact exists to make visible. */
+  int can_rcvbuf_bytes = 0;
+  /* Which knob decided can_rcvbuf_bytes: "BOAT_CAN_RCVBUF" or "default". */
+  std::string can_rcvbuf_resolved_from = "default";
+
   std::vector<PluginEntry> node_plugins;
 
   std::uint64_t tick_ns = 1000000;

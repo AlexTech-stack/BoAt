@@ -14,6 +14,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include "boat/v1/can_tp.grpc.pb.h"
+#include "boat/v1/frame.grpc.pb.h"
 #include "boat/v1/node_plugin.grpc.pb.h"
 #include "boat/v1/pdu.grpc.pb.h"
 #include "boat/v1/plugin.grpc.pb.h"
@@ -23,6 +24,7 @@
 #include "event_store/event_store.h"
 #include "gateway/grpc_gateway/can_tp_service_impl.h"
 #include "gateway/grpc_gateway/frame_sink.h"
+#include "gateway/grpc_gateway/frame_service_impl.h"
 #include "gateway/grpc_gateway/gateway_context.h"
 #include "gateway/grpc_gateway/node_plugin_service_impl.h"
 #include "gateway/grpc_gateway/pdu_service_impl.h"
@@ -710,3 +712,146 @@ TEST_CASE("CanTpService RemoveSession and Subscribe round trip",
   std::filesystem::remove(trace_db_path);
 }
 #endif
+
+namespace {
+
+/* No wire: ReadFrame parks like a quiet bus so the bridge's RX thread does not
+   spin, and every SendFrame still goes through the registry's dispatch path. */
+class LoopbackCanDriver : public boat::hil::IHalDriver {
+ public:
+  bool Open() override { return true; }
+  void Close() override {}
+  bool ReadFrame(boat::hil::CanFrame&) override {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    return false;
+  }
+  bool WriteFrame(const boat::hil::CanFrame&) override { return true; }
+  boat::hil::CanInterfaceInfo GetInfo() const override {
+    boat::hil::CanInterfaceInfo info;
+    info.driver_name = "loopback";
+    info.state = "up";
+    return info;
+  }
+};
+
+}  // namespace
+
+TEST_CASE("Subscription teardown races cleanly with dispatch",
+          "[integration][gateway][frame][pdu]") {
+  /* Regression test for the N18-class use-after-free on every streaming RPC:
+     producers snapshot their subscriber callbacks under a lock and invoke them
+     after releasing it, and Unsubscribe does not wait for a callback already
+     in flight. The handlers used to capture stack locals (a mutex, a queue,
+     even the gRPC writer) by reference, so a callback racing the handler's
+     return wrote into a dead stack frame. The fix heap-owns the queue
+     (subscriber_queue.h); under ASan/TSan the old code reports here.
+
+     Each round opens a stream, dispatches frames/PDUs while it is live, then
+     cancels and joins -- the exact window where a straggling callback can
+     outlive the handler. */
+  std::filesystem::remove("boat_config.db");
+  const auto temp_dir = std::filesystem::temp_directory_path();
+  const auto event_db_path = temp_dir / "boat_integration_sub_teardown_events.db";
+  const auto trace_db_path = temp_dir / "boat_integration_sub_teardown_traces.db";
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+
+  boat::core::SimulationContext sim(779, 2);
+  boat::core::SignalBus signal_bus;
+  boat::core::ScenarioLoader scenario_loader;
+  boat::store::SqliteEventStore event_store(event_db_path.string());
+  boat::store::FlatFileTraceStore trace_store(trace_db_path.string());
+  boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
+  boat::hil::CanBusRegistry can_registry;
+  REQUIRE(can_registry.Add("vcan0", std::make_shared<LoopbackCanDriver>(), sim.event_bus()));
+  boat::hil::EthernetBusRegistry eth_registry;
+  boat::core::PluginManager plugin_manager;
+  boat::hil::PduRouter pdu_router(can_registry, eth_registry);
+  plugin_manager.RegisterService("pdu_router", &pdu_router);
+  boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
+  boat::gateway::RpcAuditLog audit_log;
+
+  boat::gateway::GatewayContext ctx{
+      .sim = sim,
+      .signal_bus = signal_bus,
+      .scenario_loader = scenario_loader,
+      .event_store = event_store,
+      .trace_store = trace_store,
+      .replay_controller = replay_controller,
+      .can_bus_registry = can_registry,
+      .ethernet_bus_registry = eth_registry,
+      .plugin_manager = plugin_manager,
+      .frame_sink = frame_sink,
+      .audit_log = audit_log,
+      .effective_config = kTestEffectiveConfig,
+  };
+
+  boat::gateway::FrameServiceImpl frame_service(ctx);
+  boat::gateway::PduServiceImpl pdu_service(ctx);
+
+  grpc::ServerBuilder builder;
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
+  builder.RegisterService(&frame_service);
+  builder.RegisterService(&pdu_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  auto channel = server->InProcessChannel({});
+
+  auto frame_stub = boat::v1::FrameService::NewStub(channel);
+  auto pdu_stub = boat::v1::PduService::NewStub(channel);
+
+  boat::v1::ConfigureRouteRequest route_req;
+  route_req.mutable_route()->set_pdu_id(0x100);
+  route_req.mutable_route()->set_transport(boat::v1::PDU_TRANSPORT_CAN);
+  route_req.mutable_route()->set_iface("vcan0");
+  boat::v1::ConfigureRouteResponse route_resp;
+  grpc::ClientContext route_ctx;
+  REQUIRE(pdu_stub->ConfigureRoute(&route_ctx, route_req, &route_resp).ok());
+
+  boat::hil::CanFrame can_frame {};
+  can_frame.can_id = 0x100;
+  can_frame.dlc = 2;
+  can_frame.data[0] = 0xAB;
+  can_frame.data[1] = 0xCD;
+
+  for (int round = 0; round < 20; ++round) {
+    grpc::ClientContext sub_ctx;
+    boat::v1::SubscribeFramesRequest request;
+    request.add_bus_types(boat::v1::Frame::CAN);
+    auto reader = frame_stub->SubscribeFrames(&sub_ctx, request);
+    std::thread reader_thread([&reader] {
+      boat::v1::Frame frame;
+      while (reader->Read(&frame)) {
+      }
+    });
+    for (int i = 0; i < 100; ++i) {
+      can_registry.SendFrame("vcan0", can_frame);
+    }
+    sub_ctx.TryCancel();
+    reader_thread.join();
+    (void)reader->Finish();
+  }
+
+  for (int round = 0; round < 20; ++round) {
+    grpc::ClientContext sub_ctx;
+    boat::v1::SubscribePdusRequest request;
+    request.add_pdu_ids(0x100);
+    auto reader = pdu_stub->SubscribePdus(&sub_ctx, request);
+    std::thread reader_thread([&reader] {
+      boat::v1::PduFrame frame;
+      while (reader->Read(&frame)) {
+      }
+    });
+    for (int i = 0; i < 100; ++i) {
+      pdu_router.OnCanFrame(can_frame, "vcan0");
+    }
+    sub_ctx.TryCancel();
+    reader_thread.join();
+    (void)reader->Finish();
+  }
+
+  server->Shutdown();
+  std::filesystem::remove("boat_config.db");
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+}

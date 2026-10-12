@@ -30,13 +30,16 @@ imply one.
 
 The bulk of the code lives under `boat-platform/`. `admin_gui/` (PySide6 desktop client) and `ui/` + `tools/` (FastAPI web services) sit at the repo root. `boat-platform/docs/architecture/system-architecture.md` covers the architecture in depth.
 
-> **Status: Work In Progress.** APIs, config, and behavior change without notice.
+> **Status: pre-1.0.** The canonical statement lives in [README.md](README.md); in short: the
+> gRPC surface and the C plugin ABI may still change between minor versions — the ABI is
+> versioned (currently v9) and a mismatched plugin is rejected at load with a clear error.
 
 ## License
 
 The project is **Apache-2.0** (`LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md` at the repo root).
 Community and release files sit beside them: `CONTRIBUTING.md` (build, test, and the house rules
--- including the CLAUDE.md/AGENTS.md dual-file rule and the determinism constraints),
+-- including the CLAUDE.md/AGENTS.md dual-file rule, the determinism constraints, and the RFC
+process for breaking changes),
 `SECURITY.md` (reporting, plus an honest account of the permissive defaults: unauthenticated
 gRPC, arbitrary `.so` loading, replay writing to physical buses), `CODE_OF_CONDUCT.md`,
 `CHANGELOG.md` (Keep a Changelog; breaking changes marked), and `.github/ISSUE_TEMPLATE/` +
@@ -78,7 +81,7 @@ CLI commands, it is pre-v8 and no longer correct.
 
 5. **PduRouter is a plugin.** It lives in `src/plugins/pdu_router/` (`pdu_router.so`) and is loaded like any other plugin — it is *not* auto-loaded into the gateway core. PDU routing, transmission engine, groups, and deadline monitoring live there. gRPC PDU calls are **delegated** to the plugin. The five built-in plugins are `pdu_router`, `can_tp`, `someip`, `tcp`, `probe`.
 
-6. **`FrameService` gRPC + `boat frame` CLI.** A unified `FrameService` provides send/subscribe for **all** bus types. `boat frame send` / `boat frame subscribe` / `boat frame list-ifaces` are the CLI verbs. The old `boat can` / `boat eth` Typer commands are **removed outright** — not deprecated wrappers, gone (there is no `can.py`/`eth.py` in `boat_cli/`). There is no CLI hardware-detection command either; use `ip -d link show type can`. The per-bus `CanService` / `EthernetService` are **deleted** too — their send, subscribe and interface-listing RPCs all live on `FrameService` now (`FrameService.ListInterfaces` replaced `CanService.ListBuses` + `EthernetService.ListInterfaces`), and the deprecated `CanNode` / `EthernetNode` SDK classes went with them. `proto/boat/v1/` holds **16 `.proto` files declaring 14 gRPC services**.
+6. **`FrameService` gRPC + `boat frame` CLI.** A unified `FrameService` provides send/subscribe for **all** bus types. `boat frame send` / `boat frame subscribe` / `boat frame list-ifaces` are the CLI verbs. The old `boat can` / `boat eth` Typer commands are **removed outright** — not deprecated wrappers, gone (there is no `can.py`/`eth.py` in `boat_cli/`). There is no CLI hardware-detection command either; use `ip -d link show type can`. The per-bus `CanService` / `EthernetService` are **deleted** too — their send, subscribe and interface-listing RPCs all live on `FrameService` now (`FrameService.ListInterfaces` replaced `CanService.ListBuses` + `EthernetService.ListInterfaces`), and the deprecated `CanNode` / `EthernetNode` SDK classes went with them. `proto/boat/v1/` holds the protobuf files declaring the gRPC services; the counts and the per-service table are generated into `boat-platform/docs/api/protobuf-definitions.md` (`tools/gen_proto_docs.py`, checked by CI).
 
 7. **Plugin config is data-driven.** Plugins take JSON config appended to their path as a query string: `plugin.so?{"iface":"vcan0"}`. `BOAT_NODE_PLUGINS` is split brace-aware, so commas inside a `{...}` config don't split the entry. TCP's old dedicated C API was removed — TCP is now a config-driven, gateway-resident v9 plugin (`tcp.so?{"mode":"server","listen_port":8080,...}`).
 
@@ -102,8 +105,8 @@ cmake --preset debug && cmake --build --preset debug
 build/debug/src/gateway/grpc_gateway/boat_gateway
 
 # C++ tests (Catch2 via ctest) — a test preset exists per configure preset
-ctest --preset debug                       # 166 tests; 7 HIL ones Skipped unless BOAT_HIL_ENABLED=1
-BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 166 run
+ctest --preset debug                       # 7 HIL ones Skipped unless BOAT_HIL_ENABLED=1
+BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 164 run
 ctest --test-dir build/debug -R TestName --timeout 30 --output-on-failure   # single test
 ctest --test-dir build/debug -N                                             # list tests
 ```
@@ -145,14 +148,14 @@ Python SDK + CLI:
 
 ```bash
 pip install -e ./boat-platform/sdk/python[dev] && pip install -e ./boat-platform/cli
-pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests -v   # 551 tests
+pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests -v   # full suite
 ```
 
 Toolchain: CMake **3.24+** (Ubuntu 22.04's 3.22 is too old), Ninja, g++/C++20, `libacl1-dev`, and a **Rust toolchain** (`cargo`) — build-time-only transitive dep of iceoryx2 (runtime SHM IPC for payloads >4KB).
 
 ## Running the gateway
 
-Interfaces are inspected at startup: `vcan*` → `VirtualCanDriver`, others → `PhysicalCanDriver` (sysfs metadata). Plugins are passed via `BOAT_NODE_PLUGINS` (comma-separated `.so` paths, each optionally with `?{json}` config).
+Interfaces are inspected at startup: `vcan*` → `VirtualCanDriver`, others → `PhysicalCanDriver` (sysfs metadata). Plugins are passed via `BOAT_NODE_PLUGINS` (comma-separated `.so` paths, each optionally with `?{json}` config). CAN sockets request `SO_RCVBUF = $BOAT_CAN_RCVBUF` (default 4 MiB, `0` = kernel default; capped by `net.core.rmem_max`), receive error frames (`CAN_RAW_ERR_FILTER`) only to classify and count them, and publish bus health as `can.<iface>.*` metric points via `MetricsService` (drops, error frames, bus-off events, TEC/REC, state).
 
 ```bash
 sudo modprobe vcan
@@ -229,6 +232,11 @@ Dispatch quirk: `python3 -m boat` routes `can|pdu|eth|db` to `boat/cmd.py` (one-
 - **`admin_gui/`** — PySide6 desktop client (at the **repo root**, not under `boat-platform/`) for one or more launcher agents; pages: Gateway, Nodes, Test Runs, Interfaces, Settings. `python3 admin_gui/main.py`; headless verification via `QT_QPA_PLATFORM=offscreen`.
 
 Each web service resolves the SDK via `sys.path.insert(0, ...)` relative to its own script. **Port collisions to know about:** `control_panel` and `system_dashboard` both default to 8081, and `launcher_agent` and `eth_trace_analyzer` both default to 8090 — each has a `BOAT_*_PORT` env override.
+
+`ui/launcher_agent.py` is the one service that is remote process execution rather than a
+dashboard: it spawns gateway binaries and node scripts from caller-supplied paths. It binds
+`127.0.0.1` by default; `BOAT_AGENT_BIND=0.0.0.0` is the explicit opt-in for federated
+`admin_gui` use (`SECURITY.md`, issue #39).
 
 ## Other conventions & gotchas
 

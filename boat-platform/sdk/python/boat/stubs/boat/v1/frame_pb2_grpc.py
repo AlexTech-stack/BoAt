@@ -94,7 +94,11 @@ class FrameServiceServicer:
 
         Ingress frames go through the same FrameSink as every other producer, so
         they are tagged SELF_SENT and observed by plugins, PDU routing and trace
-        recording exactly like locally-generated traffic. An ingress frame naming
+        recording exactly like locally-generated traffic. SELF_SENT marks the
+        gateway as the transmitter (see CanMetadata.flags); it does **not**
+        identify which client originated a frame, so a bridge must not treat it
+        as "my frame" -- frames it injected and frames another client injected
+        come back identically tagged. An ingress frame naming
         an interface the gateway does not have fails the whole call rather than
         being dropped: the interface is fixed for the life of a bridge session, so
         that is a configuration error and silence would hide it. 

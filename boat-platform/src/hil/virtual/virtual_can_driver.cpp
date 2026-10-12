@@ -24,4 +24,6 @@ CanInterfaceInfo VirtualCanDriver::GetInfo() const {
   return info;
 }
 
+CanBusHealth VirtualCanDriver::GetBusHealth() const { return driver_.GetBusHealth(); }
+
 }  // namespace boat::hil

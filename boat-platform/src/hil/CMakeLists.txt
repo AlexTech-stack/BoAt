@@ -4,6 +4,7 @@
 add_library(boat_hil STATIC
   can/socket_can_driver.cpp
   can/physical_can_driver.cpp
+  can/can_health.cpp
   virtual/virtual_can_driver.cpp
   hil_bridge.cpp
   can_bus_registry.cpp

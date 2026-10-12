@@ -20,6 +20,7 @@ class VirtualCanDriver : public IHalDriver {
   bool WriteFrame(const CanFrame& frame) override;
   void Close() override;
   CanInterfaceInfo GetInfo() const override;
+  CanBusHealth GetBusHealth() const override;
 
  private:
   std::string iface_;

@@ -9,6 +9,10 @@
 > other; the source code is authoritative over both. This file is the longer of the two and
 > carries operational detail `CLAUDE.md` only summarizes.
 
+> **Status: pre-1.0.** The canonical statement lives in [README.md](README.md); in short: the
+> gRPC surface and the C plugin ABI may still change between minor versions — the ABI is
+> versioned (currently v9) and a mismatched plugin is rejected at load with a clear error.
+
 ## Supported platforms
 
 **The gateway is Linux-only; the clients are OS-agnostic.** Split by which machine a component
@@ -43,7 +47,7 @@ Windows-port scaffolding or docs that imply one.
     - `pdu/tick_timer.h/.cpp` — Dual-backend tick timer (sleep_for / timerfd)
   - `src/store/` — SQLite event/trace/config stores
   - `src/ipc/` — Inter-process comm (gRPC, iceoryx2 SHM, UDS)
-  - `src/plugins/` — Built-in plugins (all v8 ABI, `on_frame`/`set_frame_publisher`).
+  - `src/plugins/` — Built-in plugins (all v9 ABI, `on_frame`/`set_frame_publisher`).
     Plugins own **stateful conversations / variation** only; stateless CAN/Ethernet
     transport is core (see the `FrameSink` note under Replay).
     - `pdu_router/` — PduRouter plugin (routes PDUs over CAN/Ethernet, transmission engine, deadline monitoring, groups)
@@ -52,7 +56,9 @@ Windows-port scaffolding or docs that imply one.
     - `tcp/` — TCP transport plugin (state machine only; transmits via the core Eth registry when gateway-resident)
     - `probe/` — gateway conformance probe (verifies delivery, declared_buses filtering, self-sent tagging, round-trip from inside the dispatch loop)
   - `src/replay/` — Replay engine
-  - `proto/boat/v1/` — 16 protobuf files declaring 14 gRPC services
+  - `proto/boat/v1/` — the protobuf files declaring the gRPC services; counts and the
+    per-service RPC lists are generated into `docs/api/protobuf-definitions.md`
+    (`tools/gen_proto_docs.py`, checked by CI)
   - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
   - `sdk/cpp/include/boat/` — C++ SDK headers
     - `plugin.h` — Plugin ABI v9 (unified `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`)
@@ -120,6 +126,21 @@ The gateway distinguishes between virtual (`vcan*`) and physical CAN interfaces 
 
 The `ListBuses` gRPC response now returns per-interface metadata (driver name, state, FD support, bitrate).
 
+**RX buffer and bus health.** SocketCAN sockets request a larger `SO_RCVBUF` at
+open (`BOAT_CAN_RCVBUF` bytes, default 4 MiB; `0` leaves the kernel default) —
+the stock ~208 KB is a few milliseconds of a loaded FD bus, and an overflow used
+to drop frames with no counter and no log line. The kernel caps the value at
+`net.core.rmem_max`; the driver reads back the applied size and says so on
+stderr when it is smaller than requested. Error frames are opted in via
+`CAN_RAW_ERR_FILTER`, classified (bus-off, error-passive, error-warning,
+restarted) and counted; they are never delivered to plugins as data. Bus health
+is exposed as `can.<iface>.<field>` metric points (`rx_dropped`,
+`device_rx_dropped`, `device_rx_errors`, `error_frames`, `bus_off_events`,
+`tec`, `rec`, `bus_state`) through `MetricsService` — `GetMetrics` appends a
+snapshot, `StreamMetrics` pushes one per second. Controller state and TEC/REC
+come from netlink (`IFLA_CAN_STATE` / `IFLA_CAN_BERR_COUNTER`, physical CAN
+only); before this, bus-off and idle looked identical from the outside.
+
 ### CLI CAN commands
 
 The standalone `boat can` / `boat eth` Typer commands (including `list-buses` and
@@ -132,7 +153,7 @@ no CLI hardware-detection command anymore — inspect `/sys/class/net/` or use
 boat frame list-ifaces
 boat --json frame list-ifaces
 
-# v8: Unified frame send/subscribe
+# Unified frame send/subscribe
 boat frame send --bus-type can --can-id 0x123 --iface vcan0 --data AABBCCDD
 boat frame subscribe --bus-types can
 boat frame send --bus-type ethernet --ethertype 0x0800 --dst-ip 10.0.0.1 --data AABB
@@ -142,15 +163,15 @@ boat frame send --bus-type ethernet --ethertype 0x0800 --dst-ip 10.0.0.1 --data 
 
 ```bash
 # C++ (Catch2) — one test preset per configure preset: debug, release, asan, tsan, coverage
-ctest --preset debug                     # 166 tests; the 7 HIL ones report Skipped
-BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 166 actually run
+ctest --preset debug                     # the 7 HIL ones report Skipped unless opted in
+BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 164 actually run
 ctest --test-dir build/debug -R TestName --timeout 30 --output-on-failure
 ctest --test-dir build/debug -N  # list tests
 
 # Python SDK + CLI (run from the REPO ROOT: ui/tests and tools/tests live there, not under boat-platform/)
 pip install -e ./boat-platform/sdk/python[dev] && pip install -e ./boat-platform/cli
 pip install -r ui/requirements.txt       # ui/ services import fastapi/uvicorn/pydantic
-pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests -v   # 551 tests
+pytest boat-platform/sdk/python/tests boat-platform/cli/tests ui/tests tools/tests -v   # full suite
 ```
 
 Three things that made `ctest` lie, all now fixed — don't reintroduce them:
@@ -338,6 +359,12 @@ admin-tool architecture**: one small agent per host (no SSH, agents only ever
 touch their own machine), with a single client aggregating several agents
 over the network into one view. See `backlog/launcher_agent_backlog.md` for
 status/known gaps and `test/LauncherAgent.md` for verified behavior.
+
+It binds **`127.0.0.1` by default**; `BOAT_AGENT_BIND` is the override and
+`0.0.0.0` is the explicit opt-in for reaching it from another host. That
+default is deliberate: the API is unauthenticated and starts processes from
+caller-supplied paths, so reaching it is equivalent to running code on the
+host (see `SECURITY.md`, issue #39).
 
 ```bash
 BOAT_AGENT_PORT=8090 python3 ui/launcher_agent.py   # default port 8090
@@ -720,6 +747,8 @@ Resolution now happens once, into `EffectiveConfig`
 
 - gRPC port; TLS on/off, mTLS required, and the cert/key/CA paths
 - CAN and Ethernet interfaces **as requested**, each paired with whether it opened
+- the CAN receive buffer (`can_rcvbuf_bytes`, plus whether `BOAT_CAN_RCVBUF` or the
+  default decided it)
 - every node plugin: `.so` path, its config **verbatim**, and loaded/error
 - tick interval, plus `resolved_from` — which of `BOAT_NODE_TICK_US` /
   `BOAT_NODE_TICK_MS` / `default` actually decided it
@@ -830,8 +859,9 @@ Beside `LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md` at the repo root:
 - `CONTRIBUTING.md` — prerequisites, both test invocations, the three ctest gotchas
   (`boat_discover_tests`, `-R` matching case names not target names, third-party deps
   registering their tests), the SPDX header rule, stub regeneration, the CLAUDE.md/AGENTS.md
-  dual-file rule, the determinism constraints, and the versioning policy (project semver
-  pre-1.0, the separately versioned plugin ABI, gRPC additive-where-possible).
+  dual-file rule, the determinism constraints, the versioning policy (project semver
+  pre-1.0, the separately versioned plugin ABI, gRPC additive-where-possible), and the RFC
+  process for breaking changes.
 - `SECURITY.md` — private reporting, and the permissive-by-design defaults stated plainly:
   the gRPC API is unauthenticated and plaintext unless TLS is enabled, the gateway `dlopen()`s
   whatever plugin path it is given, and frame-send/replay write to real hardware when a physical
@@ -839,7 +869,7 @@ Beside `LICENSE` / `NOTICE` / `THIRD_PARTY_NOTICES.md` at the repo root:
 - `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1 by reference.
 - `CHANGELOG.md` — Keep a Changelog. `[0.1.0]` describes the state at the first tag rather than
   replaying the ~320 commits before it; breaking changes are marked **BREAKING**.
-- `.github/ISSUE_TEMPLATE/{bug_report,feature_request,config}.yml` and
+- `.github/ISSUE_TEMPLATE/{bug_report,feature_request,rfc,config}.yml` and
   `.github/PULL_REQUEST_TEMPLATE.md` — the PR checklist is where the dual-file rule is enforced
   socially, since nothing fails when the two files disagree.
 
@@ -961,7 +991,7 @@ boat pdu disable-group --id 1
 
 ### CanTp — CAN Transport Protocol (Plugin)
 
-ISO 15765-2 segmentation/reassembly for PDUs larger than 8 bytes. Operates as a `BOAT_NODE_PLUGINS` node plugin using the v8 ABI (`on_frame`/`set_frame_publisher`). `boat can-tp configure`/`send` talk to the live plugin instance inside the gateway process via the `CanTpService` gRPC service (`CanTpServiceImpl` looks it up via `PluginManager::FindService("can_tp:" + iface)`) — there is no offline/local mode.
+ISO 15765-2 segmentation/reassembly for PDUs larger than 8 bytes. Operates as a `BOAT_NODE_PLUGINS` node plugin using the v9 ABI (`on_frame`/`set_frame_publisher`). `boat can-tp configure`/`send` talk to the live plugin instance inside the gateway process via the `CanTpService` gRPC service (`CanTpServiceImpl` looks it up via `PluginManager::FindService("can_tp:" + iface)`) — there is no offline/local mode.
 
 Each connection is identified by `nsdu_id` and represents a session between
 `source_addr` (this node) and `target_addr` (peer node) — both required,
