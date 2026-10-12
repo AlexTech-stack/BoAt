@@ -55,6 +55,30 @@ SimulationServiceImpl::SimulationServiceImpl(
     boat::hil::EthernetBusRegistry& eth_registry)
     : sim_(sim), can_registry_(can_registry), eth_registry_(eth_registry) {}
 
+void SimulationServiceImpl::CleanupRuntime() {
+  // Serialises with an in-flight on_tick: SetOnTickHook takes the same mutex
+  // RunPipeline holds while calling the hook.
+  sim_.scheduler().SetOnTickHook(nullptr);
+  if (can_rx_sub_id_.has_value()) {
+    can_registry_.Unsubscribe(*can_rx_sub_id_);
+    can_rx_sub_id_.reset();
+  }
+  if (eth_rx_sub_id_.has_value()) {
+    eth_registry_.Unsubscribe(*eth_rx_sub_id_);
+    eth_rx_sub_id_.reset();
+  }
+  sim_.plugin_manager().ShutdownAll();
+}
+
+void SimulationServiceImpl::PrepareFreshRun() {
+  CleanupRuntime();
+  sim_.scheduler().Reset();
+  sim_.fault_injector().Clear();
+  // Events published but not yet dispatched belong to the run that just
+  // ended; the first tick of the fresh run must not deliver them.
+  sim_.event_bus().Clear();
+}
+
 grpc::Status SimulationServiceImpl::CreateSimulation(grpc::ServerContext*, const boat::v1::CreateSimulationRequest* request,
                                                      boat::v1::SimulationResponse* response) {
   try {
@@ -68,6 +92,18 @@ grpc::Status SimulationServiceImpl::CreateSimulation(grpc::ServerContext*, const
     }
     const auto scenario = boat::core::ScenarioLoader::LoadFromJson(std::get<std::string>(*stored));
     const std::string simulation_id = GenerateId();
+    // A definition created while nothing is live starts from tick 0. The clock
+    // is gateway-scoped, so without this a "fresh" simulation inherited the
+    // previous run's counter (observed: tick 11911 before it had ever been
+    // started). While a session is RUNNING or PAUSED the engine is left alone
+    // -- the new id is a definition staged for later, documented in
+    // simulation.proto.
+    {
+      const auto state = sim_.state_machine().Current();
+      if (state == boat::core::SimState::IDLE || state == boat::core::SimState::STOPPED) {
+        PrepareFreshRun();
+      }
+    }
     {
       std::lock_guard<std::mutex> lock(simulations_mutex_);
       simulations_.emplace(simulation_id, scenario);
@@ -92,6 +128,19 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
         return grpc::Status(grpc::StatusCode::NOT_FOUND, "simulation not found");
       }
       scenario = it->second;
+    }
+    {
+      // This gateway hosts one live session; `simulation_id` selects a stored
+      // scenario, not an instance. Refuse to start a different definition over
+      // a running one instead of silently driving the shared state.
+      std::lock_guard<std::mutex> lock(active_mutex_);
+      if (!active_simulation_id_.empty() &&
+          active_simulation_id_ != request->simulation_id()) {
+        return grpc::Status(
+            grpc::StatusCode::FAILED_PRECONDITION,
+            "simulation '" + active_simulation_id_ +
+                "' is already active; stop or reset it before starting another");
+      }
     }
     {
       const auto current = sim_.state_machine().Current();
@@ -200,6 +249,10 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
 
     sim_.scheduler().Start();   // no-op if already running (e.g. PAUSED→RUNNING)
     sim_.scheduler().Resume();  // clears paused_ so the tick phase starts ticking
+    {
+      std::lock_guard<std::mutex> lock(active_mutex_);
+      active_simulation_id_ = request->simulation_id();
+    }
     FillSimulation(request->simulation_id(), scenario, response->mutable_simulation());
     return grpc::Status::OK;
   } catch (const std::exception& ex) {
@@ -271,9 +324,19 @@ grpc::Status SimulationServiceImpl::ResetSimulation(grpc::ServerContext*, const 
       }
       scenario = it->second;
     }
-    sim_.scheduler().Stop();
-    if (!sim_.state_machine().Transition(boat::core::SimState::IDLE)) {
+    // Clean slate: same teardown StopSimulation does, plus the rewind. Tick 0,
+    // no leftover registry subscriptions, no plugins, no queued events, no
+    // scheduled faults. Valid from RUNNING/PAUSED directly (state machine
+    // gained the edge), and from STOPPED/ERROR; IDLE is already where we want
+    // to be, so the reset is an idempotent success.
+    PrepareFreshRun();
+    if (sim_.state_machine().Current() != boat::core::SimState::IDLE &&
+        !sim_.state_machine().Transition(boat::core::SimState::IDLE)) {
       return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "invalid state transition to IDLE");
+    }
+    {
+      std::lock_guard<std::mutex> lock(active_mutex_);
+      active_simulation_id_.clear();
     }
     FillSimulation(request->simulation_id(), scenario, response->mutable_simulation());
     return grpc::Status::OK;
@@ -301,17 +364,12 @@ grpc::Status SimulationServiceImpl::StopSimulation(grpc::ServerContext*, const b
       FillSimulation(request->simulation_id(), scenario, response->mutable_simulation());
       return grpc::Status::OK;
     }
-    sim_.scheduler().SetOnTickHook(nullptr);
-    if (can_rx_sub_id_.has_value()) {
-      can_registry_.Unsubscribe(*can_rx_sub_id_);
-      can_rx_sub_id_.reset();
-    }
-    if (eth_rx_sub_id_.has_value()) {
-      eth_registry_.Unsubscribe(*eth_rx_sub_id_);
-      eth_rx_sub_id_.reset();
-    }
-    sim_.plugin_manager().ShutdownAll();
+    CleanupRuntime();
     sim_.scheduler().Stop();
+    {
+      std::lock_guard<std::mutex> lock(active_mutex_);
+      active_simulation_id_.clear();
+    }
     if (!sim_.state_machine().Transition(boat::core::SimState::STOPPED)) {
       return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "invalid state transition to STOPPED");
     }

@@ -855,3 +855,205 @@ TEST_CASE("Subscription teardown races cleanly with dispatch",
   std::filesystem::remove(event_db_path);
   std::filesystem::remove(trace_db_path);
 }
+
+TEST_CASE("Reset rewinds the tick and only one simulation can be active",
+          "[integration][gateway][simulation]") {
+  /* The gateway hosts one live session; `simulation_id` selects a scenario
+     definition, not an instance. Before this, ResetSimulation left the tick
+     where it was (a reset simulation reported tick 11911, and a fresh
+     CreateSimulation inherited it), and StartSimulation on any id drove the
+     same shared state. */
+  std::filesystem::remove("boat_config.db");
+  const auto temp_dir = std::filesystem::temp_directory_path();
+  const auto event_db_path = temp_dir / "boat_integration_sim_reset_events.db";
+  const auto trace_db_path = temp_dir / "boat_integration_sim_reset_traces.db";
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+
+  boat::core::SimulationContext sim(782, 2);
+  boat::core::SignalBus signal_bus;
+  boat::core::ScenarioLoader scenario_loader;
+  boat::store::SqliteEventStore event_store(event_db_path.string());
+  boat::store::FlatFileTraceStore trace_store(trace_db_path.string());
+  boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
+  boat::hil::CanBusRegistry can_registry;
+  boat::hil::EthernetBusRegistry eth_registry;
+  boat::core::PluginManager plugin_manager;
+  boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
+  boat::gateway::RpcAuditLog audit_log;
+
+  boat::gateway::GatewayContext ctx{
+      .sim = sim,
+      .signal_bus = signal_bus,
+      .scenario_loader = scenario_loader,
+      .event_store = event_store,
+      .trace_store = trace_store,
+      .replay_controller = replay_controller,
+      .can_bus_registry = can_registry,
+      .ethernet_bus_registry = eth_registry,
+      .plugin_manager = plugin_manager,
+      .frame_sink = frame_sink,
+      .audit_log = audit_log,
+      .effective_config = kTestEffectiveConfig,
+  };
+
+  boat::gateway::SimulationServiceImpl simulation_service(sim, can_registry, eth_registry);
+  boat::gateway::ScenarioServiceImpl scenario_service(ctx);
+
+  grpc::ServerBuilder builder;
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
+  builder.RegisterService(&simulation_service);
+  builder.RegisterService(&scenario_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  auto channel = server->InProcessChannel({});
+
+  auto scenario_stub = boat::v1::ScenarioService::NewStub(channel);
+  auto simulation_stub = boat::v1::SimulationService::NewStub(channel);
+
+  const auto create_scenario = [&](const std::string& id) {
+    boat::v1::CreateScenarioRequest req;
+    req.mutable_scenario()->set_scenario_id(id);
+    req.mutable_scenario()->set_name(id);
+    req.mutable_scenario()->set_content(
+        R"({"id":")" + id +
+        R"(","name":")" + id +
+        R"(","version":"1.0","duration_ticks":1000,"seed":1,"plugins":[],"signals":[],"faults":[]})");
+    boat::v1::ScenarioResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(scenario_stub->CreateScenario(&context, req, &resp).ok());
+  };
+
+  const auto create_sim = [&](const std::string& scenario_id) {
+    boat::v1::CreateSimulationRequest req;
+    req.set_scenario_id(scenario_id);
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->CreateSimulation(&context, req, &resp).ok());
+    return resp.simulation();
+  };
+
+  create_scenario("scn-reset");
+  const auto created_a = create_sim("scn-reset");
+  REQUIRE(created_a.tick() == 0);
+  REQUIRE(created_a.state() == boat::v1::SIMULATION_STATE_IDLE);
+
+  {
+    boat::v1::StartSimulationRequest req;
+    req.set_simulation_id(created_a.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->StartSimulation(&context, req, &resp).ok());
+  }
+
+  // A second definition can be created while one session runs -- it is staged,
+  // not started -- but it must not be startable over the live one.
+  create_scenario("scn-other");
+  const auto created_b = create_sim("scn-other");
+  {
+    boat::v1::StartSimulationRequest req;
+    req.set_simulation_id(created_b.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    const auto status = simulation_stub->StartSimulation(&context, req, &resp);
+    REQUIRE_FALSE(status.ok());
+    REQUIRE(status.error_code() == grpc::StatusCode::FAILED_PRECONDITION);
+  }
+
+  // Advance the live session, then reset it from PAUSED: IDLE at tick 0.
+  {
+    boat::v1::PauseSimulationRequest req;
+    req.set_simulation_id(created_a.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->PauseSimulation(&context, req, &resp).ok());
+  }
+  {
+    boat::v1::StepSimulationRequest req;
+    req.set_simulation_id(created_a.simulation_id());
+    req.set_ticks(7);
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->StepSimulation(&context, req, &resp).ok());
+    REQUIRE(sim.clock().tick() == 7);
+  }
+  {
+    boat::v1::ResetSimulationRequest req;
+    req.set_simulation_id(created_a.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->ResetSimulation(&context, req, &resp).ok());
+    REQUIRE(resp.simulation().state() == boat::v1::SIMULATION_STATE_IDLE);
+    REQUIRE(resp.simulation().tick() == 0);
+    REQUIRE(sim.clock().tick() == 0);
+  }
+
+  // The reset cleared the active session, so the staged definition can start
+  // now -- and tick 1 works again instead of throwing
+  // "tick must be monotonically increasing".
+  {
+    boat::v1::StartSimulationRequest req;
+    req.set_simulation_id(created_b.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->StartSimulation(&context, req, &resp).ok());
+  }
+  {
+    boat::v1::StopSimulationRequest req;
+    req.set_simulation_id(created_b.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->StopSimulation(&context, req, &resp).ok());
+  }
+
+  // Creating after a stopped run rewinds: the new definition reports tick 0
+  // before it has ever been started, and a start-step cycle lands on tick 3.
+  const auto created_c = create_sim("scn-reset");
+  REQUIRE(created_c.tick() == 0);
+  {
+    boat::v1::StartSimulationRequest req;
+    req.set_simulation_id(created_c.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->StartSimulation(&context, req, &resp).ok());
+  }
+  {
+    boat::v1::PauseSimulationRequest req;
+    req.set_simulation_id(created_c.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->PauseSimulation(&context, req, &resp).ok());
+  }
+  {
+    boat::v1::StepSimulationRequest req;
+    req.set_simulation_id(created_c.simulation_id());
+    req.set_ticks(3);
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->StepSimulation(&context, req, &resp).ok());
+    REQUIRE(sim.clock().tick() == 3);
+  }
+
+  // Resetting an already-idle simulation is a success, not FAILED_PRECONDITION.
+  {
+    boat::v1::ResetSimulationRequest req;
+    req.set_simulation_id(created_c.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->ResetSimulation(&context, req, &resp).ok());
+    REQUIRE(sim.clock().tick() == 0);
+  }
+  {
+    boat::v1::ResetSimulationRequest req;
+    req.set_simulation_id(created_c.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->ResetSimulation(&context, req, &resp).ok());
+    REQUIRE(sim.clock().tick() == 0);
+  }
+
+  server->Shutdown();
+  std::filesystem::remove("boat_config.db");
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+}
