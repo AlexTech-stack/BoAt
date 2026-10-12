@@ -4,14 +4,16 @@
 /* Tier 1 of the clock-coupling work: a tick timer that advances logically
    instead of against wall time, selectable per deployment.
 
-   Nothing is wired to it yet -- ReplayController and the node tick thread
-   still call the env-driven factory, which still yields a real-time timer by
-   default. These tests pin the seam itself: the virtual backend advances
-   without consuming wall time, and the selection fails open to real time so a
-   HIL bench can't be made virtual by a typo. */
+   The gateway drives all tick consumers from a single TickAuthority, which
+   creates its timer through the env-driven factory (real time by default).
+   These tests pin the seam itself: the virtual backend advances without
+   consuming wall time, the selection fails open to real time so a HIL bench
+   can't be made virtual by a typo, and both backends honour the thread-safe
+   Stop() contract -- a blocked wait is interrupted and reports false. */
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -103,6 +105,56 @@ TEST_CASE("VirtualTickTimer Stop halts waiting", "[unit][tick-timer]") {
   t->Stop();
   REQUIRE_FALSE(t->WaitForNextTick());
   REQUIRE_FALSE(t->WaitUntil(steady_clock::now() + seconds(1)));
+}
+
+TEST_CASE("TimerfdTickTimer Stop interrupts a blocked wait", "[unit][tick-timer]") {
+  // 30 s interval: only an interrupt can make this return in time.
+  auto t = TickTimer::Create(seconds(30), TimeSource::kRealTime);
+
+  std::atomic<bool> returned{false};
+  std::atomic<bool> wait_result{true};
+  std::thread waiter([&] {
+    wait_result.store(t->WaitForNextTick());
+    returned.store(true);
+  });
+
+  // Let the waiter reach the blocking read before stopping the timer.
+  std::this_thread::sleep_for(milliseconds(50));
+  const auto stop_start = steady_clock::now();
+  t->Stop();
+  waiter.join();
+  const auto stop_elapsed = steady_clock::now() - stop_start;
+
+  // Interrupted well before the 30 s expiry, and reported as stopped rather
+  // than as a tick.
+  REQUIRE(returned.load());
+  REQUIRE_FALSE(wait_result.load());
+  REQUIRE(stop_elapsed < seconds(2));
+
+  // Every later wait is false too, and Stop() is idempotent.
+  REQUIRE_FALSE(t->WaitForNextTick());
+  t->Stop();
+}
+
+TEST_CASE("TimerfdTickTimer Stop interrupts a blocked WaitUntil", "[unit][tick-timer]") {
+  auto t = TickTimer::Create(milliseconds(1), TimeSource::kRealTime);
+
+  std::atomic<bool> returned{false};
+  std::atomic<bool> wait_result{true};
+  std::thread waiter([&] {
+    wait_result.store(t->WaitUntil(steady_clock::now() + seconds(30)));
+    returned.store(true);
+  });
+
+  std::this_thread::sleep_for(milliseconds(50));
+  const auto stop_start = steady_clock::now();
+  t->Stop();
+  waiter.join();
+  const auto stop_elapsed = steady_clock::now() - stop_start;
+
+  REQUIRE(returned.load());
+  REQUIRE_FALSE(wait_result.load());
+  REQUIRE(stop_elapsed < seconds(2));
 }
 
 TEST_CASE("VirtualTickTimer produces identical timelines across runs",

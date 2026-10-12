@@ -60,7 +60,7 @@ bool VirtualTickTimer::Init(std::chrono::nanoseconds interval) {
 bool VirtualTickTimer::WaitForNextTick() {
   if (stopped_.load(std::memory_order_acquire)) return false;
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!initialised_) return false;
+  if (!initialised_ || stopped_.load(std::memory_order_acquire)) return false;
   virtual_now_ += interval_;
   ++tick_count_;
   return true;
@@ -69,7 +69,7 @@ bool VirtualTickTimer::WaitForNextTick() {
 bool VirtualTickTimer::WaitUntil(std::chrono::steady_clock::time_point deadline) {
   if (stopped_.load(std::memory_order_acquire)) return false;
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!initialised_) return false;
+  if (!initialised_ || stopped_.load(std::memory_order_acquire)) return false;
   // A deadline already behind virtual now fires immediately without rewinding
   // the clock -- same observable behaviour as timerfd with TFD_TIMER_ABSTIME.
   if (deadline > virtual_now_) {
@@ -98,27 +98,28 @@ std::chrono::nanoseconds VirtualTickTimer::Elapsed() const {
 bool SleepTickTimer::Init(std::chrono::nanoseconds interval) {
   interval_ = interval;
   start_    = std::chrono::steady_clock::now();
-  running_  = true;
+  tick_count_.store(0, std::memory_order_relaxed);
+  running_.store(true, std::memory_order_release);
   return true;
 }
 
 bool SleepTickTimer::WaitForNextTick() {
-  if (!running_) return false;
+  if (!running_.load(std::memory_order_acquire)) return false;
   std::this_thread::sleep_for(interval_);
-  tick_count_++;
-  return running_;
+  if (!running_.load(std::memory_order_acquire)) return false;
+  tick_count_.fetch_add(1, std::memory_order_relaxed);
+  return true;
 }
 
 bool SleepTickTimer::WaitUntil(std::chrono::steady_clock::time_point deadline) {
-  if (!running_) return false;
+  if (!running_.load(std::memory_order_acquire)) return false;
   std::this_thread::sleep_until(deadline);
-  tick_count_++;
-  return running_;
+  if (!running_.load(std::memory_order_acquire)) return false;
+  tick_count_.fetch_add(1, std::memory_order_relaxed);
+  return true;
 }
 
-void SleepTickTimer::Stop() {
-  running_ = false;
-}
+void SleepTickTimer::Stop() { running_.store(false, std::memory_order_release); }
 
 std::chrono::nanoseconds SleepTickTimer::Elapsed() const {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -142,6 +143,17 @@ timespec ToTimespec(std::chrono::nanoseconds ns) {
 
 }  // anonymous namespace
 
+TimerfdTickTimer::~TimerfdTickTimer() {
+  // Safe only once no wait can be in flight any more -- TickAuthority joins
+  // its tick thread before destroying the timer. Stop() first so the stopped
+  // state is set even for a timer that was never explicitly stopped.
+  Stop();
+  if (fd_ >= 0) {
+    ::close(fd_);
+    fd_ = -1;
+  }
+}
+
 bool TimerfdTickTimer::Init(std::chrono::nanoseconds interval) {
   if (fd_ >= 0) ::close(fd_);
 
@@ -150,6 +162,8 @@ bool TimerfdTickTimer::Init(std::chrono::nanoseconds interval) {
 
   interval_ = interval;
   start_ = std::chrono::steady_clock::now();
+  stopped_.store(false, std::memory_order_release);
+  tick_count_.store(0, std::memory_order_relaxed);
 
   itimerspec spec{};
   spec.it_interval = ToTimespec(interval);   // repeating interval
@@ -160,6 +174,7 @@ bool TimerfdTickTimer::Init(std::chrono::nanoseconds interval) {
 }
 
 bool TimerfdTickTimer::WaitForNextTick() {
+  if (stopped_.load(std::memory_order_acquire)) return false;
   if (fd_ < 0) return false;
 
   uint64_t expirations = 0;
@@ -172,21 +187,31 @@ bool TimerfdTickTimer::WaitForNextTick() {
   // Returns the number of expirations (>=1).  Repeat count is
   // consumed — next read will wait for the following interval.
   if (n <= 0) return false;
+  // Stop() wakes a blocked read by arming the timerfd to expire immediately.
+  // That expiration is a wake-up, not a tick, so it is not counted.
+  if (stopped_.load(std::memory_order_acquire)) return false;
 
-  tick_count_ += expirations;
+  tick_count_.fetch_add(expirations, std::memory_order_relaxed);
   return true;
 }
 
 bool TimerfdTickTimer::WaitUntil(std::chrono::steady_clock::time_point deadline) {
+  if (stopped_.load(std::memory_order_acquire)) return false;
   if (fd_ < 0) return false;
 
-  auto deadline_ns = deadline.time_since_epoch();
-  itimerspec spec{};
-  spec.it_value = ToTimespec(deadline_ns);
+  {
+    // Arm under the same lock Stop() wakes under, so a wake cannot be
+    // overwritten by a later far-future arm from this thread.
+    std::lock_guard<std::mutex> lock(arm_mutex_);
+    if (stopped_.load(std::memory_order_acquire)) return false;
+    auto deadline_ns = deadline.time_since_epoch();
+    itimerspec spec{};
+    spec.it_value = ToTimespec(deadline_ns);
 
-  // One-shot set at the absolute deadline.  If deadline is in the past
-  // the timer fires immediately — no drift, no lost time.
-  if (timerfd_settime(fd_, TFD_TIMER_ABSTIME, &spec, nullptr) < 0) return false;
+    // One-shot set at the absolute deadline.  If deadline is in the past
+    // the timer fires immediately — no drift, no lost time.
+    if (timerfd_settime(fd_, TFD_TIMER_ABSTIME, &spec, nullptr) < 0) return false;
+  }
 
   uint64_t expirations = 0;
   ssize_t n;
@@ -195,15 +220,24 @@ bool TimerfdTickTimer::WaitUntil(std::chrono::steady_clock::time_point deadline)
   } while (n < 0 && errno == EINTR);
 
   if (n <= 0) return false;
-  tick_count_ += expirations;
+  if (stopped_.load(std::memory_order_acquire)) return false;
+
+  tick_count_.fetch_add(expirations, std::memory_order_relaxed);
   return true;
 }
 
 void TimerfdTickTimer::Stop() {
-  if (fd_ >= 0) {
-    ::close(fd_);
-    fd_ = -1;
-  }
+  stopped_.store(true, std::memory_order_release);
+  std::lock_guard<std::mutex> lock(arm_mutex_);
+  if (fd_ < 0) return;
+
+  // Wake a blocked read. Re-arming the timer to expire 1 ns from now fires it
+  // immediately and wakes the reader; disarm (it_value = 0) does not wake it,
+  // and closing the descriptor from another thread would race the read and
+  // leave a window where the fd number can be recycled underneath it.
+  itimerspec wake{};
+  wake.it_value.tv_nsec = 1;
+  timerfd_settime(fd_, 0, &wake, nullptr);
 }
 
 std::chrono::nanoseconds TimerfdTickTimer::Elapsed() const {
@@ -213,8 +247,11 @@ std::chrono::nanoseconds TimerfdTickTimer::Elapsed() const {
 
 #else   // not __linux__
 
+TimerfdTickTimer::~TimerfdTickTimer() = default;
+
 bool TimerfdTickTimer::Init(std::chrono::nanoseconds) { return false; }
 bool TimerfdTickTimer::WaitForNextTick() { return false; }
+bool TimerfdTickTimer::WaitUntil(std::chrono::steady_clock::time_point) { return false; }
 void TimerfdTickTimer::Stop() {}
 std::chrono::nanoseconds TimerfdTickTimer::Elapsed() const { return {}; }
 
