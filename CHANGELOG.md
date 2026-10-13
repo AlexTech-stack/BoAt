@@ -42,6 +42,19 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **Documentation described storage that never existed** (#14). `docs/diagrams/class-diagrams.md`
+  drew a `TimescaleEventStore` class and an `ISignalRouter`/`LocalSignalRouter`/
+  `DistributedSignalRouter` hierarchy — none of those types exist anywhere in the tree — and
+  `docs/database/database-design.md` listed TimescaleDB, Prometheus remote write and an async
+  event-store writer thread that were never implemented. The diagram now shows the single
+  `SignalRouter` and `SqliteEventStore` that do exist, and the database document says what is
+  real (SQLite, synchronous writes — [#23](https://github.com/AlexTech-stack/BoAt/issues/23)).
+- **`FetchContent_Populate` was used in the form CMP0169 deprecates** (#16), which CMake 3.30+
+  warns about and a future version will remove entirely. gRPC, iceoryx2 and sqlite3 are now
+  populated through `boat_populate()`, a wrapper around the fully-specified form that keeps
+  the `_deps` layout, the patch-before-`add_subdirectory` flows and the
+  `FETCHCONTENT_SOURCE_DIR_<NAME>` override working. Verified under CMake 4.4.4: the old file
+  warns, the new one configures cleanly from both a fresh download and a local source tree.
 - **JUnit reports were empty for script tests, even when they failed** (#50). The generator
   built `<testcase>` elements only from recorded steps; a script test (a subprocess whose exit
   code is the verdict) has none, so a failed run produced `tests="0" failures="0"` — a CI
