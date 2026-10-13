@@ -247,6 +247,12 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
     sim_.scheduler().SetOnTickHook(
         [this](std::uint64_t tick) { sim_.plugin_manager().TickAll(tick); });
 
+    // The scenario's own seed decides this run's random stream. The engine is
+    // gateway-scoped and used to keep whatever seed the gateway started with,
+    // so a scenario's `"seed": N` was parsed and then silently ignored
+    // (issue #53): two scenarios asking for different streams got the same one.
+    sim_.determinism().SetSeed(scenario.seed);
+
     sim_.scheduler().Start();   // no-op if already running (e.g. PAUSED→RUNNING)
     sim_.scheduler().Resume();  // clears paused_ so the tick phase starts ticking
     {
@@ -330,6 +336,9 @@ grpc::Status SimulationServiceImpl::ResetSimulation(grpc::ServerContext*, const 
     // gained the edge), and from STOPPED/ERROR; IDLE is already where we want
     // to be, so the reset is an idempotent success.
     PrepareFreshRun();
+    // A reset run is a rerun of this scenario, so it replays this scenario's
+    // seed rather than the gateway default (issue #53).
+    sim_.determinism().SetSeed(scenario.seed);
     if (sim_.state_machine().Current() != boat::core::SimState::IDLE &&
         !sim_.state_machine().Transition(boat::core::SimState::IDLE)) {
       return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "invalid state transition to IDLE");

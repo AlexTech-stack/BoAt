@@ -43,14 +43,30 @@ def _x(s: Any) -> str:
 
 
 def _generate_junit_xml(report: TestReport) -> str:
-    total = len(report.steps)
-    failures = sum(1 for s in report.steps if s.verdict == "FAIL")
-    errors = sum(1 for s in report.steps if s.verdict == "ERROR")
-    skipped = sum(1 for s in report.steps if s.verdict == "SKIPPED")
-
     test_name = report.test.name if report.test else "unknown"
     suite_name = report.test.group or "default"
     duration_s = (report.execution.duration_ms or 0) / 1000
+
+    # Script tests (a subprocess whose exit code is the verdict) have no steps
+    # to map, so they are one <testcase> per test. Without this a failing
+    # script produced tests="0" failures="0" -- a CI reporter saw a green run
+    # for a test that exited 1 (issue #50). A report with no steps and no
+    # final verdict stays empty: nothing has been run yet.
+    script_verdict = report.verdict if not report.steps else None
+    emit_single = script_verdict in ("PASS", "FAIL", "ERROR", "SKIPPED")
+
+    if report.steps:
+        total = len(report.steps)
+        failures = sum(1 for s in report.steps if s.verdict == "FAIL")
+        errors = sum(1 for s in report.steps if s.verdict == "ERROR")
+        skipped = sum(1 for s in report.steps if s.verdict == "SKIPPED")
+    elif emit_single:
+        total = 1
+        failures = 1 if script_verdict == "FAIL" else 0
+        errors = 1 if script_verdict == "ERROR" else 0
+        skipped = 1 if script_verdict == "SKIPPED" else 0
+    else:
+        total = failures = errors = skipped = 0
 
     lines: list[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
@@ -60,31 +76,49 @@ def _generate_junit_xml(report: TestReport) -> str:
         f'time="{duration_s:.3f}" timestamp="{_x(report.execution.started_at)}">'
     )
 
-    for step in report.steps:
+    if emit_single:
         classname = f"{suite_name}.{test_name}"
-        step_duration = (step.duration_ms or 0) / 1000
-        if step.verdict == "FAIL":
-            lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}">')
-            for a in step.assertions:
-                if a.result != "PASS":
-                    lines.append(f'    <failure message="{_x(a.expression)}" type="AssertionError">')
-                    lines.append(f"      Expected: {_x(a.expected)}, Actual: {_x(a.actual)}")
-                    lines.append("    </failure>")
+        message = report.summary or f"script test {script_verdict.lower()}"
+        if script_verdict == "FAIL":
+            lines.append(f'  <testcase name="{_x(test_name)}" classname="{_x(classname)}" time="{duration_s:.3f}">')
+            lines.append(f'    <failure message="{_x(message)}" type="ScriptFailure">{_x(report.summary or "")}</failure>')
             lines.append("  </testcase>")
-        elif step.verdict == "ERROR":
-            lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}">')
-            for a in step.assertions:
-                if a.result != "PASS":
-                    lines.append(f'    <error message="{_x(a.expression)}" type="Error">')
-                    lines.append(f"      {_x(a.actual)}")
-                    lines.append("    </error>")
+        elif script_verdict == "ERROR":
+            lines.append(f'  <testcase name="{_x(test_name)}" classname="{_x(classname)}" time="{duration_s:.3f}">')
+            lines.append(f'    <error message="{_x(message)}" type="ScriptError">{_x(report.summary or "")}</error>')
             lines.append("  </testcase>")
-        elif step.verdict == "SKIPPED":
-            lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}">')
+        elif script_verdict == "SKIPPED":
+            lines.append(f'  <testcase name="{_x(test_name)}" classname="{_x(classname)}" time="{duration_s:.3f}">')
             lines.append("    <skipped/>")
             lines.append("  </testcase>")
         else:
-            lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}"/>')
+            lines.append(f'  <testcase name="{_x(test_name)}" classname="{_x(classname)}" time="{duration_s:.3f}"/>')
+    else:
+        for step in report.steps:
+            classname = f"{suite_name}.{test_name}"
+            step_duration = (step.duration_ms or 0) / 1000
+            if step.verdict == "FAIL":
+                lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}">')
+                for a in step.assertions:
+                    if a.result != "PASS":
+                        lines.append(f'    <failure message="{_x(a.expression)}" type="AssertionError">')
+                        lines.append(f"      Expected: {_x(a.expected)}, Actual: {_x(a.actual)}")
+                        lines.append("    </failure>")
+                lines.append("  </testcase>")
+            elif step.verdict == "ERROR":
+                lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}">')
+                for a in step.assertions:
+                    if a.result != "PASS":
+                        lines.append(f'    <error message="{_x(a.expression)}" type="Error">')
+                        lines.append(f"      {_x(a.actual)}")
+                        lines.append("    </error>")
+                lines.append("  </testcase>")
+            elif step.verdict == "SKIPPED":
+                lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}">')
+                lines.append("    <skipped/>")
+                lines.append("  </testcase>")
+            else:
+                lines.append(f'  <testcase name="{_x(step.name)}" classname="{_x(classname)}" time="{step_duration:.3f}"/>')
 
     lines.append("</testsuite>")
     return "\n".join(lines)
@@ -290,6 +324,11 @@ class TestSuiteRunner:
         cmd_str = entry.file
         started = datetime.now(timezone.utc)
 
+        # Why the script failed, for report.json and for the JUnit <failure>
+        # (issue #50): a script test has no steps or assertions to carry the
+        # reason, and "verdict: FAIL" alone leaves a CI reader guessing.
+        failure_reason: Optional[str] = None
+
         try:
             result = subprocess.run(
                 cmd_str.split(),
@@ -302,12 +341,16 @@ class TestSuiteRunner:
                 cwd=self.manifest.base_dir,
             )
             passed = result.returncode == 0
+            if not passed:
+                failure_reason = f"script exited with code {result.returncode}"
         except subprocess.TimeoutExpired:
             result = None
             passed = False
+            failure_reason = f"script timed out after {entry.timeout_s}s"
         except FileNotFoundError:
             result = None
             passed = False
+            failure_reason = f"script not found: {cmd_str.split()[0]}"
 
         finished = datetime.now(timezone.utc)
         duration_ms = int((finished - started).total_seconds() * 1000)
@@ -316,6 +359,7 @@ class TestSuiteRunner:
         report.execution.duration_ms = duration_ms
         report.execution.verdict = "PASS" if passed else "FAIL"
         report.verdict = "PASS" if passed else "FAIL"
+        report.summary = failure_reason
 
         if result:
             report.add_trace(

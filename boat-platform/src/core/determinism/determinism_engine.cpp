@@ -23,6 +23,12 @@ void DeterminismEngine::Reset() {
   last_tick_ = std::numeric_limits<std::uint64_t>::max();
 }
 
+void DeterminismEngine::SetSeed(std::uint64_t seed) {
+  seed_ = seed;
+  last_tick_ = std::numeric_limits<std::uint64_t>::max();
+  rng_.seed(seed);
+}
+
 std::uint64_t DeterminismEngine::NextRandom() { return rng_(); }
 
 }  // namespace boat::core

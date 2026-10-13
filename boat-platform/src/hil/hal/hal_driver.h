@@ -13,10 +13,20 @@ static constexpr std::uint8_t kCanFdFlagFdf = 0x04;  // FD frame
 static constexpr std::uint8_t kCanFdFlagBrs = 0x01;  // bit-rate switch
 static constexpr std::uint8_t kCanFdFlagEsi = 0x02;  // error state indicator
 
+/* Extended (29-bit) identifier format. Not a Linux raw.h flag -- SocketCAN
+   carries this as CAN_EFF_FLAG in can_id's top bit, which ReadFrame masks off
+   to keep can_id a plain numeric ID. BoAt keeps it as an explicit bit in
+   `flags` so the format survives independent of the identifier's value:
+   `can_id > 0x7FF` is not a format signal (an extended ID of 0x123 is a real,
+   different frame from a standard 0x123), and inferring it that way made
+   replay emit a standard frame wherever a captured extended ID was small.
+   Mirrors BOAT_CAN_FLAG_EXTENDED in the public plugin ABI (plugin.h). */
+static constexpr std::uint8_t kCanFlagExtended = 0x10;
+
 struct CanFrame {
-  std::uint32_t can_id;
+  std::uint32_t can_id;        // numeric ID, without CAN_EFF_FLAG
   std::uint8_t  dlc;           // actual byte count (0-8 classic, 0-64 FD)
-  std::uint8_t  flags;         // kCanFdFlag* bits; 0 = classic CAN
+  std::uint8_t  flags;         // kCanFdFlag* | kCanFlagExtended; 0 = classic CAN
   std::uint8_t  data[64];
   std::uint64_t timestamp_ns;
 };

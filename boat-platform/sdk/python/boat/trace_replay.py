@@ -47,11 +47,19 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from boat.client import make_channel, resolve_address
-from boat.pcapng import PcapngError, PcapngReader, PcapngWriter, DLT_CAN_SOCKETCAN, DLT_EN10MB
+from boat.pcapng import (PcapngError, PcapngReader, PcapngWriter, DLT_CAN_SOCKETCAN,
+                         DLT_EN10MB, CAN_EFF_FLAG)
 
 # CAN FD flags (matches gateway constants)
 _CANFD_BRS = 0x01   # bit-rate switch
 _CANFD_FDF = 0x04   # FD frame
+# BOAT_CAN_FLAG_EXTENDED: explicit 29-bit format bit. `arbitration_id` alone
+# cannot carry it -- an extended 0x123 and a standard 0x123 are different
+# frames -- so the IDE has to survive import, replay and export as this bit
+# rather than being re-derived from the identifier's magnitude (issue #34).
+_CAN_EXTENDED = 0x10
+# Bits that belong on the wire; SELF_SENT and EXTENDED are BoAt bookkeeping.
+_WIRE_CAN_FLAGS = _CANFD_BRS | 0x02 | _CANFD_FDF  # BRS | ESI | FDF
 
 # IPv6 extension header numbers that should be walked to find the actual L4 protocol.
 _IPv6_EXTENSION_HEADERS = {0, 43, 44, 50, 51, 60, 135}
@@ -384,6 +392,8 @@ class TraceReplayer:
                         flags |= _CANFD_FDF
                     if getattr(msg, "bitrate_switch", False):
                         flags |= _CANFD_BRS
+                    if getattr(msg, "is_extended_id", False):
+                        flags |= _CAN_EXTENDED
 
                     # Store the original channel, not a resolved interface --
                     # target interface is a replay-time decision (--buses on
@@ -392,7 +402,7 @@ class TraceReplayer:
                     channel = getattr(msg, "channel", 1) or 1
 
                     proto = frame_pb2.Frame(
-                        bus_type=frame_pb2.Frame.CANFD if flags else frame_pb2.Frame.CAN,
+                        bus_type=frame_pb2.Frame.CANFD if flags & _CANFD_FDF else frame_pb2.Frame.CAN,
                         timestamp_ns=int(msg.timestamp * 1_000_000_000),
                         payload=raw,
                         can=frame_pb2.CanMetadata(
@@ -502,9 +512,16 @@ class TraceReplayer:
                 ts = frame.timestamp_ns / 1_000_000_000
 
                 if kind == "can":
+                    # The wire format carries the format as CAN_EFF_FLAG in
+                    # can_id; BoAt's bookkeeping bits (EXTENDED, SELF_SENT)
+                    # must not be written as if the kernel defined them.
+                    flags = frame.can.flags
+                    wire_id = frame.can.can_id
+                    if flags & _CAN_EXTENDED:
+                        wire_id |= CAN_EFF_FLAG
                     writer.write_can(
-                        iface_id, ts, frame.can.can_id, frame.can.dlc,
-                        bytes(frame.payload), frame.can.flags,
+                        iface_id, ts, wire_id, frame.can.dlc,
+                        bytes(frame.payload), flags & _WIRE_CAN_FLAGS,
                     )
                     can_count += 1
                 else:
@@ -1004,6 +1021,8 @@ class TraceReplayer:
                     flags |= _CANFD_FDF
                 if getattr(msg, "bitrate_switch", False):
                     flags |= _CANFD_BRS
+                if getattr(msg, "is_extended_id", False):
+                    flags |= _CAN_EXTENDED
 
                 frame = frame_pb2.Frame(
                     bus_type     = (frame_pb2.Frame.CANFD if flags & _CANFD_FDF

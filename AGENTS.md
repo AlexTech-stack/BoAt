@@ -144,6 +144,18 @@ snapshot, `StreamMetrics` pushes one per second. Controller state and TEC/REC
 come from netlink (`IFLA_CAN_STATE` / `IFLA_CAN_BERR_COUNTER`, physical CAN
 only); before this, bus-off and idle looked identical from the outside.
 
+**Frame format is explicit, not inferred from the ID.** `CanFrame.flags` bit
+`0x10` (`boat::hil::kCanFlagExtended` / `BOAT_CAN_FLAG_EXTENDED` in the plugin
+ABI) carries 29-bit format, because `can_id > 0x7FF` is not a format signal —
+an extended `0x123` is a different frame from a standard `0x123` and arbitrates
+differently. `SocketCanDriver::ReadFrame` sets it from `CAN_EFF_FLAG` (which is
+then masked off `can_id`), `WriteFrame` honours it and masks BoAt's own bits
+before handing the kernel its flag byte, and the fallback (`can_id > 0x7FF`)
+still covers producers that never set it. The trace importer sets it from the
+source file's IDE and `boat replay export` writes `CAN_EFF_FLAG` back, so an
+extended identifier below `0x800` round-trips through replay, export and RX —
+before this it was silently emitted as a standard frame (issue #34).
+
 ### CLI CAN commands
 
 The standalone `boat can` / `boat eth` Typer commands (including `list-buses` and
@@ -237,9 +249,15 @@ repo -- worth being precise about which one is meant:**
    `config/tests/env_*.json`) + `ManifestConfig` (setup/teardown actions
    + a list of test-file subprocesses to run, JSON) → `TestSuiteRunner`
    spins up (or connects to, if `gateway.binary` is left unset) one
-   gateway per run, executes each test file with a timeout
+   gateway per run,    executes each test file with a timeout
    (sequentially or `--parallel N`), and writes a JSON/JUnit/HTML/
-   optional-Allure report per test.
+   optional-Allure report per test. A **script test** -- a subprocess whose
+   exit code is the verdict -- has no steps to map, so its JUnit report is one
+   `<testcase>` named after the test, with the failure element carrying the
+   reason (`script exited with code N`, a timeout, or a missing file) and the
+   same reason stored as `summary` in `report.json`. Before issue #50 the
+   generator emitted `tests="0" failures="0"` for those, so a CI JUnit reader
+   saw a green run for a script that had exited 1.
    **Relative paths inside a manifest or env config resolve against that
    file's own directory**, not the caller's CWD -- `ManifestConfig.resolve()`
    and `EnvironmentConfig.resolve_path()`, both falling back to the CWD so
@@ -807,8 +825,13 @@ should use the gateway's own trace recording, not a client stream.
   rather than a stale tail.
 - Drops surface as cumulative `grpc.<stream>.dropped` points (`stream_metrics::` in
   `stream_drop_registry.h`) through `GetMetrics` and `StreamMetrics` — zeros included,
-  so "no drops" and "does not report" are distinguishable. Replay's count comes from
-  `ReplayController::DroppedEventCount()` rather than the registry.
+  so "no drops" and "does not report" are distinguishable. Two overflow sources are
+  not registry-backed and are appended from their own counters:
+  `ReplayController::DroppedEventCount()` and `SignalRouter::DroppedEventCount()`
+  (`signal_router.dropped`). The router's ring sits *upstream* of the signal/bus
+  streams and drops the *newest* event when full — a lock-free SPSC ring cannot
+  overwrite the oldest without a second producer — while the stream queues drop the
+  oldest; both policies are counted, neither is silent anymore (issue #55).
 - The first drop and every 1000th log one `[Gateway] stream '...': dropped N event(s)`
   line on stderr, so a stalled client leaves a diagnostic, not just a metric.
 - `bus_service_impl`, `signal_service_impl` and `debug_service_impl` were still using
@@ -896,6 +919,13 @@ faults and queued events are dropped -- and `CreateSimulation` rewinds the same 
 session is live, so a new definition reports tick 0. Resetting only one of clock/engine is
 what produced the `tick must be monotonically increasing` INTERNAL a long-lived gateway used
 to hit; the pair must stay together.
+
+**The scenario's seed is the run's seed.** `ScenarioDef.seed` is applied with
+`DeterminismEngine::SetSeed()` at `StartSimulation` and restored by `ResetSimulation`, so
+`"seed": N` in a scenario actually decides that run's random stream (fault-injector noise and
+plugin randomness) and a reset run replays it identically. Before issue #53 the field was
+parsed and ignored — every scenario ran on the gateway's fixed seed, so two scenarios asking
+for different streams got the same one.
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`. **Everything shipped -- the TGZ/DEB/RPM and
