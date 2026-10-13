@@ -4,12 +4,19 @@
 function(add_boat_plugin target_name)
   add_library(${target_name} MODULE ${ARGN})
   target_compile_features(${target_name} PRIVATE cxx_std_20)
+  # See boat_core: on glibc < 2.34 std::thread needs libpthread linked explicitly.
+  find_package(Threads REQUIRED)
+  target_link_libraries(${target_name} PRIVATE Threads::Threads)
   set_target_properties(${target_name} PROPERTIES
     PREFIX ""
     OUTPUT_NAME "${target_name}"
   )
+  # A fixed `lib`, not ${CMAKE_INSTALL_LIBDIR}: users write these paths into
+  # BOAT_NODE_PLUGINS, so they must not depend on the distribution the package
+  # was built on. LIBDIR is `lib64` on the AlmaLinux release builder but was
+  # `lib` on the Ubuntu runner that built v0.1.x, so it would have moved.
   install(TARGETS ${target_name}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/boat/plugins
+    LIBRARY DESTINATION lib/boat/plugins
   )
 
   # Optional config-schema sidecar (<target_name>.schema.json, next to this
@@ -33,7 +40,7 @@ function(add_boat_plugin target_name)
       COMMENT "Copying ${target_name}.schema.json next to ${target_name}"
     )
     install(FILES "${_schema_src}"
-      DESTINATION ${CMAKE_INSTALL_LIBDIR}/boat/plugins
+      DESTINATION lib/boat/plugins
     )
   endif()
 endfunction()

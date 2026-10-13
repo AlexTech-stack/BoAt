@@ -81,6 +81,16 @@ set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
 set(IOX2_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# protobuf's install rules -- and, through protobuf_INSTALL, Abseil's and
+# utf8_range's -- otherwise land in *our* install tree, which CPack packages:
+# ~1080 files of protobuf/absl/upb headers, static libs, CMake configs and .pc
+# files went into every TGZ/DEB/RPM. The .pc files also made rpmbuild emit
+# ~200 `Requires: pkgconfig(absl_*) = 20250127`, which nothing provides, so the
+# RPM could not be installed at all. Everything is linked statically; none of
+# it belongs in the package.
+set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
+set(ABSL_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(utf8_range_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 # gRPC_BUILD_TESTS does not reach its bundled third_party/re2, whose own
 # RE2_BUILD_TESTING defaults to ON. include(CTest) above enables testing
 # globally, so re2's add_test() calls land in *our* CTest project -- while
@@ -249,6 +259,10 @@ endif()
 add_library(sqlite3 STATIC "${sqlite3_SOURCE_DIR}/sqlite3.c")
 target_include_directories(sqlite3 PUBLIC "${sqlite3_SOURCE_DIR}")
 target_compile_definitions(sqlite3 PUBLIC SQLITE_THREADSAFE=1 SQLITE_ENABLE_WAL)
+# The amalgamation calls dlopen (loadable extensions) and pthread_* (THREADSAFE=1),
+# which glibc < 2.34 keeps in libdl / libpthread rather than libc.
+find_package(Threads REQUIRED)
+target_link_libraries(sqlite3 PUBLIC ${CMAKE_DL_LIBS} Threads::Threads)
 
 if(NOT TARGET tomlplusplus::tomlplusplus)
   add_library(tomlplusplus INTERFACE)

@@ -24,3 +24,10 @@ target_include_directories(boat_core PUBLIC
 target_compile_features(boat_core PUBLIC cxx_std_20)
 set_target_properties(boat_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(boat_core PRIVATE ${CMAKE_DL_LIBS})
+# PUBLIC, so everything built on boat_core gets it: before glibc 2.34
+# pthread_create & co. live in a separate libpthread, and a std::thread user that
+# does not link it fails with "undefined reference to pthread_create". Newer
+# glibc folded libpthread into libc, which is why this went unnoticed until the
+# portable build on AlmaLinux 8 (glibc 2.28).
+find_package(Threads REQUIRED)
+target_link_libraries(boat_core PUBLIC Threads::Threads)

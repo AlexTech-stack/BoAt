@@ -4,9 +4,10 @@
 # Relocated from boat-platform/.github/workflows/, where GitHub Actions never
 # saw it. Workflows are only discovered at the repository root.
 #
-# Triggers on a v*.*.* tag. The repository has no tags yet, so this has never
-# run -- push the first tag on a throwaway branch and check both jobs before
-# tagging a real release.
+# Triggers on a v*.*.* tag. It ran for v0.1.0 and v0.1.1, but was restructured
+# after them (issue #51: native amd64 + arm64 builds via portable-build.yml), so
+# the current shape has not run on a tag yet -- push a pre-release tag first and
+# check every job before tagging a real release.
 
 name: release
 
@@ -16,8 +17,16 @@ on:
       - "v*.*.*"
 
 jobs:
+  portable-build:
+    # Native amd64 + arm64 builds in the AlmaLinux 8 baseline image, packaged.
+    # Packages and image ship the very binaries this produced and tested.
+    uses: ./.github/workflows/portable-build.yml
+    with:
+      package: true
+
   package:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    needs: portable-build
     permissions:
       contents: write        # gh release upload
     defaults:
@@ -25,19 +34,11 @@ jobs:
         working-directory: boat-platform
     steps:
       - uses: actions/checkout@v4
-      - name: Install build tools
-        # Not installing cmake from apt: Ubuntu 22.04 ships 3.22 and the presets
-        # need 3.24+, so apt would shadow the runner's newer cmake.
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev rpm
-      - name: Verify toolchain versions
-        run: |
-          cmake --version
-          cargo --version
-      - name: Configure + build
-        run: cmake --preset release && cmake --build --preset release
-      - name: Create package
-        working-directory: boat-platform/build/release
-        run: cpack -G "TGZ;DEB;RPM"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: portable-*
+          path: boat-platform/dist
+          merge-multiple: true
       - name: Verify the packages are ours
         # Checked by NAME, not by glob. v0.1.0 shipped c-ares_1.34.5-1_amd64.deb,
         # c-ares-1.34.5-1.src.rpm and an 8.6 GB -Source.tar.gz of the whole
@@ -45,61 +46,68 @@ jobs:
         # that was not BoAt's. CPACK_PACKAGE_FILE_NAME is pinned, so assert it.
         run: |
           set -eux
-          cd build/release
-          ls -lh boat-platform[-_]*.tar.gz boat-platform[-_]*.deb boat-platform[-_]*.rpm
+          cd dist/packages
+          ls -lh
 
-          # Exactly one of each, and nothing calling itself a Source tarball.
-          test "$(ls -1 boat-platform[-_]*.tar.gz | wc -l)" -eq 1
-          test "$(ls -1 boat-platform[-_]*.deb     | wc -l)" -eq 1
-          test "$(ls -1 boat-platform[-_]*.rpm     | wc -l)" -eq 1
           if ls *-Source.tar.gz >/dev/null 2>&1; then
             echo "::error::a -Source tarball was produced; CPack is misconfigured"
             exit 1
           fi
 
-          # The DEB must declare itself as boat-platform at this version.
-          pkg=$(dpkg-deb -f boat-platform[-_]*.deb Package)
-          ver=$(dpkg-deb -f boat-platform[-_]*.deb Version)
-          echo "deb declares: $pkg $ver"
-          test "$pkg" = "boat-platform"
-          case "$ver" in ${GITHUB_REF_NAME#v}*) ;; *) echo "::error::deb version $ver does not match tag ${GITHUB_REF_NAME}"; exit 1 ;; esac
+          # Exactly one of each format per architecture -- named by the
+          # architecture, so a package filed under the wrong one fails here.
+          for pair in amd64:x86_64 arm64:aarch64; do
+            deb_arch=${pair%%:*} machine=${pair#*:}
+            test "$(ls -1 boat-platform-*-Linux-${machine}.tar.gz | wc -l)" -eq 1
+            test "$(ls -1 boat-platform_*_${deb_arch}.deb         | wc -l)" -eq 1
+            test "$(ls -1 boat-platform-*.${machine}.rpm          | wc -l)" -eq 1
 
-          # And it must actually contain the gateway.
-          dpkg-deb -c boat-platform[-_]*.deb | grep -q 'bin/boat_gateway'
+            deb=$(ls boat-platform_*_${deb_arch}.deb)
+            # The DEB must declare itself as boat-platform at this version, for
+            # this architecture. Without dpkg in the build image CPack would
+            # otherwise have labelled it i386.
+            pkg=$(dpkg-deb -f "$deb" Package)
+            ver=$(dpkg-deb -f "$deb" Version)
+            arch=$(dpkg-deb -f "$deb" Architecture)
+            echo "$deb declares: $pkg $ver $arch"
+            test "$pkg" = "boat-platform"
+            test "$arch" = "$deb_arch"
+            case "$ver" in ${GITHUB_REF_NAME#v}*) ;; *) echo "::error::deb version $ver does not match tag ${GITHUB_REF_NAME}"; exit 1 ;; esac
 
-          # A sanity ceiling: the install set is one static binary plus five
-          # small plugins and a header. Anything near a gigabyte means CPack has
-          # swept up the build tree again.
-          for f in boat-platform[-_]*.tar.gz boat-platform[-_]*.deb boat-platform[-_]*.rpm; do
+            # And it must actually contain the gateway -- for this architecture.
+            rm -rf x && mkdir x && dpkg-deb -x "$deb" x
+            ../../packaging/check-portable-binary.sh "$(find x -path '*bin/boat_gateway')" "$machine"
+
+            # Nothing but our own files. v0.1.x shipped 1088 entries -- protobuf,
+            # Abseil and upb headers, static libs, CMake configs, .pc files and
+            # /usr/bin/protoc, which collides with the distro's protobuf-compiler
+            # -- because fetched deps' install rules ran into our install tree.
+            stray=$(cd x && find . -type f | grep -vE '^\./usr/(bin/boat_gateway|include/boat/[^/]+\.h|lib/boat/plugins/[^/]+\.(so|schema\.json))$' || true)
+            if [ -n "$stray" ]; then
+              echo "::error::$deb contains files that are not BoAt's:"; echo "$stray" | head -20
+              exit 1
+            fi
+            rm -rf x
+          done
+
+          # A sanity ceiling: the install set is one binary plus five small
+          # plugins and a header. Anything near a gigabyte means CPack has swept
+          # up the build tree again.
+          for f in boat-platform[-_]*; do
             sz=$(stat -c%s "$f")
             echo "$f: $sz bytes"
             test "$sz" -lt 900000000
           done
-      - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-packages
-          # upload-artifact paths are relative to the workspace root, not to the
-          # job's working-directory.
-          path: |
-            boat-platform/build/release/boat-platform[-_]*.tar.gz
-            boat-platform/build/release/boat-platform[-_]*.deb
-            boat-platform/build/release/boat-platform[-_]*.rpm
       - name: Attach the packages to the GitHub release
-        # upload-artifact alone leaves them as workflow artifacts: behind a
-        # login, expiring with retention, and absent from the release page.
-        # v0.1.0's release had no downloadable packages for that reason.
+        # The portable-* workflow artifacts alone sit behind a login and expire
+        # with retention. v0.1.0's release had no downloadable packages for that
+        # reason.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${GITHUB_REF_NAME}" \
-            build/release/boat-platform[-_]*.tar.gz \
-            build/release/boat-platform[-_]*.deb \
-            build/release/boat-platform[-_]*.rpm \
-            --clobber
+        run: gh release upload "${GITHUB_REF_NAME}" dist/packages/boat-platform[-_]* --clobber
 
   docker-push:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: package
     permissions:
       contents: read
@@ -109,12 +117,19 @@ jobs:
         working-directory: boat-platform
     steps:
       - uses: actions/checkout@v4
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++ libacl1-dev
-      - name: Configure + build runtime binary
-        run: cmake --preset release && cmake --build --preset release --target boat_gateway
-      - name: Verify runtime binary exists for Dockerfile
-        run: ls build/release/src/gateway/grpc_gateway/boat_gateway
+      # Dockerfile.runtime compiles nothing: it COPYs dist/<TARGETARCH>/boat_gateway.
+      # This job used to build one x86-64 binary itself, which buildx then put
+      # into the linux/arm64 image too (issue #51).
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: portable-*
+          path: boat-platform/dist
+          merge-multiple: true
+      - name: Check each binary matches the platform it is filed under
+        # Artifacts do not preserve the executable bit.
+        run: |
+          chmod +x dist/*/boat_gateway
+          packaging/check-portable-binary.sh dist/amd64/boat_gateway x86_64 dist/arm64/boat_gateway aarch64
       - name: Compute image name
         # GHCR namespaces follow the GitHub owner, so a hardcoded
         # ghcr.io/boat-platform/... is denied from any other account -- and the
@@ -123,6 +138,8 @@ jobs:
         id: img
         run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
       - name: Set up QEMU
+        # Only for the arm64 stage's `apt-get install ca-certificates`; nothing
+        # is compiled under emulation.
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

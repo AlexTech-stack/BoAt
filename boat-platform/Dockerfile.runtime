@@ -1,10 +1,30 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+#
+# Runtime image: the gateway binary on a minimal base. Nothing is compiled here.
+#
+# The binary comes from dist/<TARGETARCH>/boat_gateway -- one per platform, each
+# built natively in Dockerfile.build. This used to COPY a single
+# build/release/.../boat_gateway, so a multi-platform buildx run put the same
+# x86-64 file into the linux/arm64 image as well (issue #51). With the path keyed
+# on TARGETARCH, a platform whose binary was not provided fails to build instead.
+#
+# Local use:
+#   mkdir -p dist/amd64
+#   cp build/release/src/gateway/grpc_gateway/boat_gateway dist/amd64/
+#   docker build -f Dockerfile.runtime -t boat-platform:local .
+# The binary must not need a newer glibc than this base image has (2.35); one
+# built on a newer host will not start here -- build it in Dockerfile.build.
+
 FROM ubuntu:22.04
+
+ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/boat
-COPY build/release/src/gateway/grpc_gateway/boat_gateway /usr/local/bin/boat_gateway
+COPY dist/${TARGETARCH}/boat_gateway /usr/local/bin/boat_gateway
 
 ENTRYPOINT ["/usr/local/bin/boat_gateway"]

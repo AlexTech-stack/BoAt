@@ -8,7 +8,7 @@ BoAt is split by *which machine a component runs on*:
 
 | Where it runs | OS | What |
 |---|---|---|
-| **Gateway host** | **Linux only** (Ubuntu 22.04 / 24.04 LTS) | `boat_gateway`, its `.so` plugins, the launcher agent (`ui/launcher_agent.py`) and local launcher (`ui/launcher.py`), `boat test run` when it starts its own gateway, and the `start_*.sh`/`stop_*.sh` scripts |
+| **Gateway host** | **Linux only**, x86_64 or aarch64 — see [Prebuilt binaries](#prebuilt-binaries) for distributions | `boat_gateway`, its `.so` plugins, the launcher agent (`ui/launcher_agent.py`) and local launcher (`ui/launcher.py`), `boat test run` when it starts its own gateway, and the `start_*.sh`/`stop_*.sh` scripts |
 | **Clients** | Any OS with Python 3.11+ | The `boat-py` SDK, the `boat` CLI pointed at a gateway (`--host` / `BOAT_HOST`), `admin_gui/`, the other web UIs and `tools/` services, node scripts, and offline tools such as `boat trace score` and `tools/dbc2boatjson.py` |
 
 The gateway is Linux-only by design, not by omission: it is built on SocketCAN and `vcan`,
@@ -20,6 +20,37 @@ code paths, but CI only exercises it on Linux.
 Working from Windows: run the gateway on a Linux machine and point the SDK, CLI or Admin GUI
 at it over gRPC. WSL2 or a Linux VM may be enough for virtual buses (`vcan`) but is untested;
 physical CAN hardware needs a native Linux host.
+
+### Prebuilt binaries
+
+Each release ships `boat_gateway` and its plugins as `.tar.gz`, `.deb` and `.rpm` for
+**amd64 (x86_64)** and **arm64 (aarch64)**, plus a multi-arch container image
+`ghcr.io/alextech-stack/boat:<tag>`. All of them carry the same binaries, built natively per
+architecture in [`Dockerfile.build`](Dockerfile.build) (AlmaLinux 8). They need **glibc 2.28
+and GCC 8's libstdc++ or newer**, and nothing beyond the C/C++ runtime and `libacl`, so one
+build covers:
+
+| Family | Releases |
+|---|---|
+| Debian / Ubuntu (incl. Raspberry Pi OS 64-bit) | Debian 10+, Ubuntu 20.04+ — use the `.deb` |
+| RHEL / Rocky / AlmaLinux (incl. CentOS AutoSD) | 8, 9, 10 — use the `.rpm` |
+| Fedora, openSUSE Leap / SLES 15 | current releases — `.rpm`, or the `.tar.gz` |
+| Anything else with glibc ≥ 2.28 | the `.tar.gz` |
+
+CI starts the gateway on AlmaLinux 8/9/10, Debian 11/12, Ubuntu 20.04/22.04/24.04, Fedora and
+openSUSE Leap 15 on both architectures before anything is published (`portable-build.yml`).
+musl-based distributions (Alpine) are not supported.
+
+**SocketCAN on RHEL-family kernels:** `can`, `can-raw`, `can-bcm`, `can-gw` and the USB
+adapter drivers are in the default `kernel-modules` package, but **`vcan` is in
+`kernel-modules-extra`**, which is not installed by default:
+
+```bash
+sudo dnf install kernel-modules-extra-$(uname -r) && sudo modprobe vcan
+```
+
+Building from source is tested on Ubuntu 22.04 and 24.04 (the prerequisites below are for
+those); to produce binaries for other distributions, build in `Dockerfile.build` instead.
 
 ## Prerequisites
 

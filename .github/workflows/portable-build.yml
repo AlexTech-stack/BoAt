@@ -1,0 +1,107 @@
+# Copyright 2026 Alexander Günther
+# SPDX-License-Identifier: Apache-2.0
+#
+# The binaries we ship -- release packages and the runtime container image --
+# come from here, and only from here. Called by ci.yml and release.yml.
+#
+# One NATIVE build per architecture, inside Dockerfile.build (AlmaLinux 8,
+# glibc 2.28), so the result runs on every mainstream distribution at or above
+# that baseline. arm64 builds on an arm64 runner: the image used to be built
+# once on x86 and buildx copied that same x86-64 binary into the linux/arm64
+# image as well (issue #51). Building under QEMU instead would take hours.
+#
+# Output: an artifact `portable-<arch>` holding dist/<arch>/boat_gateway and,
+# with `package: true`, the TGZ/DEB/RPM packages.
+
+name: portable-build
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: Also run CPack and include the packages in the artifact.
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64        # Docker / Debian name
+            machine: x86_64    # ELF / RPM / uname name
+            runner: ubuntu-24.04
+          - arch: arm64
+            machine: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: boat-platform
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the baseline build image
+        run: docker build -f Dockerfile.build -t boat-build .
+      - name: Build and test in it
+        # ctest runs here too: for arm64 this is the only place the test suite
+        # runs on that architecture at all. HIL cases skip without vcan.
+        #
+        # The container runs as root, so hand build/ back to the runner user
+        # afterwards (even on failure) -- the later steps move files out of it.
+        # --shm-size: iceoryx2 uses /dev/shm, and Docker's default is 64 MB.
+        run: |
+          docker run --rm --shm-size=1g -v "$PWD":/src -w /src -e OWNER="$(id -u):$(id -g)" boat-build sh -ec '
+            trap "chown -R \$OWNER build" EXIT
+            cmake --preset release
+            cmake --build --preset release
+            ctest --preset release
+            if [ "${{ inputs.package }}" = "true" ]; then
+              cd build/release && cpack -G "TGZ;DEB;RPM"
+            fi'
+      - name: Check architecture, glibc baseline and linked libraries
+        run: |
+          set -- build/release/src/gateway/grpc_gateway/boat_gateway ${{ matrix.machine }}
+          for so in build/release/src/plugins/*/*.so; do set -- "$@" "$so" ${{ matrix.machine }}; done
+          packaging/check-portable-binary.sh "$@"
+      - name: Stage the gateway for Dockerfile.runtime
+        run: |
+          mkdir -p dist/${{ matrix.arch }}
+          cp build/release/src/gateway/grpc_gateway/boat_gateway dist/${{ matrix.arch }}/
+      - name: Start the gateway, with a plugin, on the distributions we claim
+        # Proves the binaries load and get through config resolution, not merely
+        # that their symbol versions look right: the gateway must load the probe
+        # plugin, write its effective config, and still be running when
+        # `timeout` stops it (exit 124). Each image is the bare official one.
+        run: |
+          set -u
+          failed=
+          for img in almalinux:8 almalinux:9 almalinux:10 debian:11 debian:12 \
+                     ubuntu:20.04 ubuntu:22.04 ubuntu:24.04 fedora:latest opensuse/leap:15; do
+            if docker run --rm --shm-size=256m \
+                 -v "$PWD/dist/${{ matrix.arch }}:/d:ro" -v "$PWD/build/release/src/plugins:/p:ro" \
+                 -e BOAT_CONFIG_DUMP=/tmp/effective-config.json -e BOAT_NODE_PLUGINS=/p/probe/probe.so \
+                 "$img" \
+                 sh -c 'timeout 5 /d/boat_gateway >/tmp/out 2>&1; rc=$?
+                        [ $rc -eq 124 ] && grep -q "\"loaded\": true" /tmp/effective-config.json && exit 0
+                        echo "exit $rc"; cat /tmp/out; cat /tmp/effective-config.json 2>/dev/null; exit 1'; then
+              echo "ok   $img"
+            else
+              echo "::error::boat_gateway (${{ matrix.arch }}) does not start on $img"
+              failed=1
+            fi
+          done
+          [ -z "$failed" ]
+      - name: Collect packages
+        if: inputs.package
+        run: |
+          set -eux
+          mkdir -p dist/packages
+          mv build/release/boat-platform[-_]*.tar.gz build/release/boat-platform[-_]*.deb \
+             build/release/boat-platform[-_]*.rpm dist/packages/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.arch }}
+          # Relative to the workspace root, not the job's working-directory.
+          path: boat-platform/dist/
+          if-no-files-found: error

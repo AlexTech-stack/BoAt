@@ -60,8 +60,11 @@ never contains different frames.
 
 ## Platforms
 
-The **gateway runs on Linux only** (Ubuntu 22.04 / 24.04) — it is built on SocketCAN, `vcan`,
-`AF_PACKET` and `timerfd`, and no Windows or macOS port is planned. The **clients** (Python
+The **gateway runs on Linux only** — it is built on SocketCAN, `vcan`, `AF_PACKET` and
+`timerfd`, and no Windows or macOS port is planned. Release packages and container images are
+built for amd64 and arm64 and run on any distribution with glibc 2.28+ (Debian 10+, Ubuntu
+20.04+, RHEL/Rocky/Alma 8+, Fedora, openSUSE); building from source is tested on Ubuntu
+22.04 / 24.04. The **clients** (Python
 SDK, `boat` CLI, Admin GUI, web tools) are OS-agnostic and talk to a gateway over gRPC, so you
 can drive a Linux gateway from Windows or macOS. Details:
 [boat-platform/README.md — Supported platforms](boat-platform/README.md#supported-platforms).
