@@ -9,9 +9,12 @@
 > other; the source code is authoritative over both. This file is the longer of the two and
 > carries operational detail `CLAUDE.md` only summarizes.
 
-> **Status: pre-1.0.** The canonical statement lives in [README.md](README.md); in short: the
-> gRPC surface and the C plugin ABI may still change between minor versions — the ABI is
-> versioned (currently v9) and a mismatched plugin is rejected at load with a clear error.
+> **Project status is stated in one place: [`README.md`](README.md).** Neither this file nor
+> its sibling carries a status or stability line — three copies of that statement had already
+> drifted into three different promises, which is the thing the dual-file rule exists to
+> prevent. The README is the single source; `CHANGELOG.md` records what changed and
+> [`boat-platform/project-plan.md`](boat-platform/project-plan.md) says which requirements are
+> unmet.
 
 ## Supported platforms
 

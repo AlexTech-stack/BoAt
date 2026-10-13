@@ -30,9 +30,12 @@ imply one.
 
 The bulk of the code lives under `boat-platform/`. `admin_gui/` (PySide6 desktop client) and `ui/` + `tools/` (FastAPI web services) sit at the repo root. `boat-platform/docs/architecture/system-architecture.md` covers the architecture in depth.
 
-> **Status: pre-1.0.** The canonical statement lives in [README.md](README.md); in short: the
-> gRPC surface and the C plugin ABI may still change between minor versions — the ABI is
-> versioned (currently v9) and a mismatched plugin is rejected at load with a clear error.
+> **Project status is stated in one place: [`README.md`](README.md).** Neither this file nor
+> its sibling carries a status or stability line — three copies of that statement had already
+> drifted into three different promises, which is the thing the dual-file rule exists to
+> prevent. The README is the single source; `CHANGELOG.md` records what changed and
+> [`boat-platform/project-plan.md`](boat-platform/project-plan.md) says which requirements are
+> unmet.
 
 ## License
 
