@@ -16,12 +16,12 @@ classDiagram
     class PduRouterPlugin
     class CanTpPlugin
     class TcpPlugin
-    class SomeIpPlugin
+    class SomeipPlugin
 
     IPlugin <|-- PduRouterPlugin
     IPlugin <|-- CanTpPlugin
     IPlugin <|-- TcpPlugin
-    IPlugin <|-- SomeIpPlugin
+    IPlugin <|-- SomeipPlugin
 ```
 
 `IPlugin` in this diagram maps to the C ABI dispatch table `BoatPluginVTable`
@@ -103,16 +103,21 @@ can skip their own echoes in `on_frame` and avoid dispatch loops.
 
 ```mermaid
 classDiagram
-    class ISignalRouter {
-      +Route(event)
-      +Subscribe(filter)
+    class SignalRouter {
+      +Subscribe(signal_id, filter, callback) SubscriptionHandle
+      +Unsubscribe(handle)
+      +Publish(event)
+      +SetFaultInjector(injector)
+      +DroppedEventCount() uint64
     }
-    class LocalSignalRouter
-    class DistributedSignalRouter
-
-    ISignalRouter <|-- LocalSignalRouter
-    ISignalRouter <|-- DistributedSignalRouter
 ```
+
+There is one implementation, `boat::core::SignalRouter` (`src/core/signal/signal_router.h`):
+a single dispatcher thread drains a lock-free SPSC ring per subscription (4096 slots,
+drop-newest) and invokes the callback outside the subscription lock. Earlier revisions of
+this diagram drew an `ISignalRouter` interface with `Local`/`Distributed` implementations;
+none of those types ever existed. `DroppedEventCount()` is the aggregate reported as the
+`signal_router.dropped` metric.
 
 ## Event Store Hierarchy
 
@@ -123,11 +128,12 @@ classDiagram
       +Query(filter)
     }
     class SqliteEventStore
-    class TimescaleEventStore
 
     IEventStore <|-- SqliteEventStore
-    IEventStore <|-- TimescaleEventStore
 ```
+
+`TimescaleEventStore` was drawn here and never existed — see
+`docs/database/database-design.md`.
 
 ## HAL Driver Hierarchy
 
