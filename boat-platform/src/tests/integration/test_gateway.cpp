@@ -1249,16 +1249,19 @@ TEST_CASE("A slow frame subscriber overflows into dropped-oldest, and metrics sa
   double dropped = -1.0;
   double pdu_dropped = -1.0;
   double replay_dropped = -1.0;
+  double router_dropped = -1.0;
   for (const auto& point : metrics_resp.points()) {
     if (point.name() == "grpc.frames.subscribe.dropped") dropped = point.value();
     if (point.name() == "grpc.pdus.subscribe.dropped") pdu_dropped = point.value();
     if (point.name() == "grpc.replay.stream.dropped") replay_dropped = point.value();
+    if (point.name() == "signal_router.dropped") router_dropped = point.value();
   }
   REQUIRE(dropped > 0.0);
   // Every stream is reported, zeros included: "no drops" and "does not
   // report" must not look the same to a consumer.
   REQUIRE(pdu_dropped == 0.0);
   REQUIRE(replay_dropped == 0.0);
+  REQUIRE(router_dropped == 0.0);
 
   sub_ctx.TryCancel();
   (void)reader->Finish();

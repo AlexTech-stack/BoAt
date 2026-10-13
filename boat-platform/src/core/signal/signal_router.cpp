@@ -119,6 +119,7 @@ void SignalRouter::EnqueueEvent(const SignalEvent& event) {
     }
     if (!subscription->queue.Push(event)) {
       subscription->overflow_count.fetch_add(1, std::memory_order_relaxed);
+      dropped_events_.fetch_add(1, std::memory_order_relaxed);
     }
   }
 }

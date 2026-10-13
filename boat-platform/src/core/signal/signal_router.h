@@ -45,6 +45,18 @@ class SignalRouter {
   void Publish(const SignalEvent& event);
   void SetFaultInjector(FaultInjector* injector);
 
+  /* Cumulative events dropped because a subscription's ring was full, summed
+     across subscriptions including ones since unsubscribed. The per-
+     subscription counter is lost with the subscription, so an aggregate is
+     what an operator can actually see -- it is reported as the
+     `signal_router.dropped` metric. Note the policy differs from the gRPC
+     handler queues: this lock-free SPSC ring drops the *newest* event (it
+     cannot overwrite the oldest without a second producer), while the stream
+     queues in the gateway drop the oldest. */
+  [[nodiscard]] std::uint64_t DroppedEventCount() const {
+    return dropped_events_.load(std::memory_order_relaxed);
+  }
+
  private:
   static constexpr std::size_t kRingBufferSize = 4096;
 
@@ -74,6 +86,7 @@ class SignalRouter {
 
   std::atomic<bool> running_{true};
   std::atomic<SubscriptionHandle> next_handle_{1};
+  std::atomic<std::uint64_t> dropped_events_{0};  // see DroppedEventCount()
   std::vector<std::shared_ptr<Subscription>> subscriptions_;
   mutable std::mutex subscriptions_mutex_;
   FaultInjector* fault_injector_{nullptr};

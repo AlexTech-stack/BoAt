@@ -55,11 +55,11 @@ void AppendCanHealthMetrics(GatewayContext& ctx, std::uint64_t tick, Emit emit) 
   }
 }
 
-/* Every streaming RPC's cumulative overflow count, one point per stream.
-   Emitted with zeros when nothing has dropped: a consumer must be able to tell
-   "no drops" from "this build does not report drops". The replay queue lives in
-   core::replay rather than the registry, so it is appended from its own
-   counter. */
+/* Every streaming RPC's cumulative overflow count, one point per stream, plus
+   the two overflow sources that are not registry-backed (replay's queue and
+   SignalRouter's own ring). Emitted with zeros when nothing has dropped: a
+   consumer must be able to tell "no drops" from "this build does not report
+   drops". */
 template <typename Emit>
 void AppendStreamDropMetrics(GatewayContext& ctx, std::uint64_t tick, Emit emit) {
   for (const char* name : stream_metrics::kRegistryBacked) {
@@ -67,6 +67,8 @@ void AppendStreamDropMetrics(GatewayContext& ctx, std::uint64_t tick, Emit emit)
   }
   emit(stream_metrics::kReplayStream,
        static_cast<double>(ctx.replay_controller.DroppedEventCount()));
+  emit(stream_metrics::kSignalRouterDropped,
+       static_cast<double>(ctx.sim.signal_router().DroppedEventCount()));
 }
 }  // namespace
 
