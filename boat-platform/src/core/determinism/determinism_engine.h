@@ -24,6 +24,14 @@ class DeterminismEngine {
   [[nodiscard]] std::uint64_t NextRandom();
   [[nodiscard]] std::uint64_t Seed() const { return seed_; }
 
+  /* Switch to a different seed and forget the last tick, as if the engine had
+     been constructed with it. Applying a scenario's own seed at start time is
+     what makes `ScenarioDef.seed` mean anything: without it every scenario ran
+     on the gateway's fixed seed, so two scenarios asking for different random
+     streams got the same one (issue #53). Also used by ResetSimulation, so a
+     reset run replays the scenario's stream identically. */
+  void SetSeed(std::uint64_t seed);
+
   /* Forget the last tick, so a rewound clock can start again from tick 1.
      Without this, resetting the clock while this engine still remembers a
      high-water tick makes the next BeforeTick() throw "tick must be

@@ -999,14 +999,15 @@ TEST_CASE("Reset rewinds the tick and only one simulation can be active",
   auto scenario_stub = boat::v1::ScenarioService::NewStub(channel);
   auto simulation_stub = boat::v1::SimulationService::NewStub(channel);
 
-  const auto create_scenario = [&](const std::string& id) {
+  const auto create_scenario = [&](const std::string& id, std::uint64_t seed) {
     boat::v1::CreateScenarioRequest req;
     req.mutable_scenario()->set_scenario_id(id);
     req.mutable_scenario()->set_name(id);
     req.mutable_scenario()->set_content(
         R"({"id":")" + id +
         R"(","name":")" + id +
-        R"(","version":"1.0","duration_ticks":1000,"seed":1,"plugins":[],"signals":[],"faults":[]})");
+        R"(","version":"1.0","duration_ticks":1000,"seed":)" + std::to_string(seed) +
+        R"(,"plugins":[],"signals":[],"faults":[]})");
     boat::v1::ScenarioResponse resp;
     grpc::ClientContext context;
     REQUIRE(scenario_stub->CreateScenario(&context, req, &resp).ok());
@@ -1021,7 +1022,7 @@ TEST_CASE("Reset rewinds the tick and only one simulation can be active",
     return resp.simulation();
   };
 
-  create_scenario("scn-reset");
+  create_scenario("scn-reset", 1);
   const auto created_a = create_sim("scn-reset");
   REQUIRE(created_a.tick() == 0);
   REQUIRE(created_a.state() == boat::v1::SIMULATION_STATE_IDLE);
@@ -1032,11 +1033,15 @@ TEST_CASE("Reset rewinds the tick and only one simulation can be active",
     boat::v1::SimulationResponse resp;
     grpc::ClientContext context;
     REQUIRE(simulation_stub->StartSimulation(&context, req, &resp).ok());
+    // The scenario's own seed is what the run's random stream comes from
+    // (issue #53); the gateway's fixed seed used to win and make the field
+    // meaningless.
+    REQUIRE(sim.determinism().Seed() == 1);
   }
 
   // A second definition can be created while one session runs -- it is staged,
   // not started -- but it must not be startable over the live one.
-  create_scenario("scn-other");
+  create_scenario("scn-other", 2);
   const auto created_b = create_sim("scn-other");
   {
     boat::v1::StartSimulationRequest req;
@@ -1074,6 +1079,9 @@ TEST_CASE("Reset rewinds the tick and only one simulation can be active",
     REQUIRE(resp.simulation().state() == boat::v1::SIMULATION_STATE_IDLE);
     REQUIRE(resp.simulation().tick() == 0);
     REQUIRE(sim.clock().tick() == 0);
+    // A reset run is a rerun of the same scenario, so its seed is restored
+    // rather than left at whatever ran before.
+    REQUIRE(sim.determinism().Seed() == 1);
   }
 
   // The reset cleared the active session, so the staged definition can start
@@ -1085,6 +1093,7 @@ TEST_CASE("Reset rewinds the tick and only one simulation can be active",
     boat::v1::SimulationResponse resp;
     grpc::ClientContext context;
     REQUIRE(simulation_stub->StartSimulation(&context, req, &resp).ok());
+    REQUIRE(sim.determinism().Seed() == 2);  // the second scenario's seed
   }
   {
     boat::v1::StopSimulationRequest req;

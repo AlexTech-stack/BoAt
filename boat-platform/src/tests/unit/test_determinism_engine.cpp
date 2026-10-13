@@ -39,3 +39,26 @@ TEST_CASE("Reset lets a rewound run replay the identical stream",
   }
   REQUIRE(first == second);
 }
+
+TEST_CASE("SetSeed switches the stream and lets a rewound run start over",
+          "[unit][determinism_engine]") {
+  // `ScenarioDef.seed` used to be parsed and never applied, so every scenario
+  // ran on the gateway's fixed seed (issue #53). Applying a scenario's seed at
+  // start time is this call.
+  boat::core::DeterminismEngine engine(777);
+
+  engine.BeforeTick(1);
+  const std::uint64_t stream_777 = engine.NextRandom();
+
+  // Same seed, repeated: identical stream.
+  engine.SetSeed(777);
+  REQUIRE(engine.Seed() == 777);
+  engine.BeforeTick(1);  // last_tick_ was cleared, so tick 1 is legal again
+  REQUIRE(engine.NextRandom() == stream_777);
+
+  // Different scenario, different seed: different stream.
+  engine.SetSeed(42);
+  REQUIRE(engine.Seed() == 42);
+  engine.BeforeTick(1);
+  REQUIRE(engine.NextRandom() != stream_777);
+}
