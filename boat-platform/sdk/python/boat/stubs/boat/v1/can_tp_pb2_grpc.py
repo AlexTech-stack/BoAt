@@ -100,14 +100,17 @@ class CanTpServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def Subscribe(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Bounded backlog per subscriber: a slow client loses the oldest events,
+        counted as `grpc.can_tp.subscribe.dropped` by MetricsService.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def SubscribeErrors(self, request, context):
         """Same nsdu_ids/iface scoping convention as Subscribe (SubscribeRequest
-        is shared between the two).
+        is shared between the two). Drops counted as
+        `grpc.can_tp.subscribe_errors.dropped`.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

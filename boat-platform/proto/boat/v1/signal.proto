@@ -33,6 +33,9 @@ message InjectSignalResponse { bool accepted = 1; ErrorDetail error = 2; }
 
 service SignalService {
   rpc InjectSignal(InjectSignalRequest) returns (InjectSignalResponse);
+  // Stream signal values. Bounded backlog per subscriber: a slow client loses
+  // the oldest values, counted as `grpc.signals.subscribe.dropped` by
+  // MetricsService.
   rpc SubscribeSignals(SubscribeSignalsRequest) returns (stream SignalValue);
   rpc GetSignalHistory(GetSignalHistoryRequest) returns (SignalHistoryResponse);
 }

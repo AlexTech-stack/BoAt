@@ -142,7 +142,14 @@ service FrameService {
      An `iface_filter` naming an interface neither registry has fails with
      NOT_FOUND rather than returning an empty stream, matching SendFrame. A
      typo'd interface is a configuration error, and a subscription that
-     silently never yields is indistinguishable from a quiet bus. */
+     silently never yields is indistinguishable from a quiet bus.
+
+     Backpressure: each subscriber has a bounded backlog
+     (BOAT_STREAM_QUEUE_CAPACITY, default 4096 events). A client that cannot
+     keep up loses the oldest frames -- the gateway stays live and flat rather
+     than buffering for it -- and the cumulative count is reported as the
+     `grpc.frames.subscribe.dropped` point by MetricsService. A rising count
+     means gaps in what this stream delivered. */
   rpc SubscribeFrames(SubscribeFramesRequest) returns (stream Frame);
 
   /* Every CAN and Ethernet interface the gateway has open. */
@@ -164,6 +171,10 @@ service FrameService {
      come back identically tagged. An ingress frame naming
      an interface the gateway does not have fails the whole call rather than
      being dropped: the interface is fixed for the life of a bridge session, so
-     that is a configuration error and silence would hide it. */
+     that is a configuration error and silence would hide it.
+
+     Backpressure matches SubscribeFrames: bounded backlog per subscriber,
+     oldest frames dropped, cumulative count as `grpc.frames.stream.dropped`
+     via MetricsService. */
   rpc StreamFrames(stream StreamFramesRequest) returns (stream Frame);
 }

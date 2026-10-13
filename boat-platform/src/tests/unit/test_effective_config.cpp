@@ -3,12 +3,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdlib>
 #include <string>
 
 #include "effective_config.h"
 
 using boat::gateway::EffectiveConfig;
 using boat::gateway::JsonEscape;
+using boat::gateway::ResolveStreamQueueCapacity;
 
 TEST_CASE("JsonEscape produces valid JSON string content", "[unit][effective_config]") {
   REQUIRE(JsonEscape("plain") == "plain");
@@ -85,4 +87,40 @@ TEST_CASE("EffectiveConfig with no plugins still emits a valid array",
   REQUIRE(json.find("\"node_plugins\": [],") != std::string::npos);
   REQUIRE(json.find(",\n}") == std::string::npos);
   REQUIRE(json.find(",]") == std::string::npos);
+}
+
+TEST_CASE("BOAT_STREAM_QUEUE_CAPACITY resolves with a clear fallback",
+          "[unit][effective_config]") {
+  ::unsetenv("BOAT_STREAM_QUEUE_CAPACITY");
+  {
+    EffectiveConfig cfg;
+    ResolveStreamQueueCapacity(&cfg);
+    REQUIRE(cfg.stream_queue_capacity == 4096);
+    REQUIRE(cfg.stream_queue_capacity_resolved_from == "default");
+    REQUIRE(cfg.warnings.empty());
+  }
+
+  ::setenv("BOAT_STREAM_QUEUE_CAPACITY", "128", 1);
+  {
+    EffectiveConfig cfg;
+    ResolveStreamQueueCapacity(&cfg);
+    REQUIRE(cfg.stream_queue_capacity == 128);
+    REQUIRE(cfg.stream_queue_capacity_resolved_from == "BOAT_STREAM_QUEUE_CAPACITY");
+    REQUIRE(cfg.warnings.empty());
+    REQUIRE(cfg.ToJson().find("\"stream_queue_capacity\": 128") != std::string::npos);
+  }
+
+  // A typo'd extra digit must not turn "bound the memory" into the opposite:
+  // invalid values fall back to the default and say so.
+  for (const char* bad : {"banana", "0", "-5", "99999999999999999999", "2000000", "12x"}) {
+    ::setenv("BOAT_STREAM_QUEUE_CAPACITY", bad, 1);
+    EffectiveConfig cfg;
+    ResolveStreamQueueCapacity(&cfg);
+    REQUIRE(cfg.stream_queue_capacity == 4096);
+    REQUIRE(cfg.stream_queue_capacity_resolved_from == "default");
+    REQUIRE(cfg.warnings.size() == 1);
+    REQUIRE(cfg.warnings[0].find("BOAT_STREAM_QUEUE_CAPACITY") != std::string::npos);
+  }
+
+  ::unsetenv("BOAT_STREAM_QUEUE_CAPACITY");
 }

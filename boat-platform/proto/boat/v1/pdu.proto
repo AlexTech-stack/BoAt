@@ -110,6 +110,9 @@ message RemoveRouteResponse { bool ok = 1; }
 
 service PduService {
   rpc SendPdu(SendPduRequest)                       returns (SendPduResponse);
+  // Stream routed I-PDUs. Bounded backlog per subscriber: a slow consumer
+  // loses the oldest PDUs, counted as `grpc.pdus.subscribe.dropped` by
+  // MetricsService.
   rpc SubscribePdus(SubscribePdusRequest)            returns (stream PduFrame);
   rpc ConfigureRoute(ConfigureRouteRequest)          returns (ConfigureRouteResponse);
   rpc ListRoutes(ListRoutesRequest)                  returns (ListRoutesResponse);

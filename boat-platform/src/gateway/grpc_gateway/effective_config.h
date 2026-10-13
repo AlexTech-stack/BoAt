@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -43,6 +44,14 @@ struct EffectiveConfig {
   std::string version;
 
   int  grpc_port = 50051;
+  /* Events one streaming subscriber may queue before the oldest entries are
+     dropped (see subscriber_queue.h). BOAT_STREAM_QUEUE_CAPACITY, resolved by
+     ResolveStreamQueueCapacity(); recorded because raising or lowering the cap
+     changes whether a slow subscriber loses data. */
+  std::size_t stream_queue_capacity = 4096;
+  /* Which knob decided stream_queue_capacity: "BOAT_STREAM_QUEUE_CAPACITY" or
+     "default". */
+  std::string stream_queue_capacity_resolved_from = "default";
   bool tls_enabled = false;
   bool mtls_required = false;
   std::string tls_cert_path;
@@ -89,5 +98,11 @@ struct EffectiveConfig {
 /* Escapes a string for embedding in a JSON document (quotes, backslashes,
    control characters). Exposed for tests. */
 [[nodiscard]] std::string JsonEscape(const std::string& in);
+
+/* Resolves BOAT_STREAM_QUEUE_CAPACITY into `cfg`: a positive integer up to
+   kMaxStreamQueueCapacity sets stream_queue_capacity; unset leaves the
+   default; anything else leaves the default and appends a warning naming the
+   offending value. */
+void ResolveStreamQueueCapacity(EffectiveConfig* cfg);
 
 }  // namespace boat::gateway

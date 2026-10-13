@@ -3,8 +3,12 @@
 
 #include "effective_config.h"
 
+#include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <sstream>
+
+#include "stream_drop_registry.h"
 
 namespace boat::gateway {
 namespace {
@@ -59,6 +63,9 @@ std::string EffectiveConfig::ToJson() const {
 
   os << "  \"grpc\": {\n";
   os << "    \"port\": " << grpc_port << ",\n";
+  os << "    \"stream_queue_capacity\": " << stream_queue_capacity << ",\n";
+  os << "    \"stream_queue_capacity_resolved_from\": \""
+     << JsonEscape(stream_queue_capacity_resolved_from) << "\",\n";
   os << "    \"tls_enabled\": " << BoolStr(tls_enabled) << ",\n";
   os << "    \"mtls_required\": " << BoolStr(mtls_required) << ",\n";
   os << "    \"tls_cert_path\": \"" << JsonEscape(tls_cert_path) << "\",\n";
@@ -122,6 +129,28 @@ std::string EffectiveConfig::ToJson() const {
   AppendStringArray(os, warnings);
   os << "\n}\n";
   return os.str();
+}
+
+void ResolveStreamQueueCapacity(EffectiveConfig* cfg) {
+  const char* env = std::getenv("BOAT_STREAM_QUEUE_CAPACITY");
+  if (env == nullptr || *env == '\0') {
+    return;  // leave the default and "default" tag in place
+  }
+
+  errno = 0;
+  char* end = nullptr;
+  const long long parsed = std::strtoll(env, &end, 10);
+  const long long max = static_cast<long long>(kMaxStreamQueueCapacity);
+  if (errno != 0 || end == env || *end != '\0' || parsed <= 0 || parsed > max) {
+    cfg->warnings.push_back(
+        "BOAT_STREAM_QUEUE_CAPACITY='" + std::string(env) +
+        "' is not a positive integer <= " + std::to_string(kMaxStreamQueueCapacity) +
+        "; using the default of " + std::to_string(kDefaultStreamQueueCapacity));
+    return;
+  }
+
+  cfg->stream_queue_capacity = static_cast<std::size_t>(parsed);
+  cfg->stream_queue_capacity_resolved_from = "BOAT_STREAM_QUEUE_CAPACITY";
 }
 
 }  // namespace boat::gateway

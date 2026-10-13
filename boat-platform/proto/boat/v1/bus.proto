@@ -30,5 +30,8 @@ message BusSubscribeRequest {
 
 service BusService {
   rpc Publish(BusPublishRequest)     returns (BusPublishResponse);
+  // Stream bus signals. Bounded backlog per subscriber: a slow client loses
+  // the oldest signals, counted as `grpc.bus.subscribe.dropped` by
+  // MetricsService.
   rpc Subscribe(BusSubscribeRequest) returns (stream BusSignal);
 }

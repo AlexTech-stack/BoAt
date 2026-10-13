@@ -70,6 +70,12 @@ target_include_directories(boat_unit_effective_config PRIVATE
 target_link_libraries(boat_unit_effective_config PRIVATE Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_effective_config)
 
+add_executable(boat_unit_subscriber_queue unit/test_subscriber_queue.cpp)
+target_include_directories(boat_unit_subscriber_queue PRIVATE
+  ${CMAKE_SOURCE_DIR}/src/gateway/grpc_gateway)
+target_link_libraries(boat_unit_subscriber_queue PRIVATE Catch2::Catch2WithMain)
+boat_discover_tests(boat_unit_subscriber_queue)
+
 add_executable(boat_unit_ipc_channel_selector unit/test_ipc_channel_selector.cpp)
 target_link_libraries(boat_unit_ipc_channel_selector PRIVATE boat_ipc Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_ipc_channel_selector)
@@ -91,6 +97,10 @@ add_executable(
   ../gateway/grpc_gateway/can_tp_service_impl.cpp
   ../gateway/grpc_gateway/frame_service_impl.cpp
   ../gateway/grpc_gateway/frame_sink.cpp
+  ../gateway/grpc_gateway/bus_service_impl.cpp
+  ../gateway/grpc_gateway/debug_service_impl.cpp
+  ../gateway/grpc_gateway/effective_config.cpp
+  ../gateway/grpc_gateway/metrics_service_impl.cpp
 )
 target_include_directories(boat_integration_gateway PRIVATE
   ${CMAKE_SOURCE_DIR}/src

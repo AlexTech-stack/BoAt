@@ -25,6 +25,17 @@ The plugin ABI is versioned separately from the project; see
   `docs/api/protobuf-definitions.md` from `proto/boat/v1/`; a `doc-facts-in-sync` CI job fails
   when the committed document is stale. The hand-typed totals are no longer maintained
   anywhere in the docs.
+- **gRPC streaming is bounded, and its losses are visible.** Every streaming RPC hands each
+  subscriber a bounded drop-oldest queue (`BOAT_STREAM_QUEUE_CAPACITY`, default 4096, max
+  1,000,000, recorded in the effective-config artifact) instead of buffering a slow client's
+  backlog without limit; the metrics stream conflates latest-value-per-name instead. Overflow
+  is cumulative and reported as `grpc.<stream>.dropped` points through `MetricsService` (zeros
+  included, so "no drops" and "does not report" are distinguishable) with a rate-limited
+  stderr line on the first and every 1000th drop. `ReplayController`'s StreamReplay queue is
+  bounded the same way — it had been fed on every replayed frame even with no subscriber
+  attached. Producers are never blocked for backpressure: they run on bus-dispatch threads,
+  so a slow client must not stall hardware RX for everyone else. Lossless capture belongs to
+  the gateway's own trace recording, not a client stream.
 - **arm64 (aarch64) release packages.** Releases now ship `.tar.gz`, `.deb` and `.rpm` for
   both amd64 and arm64 (Raspberry Pi OS 64-bit, Jetson, Graviton, NXP i.MX8/S32G-class
   boards), not only an image.
@@ -74,7 +85,9 @@ The plugin ABI is versioned separately from the project; see
   writer itself. `PduService.SubscribePdus`, `FrameService.SubscribeFrames`/`StreamFrames` and
   `MetricsService.StreamMetrics` now use a heap-owned subscriber queue captured by value; the
   bidirectional stream writes from a dedicated writer thread that is joined before the handler
-  returns.
+  returns. `BusService.Subscribe`, `SignalService.SubscribeSignals` and
+  `DebugService.StreamEvents` were still on the stack-local pattern — the debug stream even
+  captured its filter string by reference — and now share the same queue.
 - **`ResetSimulation` now means reset, and one simulation is active at a time.** It stopped
   the scheduler and reported `IDLE` without touching the clock, so a reset simulation kept
   its tick and a definition created afterwards inherited it — a long-lived gateway could even

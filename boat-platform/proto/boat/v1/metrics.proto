@@ -18,5 +18,9 @@ message MetricsResponse { repeated MetricPoint points = 1; }
 
 service MetricsService {
   rpc GetMetrics(GetMetricsRequest) returns (MetricsResponse);
+  // Stream metric points; CAN bus health and the per-stream drop counters
+  // (grpc.*.dropped) are appended once a second. A slow consumer gets the
+  // latest value per metric name rather than a backlog -- conflated, not
+  // queued indefinitely; the conflated count is `grpc.metrics.stream.dropped`.
   rpc StreamMetrics(StreamMetricsRequest) returns (stream MetricPoint);
 }

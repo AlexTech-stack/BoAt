@@ -56,7 +56,11 @@ class MetricsServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def StreamMetrics(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Stream metric points; CAN bus health and the per-stream drop counters
+        (grpc.*.dropped) are appended once a second. A slow consumer gets the
+        latest value per metric name rather than a backlog -- conflated, not
+        queued indefinitely; the conflated count is `grpc.metrics.stream.dropped`.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
