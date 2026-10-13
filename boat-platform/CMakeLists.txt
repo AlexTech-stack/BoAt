@@ -116,23 +116,6 @@ FetchContent_Declare(
 )
 
 FetchContent_Declare(
-  gRPC
-  GIT_REPOSITORY https://github.com/grpc/grpc.git
-  GIT_TAG v1.75.0
-)
-
-FetchContent_Declare(
-  iceoryx2
-  GIT_REPOSITORY https://github.com/eclipse-iceoryx/iceoryx2.git
-  GIT_TAG v0.4.1
-)
-
-FetchContent_Declare(
-  sqlite3
-  URL https://www.sqlite.org/2024/sqlite-amalgamation-3460000.zip
-)
-
-FetchContent_Declare(
   tomlplusplus
   GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
   GIT_TAG v3.4.0
@@ -141,6 +124,38 @@ FetchContent_Declare(
 # protobuf must be available before gRPC so that gRPC's find_package(protobuf)
 # is redirected to our FetchContent copy via OVERRIDE_FIND_PACKAGE.
 FetchContent_MakeAvailable(spdlog protobuf tomlplusplus)
+
+# gRPC, iceoryx2 and sqlite3 are populated here rather than through
+# FetchContent_MakeAvailable(): the first two must be patched *before* their
+# add_subdirectory (see below), and sqlite3 has no upstream CMake project to
+# add at all.
+#
+# CMP0169 deprecates FetchContent_Populate(<name>) with only the content name.
+# The replacement is the fully-specified direct form, which does *not* read
+# FetchContent_Declare -- every detail (directories and download info) has to
+# be in the call. This helper wraps that form, keeps the build/<preset>/_deps
+# directory layout the declared form would have chosen, and preserves the
+# FETCHCONTENT_SOURCE_DIR_<NAME> cache override (point at a local tree instead
+# of downloading).
+function(boat_populate name source_dir binary_dir)
+  string(TOUPPER "${name}" _upper)
+  string(TOLOWER "${name}" _lower)
+  if(FETCHCONTENT_SOURCE_DIR_${_upper})
+    FetchContent_Populate(${_lower}
+      SUBBUILD_DIR "${FETCHCONTENT_BASE_DIR}/${_lower}-subbuild"
+      SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_${_upper}}"
+      BINARY_DIR "${binary_dir}")
+  else()
+    FetchContent_Populate(${_lower}
+      SUBBUILD_DIR "${FETCHCONTENT_BASE_DIR}/${_lower}-subbuild"
+      SOURCE_DIR "${source_dir}"
+      BINARY_DIR "${binary_dir}"
+      ${ARGN})
+  endif()
+  # The direct form sets these only in this function's scope.
+  set(${_lower}_SOURCE_DIR "${${_lower}_SOURCE_DIR}" PARENT_SCOPE)
+  set(${_lower}_BINARY_DIR "${${_lower}_BINARY_DIR}" PARENT_SCOPE)
+endfunction()
 
 # The gRPC and iceoryx2 patches below edit files *inside* FetchContent's git
 # checkouts. ExternalProject's update step stashes local edits, checks out the
@@ -188,10 +203,10 @@ boat_unpatch_dep(iceoryx2 iceoryx2-ffi/c/CMakeLists.txt)
 # off ${_gRPC_PROTOBUF_LIBRARIES} instead, so the patch's search string no
 # longer exists and it had silently become a no-op -- removed rather than kept
 # as dead code.
-FetchContent_GetProperties(grpc)
-if(NOT grpc_POPULATED)
-  FetchContent_Populate(grpc)
-endif()
+boat_populate(gRPC
+  "${FETCHCONTENT_BASE_DIR}/grpc-src" "${FETCHCONTENT_BASE_DIR}/grpc-build"
+  GIT_REPOSITORY https://github.com/grpc/grpc.git
+  GIT_TAG v1.75.0)
 
 # gRPC's bundled third_party/zlib registers its example programs as CTest tests
 # unconditionally -- there is no option to disable them, unlike re2's
@@ -212,10 +227,10 @@ add_subdirectory("${grpc_SOURCE_DIR}" "${grpc_BINARY_DIR}" EXCLUDE_FROM_ALL)
 # iceoryx2 hardcodes WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} in its cargo build
 # step, which resolves to our project root when used via FetchContent instead of
 # the iceoryx2 workspace root where Cargo.toml lives. Patch before add_subdirectory.
-FetchContent_GetProperties(iceoryx2)
-if(NOT iceoryx2_POPULATED)
-  FetchContent_Populate(iceoryx2)
-endif()
+boat_populate(iceoryx2
+  "${FETCHCONTENT_BASE_DIR}/iceoryx2-src" "${FETCHCONTENT_BASE_DIR}/iceoryx2-build"
+  GIT_REPOSITORY https://github.com/eclipse-iceoryx/iceoryx2.git
+  GIT_TAG v0.4.1)
 set(_iox2_c_cmake "${iceoryx2_SOURCE_DIR}/iceoryx2-ffi/c/CMakeLists.txt")
 file(READ "${_iox2_c_cmake}" _iox2_content)
 # Fix 1: wrong WORKING_DIRECTORY when used via FetchContent
@@ -251,10 +266,9 @@ endif()
 file(WRITE "${_iox2_c_cmake}" "${_iox2_content}")
 add_subdirectory("${iceoryx2_SOURCE_DIR}" "${iceoryx2_BINARY_DIR}" EXCLUDE_FROM_ALL)
 
-FetchContent_GetProperties(sqlite3)
-if(NOT sqlite3_POPULATED)
-  FetchContent_Populate(sqlite3)
-endif()
+boat_populate(sqlite3
+  "${FETCHCONTENT_BASE_DIR}/sqlite3-src" "${FETCHCONTENT_BASE_DIR}/sqlite3-build"
+  URL https://www.sqlite.org/2024/sqlite-amalgamation-3460000.zip)
 
 add_library(sqlite3 STATIC "${sqlite3_SOURCE_DIR}/sqlite3.c")
 target_include_directories(sqlite3 PUBLIC "${sqlite3_SOURCE_DIR}")

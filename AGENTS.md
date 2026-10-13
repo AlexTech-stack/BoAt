@@ -947,6 +947,15 @@ for different streams got the same one.
 - Fetched deps must not install into our tree: `protobuf_INSTALL`, `ABSL_ENABLE_INSTALL` and
   `utf8_range_ENABLE_INSTALL` are forced OFF. Without that CPack shipped ~1080 protobuf/absl/upb
   files, and their `.pc` files made the RPM require `pkgconfig(absl_*)`, i.e. uninstallable.
+- **Fetching a dep you need to patch goes through `boat_populate()`**
+  (`boat-platform/CMakeLists.txt`): a wrapper around the fully-specified
+  `FetchContent_Populate(<name> SUBBUILD_DIR ... SOURCE_DIR ... BINARY_DIR ... <download
+  details>)`, which CMP0169 does not deprecate. The single-argument form (details only from
+  `FetchContent_Declare`) warns under CMake >= 3.30 and is slated for removal; the direct form
+  ignores declares, so the `GIT_REPOSITORY`/`GIT_TAG`/`URL` have to be in the `boat_populate()`
+  call. It preserves the `build/<preset>/_deps` layout, `boat_unpatch_dep()`'s paths and the
+  `FETCHCONTENT_SOURCE_DIR_<NAME>` override. `spdlog`, `protobuf` and `tomlplusplus` have no
+  patch step and still use `FetchContent_MakeAvailable`.
 - Docker images are tagged `ghcr.io/<owner>/<repo>` lowercased, derived from `github.repository` in CI, i.e. `ghcr.io/alextech-stack/boat:*` for this repo.
   GHCR namespaces follow the GitHub owner and the registry rejects uppercase, so the old
   hardcoded `ghcr.io/boat-platform/boat-platform` would have been denied on the first tag.

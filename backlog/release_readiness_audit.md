@@ -775,6 +775,16 @@ sqlite3. Today a warning; on removal it becomes exactly the breakage N15 just wa
 blocks cannot simply become `FetchContent_MakeAvailable` because they exist to rewrite the
 fetched sources *before* `add_subdirectory`. **Severity: should-fix, before it becomes urgent.**
 
+**Fixed.** `boat_populate()` (`boat-platform/CMakeLists.txt`) wraps the fully-specified
+`FetchContent_Populate(<name> SUBBUILD_DIR ... SOURCE_DIR ... BINARY_DIR ... <download
+details>)` form, which CMP0169 does not deprecate. The direct form does not read
+`FetchContent_Declare`, so the gRPC/iceoryx2/sqlite3 download details moved into the calls,
+and the helper still honours `FETCHCONTENT_SOURCE_DIR_<NAME>` and keeps the
+`build/<preset>/_deps` layout (source paths other tooling references are unchanged). The
+patch-before-`add_subdirectory` flows are untouched. Verified against CMake 4.4.4: the old
+file emits `Calling FetchContent_Populate(grpc) is deprecated`, the new one emits nothing,
+and both a scratch download and a `FETCHCONTENT_SOURCE_DIR_*` configure succeed.
+
 ---
 
 ## After the fixes: what run 37592677977 showed
