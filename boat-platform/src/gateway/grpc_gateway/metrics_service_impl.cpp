@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -53,6 +54,20 @@ void AppendCanHealthMetrics(GatewayContext& ctx, std::uint64_t tick, Emit emit) 
                                           : static_cast<double>(health.state_code));
   }
 }
+
+/* Every streaming RPC's cumulative overflow count, one point per stream.
+   Emitted with zeros when nothing has dropped: a consumer must be able to tell
+   "no drops" from "this build does not report drops". The replay queue lives in
+   core::replay rather than the registry, so it is appended from its own
+   counter. */
+template <typename Emit>
+void AppendStreamDropMetrics(GatewayContext& ctx, std::uint64_t tick, Emit emit) {
+  for (const char* name : stream_metrics::kRegistryBacked) {
+    emit(name, static_cast<double>(ctx.stream_drops.Count(name)));
+  }
+  emit(stream_metrics::kReplayStream,
+       static_cast<double>(ctx.replay_controller.DroppedEventCount()));
+}
 }  // namespace
 
 MetricsServiceImpl::MetricsServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
@@ -75,14 +90,25 @@ grpc::Status MetricsServiceImpl::GetMetrics(grpc::ServerContext*, const boat::v1
     point->set_name(name);
     point->set_value(value);
   });
+  AppendStreamDropMetrics(ctx_, tick, [&](const std::string& name, double value) {
+    auto* point = response->add_points();
+    point->set_tick(tick);
+    point->set_name(name);
+    point->set_value(value);
+  });
   return grpc::Status::OK;
 }
 
 grpc::Status MetricsServiceImpl::StreamMetrics(grpc::ServerContext* context, const boat::v1::StreamMetricsRequest*,
                                                grpc::ServerWriter<boat::v1::MetricPoint>* writer) {
   /* Heap-owned and captured by value: EventBus dispatch may invoke the handler
-     after Unsubscribe returns -- see subscriber_queue.h. */
-  auto shared = std::make_shared<SubscriberQueue<boat::v1::MetricPoint>>();
+     after Unsubscribe returns -- see subscriber_queue.h. Conflating by name:
+     metrics are latest-value-wins, so a slow consumer gets the current value of
+     every series instead of a tail of stale snapshots. */
+  auto shared = MakeSubscriberQueue<boat::v1::MetricPoint>(
+      &ctx_.stream_drops, stream_metrics::kMetricsStream,
+      ctx_.stream_queue_capacity,
+      [](const boat::v1::MetricPoint& point) { return point.name(); });
 
   const auto handle = ctx_.sim.event_bus().Subscribe(kMetricEventType, [shared](const boat::core::BusEvent& event) {
     boat::v1::MetricPoint point;
@@ -96,17 +122,19 @@ grpc::Status MetricsServiceImpl::StreamMetrics(grpc::ServerContext* context, con
       point.set_name("metric");
       point.set_value(0.0);
     }
+    std::size_t dropped = 0;
     {
       std::lock_guard<std::mutex> lock(shared->mutex);
       if (shared->closed) return;
-      shared->queue.push_back(std::move(point));
+      dropped = shared->Push(std::move(point));
     }
+    shared->ReportDrop(dropped);
     shared->cv.notify_one();
   });
 
   auto last_health_push = std::chrono::steady_clock::now();
   while (!context->IsCancelled()) {
-    std::vector<boat::v1::MetricPoint> local;
+    std::deque<boat::v1::MetricPoint> local;
     {
       std::unique_lock<std::mutex> lock(shared->mutex);
       shared->cv.wait_for(lock, std::chrono::milliseconds(50),
@@ -131,6 +159,18 @@ grpc::Status MetricsServiceImpl::StreamMetrics(grpc::ServerContext* context, con
       last_health_push = now;
       const std::uint64_t tick = ctx_.sim.clock().tick();
       AppendCanHealthMetrics(ctx_, tick, [&](const std::string& name, double value) {
+        if (!write_ok) {
+          return;
+        }
+        boat::v1::MetricPoint point;
+        point.set_tick(tick);
+        point.set_name(name);
+        point.set_value(value);
+        if (!writer->Write(point)) {
+          write_ok = false;
+        }
+      });
+      AppendStreamDropMetrics(ctx_, tick, [&](const std::string& name, double value) {
         if (!write_ok) {
           return;
         }

@@ -168,8 +168,11 @@ service CanTpService {
   rpc Send(SendRequest) returns (SendResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc RemoveSession(RemoveSessionRequest) returns (RemoveSessionResponse);
+  // Bounded backlog per subscriber: a slow client loses the oldest events,
+  // counted as `grpc.can_tp.subscribe.dropped` by MetricsService.
   rpc Subscribe(SubscribeRequest) returns (stream CanTpRxEvent);
   // Same nsdu_ids/iface scoping convention as Subscribe (SubscribeRequest
-  // is shared between the two).
+  // is shared between the two). Drops counted as
+  // `grpc.can_tp.subscribe_errors.dropped`.
   rpc SubscribeErrors(SubscribeRequest) returns (stream CanTpErrorEvent);
 }

@@ -95,6 +95,17 @@ class ReplayController {
   /// Thread-safe: consume (pop) all queued replay events.
   std::vector<ReplayEventEntry> ConsumeEvents();
 
+  /* Cumulative events dropped because the StreamReplay backlog hit
+     kMaxStreamEvents. Replay queues a record for streaming whether or not a
+     client is attached and whether or not it is keeping up; without a bound,
+     every replayed frame of every pass accumulated in memory forever. Exposed
+     as the grpc.replay.stream.dropped metric. */
+  [[nodiscard]] std::uint64_t DroppedEventCount() const;
+
+  /* Backlog cap for one replay's StreamReplay queue, in events -- same value
+     and reasoning as the gRPC stream queues (subscriber_queue.h). */
+  static constexpr std::size_t kMaxStreamEvents = 4096;
+
   using EventForwarder = std::function<void(const boat::core::Frame& frame)>;
   void SetEventForwarder(EventForwarder forwarder);
   const ReplayConfig& GetActiveConfig() const;
@@ -132,6 +143,10 @@ class ReplayController {
   void DispatchRecord(const boat::v1::Frame& pf, std::uint64_t tick,
                       std::span<const std::uint8_t> raw);
 
+  /* Append one event to event_queue_, dropping the oldest first once the
+     backlog is at kMaxStreamEvents. Caller holds event_queue_mutex_. */
+  void PushEventLocked(std::uint64_t tick, std::string payload);
+
   boat::store::ITraceStore& trace_store_;
   boat::store::IEventStore& event_store_;
   boat::core::EventBus& event_bus_;
@@ -154,8 +169,10 @@ class ReplayController {
 
   // Replay event queue — used by StreamReplay to consume events without going
   // through the EventBus (avoids race between publishing and subscribing).
+  // Bounded: see kMaxStreamEvents.
   std::deque<ReplayEventEntry> event_queue_;
-  std::mutex event_queue_mutex_;
+  mutable std::mutex event_queue_mutex_;
+  std::uint64_t dropped_events_ = 0;  // guarded by event_queue_mutex_
 
   // Tick-driven scheduling. tick_duration_ is how long one authority tick is;
   // replay_base_tick_ is the trace tick the current pass is anchored to and

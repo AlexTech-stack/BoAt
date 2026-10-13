@@ -92,7 +92,11 @@ class ReplayServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def StreamReplay(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Stream the frames a running replay delivers. The backlog is bounded
+        (ReplayController::kMaxStreamEvents): a client that cannot keep up loses
+        the oldest events, counted as `grpc.replay.stream.dropped` via
+        MetricsService.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')

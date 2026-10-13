@@ -6,6 +6,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -412,7 +413,9 @@ grpc::Status CanTpServiceImpl::Subscribe(
     ctx_.audit_log.Push(std::move(ev));
   }
 
-  auto shared = std::make_shared<SubscriberQueue<boat::v1::CanTpRxEvent>>();
+  auto shared = MakeSubscriberQueue<boat::v1::CanTpRxEvent>(
+      &ctx_.stream_drops, stream_metrics::kCanTpSubscribe,
+      ctx_.stream_queue_capacity);
 
   std::vector<std::pair<std::string, boat::core::ICanTp::SubId>> subs;
   subs.reserve(targets.size());
@@ -428,17 +431,19 @@ grpc::Status CanTpServiceImpl::Subscribe(
           ev.set_nsdu_id(nsdu_id);
           ev.set_data(payload.data(), payload.size());
           ev.set_timestamp_ns(NowNsCanTp());
+          std::size_t dropped = 0;
           {
             std::lock_guard<std::mutex> lock(shared->mutex);
-            shared->queue.push_back(std::move(ev));
+            dropped = shared->Push(std::move(ev));
           }
+          shared->ReportDrop(dropped);
           shared->cv.notify_one();
         });
     subs.emplace_back(iface, sub_id);
   }
 
   while (!context->IsCancelled()) {
-    std::vector<boat::v1::CanTpRxEvent> pending;
+    std::deque<boat::v1::CanTpRxEvent> pending;
     {
       std::unique_lock<std::mutex> lock(shared->mutex);
       shared->cv.wait_for(lock, std::chrono::milliseconds(50),
@@ -511,7 +516,9 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
     ctx_.audit_log.Push(std::move(ev));
   }
 
-  auto shared = std::make_shared<SubscriberQueue<boat::v1::CanTpErrorEvent>>();
+  auto shared = MakeSubscriberQueue<boat::v1::CanTpErrorEvent>(
+      &ctx_.stream_drops, stream_metrics::kCanTpErrors,
+      ctx_.stream_queue_capacity);
 
   std::vector<std::pair<std::string, boat::core::ICanTp::SubId>> subs;
   subs.reserve(targets.size());
@@ -528,17 +535,19 @@ grpc::Status CanTpServiceImpl::SubscribeErrors(
           ev.set_result(static_cast<boat::v1::CanTpResult>(err.result));
           ev.set_message(err.message);
           ev.set_timestamp_ns(NowNsCanTp());
+          std::size_t dropped = 0;
           {
             std::lock_guard<std::mutex> lock(shared->mutex);
-            shared->queue.push_back(std::move(ev));
+            dropped = shared->Push(std::move(ev));
           }
+          shared->ReportDrop(dropped);
           shared->cv.notify_one();
         });
     subs.emplace_back(iface, sub_id);
   }
 
   while (!context->IsCancelled()) {
-    std::vector<boat::v1::CanTpErrorEvent> pending;
+    std::deque<boat::v1::CanTpErrorEvent> pending;
     {
       std::unique_lock<std::mutex> lock(shared->mutex);
       shared->cv.wait_for(lock, std::chrono::milliseconds(50),

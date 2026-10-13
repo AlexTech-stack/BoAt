@@ -775,3 +775,28 @@ TEST_CASE("Replay due-times are durations, independent of tick resolution",
   REQUIRE(span_1ms_us == span_100us_us);
   REQUIRE(span_1ms_us == 40000);
 }
+
+TEST_CASE("ReplayController bounds the StreamReplay queue and counts drops",
+          "[unit][replay]") {
+  /* Replay queues a record for StreamReplay whether or not a client is
+     attached and whether or not it keeps up; before this bound, every frame of
+     every pass accumulated forever. Content policy mirrors the gRPC stream
+     queues: drop the oldest, count it, expose the count. */
+  MockTraceStore trace_store;
+  MockEventStore event_store;
+  boat::core::EventBus event_bus;
+  ReplayController controller(trace_store, event_store, event_bus);
+
+  constexpr std::size_t kCapacity = ReplayController::kMaxStreamEvents;
+  for (std::size_t i = 0; i < kCapacity + 10; ++i) {
+    controller.PushEvent(i, "payload");
+  }
+  REQUIRE(controller.DroppedEventCount() == 10);
+
+  const auto events = controller.ConsumeEvents();
+  REQUIRE(events.size() == kCapacity);
+  REQUIRE(events.front().tick == 10);  // oldest dropped, freshest kept
+  REQUIRE(events.back().tick == kCapacity + 9);
+  REQUIRE(controller.DroppedEventCount() == 10);
+  REQUIRE(controller.ConsumeEvents().empty());
+}

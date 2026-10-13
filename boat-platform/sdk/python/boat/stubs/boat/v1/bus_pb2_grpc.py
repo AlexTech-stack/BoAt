@@ -56,7 +56,10 @@ class BusServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def Subscribe(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Stream bus signals. Bounded backlog per subscriber: a slow client loses
+        the oldest signals, counted as `grpc.bus.subscribe.dropped` by
+        MetricsService.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')

@@ -5,6 +5,7 @@
 
 #include "effective_config.h"
 #include "rpc_audit_log.h"
+#include "subscriber_queue.h"  // kDefaultStreamQueueCapacity + StreamDropRegistry
 #include "core/plugin/plugin_manager.h"
 #include "core/scenario/scenario_loader.h"
 #include "core/signal/signal_bus.h"
@@ -41,6 +42,18 @@ struct GatewayContext {
      this struct is built, and services only read it once an RPC arrives, by
      which time startup has finished and the value is final. */
   const EffectiveConfig& effective_config;
+
+  /* Cumulative per-stream overflow counts, one entry per stream_metrics name.
+     Handlers register their drops here so MetricsService can expose them
+     (issue #21); value member so every GatewayContext has one without every
+     construction site having to wire it in. */
+  StreamDropRegistry stream_drops;
+
+  /* Events one streaming subscriber may queue before the oldest are dropped.
+     BOAT_STREAM_QUEUE_CAPACITY, resolved once in main into EffectiveConfig;
+     defaulted so tests and any other construction site get the documented
+     behavior without touching this field. */
+  std::size_t stream_queue_capacity = kDefaultStreamQueueCapacity;
 };
 
 }  // namespace boat::gateway

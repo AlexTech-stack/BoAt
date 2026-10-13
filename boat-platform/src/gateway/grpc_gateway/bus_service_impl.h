@@ -12,6 +12,7 @@
 #include "boat/v1/bus.grpc.pb.h"
 #include "core/signal/signal_bus.h"
 #include "rpc_audit_log.h"
+#include "subscriber_queue.h"
 
 namespace boat::gateway {
 
@@ -20,8 +21,12 @@ namespace boat::gateway {
    performs audit logging.  The core bus manages subscriptions and dispatch. */
 class BusServiceImpl final : public boat::v1::BusService::Service {
  public:
-  BusServiceImpl(RpcAuditLog& log, boat::core::SignalBus& signal_bus)
-      : audit_log_(log), signal_bus_(signal_bus) {}
+  BusServiceImpl(RpcAuditLog& log, boat::core::SignalBus& signal_bus,
+                 StreamDropRegistry& stream_drops, std::size_t stream_queue_capacity)
+      : audit_log_(log),
+        signal_bus_(signal_bus),
+        stream_drops_(stream_drops),
+        stream_queue_capacity_(stream_queue_capacity) {}
 
   grpc::Status Publish(grpc::ServerContext* context,
                        const boat::v1::BusPublishRequest* request,
@@ -34,6 +39,8 @@ class BusServiceImpl final : public boat::v1::BusService::Service {
  private:
   RpcAuditLog& audit_log_;
   boat::core::SignalBus& signal_bus_;
+  StreamDropRegistry& stream_drops_;
+  std::size_t stream_queue_capacity_;
 };
 
 }  // namespace boat::gateway

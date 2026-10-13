@@ -4,17 +4,23 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <span>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include <grpcpp/grpcpp.h>
 
+#include "boat/v1/bus.grpc.pb.h"
 #include "boat/v1/can_tp.grpc.pb.h"
+#include "boat/v1/debug.grpc.pb.h"
 #include "boat/v1/frame.grpc.pb.h"
+#include "boat/v1/metrics.grpc.pb.h"
 #include "boat/v1/node_plugin.grpc.pb.h"
 #include "boat/v1/pdu.grpc.pb.h"
 #include "boat/v1/plugin.grpc.pb.h"
@@ -22,10 +28,13 @@
 #include "boat/v1/signal.grpc.pb.h"
 #include "boat/v1/simulation.grpc.pb.h"
 #include "event_store/event_store.h"
+#include "gateway/grpc_gateway/bus_service_impl.h"
 #include "gateway/grpc_gateway/can_tp_service_impl.h"
+#include "gateway/grpc_gateway/debug_service_impl.h"
 #include "gateway/grpc_gateway/frame_sink.h"
 #include "gateway/grpc_gateway/frame_service_impl.h"
 #include "gateway/grpc_gateway/gateway_context.h"
+#include "gateway/grpc_gateway/metrics_service_impl.h"
 #include "gateway/grpc_gateway/node_plugin_service_impl.h"
 #include "gateway/grpc_gateway/pdu_service_impl.h"
 #include "gateway/grpc_gateway/plugin_service_impl.h"
@@ -788,17 +797,28 @@ TEST_CASE("Subscription teardown races cleanly with dispatch",
 
   boat::gateway::FrameServiceImpl frame_service(ctx);
   boat::gateway::PduServiceImpl pdu_service(ctx);
+  boat::gateway::BusServiceImpl bus_service(audit_log, signal_bus, ctx.stream_drops,
+                                            ctx.stream_queue_capacity);
+  boat::gateway::SignalServiceImpl signal_service(ctx);
+  boat::gateway::DebugServiceImpl debug_service(audit_log, kTestEffectiveConfig,
+                                                ctx.stream_drops, ctx.stream_queue_capacity);
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
   builder.RegisterService(&frame_service);
   builder.RegisterService(&pdu_service);
+  builder.RegisterService(&bus_service);
+  builder.RegisterService(&signal_service);
+  builder.RegisterService(&debug_service);
   std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
   REQUIRE(server != nullptr);
   auto channel = server->InProcessChannel({});
 
   auto frame_stub = boat::v1::FrameService::NewStub(channel);
   auto pdu_stub = boat::v1::PduService::NewStub(channel);
+  auto bus_stub = boat::v1::BusService::NewStub(channel);
+  auto signal_stub = boat::v1::SignalService::NewStub(channel);
+  auto debug_stub = boat::v1::DebugService::NewStub(channel);
 
   boat::v1::ConfigureRouteRequest route_req;
   route_req.mutable_route()->set_pdu_id(0x100);
@@ -848,6 +868,74 @@ TEST_CASE("Subscription teardown races cleanly with dispatch",
     sub_ctx.TryCancel();
     reader_thread.join();
     (void)reader->Finish();
+  }
+
+  /* BusService, SignalService and DebugService used to keep their queue (and,
+     for the debug stream, its filter string) as stack locals captured by
+     reference -- SignalBus::Publish, SignalRouter dispatch and RpcAuditLog::
+     Push all invoke callbacks after releasing their lock and Unsubscribe does
+     not wait for one in flight, so these were the same use-after-free. They
+     now share the heap-owned queue; the rounds below race teardown against
+     dispatch exactly like the frame and PDU ones above. */
+  for (int round = 0; round < 10; ++round) {
+    {
+      grpc::ClientContext sub_ctx;
+      boat::v1::BusSubscribeRequest request;
+      auto reader = bus_stub->Subscribe(&sub_ctx, request);
+      std::thread reader_thread([&reader] {
+        boat::v1::BusSignal sig;
+        while (reader->Read(&sig)) {
+        }
+      });
+      for (int i = 0; i < 50; ++i) {
+        signal_bus.Publish("teardown.sig", 1.0);
+      }
+      sub_ctx.TryCancel();
+      reader_thread.join();
+      (void)reader->Finish();
+    }
+    {
+      grpc::ClientContext sub_ctx;
+      boat::v1::SubscribeSignalsRequest request;
+      request.add_names("teardown.sig");
+      auto reader = signal_stub->SubscribeSignals(&sub_ctx, request);
+      std::thread reader_thread([&reader] {
+        boat::v1::SignalValue value;
+        while (reader->Read(&value)) {
+        }
+      });
+      const std::uint64_t signal_id =
+          static_cast<std::uint64_t>(std::hash<std::string>{}("teardown.sig"));
+      for (int i = 0; i < 50; ++i) {
+        boat::core::SignalEvent event;
+        event.signal_id = signal_id;
+        event.tick = static_cast<std::uint64_t>(i);
+        event.value = 1.0;
+        sim.signal_router().Publish(event);
+      }
+      sub_ctx.TryCancel();
+      reader_thread.join();
+      (void)reader->Finish();
+    }
+    {
+      grpc::ClientContext sub_ctx;
+      boat::v1::StreamRpcEventsRequest request;
+      auto reader = debug_stub->StreamEvents(&sub_ctx, request);
+      std::thread reader_thread([&reader] {
+        boat::v1::RpcEvent event;
+        while (reader->Read(&event)) {
+        }
+      });
+      for (int i = 0; i < 50; ++i) {
+        boat::gateway::RpcEvent event;
+        event.method = "teardown";
+        event.event_type = "DATA";
+        audit_log.Push(std::move(event));
+      }
+      sub_ctx.TryCancel();
+      reader_thread.join();
+      (void)reader->Finish();
+    }
   }
 
   server->Shutdown();
@@ -1052,6 +1140,119 @@ TEST_CASE("Reset rewinds the tick and only one simulation can be active",
     REQUIRE(sim.clock().tick() == 0);
   }
 
+  server->Shutdown();
+  std::filesystem::remove("boat_config.db");
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+}
+
+TEST_CASE("A slow frame subscriber overflows into dropped-oldest, and metrics say so",
+          "[integration][gateway][frame][metrics]") {
+  /* The gRPC streams used to buffer without bound: a fast bus plus a slow
+     client grew the server process until it was OOM-killed. The queues are now
+     bounded and drop the oldest events, and the cumulative count is served as
+     grpc.<stream>.dropped so a consumer can tell its view has gaps.
+
+     This drives the real failure mode over a real TCP channel: the client
+     never reads, the HTTP/2 window fills, the server's writer blocks in
+     Write(), and the handler queue (capacity 8) overflows while it is parked.
+     In-process channels are no good here -- they do not exercise transport
+     flow control, and it is the blocked writer that creates the backlog. */
+  std::filesystem::remove("boat_config.db");
+  const auto temp_dir = std::filesystem::temp_directory_path();
+  const auto event_db_path = temp_dir / "boat_integration_stream_overflow_events.db";
+  const auto trace_db_path = temp_dir / "boat_integration_stream_overflow_traces.db";
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+
+  boat::core::SimulationContext sim(781, 2);
+  boat::core::SignalBus signal_bus;
+  boat::core::ScenarioLoader scenario_loader;
+  boat::store::SqliteEventStore event_store(event_db_path.string());
+  boat::store::FlatFileTraceStore trace_store(trace_db_path.string());
+  boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
+  boat::hil::CanBusRegistry can_registry;
+  REQUIRE(can_registry.Add("vcan0", std::make_shared<LoopbackCanDriver>(), sim.event_bus()));
+  boat::hil::EthernetBusRegistry eth_registry;
+  boat::core::PluginManager plugin_manager;
+  boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
+  boat::gateway::RpcAuditLog audit_log;
+
+  boat::gateway::GatewayContext ctx{
+      .sim = sim,
+      .signal_bus = signal_bus,
+      .scenario_loader = scenario_loader,
+      .event_store = event_store,
+      .trace_store = trace_store,
+      .replay_controller = replay_controller,
+      .can_bus_registry = can_registry,
+      .ethernet_bus_registry = eth_registry,
+      .plugin_manager = plugin_manager,
+      .frame_sink = frame_sink,
+      .audit_log = audit_log,
+      .effective_config = kTestEffectiveConfig,
+  };
+  // Small enough that the overflow happens while the writer is briefly blocked
+  // on the transport window, without publishing gigabytes.
+  ctx.stream_queue_capacity = 8;
+
+  boat::gateway::FrameServiceImpl frame_service(ctx);
+  boat::gateway::MetricsServiceImpl metrics_service(ctx);
+
+  grpc::ServerBuilder builder;
+  int port = 0;  // filled in by BuildAndStart() for a :0 listen address
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port);
+  builder.RegisterService(&frame_service);
+  builder.RegisterService(&metrics_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  REQUIRE(port > 0);
+
+  auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(port),
+                                     grpc::InsecureChannelCredentials());
+  auto frame_stub = boat::v1::FrameService::NewStub(channel);
+  auto metrics_stub = boat::v1::MetricsService::NewStub(channel);
+
+  grpc::ClientContext sub_ctx;
+  boat::v1::SubscribeFramesRequest request;
+  request.add_bus_types(boat::v1::Frame::CAN);
+  request.set_iface_filter("vcan0");
+  auto reader = frame_stub->SubscribeFrames(&sub_ctx, request);
+
+  boat::hil::CanFrame can_frame{};
+  can_frame.can_id = 0x123;
+  can_frame.dlc = 8;
+  // Deliberately never Read(): the client cannot keep up, which is the case
+  // being tested.
+  for (int i = 0; i < 50000; ++i) {
+    can_frame.data[0] = static_cast<std::uint8_t>(i);
+    can_registry.SendFrame("vcan0", can_frame);
+  }
+  // Let the server writer hit the transport window and the queue overflow
+  // while it is parked there.
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  boat::v1::GetMetricsRequest metrics_req;
+  boat::v1::MetricsResponse metrics_resp;
+  grpc::ClientContext metrics_ctx;
+  REQUIRE(metrics_stub->GetMetrics(&metrics_ctx, metrics_req, &metrics_resp).ok());
+
+  double dropped = -1.0;
+  double pdu_dropped = -1.0;
+  double replay_dropped = -1.0;
+  for (const auto& point : metrics_resp.points()) {
+    if (point.name() == "grpc.frames.subscribe.dropped") dropped = point.value();
+    if (point.name() == "grpc.pdus.subscribe.dropped") pdu_dropped = point.value();
+    if (point.name() == "grpc.replay.stream.dropped") replay_dropped = point.value();
+  }
+  REQUIRE(dropped > 0.0);
+  // Every stream is reported, zeros included: "no drops" and "does not
+  // report" must not look the same to a consumer.
+  REQUIRE(pdu_dropped == 0.0);
+  REQUIRE(replay_dropped == 0.0);
+
+  sub_ctx.TryCancel();
+  (void)reader->Finish();
   server->Shutdown();
   std::filesystem::remove("boat_config.db");
   std::filesystem::remove(event_db_path);

@@ -6,6 +6,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -205,8 +206,12 @@ grpc::Status PduServiceImpl::SubscribePdus(
 
   /* Heap-owned and captured by value: PduRouter::DispatchPdu snapshots the
      callbacks under its lock and invokes them after releasing it, so a
-     callback can still be in flight after Unsubscribe -- see subscriber_queue.h. */
-  auto shared = std::make_shared<SubscriberQueue<boat::v1::PduFrame>>();
+     callback can still be in flight after Unsubscribe -- see subscriber_queue.h.
+     Bounded: a slow subscriber loses the oldest PDUs, counted as
+     grpc.pdus.subscribe.dropped. */
+  auto shared = MakeSubscriberQueue<boat::v1::PduFrame>(
+      &ctx_.stream_drops, stream_metrics::kPdusSubscribe,
+      ctx_.stream_queue_capacity);
 
   // Scoped deliberately: the ref must NOT stay alive for the life of the
   // stream, or Unload would block until the client disconnects. Every later
@@ -222,17 +227,19 @@ grpc::Status PduServiceImpl::SubscribePdus(
       [shared](const boat::hil::PduFrame& f) {
         boat::v1::PduFrame proto;
         PduFrameToProto(f, &proto);
+        std::size_t dropped = 0;
         {
           std::lock_guard<std::mutex> lock(shared->mutex);
           if (shared->closed) return;
-          shared->queue.push_back(std::move(proto));
+          dropped = shared->Push(std::move(proto));
         }
+        shared->ReportDrop(dropped);
         shared->cv.notify_one();
       });
   }
 
   while (!context->IsCancelled()) {
-    std::vector<boat::v1::PduFrame> pending;
+    std::deque<boat::v1::PduFrame> pending;
     {
       std::unique_lock<std::mutex> lock(shared->mutex);
       shared->cv.wait_for(lock, std::chrono::milliseconds(50),
