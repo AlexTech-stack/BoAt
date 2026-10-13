@@ -130,7 +130,7 @@ avoid that.
 
 ---
 
-## 🟡 Extended identifiers below `0x800` cannot round-trip
+## ✅ RESOLVED (2026-10-13, #34) — Extended identifiers below `0x800` cannot round-trip
 
 `SocketCanDriver::WriteFrame` infers frame format from the identifier's value
 (`src/hil/can/socket_can_driver.cpp:133`):
@@ -168,3 +168,12 @@ never exercising it.
   client authors know identifiers are the whole format signal.
 
 **Effort:** Small either way; the choice is about how faithful replay needs to be.
+
+**Resolved (#34):** the explicit flag was the answer. `CanMetadata.flags` bit
+`0x10` (`BOAT_CAN_FLAG_EXTENDED` / `kCanFlagExtended`) carries the format; the
+trace importer sets it from the source file's IDE, `SocketCanDriver::ReadFrame`
+sets it from `CAN_EFF_FLAG` and `WriteFrame` honours it (the magnitude rule
+survives only as a fallback for producers that never set it), and
+`boat replay export` maps it back to `CAN_EFF_FLAG`. A vcan HIL test covers an
+extended `0x123`, the standard `0x123` that must stay distinct, and the
+large-ID fallback.

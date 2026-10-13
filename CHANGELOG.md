@@ -42,6 +42,30 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **JUnit reports were empty for script tests, even when they failed** (#50). The generator
+  built `<testcase>` elements only from recorded steps; a script test (a subprocess whose exit
+  code is the verdict) has none, so a failed run produced `tests="0" failures="0"` — a CI
+  JUnit reader saw green for a script that exited 1. A script test is now one `<testcase>`
+  named after the test, with the failure element carrying the reason (`script exited with
+  code N`, a timeout, or a missing file), and the same reason is stored as `summary` in
+  `report.json`.
+- **Extended CAN identifiers below `0x800` could not round-trip** (#34). Frame format was
+  inferred from `can_id > 0x7FF`, but the 29-bit range includes small values: an imported
+  extended frame with ID `0x123` replayed as a *standard* `0x123` — same number, different
+  frame on the wire. Format is now an explicit flag (`CanMetadata.flags` bit `0x10` /
+  `BOAT_CAN_FLAG_EXTENDED`): the trace importer sets it from the source file's IDE,
+  `SocketCanDriver` sets it from `CAN_EFF_FLAG` on RX and honours it on TX (the old
+  magnitude rule remains only as a fallback for producers that never set it), and
+  `boat replay export` writes `CAN_EFF_FLAG` back.
+- **`ScenarioDef.seed` was parsed and then ignored** (#53) — every scenario ran on the
+  gateway's fixed seed, so two scenarios asking for different random streams got the same
+  one. `DeterminismEngine::SetSeed()` is applied at `StartSimulation` and restored by
+  `ResetSimulation`, so a reset run replays the scenario's seed exactly.
+- **`SignalRouter`'s ring overflow was counted and then never read** (#55). Its per-
+  subscription 4096-slot ring drops the newest event when full and the count died with the
+  subscription, so signal loss upstream of every stream was invisible. There is now an
+  aggregate `DroppedEventCount()`, reported with the other overflow counts as the
+  `signal_router.dropped` metric point.
 - **The `linux/arm64` container image contained an x86-64 `boat_gateway`** (#51) and failed
   with `exec format error` on every arm64 host. CI built the binary once on an x86 runner and
   `Dockerfile.runtime` COPYed that one file into both platforms. Binaries are now built
