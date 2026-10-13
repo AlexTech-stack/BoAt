@@ -21,6 +21,13 @@ typedef void (*BoatPublishFn)(void* publisher_ctx, const char* signal_id,
 /* CAN FD flag constants — kept for self-sent detection in can_tp. */
 #define BOAT_CAN_FLAG_SELF_SENT 0x08
 
+/* Extended (29-bit) identifier format, carried in CanMeta.flags so the frame
+   format does not depend on the identifier's magnitude (an extended ID of
+   0x123 is a different frame from a standard 0x123). Mirrors
+   boat::hil::kCanFlagExtended; the driver sets it from CAN_EFF_FLAG on RX and
+   honours it on TX, falling back to `can_id > 0x7FF` when unset. */
+#define BOAT_CAN_FLAG_EXTENDED 0x10
+
 /* Ethernet self-sent flag — set by EthernetBusRegistry when a frame was
    sourced locally (loopback prevention). */
 #define BOAT_ETH_FLAG_SELF_SENT 0x01

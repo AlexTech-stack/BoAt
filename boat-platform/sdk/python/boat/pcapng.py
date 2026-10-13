@@ -36,6 +36,10 @@ from typing import Dict
 DLT_EN10MB = 1      # Ethernet
 DLT_CAN_SOCKETCAN = 227  # Linux SocketCAN can_frame/canfd_frame
 
+# SocketCAN carries the 29-bit (extended) format as this bit in can_id; the
+# numeric ID itself can be any 29-bit value, including ones below 0x800.
+CAN_EFF_FLAG = 0x80000000
+
 # ── Block types ───────────────────────────────────────────────────────────
 _BT_SHB = 0x0A0D0D0A
 _BT_IDB = 0x00000001
@@ -276,7 +280,7 @@ class PcapngReader:
                 arbitration_id=can_id & 0x1FFFFFFF,
                 data=frame_data,
                 is_fd=is_fd,
-                is_extended_id=bool(can_id & 0x80000000),
+                is_extended_id=bool(can_id & CAN_EFF_FLAG),
                 bitrate_switch=bool(flags & _CANFD_BRS),
             )
         return None  # link type not needed for CAN/Ethernet extraction -- skip

@@ -256,3 +256,67 @@ def test_export_to_pcapng_skips_tcp_and_pdu(tmp_path):
     assert stats["can_frames"] == 1
     assert stats["eth_frames"] == 0
     assert stats["skipped"] == 2
+
+
+def test_extended_id_below_0x800_survives_import(tmp_path):
+    """Issue #34: an extended identifier below 0x800 was replayed as a standard
+    frame, because the format was inferred from `can_id > 0x7FF` rather than
+    read from the file's IDE. The import must carry the IDE into the frame
+    flags, where the driver and the reporter look for it."""
+    from boat.pcapng import CAN_EFF_FLAG
+    from boat.trace_replay import _CAN_EXTENDED, TraceReplayer
+    from boat.v1 import frame_pb2
+
+    path = tmp_path / "extended.pcapng"
+    w = PcapngWriter(str(path))
+    can_id = w.add_interface("vcan0", DLT_CAN_SOCKETCAN)
+    w.write_can(can_id, 1.0, 0x123 | CAN_EFF_FLAG, 2, b"\xaa\xbb", 0)
+    w.write_can(can_id, 1.1, 0x123, 2, b"\xcc\xdd", 0)
+    w.close()
+
+    binary = TraceReplayer(buses=["vcan0"]).convert_to_binary(path)
+    frames = TraceReplayer.parse_binary(binary)
+
+    assert len(frames) == 2
+    assert frames[0].bus_type == frame_pb2.Frame.CAN
+    assert frames[0].can.can_id == 0x123
+    assert frames[0].can.flags & _CAN_EXTENDED
+    # The standard frame with the same numeric ID is a different frame.
+    assert frames[1].can.can_id == 0x123
+    assert not (frames[1].can.flags & _CAN_EXTENDED)
+
+
+def test_export_restores_the_extended_flag_and_drops_internal_bits(tmp_path):
+    """Export is the inverse: the BoAt EXTENDED bit becomes the wire
+    CAN_EFF_FLAG, and BoAt bookkeeping bits (EXTENDED, SELF_SENT) must not be
+    written into the SocketCAN flag byte as if the kernel defined them."""
+    from boat.trace_replay import _CAN_EXTENDED, TraceReplayer
+    from boat.v1 import frame_pb2
+
+    frames = [
+        frame_pb2.Frame(
+            bus_type=frame_pb2.Frame.CAN, timestamp_ns=1_000_000_000, payload=b"\x01\x02",
+            can=frame_pb2.CanMetadata(can_id=0x123, dlc=2, flags=_CAN_EXTENDED, channel=1),
+        ),
+        frame_pb2.Frame(
+            bus_type=frame_pb2.Frame.CANFD, timestamp_ns=1_100_000_000, payload=b"\x03",
+            can=frame_pb2.CanMetadata(can_id=0x456, dlc=1,
+                                      # FDF | SELF_SENT | EXTENDED
+                                      flags=0x04 | 0x08 | _CAN_EXTENDED, channel=1),
+        ),
+    ]
+    out = tmp_path / "export-extended.pcapng"
+    stats = TraceReplayer.export_to_pcapng(frames, out)
+    assert stats["can_frames"] == 2
+
+    with PcapngReader(str(out)) as r:
+        reimported = list(r)
+
+    assert reimported[0].arbitration_id == 0x123
+    assert reimported[0].is_extended_id
+    assert reimported[1].arbitration_id == 0x456
+    assert reimported[1].is_extended_id
+    # Only BRS/ESI/FDF may appear in the FD flag byte; SELF_SENT and EXTENDED
+    # are BoAt's, not the wire format's.
+    assert reimported[1].is_fd
+    assert reimported[1].bitrate_switch is False

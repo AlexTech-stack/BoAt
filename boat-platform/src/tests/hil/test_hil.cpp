@@ -83,3 +83,62 @@ TEST_CASE("Virtual CAN HIL: CAN FD payload over 8 bytes is rounded to a valid IS
   rx_driver.Close();
   SUCCEED("HIL CAN FD DLC rounding: PASS");
 }
+
+TEST_CASE("Virtual CAN HIL: a small extended identifier keeps its IDE bit", "[hil]") {
+  // The 29-bit range includes values below 0x800. Inferring the frame format
+  // from `can_id > 0x7FF` meant an extended frame with ID 0x123 came back as
+  // a *standard* frame -- same numeric ID, silently different frame on the
+  // wire (issue #34). The format is carried explicitly now.
+  const char* enabled = std::getenv("BOAT_HIL_ENABLED");
+  if (enabled == nullptr || *enabled == '\0') {
+    SKIP("BOAT_HIL_ENABLED not set");
+  }
+
+  const char* iface_env = std::getenv("BOAT_VCAN_IFACE");
+  const char* iface = (iface_env != nullptr && *iface_env != '\0') ? iface_env : "vcan0";
+  boat::hil::VirtualCanDriver tx_driver(iface);
+  boat::hil::VirtualCanDriver rx_driver(iface);
+
+  REQUIRE(tx_driver.Open());
+  REQUIRE(rx_driver.Open());
+
+  // Extended format with an identifier the old magnitude heuristic would
+  // have called standard.
+  boat::hil::CanFrame frame {};
+  frame.can_id = 0x123;
+  frame.flags = boat::hil::kCanFlagExtended;
+  frame.dlc = 2;
+  frame.data[0] = 0xAB;
+  frame.data[1] = 0xCD;
+  REQUIRE(tx_driver.WriteFrame(frame));
+
+  boat::hil::CanFrame received {};
+  REQUIRE(rx_driver.ReadFrame(received));
+  REQUIRE(received.can_id == 0x123);
+  REQUIRE((received.flags & boat::hil::kCanFlagExtended) != 0);
+
+  // A standard frame with the same numeric ID is still a standard frame.
+  boat::hil::CanFrame standard {};
+  standard.can_id = 0x123;
+  standard.flags = 0;
+  standard.dlc = 1;
+  standard.data[0] = 0x01;
+  REQUIRE(tx_driver.WriteFrame(standard));
+  REQUIRE(rx_driver.ReadFrame(received));
+  REQUIRE(received.can_id == 0x123);
+  REQUIRE((received.flags & boat::hil::kCanFlagExtended) == 0);
+
+  // The magnitude fallback still covers a producer that never set the bit.
+  boat::hil::CanFrame large {};
+  large.can_id = 0x18DA1234;
+  large.dlc = 1;
+  large.data[0] = 0x02;
+  REQUIRE(tx_driver.WriteFrame(large));
+  REQUIRE(rx_driver.ReadFrame(received));
+  REQUIRE(received.can_id == 0x18DA1234);
+  REQUIRE((received.flags & boat::hil::kCanFlagExtended) != 0);
+
+  tx_driver.Close();
+  rx_driver.Close();
+  SUCCEED("HIL CAN extended-ID format: PASS");
+}

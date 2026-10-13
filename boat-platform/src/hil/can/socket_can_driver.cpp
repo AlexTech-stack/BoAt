@@ -258,15 +258,20 @@ bool SocketCanDriver::ReadFrame(CanFrame& out_frame) {
 
   // raw.can_id carries CAN_EFF_FLAG/CAN_RTR_FLAG/CAN_ERR_FLAG in its top
   // bits per SocketCAN convention -- mask them off so out_frame.can_id is a
-  // plain numeric ID, matching WriteFrame's assumption (`can_id > 0x7FF`
-  // implies extended) and every comparison against a plain configured ID
+  // plain numeric ID, matching every comparison against a plain configured ID
   // elsewhere in the system (e.g. CanTp's source_addr/target_addr). Without
   // this, every received 29-bit-ID frame's can_id silently carried
   // CAN_EFF_FLAG (0x80000000) and could never match a plain-valued
-  // target_addr.
-  out_frame.can_id = raw.can_id & ((raw.can_id & CAN_EFF_FLAG) ? CAN_EFF_MASK : CAN_SFF_MASK);
+  // target_addr. The format itself is not lost: it moves to an explicit
+  // kCanFlagExtended bit, because an extended ID of 0x123 cannot be told
+  // apart from a standard 0x123 once the flag is masked off.
+  const bool is_extended = (raw.can_id & CAN_EFF_FLAG) != 0;
+  out_frame.can_id = raw.can_id & (is_extended ? CAN_EFF_MASK : CAN_SFF_MASK);
   out_frame.dlc    = data_len;
   out_frame.flags  = is_fd ? raw.flags : 0;
+  if (is_extended) {
+    out_frame.flags |= kCanFlagExtended;
+  }
   std::memset(out_frame.data, 0, sizeof(out_frame.data));
   std::memcpy(out_frame.data, raw.data, data_len);
 
@@ -286,21 +291,29 @@ bool SocketCanDriver::WriteFrame(const CanFrame& frame) {
     return false;
   }
 
-  const std::uint32_t ext_flag = (frame.can_id > 0x7FF) ? CAN_EFF_FLAG : 0U;
+  // Format comes from the explicit kCanFlagExtended bit; `can_id > 0x7FF` is
+  // kept as a fallback for callers that predate the bit (a 29-bit ID above
+  // 0x7FF can only be extended). BoAt-level bits (kCanFlagExtended,
+  // BOAT_CAN_FLAG_SELF_SENT) must not reach the kernel's flag byte.
+  const bool extended = (frame.flags & kCanFlagExtended) != 0 || frame.can_id > 0x7FF;
+  const std::uint32_t ext_flag = extended ? CAN_EFF_FLAG : 0U;
+  const std::uint32_t wire_id =
+      frame.can_id & (extended ? CAN_EFF_MASK : CAN_SFF_MASK);
+
   if (frame.flags & kCanFdFlagFdf) {
     // CAN FD frame
     struct canfd_frame raw {};  // zero-initializes raw.data, so any padding added below is 0x00
-    raw.can_id = frame.can_id | ext_flag;
+    raw.can_id = wire_id | ext_flag;
     const std::uint8_t requested_len = frame.dlc <= CANFD_MAX_DLEN ? frame.dlc : CANFD_MAX_DLEN;
     raw.len    = RoundUpToValidCanFdLen(requested_len);
-    raw.flags  = frame.flags;
+    raw.flags  = frame.flags & (kCanFdFlagFdf | kCanFdFlagBrs | kCanFdFlagEsi);
     std::memcpy(raw.data, frame.data, requested_len);
     const ssize_t bytes = write(socket_fd_, &raw, sizeof(raw));
     return bytes == static_cast<ssize_t>(sizeof(raw));
   } else {
     // Classic CAN frame
     struct can_frame raw {};
-    raw.can_id  = frame.can_id | ext_flag;
+    raw.can_id  = wire_id | ext_flag;
     raw.can_dlc = frame.dlc <= CAN_MAX_DLEN ? frame.dlc : CAN_MAX_DLEN;
     std::memcpy(raw.data, frame.data, raw.can_dlc);
     const ssize_t bytes = write(socket_fd_, &raw, sizeof(raw));

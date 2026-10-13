@@ -19,9 +19,20 @@ message CanMetadata {
                         // reach further into `payload` to do so, so dlc should
                         // normally just equal payload.size().
   uint32 flags   = 3;  // CANFD_BRS=0x01, CANFD_ESI=0x02, CANFD_FDF=0x04,
-                        // BOAT_CAN_FLAG_SELF_SENT=0x08. The registry send path
-                        // sets SELF_SENT on every frame the gateway transmits,
-                        // including frames an ingress client sent itself through
+                        // BOAT_CAN_FLAG_SELF_SENT=0x08,
+                        // BOAT_CAN_FLAG_EXTENDED=0x10. `can_id` is a plain
+                        // numeric ID and does *not* encode the 29-bit format
+                        // in its magnitude: an extended ID of 0x123 is a
+                        // different frame from a standard 0x123 and arbitrates
+                        // differently, so the format is this bit. The driver
+                        // sets it from CAN_EFF_FLAG on RX and honours it on TX
+                        // (falling back to can_id > 0x7FF only when it is
+                        // unset, for older producers). Import sets it from the
+                        // source file's IDE; replay preserves it.
+                        //
+                        // SELF_SENT: the registry send path sets it on every
+                        // frame the gateway transmits, including frames an
+                        // ingress client sent itself through
                         // SendFrame/StreamFrames. It identifies the transmitting
                         // *gateway*, not the originating client: two different
                         // clients' locally-injected frames carry the same bit.

@@ -10,6 +10,11 @@
 
 namespace boat::hil {
 
+// The public ABI and the HIL frame model each define the extended-format bit;
+// a plugin reading meta.can.flags must see the same bit the driver sets.
+static_assert(kCanFlagExtended == BOAT_CAN_FLAG_EXTENDED,
+              "kCanFlagExtended and BOAT_CAN_FLAG_EXTENDED must stay in sync");
+
 namespace {
 
 // Wall-clock nanoseconds since epoch, matching SocketCanDriver::ReadFrame()'s
