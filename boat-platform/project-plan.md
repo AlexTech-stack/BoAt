@@ -140,8 +140,9 @@ numbers come out lower, this table gets amended to match them.
 
 The earlier "macOS and Windows via abstraction layer" target is withdrawn rather than
 scheduled: SocketCAN is a Linux kernel subsystem with no equivalent on either target, so a
-port would have no CAN transport. Any surviving document that still implies one is tracked
-by [#42](https://github.com/AlexTech-stack/BoAt/issues/42).
+port would have no CAN transport. An Ethernet-only or virtual-bus-only gateway port, if it
+is ever wanted for SIL on developer machines, needs its own scoped proposal — it is not a
+line item here.
 
 ## Constraints
 

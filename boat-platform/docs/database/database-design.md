@@ -4,10 +4,15 @@
 
 | Store | Backend | Use Case |
 |---|---|---|
-| Event Store | SQLite (embedded) / TimescaleDB (distributed) | Queryable event history |
+| Event Store | SQLite (embedded) | Queryable event history |
 | Trace Store | Binary flat files + SQLite index | High-throughput raw traces |
 | Config Store | SQLite + TOML files | Scenario and plugin configuration |
-| Metrics Store | In-memory ring buffer + optional Prometheus remote write | Live metrics |
+| Metrics Store | `MetricsService`: on-demand snapshot + 1 Hz stream | Live metrics |
+
+Earlier revisions of this table listed TimescaleDB (distributed event store) and Prometheus
+remote write (metrics). Neither was ever implemented — SQLite is the only event store, and
+`MetricsService` computes points on demand from the event store and live counters rather
+than keeping a store of its own.
 
 ## SQLite Schema (Event Store)
 
@@ -57,6 +62,8 @@
 - Enable WAL mode for concurrent readers and a continuous writer.
 - Insert events in transactions of 1000 rows for throughput.
 - Replay reads traces via memory-mapped I/O.
-- TimescaleDB deployments use hypertables partitioned by `wall_time_ns` in 1-hour chunks.
-- Write path remains asynchronous using a dedicated writer thread and bounded queue.
+- Writes are **synchronous on the caller's thread** — there is no async batch writer yet
+  ([#23](https://github.com/AlexTech-stack/BoAt/issues/23)). A hot signal path can therefore
+  wait on SQLite; an earlier revision of this list claimed a dedicated writer thread and
+  bounded queue that do not exist.
 
