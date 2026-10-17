@@ -1,7 +1,7 @@
 ---
 description: Documentation & architecture reference — read-only knowledge base
 mode: subagent
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 permission:
   read: allow
   glob: allow

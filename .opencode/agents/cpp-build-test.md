@@ -1,7 +1,7 @@
 ---
 description: C++ build & test — CMake, Catch2 tests, all build presets
 mode: subagent
-model: deepseek/deepseek-v4-pro
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

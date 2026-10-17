@@ -1,7 +1,7 @@
 ---
 description: Trace Analysis — recorder, replayer, BLF analyzer, reverse engineer
 mode: subagent
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

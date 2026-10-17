@@ -1,7 +1,7 @@
 ---
 description: HIL / Hardware-in-the-Loop — CAN/Ethernet drivers, vcan/veth, HIL tests
 mode: subagent
-model: deepseek/deepseek-v4-pro
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

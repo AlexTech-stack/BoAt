@@ -1,7 +1,7 @@
 ---
 description: End-to-End Integration Testing — cross-component tests, stack bring-up, smoke tests
 mode: subagent
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

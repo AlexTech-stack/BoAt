@@ -1,7 +1,7 @@
 ---
 description: DevOps, CI/CD & Release — GitHub Actions, Docker, packaging
 mode: subagent
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

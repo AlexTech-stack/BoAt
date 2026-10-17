@@ -1,7 +1,7 @@
 ---
 description: Web UI — FastAPI services for dashboard, launcher, commander, etc.
 mode: subagent
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

@@ -1,7 +1,7 @@
 ---
 description: Proto/gRPC code generation — protobuf stubs for C++ and Python
 mode: subagent
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

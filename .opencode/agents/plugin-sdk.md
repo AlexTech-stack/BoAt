@@ -1,7 +1,7 @@
 ---
 description: Plugin SDK — C ABI plugin development and sample plugins
 mode: subagent
-model: deepseek/deepseek-v4-pro
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

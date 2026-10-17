@@ -1,7 +1,7 @@
 ---
 description: Python SDK (boat-py) and CLI (boat-cli) — development and testing
 mode: subagent
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

@@ -1,7 +1,7 @@
 ---
 description: PDU Database — JSON schema, signal routing, PDU node tooling
 mode: subagent
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

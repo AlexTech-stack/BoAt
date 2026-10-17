@@ -1,7 +1,7 @@
 ---
 description: AUTOSAR & specification reference — search and answer questions from the local spec library
 mode: subagent
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 permission:
   edit: deny
   write: deny

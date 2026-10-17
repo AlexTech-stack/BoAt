@@ -1,7 +1,7 @@
 ---
 description: BoAt Test Engineer — writes and reviews HIL/system tests using the boat-test framework
 mode: subagent
-model: deepseek/deepseek-v4-flash
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow

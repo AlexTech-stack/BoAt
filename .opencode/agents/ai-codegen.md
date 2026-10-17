@@ -1,7 +1,7 @@
 ---
 description: AI/LLM Code Generation — plugin generator, prompt engineering, AI config
 mode: subagent
-model: deepseek/deepseek-v4-pro
+model: deepseek/deepseek-flash
 permission:
   edit: allow
   bash: allow
