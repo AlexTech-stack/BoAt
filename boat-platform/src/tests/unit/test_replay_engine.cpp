@@ -306,6 +306,12 @@ TEST_CASE("ReplayController Pause/Resume suspends and continues replay", "[unit]
   REQUIRE(event_store.inserted.size() == count_after_pause);
 
   controller.Resume();
+  pump.Ticks(1);
+  // The 100 ticks spent paused must not be released as a burst: one tick after
+  // Resume() may deliver at most the single record that was due at the pause
+  // boundary, never the ~20 a shifted-only-by-pause bug would produce.
+  REQUIRE(event_store.inserted.size() <= count_after_pause + 1);
+
   pump.Ticks(100);
   REQUIRE(event_store.inserted.size() > count_after_pause);
 
