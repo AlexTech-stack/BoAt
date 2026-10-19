@@ -154,14 +154,27 @@ bool EthernetBusRegistry::Has(const std::string& iface) const {
 }
 
 void EthernetBusRegistry::StopAll() {
-  std::lock_guard<std::mutex> lock(ifaces_mutex_);
-  for (auto& [name, entry] : ifaces_) {
-    (void)name;
-    entry.running.store(false);
-    entry.driver->Close();
-    if (entry.rx_thread.joinable()) {
-      entry.rx_thread.join();
+  // Stop and join outside the mutex: an RX callback can call SendFrame, which
+  // takes ifaces_mutex_. Entries are never erased, so their addresses remain
+  // valid. Close the driver only after the RX thread has exited, so no
+  // ReadFrame can race a close of the socket.
+  std::vector<IfaceEntry*> entries;
+  {
+    std::lock_guard<std::mutex> lock(ifaces_mutex_);
+    entries.reserve(ifaces_.size());
+    for (auto& [name, entry] : ifaces_) {
+      (void)name;
+      entry.running.store(false);
+      entries.push_back(&entry);
     }
+  }
+  for (auto* entry : entries) {
+    if (entry->rx_thread.joinable()) {
+      entry->rx_thread.join();
+    }
+  }
+  for (auto* entry : entries) {
+    entry->driver->Close();
   }
 }
 
