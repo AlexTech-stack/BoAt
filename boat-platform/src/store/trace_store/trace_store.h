@@ -23,10 +23,10 @@ struct __attribute__((packed)) TraceRecordHeader {
 };
 
 struct TraceRecord {
+  // Only BINARY is implemented. The former MF4/CSV placeholders were removed
+  // rather than left as values that no writer or reader supports (issue #29).
   enum class Format : int {
     BINARY = 0,
-    MF4 = 1,
-    CSV = 2,
   };
 
   std::string id;

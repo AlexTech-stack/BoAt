@@ -177,11 +177,11 @@ Two items from the original concept are not built, and one is corrected:
 - **Fault injection panel** (timeline drag-and-drop) — not built
   ([#27](https://github.com/AlexTech-stack/BoAt/issues/27)).
 - **Metrics display** — not built ([#28](https://github.com/AlexTech-stack/BoAt/issues/28)).
-- **Trace export** is **PCAPNG**, not MF4/CSV. `boat replay export` writes CAN/CAN-FD and
+- **Trace export** is **PCAPNG**. `boat replay export` writes CAN/CAN-FD and
   Ethernet frames to separate PCAPNG interfaces in one file on one timeline, which opens in
-  Wireshark. The `MF4` and `CSV` values in `TraceRecord::Format` are declared and
-  unimplemented ([#29](https://github.com/AlexTech-stack/BoAt/issues/29)); MF4 has a real
-  argument behind it for this audience and would need its own scope.
+  Wireshark. `TraceRecord::Format` declares only the implemented `BINARY` value; the
+  unimplemented MF4/CSV placeholders were removed ([#29](https://github.com/AlexTech-stack/BoAt/issues/29)).
+  MF4 would need its own design and scope if it is ever wanted.
 
 **Accessibility.** Keyboard-first navigation, high-contrast indicators, error states with
 remediation guidance. Partially delivered; not audited.
