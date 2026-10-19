@@ -1248,9 +1248,12 @@ than `CanTpService`, `nsdu_id` must stay unique across every CanTp instance
 sharing that PDU-bus namespace, since there's no ambiguity-detection here
 the way `CanTpService.Send`'s "multiple instances loaded" error provides.
 
-### SOME/IP Plugin
+### SOME/IP Plugin (experimental)
 
-Service-oriented middleware over Ethernet UDP. Listens on configured ports, responds to SOME/IP requests, supports Service Discovery.
+SOME/IP protocol constants and a **service-discovery stub** over Ethernet UDP. The
+request/response responder is **not functional yet**: `local_services` is never
+populated, so no service can be registered and no REQUEST is answered. Treat the
+plugin as a stub, not as working SOME/IP middleware.
 
 ```bash
 BOAT_NODE_PLUGINS=./build/debug/src/plugins/someip/someip.so \
@@ -1258,7 +1261,7 @@ BOAT_NODE_PLUGINS=./build/debug/src/plugins/someip/someip.so \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
-Config: `{"sd_port": 30490}`. Registers offered services; responds to REQUEST messages with RESPONSE echoes.
+Config: `{"sd_port": 30490}` is parsed; the plugin currently offers and answers no services.
 
 ### Probe Plugin (gateway conformance)
 
