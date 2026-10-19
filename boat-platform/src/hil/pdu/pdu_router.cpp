@@ -110,6 +110,9 @@ void PduRouter::AddContainer(const PduContainerDef& def) {
 bool PduRouter::SendContainer(const PduContainerDef& def,
                                const std::vector<IpduMEntry>& entries) {
   if (entries.empty()) return false;
+  // Both addresses feed fixed-size arrays in the builders; an empty or
+  // mismatched pair would read out of bounds.
+  if (def.src_ip.size() != def.dst_ip.size()) return false;
   const auto container = IpduMSerialize(entries);
 
   EthernetFrame frame;
@@ -230,6 +233,7 @@ bool PduRouter::TransmitRoute(const PduRoute& route,
 
     if (!route.dst_ip.empty()) {
       // IP/UDP/IpduM path
+      if (route.src_ip.size() != route.dst_ip.size()) return false;
       const auto container = IpduMSerialize({{pdu_id, payload}});
       if (route.dst_ip.size() == 4) {
         frame.ethertype = 0x0800;
@@ -244,6 +248,7 @@ bool PduRouter::TransmitRoute(const PduRoute& route,
       } else {
         return false;
       }
+      if (frame.payload.empty()) return false;
       frame.src_ip = route.src_ip;
       frame.dst_ip = route.dst_ip;
     } else {

@@ -62,7 +62,8 @@ void FlatFileTraceStore::WriteTrace(const TraceRecord& meta, std::span<const std
   // Remove any existing file first so open() works even if the old file
   // was created by a different process/user with incompatible permissions.
   unlink(meta.storage_path.c_str());
-  const int fd = open(meta.storage_path.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0644);
+  const int fd = open(meta.storage_path.c_str(),
+                      O_CREAT | O_TRUNC | O_WRONLY | O_NOFOLLOW, 0644);
   if (fd < 0) {
     throw std::runtime_error("failed to open trace output file");
   }
@@ -102,7 +103,8 @@ void FlatFileTraceStore::WriteTrace(const TraceRecord& meta, std::span<const std
 
 void FlatFileTraceStore::AppendTraceRecord(const TraceRecord& meta,
                                             std::span<const std::uint8_t> record_data) {
-  const int fd = open(meta.storage_path.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0644);
+  const int fd = open(meta.storage_path.c_str(),
+                      O_CREAT | O_WRONLY | O_APPEND | O_NOFOLLOW, 0644);
   if (fd < 0) {
     throw std::runtime_error("failed to open trace file for append");
   }

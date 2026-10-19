@@ -41,6 +41,9 @@ struct PluginHandle {
   // and unconditionally erasing by name alone would delete that newer,
   // still-live registration instead of this handle's stale one.
   std::vector<std::pair<std::string, void*>> registered_services;
+  // Slot in the crash-attribution registry (plugin/crash_attribution.h), or
+  // -1. Owned by the entry in plugins_: DestroyHandle frees it before dlclose.
+  int crash_slot = -1;
 };
 
 /* Signature for routing a signal value from a plugin. */

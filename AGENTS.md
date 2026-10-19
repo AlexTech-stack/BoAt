@@ -55,7 +55,7 @@ Windows-port scaffolding or docs that imply one.
     transport is core (see the `FrameSink` note under Replay).
     - `pdu_router/` — PduRouter plugin (routes PDUs over CAN/Ethernet, transmission engine, deadline monitoring, groups)
     - `can_tp/` — ISO 15765-2 CAN Transport Protocol (segmentation/reassembly)
-    - `someip/` — SOME/IP middleware (service discovery stub, request/response)
+    - `someip/` — SOME/IP plugin (experimental: protocol constants + a service-discovery stub; the request/response responder is not wired)
     - `tcp/` — TCP transport plugin (state machine only; transmits via the core Eth registry when gateway-resident)
     - `probe/` — gateway conformance probe (verifies delivery, declared_buses filtering, self-sent tagging, round-trip from inside the dispatch loop)
   - `src/replay/` — Replay engine
@@ -178,8 +178,8 @@ boat frame send --bus-type ethernet --ethertype 0x0800 --dst-ip 10.0.0.1 --data 
 
 ```bash
 # C++ (Catch2) — one test preset per configure preset: debug, release, asan, tsan, coverage
-ctest --preset debug                     # the 7 HIL ones report Skipped unless opted in
-BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 164 actually run
+ctest --preset debug                     # the HIL tests report Skipped unless opted in
+BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # includes the HIL tests
 ctest --test-dir build/debug -R TestName --timeout 30 --output-on-failure
 ctest --test-dir build/debug -N  # list tests
 
@@ -227,11 +227,10 @@ It asserts two different things:
 
 - **Frame content and ordering** — hard `REQUIRE`. Bit-identical across runs, including under CPU
   oversubscription (measured 10/10).
-- **Tick attribution** — tagged `[!mayfail]`. Replay and the node tick thread are independent clocks that
-  are never coupled, so which tick a frame lands in is not decided by the trace. Both sides schedule
-  against absolute deadlines (`TickTimer::WaitUntil`), which keeps them in lockstep on an idle host
-  (30/30 identical) but not under contention (0/6 identical, and the tick thread drops ticks outright).
-  Promote this to a plain `REQUIRE` once replay delivery and plugin ticks share one clock.
+- **Tick attribution** — hard `REQUIRE`. Replay delivery and node-plugin ticks are ordered
+  phases of a single `TickAuthority`, so which tick a record lands in is computed from elapsed
+  ticks, not from wall-clock scheduling. Verified 10/10 identical under 2× CPU oversubscription,
+  the load that previously failed 0/6.
 
 Manual verification runbooks for specific feature areas live under `boat-platform/docs/testing/`, e.g. `cantp-plugin-manager-verification.md` (CanTp gRPC bridge, multi-instance `--iface`, `NodePluginService`/`boat plugin list`, PDU-bus dispatch).
 
@@ -384,10 +383,14 @@ over the network into one view. See `backlog/launcher_agent_backlog.md` for
 status/known gaps and `test/LauncherAgent.md` for verified behavior.
 
 It binds **`127.0.0.1` by default**; `BOAT_AGENT_BIND` is the override and
-`0.0.0.0` is the explicit opt-in for reaching it from another host. That
-default is deliberate: the API is unauthenticated and starts processes from
-caller-supplied paths, so reaching it is equivalent to running code on the
-host (see `SECURITY.md`, issue #39).
+`0.0.0.0` is the explicit opt-in for reaching it from another host. An empty
+or whitespace-only value also means loopback. That default is deliberate: the
+API is unauthenticated and starts processes from caller-supplied paths, so
+reaching it is equivalent to running code on the host (see `SECURITY.md`,
+issue #39). Mutating requests are rejected unless the `Host` header is an IP
+literal, a local name or in `BOAT_AGENT_ALLOWED_HOSTS`, and the `Origin` is
+absent or loopback (DNS-rebinding/CSRF guard). `external:<pid>` stop requires
+a positive pid whose `/proc/<pid>/comm` is `boat_gateway`.
 
 ```bash
 BOAT_AGENT_PORT=8090 python3 ui/launcher_agent.py   # default port 8090
@@ -697,14 +700,47 @@ dependency above.
     re-acquire per use, treating a null ref as "the plugin went away".
   - Acquire and release a ref on the same thread; the re-entrancy check is a per-thread counter.
 
+- **Plugin crash attribution, not containment (#19).** Plugins are in-process, so a crash in
+  one still kills the gateway. `src/core/plugin/crash_attribution.{h,cpp}` makes it say which
+  plugin did it:
+  - **Image registry.** `PluginManager::Load` registers each plugin's `PT_LOAD` address ranges
+    (found with `dl_iterate_phdr`) before running any plugin code. `DestroyHandle` frees the
+    slot after `destroy_fn` and before `dlclose` (`PluginHandle::crash_slot`). The registry has
+    a fixed 64 slots and is lock-free for readers. When full, attribution degrades and loading
+    never fails. Ranges identify a `.so`, not an instance: instances sharing a mapping are all
+    listed.
+  - **Per-thread marker.** `crash::ActiveCallbackScope` wraps every host → plugin call: the
+    `load` steps, `on_tick`, `on_frame`, `destroy_fn`. It is what attributes `abort()`, an
+    exception escaping a callback, or a fault in host code a plugin called back into, where the
+    faulting PC is not in the plugin. **Any new host → plugin call site must use it.** The
+    first scope on a thread also gives that thread an alternate signal stack, so a stack
+    overflow in a plugin is still reported. Plugin-owned threads (e.g. the TCP plugin's
+    `raw_rx_thread`) get no marker and no alternate stack, but they are still attributed by PC
+    or stack walk.
+  - **Handler.** `crash::InstallFatalSignalHandler()` is called once at the top of the
+    gateway's `main()`, before any plugin loads; failure lands in `EffectiveConfig.warnings`.
+    `PluginManager` never installs it itself. On `SIGSEGV`/`SIGBUS`/`SIGILL`/`SIGFPE`/`SIGABRT`
+    it writes `[Gateway] FATAL: …` lines with `write(2)` only: the signal, then
+    `plugin '<so>' (key '<key>') via=pc|stack|callback`, `thread was inside <kind> of …`,
+    `faulting pc is outside the plugin …` or `not attributed to any loaded plugin`, then a
+    backtrace. It then restores the previous disposition and re-raises (signals sent by
+    kill/raise/abort) or returns so the instruction faults again (hardware faults). The
+    process dies by the original signal, and sanitizer handlers still run.
+  - Tests: `boat_unit_plugin_crash_attribution` (registry, marker, no signal takeover) and
+    `boat_integration_plugin_crash`. The integration test spawns `boat_crash_host` and the
+    real `boat_gateway` with the test-only `crash_plugin.so` fixture (`src/tests/fixtures/`)
+    and asserts both the FATAL lines and the exit signal. Exit-signal assertions are relaxed
+    under ASan/TSan.
+
 - **Plugin ABI v9** (current, merged to `master`):
   - Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU)
   - Plugin vtable (10 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`
   - `BOAT_PLUGIN_ABI_VERSION = 9` — any other version rejected with a clear error
     (`boat_unit_plugin_time_source` loads a deliberately stale fixture to prove it)
   - `set_time_source(ctx, BoatNowNsFn, host_ctx)` — v9. The host hands each plugin a clock
-    returning monotonic nanoseconds: real time normally, virtual time under
-    `BOAT_TIME_SOURCE=virtual`. Called once, after `initialize()` succeeds and before the
+    returning monotonic nanoseconds: real time for the gateway, which always passes
+    `kRealTime`; library callers can opt into `virtual` through `BOAT_TIME_SOURCE=virtual`.
+    Called once, after `initialize()` succeeds and before the
     first tick; optional in both directions (a NULL entry, or a host that never calls
     `PluginManager::SetTimeSource`, are both fine). Plugins that need time **must** use it
     instead of `steady_clock::now()` — a plugin reading a system clock puts back exactly the
@@ -825,13 +861,16 @@ should use the gateway's own trace recording, not a client stream.
   rather than a stale tail.
 - Drops surface as cumulative `grpc.<stream>.dropped` points (`stream_metrics::` in
   `stream_drop_registry.h`) through `GetMetrics` and `StreamMetrics` — zeros included,
-  so "no drops" and "does not report" are distinguishable. Two overflow sources are
+  so "no drops" and "does not report" are distinguishable. Three overflow sources are
   not registry-backed and are appended from their own counters:
-  `ReplayController::DroppedEventCount()` and `SignalRouter::DroppedEventCount()`
-  (`signal_router.dropped`). The router's ring sits *upstream* of the signal/bus
+  `ReplayController::DroppedEventCount()`, `SignalRouter::DroppedEventCount()`
+  (`signal_router.dropped`) and `EventBus::DroppedEventCount()`
+  (`event_bus.dropped`). The router's ring sits *upstream* of the signal/bus
   streams and drops the *newest* event when full — a lock-free SPSC ring cannot
   overwrite the oldest without a second producer — while the stream queues drop the
   oldest; both policies are counted, neither is silent anymore (issue #55).
+  `EventBus` drops events for types with no subscriber at publish time and drops the
+  oldest queued event once its 4096-entry cap is reached (issue #64).
 - The first drop and every 1000th log one `[Gateway] stream '...': dropped N event(s)`
   line on stderr, so a stalled client leaves a diagnostic, not just a metric.
 - `bus_service_impl`, `signal_service_impl` and `debug_service_impl` were still using
@@ -1248,9 +1287,12 @@ than `CanTpService`, `nsdu_id` must stay unique across every CanTp instance
 sharing that PDU-bus namespace, since there's no ambiguity-detection here
 the way `CanTpService.Send`'s "multiple instances loaded" error provides.
 
-### SOME/IP Plugin
+### SOME/IP Plugin (experimental)
 
-Service-oriented middleware over Ethernet UDP. Listens on configured ports, responds to SOME/IP requests, supports Service Discovery.
+SOME/IP protocol constants and a **service-discovery stub** over Ethernet UDP. The
+request/response responder is **not functional yet**: `local_services` is never
+populated, so no service can be registered and no REQUEST is answered. Treat the
+plugin as a stub, not as working SOME/IP middleware.
 
 ```bash
 BOAT_NODE_PLUGINS=./build/debug/src/plugins/someip/someip.so \
@@ -1258,7 +1300,7 @@ BOAT_NODE_PLUGINS=./build/debug/src/plugins/someip/someip.so \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
-Config: `{"sd_port": 30490}`. Registers offered services; responds to REQUEST messages with RESPONSE echoes.
+Config: `{"sd_port": 30490}` is parsed; the plugin currently offers and answers no services.
 
 ### Probe Plugin (gateway conformance)
 

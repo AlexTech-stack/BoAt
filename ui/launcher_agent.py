@@ -57,13 +57,21 @@ Usage:
 Environment:
     BOAT_AGENT_PORT       — HTTP port for this agent (default 8090)
     BOAT_AGENT_BIND       — address to bind (default 127.0.0.1, loopback only).
-                            Reaching this API is equivalent to running code on
-                            this host: it spawns gateway binaries and node
-                            scripts from caller-supplied paths. Listening on a
-                            routable interface is therefore an explicit opt-in
-                            -- set BOAT_AGENT_BIND=0.0.0.0 when admin_gui on
-                            another machine has to reach this agent, and never
-                            on an untrusted network.
+                            An empty or whitespace-only value also means the
+                            loopback default. Reaching this API is equivalent
+                            to running code on this host: it spawns gateway
+                            binaries and node scripts from caller-supplied
+                            paths. Listening on a routable interface is
+                            therefore an explicit opt-in -- set
+                            BOAT_AGENT_BIND=0.0.0.0 when admin_gui on another
+                            machine has to reach this agent, and never on an
+                            untrusted network.
+    BOAT_AGENT_ALLOWED_HOSTS — comma-separated extra Host-header names accepted
+                            by the request guard, for an agent reached by a DNS
+                            name. IP literals, localhost and the host's own
+                            names are always accepted. Mutating requests from a
+                            browser Origin other than loopback/local are
+                            rejected (CSRF/rebinding defence).
     BOAT_AGENT_BASE_PORT  — first gRPC port to try when auto-allocating
                             (default 50051, matches boat_gateway's own default)
     BOAT_GATEWAY_BIN      — path to boat_gateway binary (default build/debug)
@@ -81,6 +89,7 @@ become unmanaged). Extend as real needs surface.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -96,11 +105,13 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "boat-platform" / "sdk" / "python"))
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # ── Configuration ────────────────────────────────────────────────────────────
@@ -108,8 +119,32 @@ from pydantic import BaseModel
 _PROJECT_ROOT   = Path(__file__).resolve().parent.parent / "boat-platform"
 _DEFAULT_GW_BIN = str(_PROJECT_ROOT / "build" / "debug" / "src" / "gateway" / "grpc_gateway" / "boat_gateway")
 _GW_BIN_DEFAULT = os.environ.get("BOAT_GATEWAY_BIN", _DEFAULT_GW_BIN)
+
+
+def _resolve_agent_bind(raw: Optional[str]) -> str:
+    """Empty or whitespace-only means the loopback default, not all interfaces.
+
+    `os.environ.get(..., "127.0.0.1")` returns "" when the variable is set but
+    empty (systemd Environment= templates, .env files, CI matrices), and
+    uvicorn treats host="" as every interface. That silently reaches the
+    dangerous configuration without an opt-in.
+    """
+    value = (raw or "").strip()
+    return value or "127.0.0.1"
+
+
+def _is_loopback_bind(addr: str) -> bool:
+    value = addr.strip()
+    if value.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
 _AGENT_PORT     = int(os.environ.get("BOAT_AGENT_PORT", "8090"))
-_AGENT_BIND     = os.environ.get("BOAT_AGENT_BIND", "127.0.0.1")
+_AGENT_BIND     = _resolve_agent_bind(os.environ.get("BOAT_AGENT_BIND"))
 _BASE_PORT      = int(os.environ.get("BOAT_AGENT_BASE_PORT", "50051"))
 _LOG_LINES      = 500
 _NODES_DIR      = _PROJECT_ROOT / "nodes"
@@ -117,6 +152,87 @@ _TESTS_DIR      = _PROJECT_ROOT / "config" / "tests"
 _REPORTS_DIR    = _PROJECT_ROOT / "reports" / "admin_gui"
 
 _SIM_STATE_NAMES = {0: "UNSPECIFIED", 1: "IDLE", 2: "RUNNING", 3: "PAUSED", 4: "STOPPED", 5: "ERROR"}
+
+# Host-header names accepted in addition to IP literals and localhost. Needed
+# when the agent is reached by a DNS name; without it, a rebinding page could
+# use its own domain as Host.
+_LOCAL_HOSTNAMES = {socket.gethostname().lower(), socket.getfqdn().lower()}
+_EXTRA_ALLOWED_HOSTS = {
+    item.strip().lower()
+    for item in os.environ.get("BOAT_AGENT_ALLOWED_HOSTS", "").split(",")
+    if item.strip()
+}
+
+
+def _strip_port(host_header: str) -> str:
+    host = host_header.strip()
+    if host.startswith("["):  # [::1]:8090
+        end = host.find("]")
+        return host[1:end] if end != -1 else host[1:]
+    if host.count(":") == 1:  # host:port
+        return host.rsplit(":", 1)[0]
+    return host
+
+
+def _host_allowed(host_header: str) -> bool:
+    host = _strip_port(host_header).lower()
+    if not host:
+        return False
+    if host == "localhost" or host in _LOCAL_HOSTNAMES or host in _EXTRA_ALLOWED_HOSTS:
+        return True
+    try:
+        ipaddress.ip_address(host)  # any IP literal, including a LAN address
+        return True
+    except ValueError:
+        return False
+
+
+def _origin_allowed(origin: Optional[str]) -> bool:
+    """Native clients (admin_gui, curl) send no Origin; browser pages do.
+
+    A browser page on another origin must not be able to drive the API, which
+    is the CSRF half of the DNS-rebinding defence. The Host check handles the
+    rebinding half.
+    """
+    if not origin:
+        return True
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if host == "localhost" or host in _LOCAL_HOSTNAMES or host in _EXTRA_ALLOWED_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _external_pid(instance_id: str) -> int:
+    """Resolve an `external:<pid>` id to a pid that is safe to signal.
+
+    Discovery checks /proc/<pid>/comm; the stop path must too, otherwise
+    `external:-1` signals every process the user owns and `external:0` hits the
+    agent's own process group.
+    """
+    try:
+        pid = int(instance_id.split(":", 1)[1])
+    except (IndexError, ValueError):
+        raise HTTPException(status_code=400, detail="malformed external instance id")
+    if pid <= 0:
+        raise HTTPException(status_code=400, detail="external pid must be a positive integer")
+    try:
+        comm = Path(f"/proc/{pid}/comm").read_text().strip()
+    except OSError:
+        raise HTTPException(status_code=404,
+                            detail="process not found (it may have already exited)")
+    if comm != "boat_gateway":
+        raise HTTPException(status_code=409,
+                            detail=f"pid {pid} is not a boat_gateway process")
+    return pid
 
 
 # ── Port allocation ──────────────────────────────────────────────────────────
@@ -1319,6 +1435,23 @@ def _discover_external_gateways(known_pids: set) -> List[dict]:
 app = FastAPI(title="BoAt Launcher Agent")
 
 
+@app.middleware("http")
+async def _guard_agent_requests(request, call_next):
+    """Reject DNS-rebinding Host headers and cross-origin browser writes.
+
+    The agent is unauthenticated by decision (#39); these checks remove the
+    browser-only attack paths without adding a secret to manage.
+    """
+    if not _host_allowed(request.headers.get("host", "")):
+        return JSONResponse(status_code=403,
+                            content={"detail": "Host header is not allowed"})
+    if request.method not in ("GET", "HEAD", "OPTIONS") and not _origin_allowed(
+            request.headers.get("origin")):
+        return JSONResponse(status_code=403,
+                            content={"detail": "cross-origin request rejected"})
+    return await call_next(request)
+
+
 class NodePluginSpec(BaseModel):
     path: str
     config: dict = {}
@@ -1441,7 +1574,7 @@ def api_start_instance(instance_id: str):
 @app.post("/api/instances/{instance_id}/stop")
 def api_stop_instance(instance_id: str):
     if instance_id.startswith("external:"):
-        pid = int(instance_id.split(":", 1)[1])
+        pid = _external_pid(instance_id)
         try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -1874,7 +2007,7 @@ def api_can_config(name: str, req: CanConfigRequest):
 
 if __name__ == "__main__":
     print(f"BoAt Launcher Agent → http://{_AGENT_BIND}:{_AGENT_PORT}")
-    if _AGENT_BIND not in ("127.0.0.1", "localhost", "::1"):
+    if not _is_loopback_bind(_AGENT_BIND):
         print(f"WARNING: listening on {_AGENT_BIND}; anyone who can reach this port "
               "can run processes on this host (see SECURITY.md)")
     print(f"Default gateway binary: {_GW_BIN_DEFAULT}")

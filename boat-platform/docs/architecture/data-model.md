@@ -42,7 +42,7 @@ Trace
   simulation_id: UUID
   start_tick: uint64
   end_tick: uint64
-  format: ENUM(BINARY|MF4|CSV)
+  format: ENUM(BINARY)
   storage_path: String
 
 Plugin

@@ -83,10 +83,12 @@ EthernetHilBridge::EthernetHilBridge(EthernetBusRegistry& registry,
   rx_sub_id_ = registry_.Subscribe(
       "", 0,
       [this](const EthernetFrame& frame, const std::string& /*iface*/) {
-        bus_.Publish(boat::core::BusEvent{
-            kEventTypeEthRx,
-            boat::core::UnknownPayload{kEventTypeEthRx, EncodeEthFrame(frame)},
-            0});
+        if (bus_.HasSubscribers(kEventTypeEthRx)) {
+          bus_.Publish(boat::core::BusEvent{
+              kEventTypeEthRx,
+              boat::core::UnknownPayload{kEventTypeEthRx, EncodeEthFrame(frame)},
+              0});
+        }
       });
   subscribed_ = true;
 

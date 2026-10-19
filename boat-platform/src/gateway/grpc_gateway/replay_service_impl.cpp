@@ -12,6 +12,8 @@
 #include <thread>
 #include <vector>
 
+#include "store/trace_store/trace_store.h"
+
 namespace boat::gateway {
 namespace {
 
@@ -212,6 +214,11 @@ grpc::Status ReplayServiceImpl::ImportTraceData(grpc::ServerContext*, const boat
     }
     if (request->data().empty()) {
       return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "trace data must be non-empty");
+    }
+
+    if (!boat::store::IsValidTraceId(request->trace_id())) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "trace_id must match [A-Za-z0-9._-]+ and must not be '.' or '..'");
     }
 
     const std::string storage_path = "/tmp/" + request->trace_id() + ".trace";

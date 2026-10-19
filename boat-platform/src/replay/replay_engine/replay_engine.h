@@ -157,6 +157,12 @@ class ReplayController {
   std::atomic<std::uint64_t> current_tick_{0};
   std::atomic<bool> running_{false};
   std::atomic<bool> paused_{false};
+  // Resume() must shift authority_base_tick_ by the time spent paused; the
+  // shift happens on the pump thread, which is the only one that knows the
+  // current authority tick.
+  std::atomic<bool> resume_pending_{false};
+  std::uint64_t paused_at_tick_{0};  // pump thread only: first tick observed paused
+  bool          paused_seen_{false}; // pump thread only
   std::condition_variable pause_cv_;
   std::mutex pause_mutex_;
   mutable std::mutex error_mutex_;

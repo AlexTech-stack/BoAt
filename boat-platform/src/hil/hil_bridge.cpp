@@ -50,10 +50,14 @@ void HilBridge::Start() {
     while (running_.load()) {
       CanFrame frame {};
       if (driver_ != nullptr && driver_->ReadFrame(frame)) {
-        bus_.Publish(boat::core::BusEvent{
-            kEventTypeCanFrameRx,
-            boat::core::UnknownPayload{kEventTypeCanFrameRx, EncodeCanFrame(frame)},
-            0});
+        // Skip the encode and the queued event when no handler can receive
+        // it; EventBus::Publish would drop it at publish time anyway.
+        if (bus_.HasSubscribers(kEventTypeCanFrameRx)) {
+          bus_.Publish(boat::core::BusEvent{
+              kEventTypeCanFrameRx,
+              boat::core::UnknownPayload{kEventTypeCanFrameRx, EncodeCanFrame(frame)},
+              0});
+        }
         std::function<void(const CanFrame&)> cb;
         {
           std::lock_guard<std::mutex> lock(on_receive_mutex_);

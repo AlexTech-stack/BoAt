@@ -21,11 +21,13 @@ bool FrameSink::Publish(const boat::core::Frame& frame) {
       const auto& cm = frame.can_meta();
       boat::hil::CanFrame cf{};
       cf.can_id       = cm.can_id;
-      cf.dlc          = cm.dlc;
       cf.flags        = cm.flags;
       cf.timestamp_ns = frame.timestamp_ns();
       const std::size_t copy_len =
           std::min(frame.payload().size(), static_cast<std::size_t>(64));
+      // dlc is the payload byte count, not an ISO DLC code. Clamp it to the
+      // bytes actually stored so downstream consumers cannot read past data[].
+      cf.dlc = static_cast<uint8_t>(std::min<std::size_t>(cm.dlc, copy_len));
       if (copy_len > 0) {
         std::memcpy(cf.data, frame.payload().data(), copy_len);
       }

@@ -130,7 +130,7 @@ HIL, GA) are all delivered, with the exceptions recorded under [Epics](#epics) a
 | Client side (Python SDK, CLI, Admin GUI, web tools): OS-agnostic, talks to a Linux gateway over gRPC | **Met.** Pure Python, no OS-specific paths; CI exercises Linux only |
 | Soft real-time latency: ≤1 ms jitter in simulated mode | **Not measured.** No benchmark exists anywhere in the repository ([#18](https://github.com/AlexTech-stack/BoAt/issues/18)) |
 | Throughput: ≥1,000,000 events per second | **Not measured.** Same issue |
-| Plugin isolation with crash containment strategy | **Not implemented.** No signal handler, no watchdog, no supervisor. All plugins run in-process via `dlopen`, so one `abort()` takes down the gateway, every other plugin, the gRPC server and all simulation state ([#19](https://github.com/AlexTech-stack/BoAt/issues/19)) |
+| Plugin isolation with crash containment strategy | **Containment not implemented; attribution is.** All plugins run in-process via `dlopen`, so one `abort()` still takes down the gateway, every other plugin, the gRPC server and all simulation state. A fatal-signal handler now names the plugin responsible on stderr before the process dies (`src/core/plugin/crash_attribution.{h,cpp}`). There is no watchdog, no supervisor and no restart ([#19](https://github.com/AlexTech-stack/BoAt/issues/19)) |
 
 The two unmeasured numbers were removed from the public-facing documentation during the
 release-readiness audit, so they are not being advertised without evidence. They remain here
@@ -177,11 +177,11 @@ Two items from the original concept are not built, and one is corrected:
 - **Fault injection panel** (timeline drag-and-drop) — not built
   ([#27](https://github.com/AlexTech-stack/BoAt/issues/27)).
 - **Metrics display** — not built ([#28](https://github.com/AlexTech-stack/BoAt/issues/28)).
-- **Trace export** is **PCAPNG**, not MF4/CSV. `boat replay export` writes CAN/CAN-FD and
+- **Trace export** is **PCAPNG**. `boat replay export` writes CAN/CAN-FD and
   Ethernet frames to separate PCAPNG interfaces in one file on one timeline, which opens in
-  Wireshark. The `MF4` and `CSV` values in `TraceRecord::Format` are declared and
-  unimplemented ([#29](https://github.com/AlexTech-stack/BoAt/issues/29)); MF4 has a real
-  argument behind it for this audience and would need its own scope.
+  Wireshark. `TraceRecord::Format` declares only the implemented `BINARY` value; the
+  unimplemented MF4/CSV placeholders were removed ([#29](https://github.com/AlexTech-stack/BoAt/issues/29)).
+  MF4 would need its own design and scope if it is ever wanted.
 
 **Accessibility.** Keyboard-first navigation, high-contrast indicators, error states with
 remediation guidance. Partially delivered; not audited.
@@ -251,7 +251,7 @@ live. The column is now **Status**, and it says what is true.
 
 | ID | Risk | Status |
 |---|---|---|
-| R01 | Plugin crash takes down the entire gateway | **Open, unmitigated.** All plugins run in-process via `dlopen`. No process isolation, no watchdog, no state recovery, no crash attribution. Rises in severity the moment out-of-tree plugins exist → [#19](https://github.com/AlexTech-stack/BoAt/issues/19) |
+| R01 | Plugin crash takes down the entire gateway | **Open; diagnosis mitigated, impact not.** All plugins run in-process via `dlopen`, with no process isolation, no watchdog and no state recovery. A crash still kills the gateway, but it now names the plugin responsible (pc, stack or callback marker) before dying, so "the gateway died" becomes "plugin X killed the gateway". Rises in severity the moment out-of-tree plugins exist → [#19](https://github.com/AlexTech-stack/BoAt/issues/19) |
 | R02 | Tick ordering divergence between dual PluginManagers | **Closed.** Both managers are now ordered phases of one `TickAuthority` (`node_plugins` → `sim_plugins` → `replay`). The two managers still exist, but the split is about plugin *lifetime*, not timing. This is what made hard tick-attribution assertions possible |
 | R03 | CAN frame loss under high bus load | **Closed.** Sockets request a larger `SO_RCVBUF`, RX drops and error frames are counted, and controller state with TEC/REC is exposed as `can.<iface>.*` metrics — a bus that went bus-off no longer looks idle ([#20](https://github.com/AlexTech-stack/BoAt/issues/20), [#22](https://github.com/AlexTech-stack/BoAt/issues/22)) |
 | R04 | Python gRPC stub drift from proto changes | **Closed.** The `proto-stubs-in-sync` CI job regenerates the stubs and fails if the committed output differs |

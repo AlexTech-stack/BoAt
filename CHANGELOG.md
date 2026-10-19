@@ -13,6 +13,16 @@ The plugin ABI is versioned separately from the project; see
 
 ### Added
 
+- **Plugin crash attribution (#19) — attribution, not containment.** The gateway installs a
+  fatal-signal handler (`SIGSEGV`/`SIGBUS`/`SIGILL`/`SIGFPE`/`SIGABRT`) at startup. When a
+  plugin crashes, the gateway now writes `[Gateway] FATAL: plugin '<so>' (key '<key>') via=pc|stack|callback`
+  to stderr, plus which callback the thread was in (`load`, `on_tick`, `on_frame`, `destroy`)
+  and a backtrace. This covers `abort()` and exceptions escaping a callback, faults in host
+  code a plugin called into, and faults on threads the plugin started itself. The handler then
+  chains to whatever disposition was there before, so the process still dies by the original
+  signal: exit status, core dumps and sanitizer reports are unchanged. A crashing plugin
+  **still takes the gateway down**; containment is still open under #19. No ABI, proto or CLI
+  change. `src/core/plugin/crash_attribution.{h,cpp}`.
 - **CAN bus health is observable.** `SocketCanDriver` requests a larger `SO_RCVBUF`
   (`BOAT_CAN_RCVBUF`, default 4 MiB, `0` = kernel default) and says so when the kernel capped
   it; RX drop counts (`SO_RXQ_OVFL`, device-level `rx_dropped`/`rx_errors` from netlink) and
@@ -49,6 +59,20 @@ The plugin ABI is versioned separately from the project; see
   `node_manager` is destroyed or drained, and `StopAll()` no longer joins RX threads while
   holding the registry mutex — an RX callback that sends (CanTp flow control) can no longer
   deadlock shutdown. CAN/Ethernet frame subscription ids are explicitly released.
+- **A bare gateway no longer grows without bound** (#64). `EventBus` queued every CAN/Ethernet
+  RX frame and every replayed record even when nothing subscribed to them, and the only drain
+  ran while a simulation was active; a README-quick-start gateway or a replay-only run leaked
+  memory until OOM. Events for unsubscribed types are now dropped at publish time, the queue is
+  capped at 4096 entries with drop-oldest, and overflow is reported as `event_bus.dropped`
+  through `MetricsService`. `HilBridge` and the replay phase also skip encoding when no handler
+  is subscribed.
+- **The launcher agent fails closed on an empty bind and guards browser request paths**
+  (#39). `BOAT_AGENT_BIND=""` is treated as unset (loopback) instead of uvicorn's
+  all-interfaces, loopback detection uses `ipaddress`, and requests are rejected when the
+  `Host` header is not an IP literal/local name/`BOAT_AGENT_ALLOWED_HOSTS` or when a mutating
+  request carries a non-loopback browser `Origin` (DNS-rebinding/CSRF defence).
+  `external:<pid>` stop now requires a positive pid whose `/proc/<pid>/comm` is
+  `boat_gateway`; previously `external:-1` signalled every process the user owned.
 - **Documentation described storage that never existed** (#14). `docs/diagrams/class-diagrams.md`
   drew a `TimescaleEventStore` class and an `ISignalRouter`/`LocalSignalRouter`/
   `DistributedSignalRouter` hierarchy — none of those types exist anywhere in the tree — and

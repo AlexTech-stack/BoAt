@@ -3,16 +3,30 @@
 
 #pragma once
 
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
 struct sqlite3;
 
 namespace boat::store {
+
+// Trace ids become path components under /tmp. Only characters that cannot
+// escape the directory are accepted; "." and ".." are rejected explicitly.
+inline bool IsValidTraceId(std::string_view id) {
+  if (id.empty() || id.size() > 128) return false;
+  if (id == "." || id == "..") return false;
+  for (const char ch : id) {
+    const auto c = static_cast<unsigned char>(ch);
+    if (!(std::isalnum(c) || c == '.' || c == '_' || c == '-')) return false;
+  }
+  return true;
+}
 
 struct __attribute__((packed)) TraceRecordHeader {
   std::uint32_t magic;
@@ -23,10 +37,10 @@ struct __attribute__((packed)) TraceRecordHeader {
 };
 
 struct TraceRecord {
+  // Only BINARY is implemented. The former MF4/CSV placeholders were removed
+  // rather than left as values that no writer or reader supports (issue #29).
   enum class Format : int {
     BINARY = 0,
-    MF4 = 1,
-    CSV = 2,
   };
 
   std::string id;
