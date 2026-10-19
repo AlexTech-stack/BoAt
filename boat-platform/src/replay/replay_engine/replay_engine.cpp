@@ -180,8 +180,11 @@ void ReplayController::StartFromEvents(const boat::store::EventFilter& filter,
     return;
   }
 
-  std::string trace_id = "evtstore_replay_" +
-                         filter.simulation_id.value_or("default") + "_" +
+  const std::string simulation_id = filter.simulation_id.value_or("default");
+  if (!boat::store::IsValidTraceId(simulation_id)) {
+    throw std::runtime_error("invalid simulation_id for event replay");
+  }
+  std::string trace_id = "evtstore_replay_" + simulation_id + "_" +
                          std::to_string(events[0].tick);
   std::string storage_path = "/tmp/" + trace_id + ".trace";
 

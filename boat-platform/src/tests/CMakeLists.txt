@@ -58,6 +58,11 @@ add_executable(boat_unit_frame unit/test_frame.cpp)
 target_link_libraries(boat_unit_frame PRIVATE boat_core Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_frame)
 
+add_executable(boat_unit_trace_id unit/test_trace_id.cpp)
+target_include_directories(boat_unit_trace_id PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(boat_unit_trace_id PRIVATE boat_store Catch2::Catch2WithMain)
+boat_discover_tests(boat_unit_trace_id)
+
 add_executable(boat_unit_sqlite_event_store unit/test_sqlite_event_store.cpp)
 target_link_libraries(boat_unit_sqlite_event_store PRIVATE boat_core boat_store Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_sqlite_event_store)
