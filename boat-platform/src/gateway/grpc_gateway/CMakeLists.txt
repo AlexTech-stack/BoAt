@@ -44,3 +44,12 @@ target_compile_features(boat_gateway PRIVATE cxx_std_20)
 target_compile_definitions(boat_gateway PRIVATE BOAT_VERSION="${PROJECT_VERSION}")
 
 install(TARGETS boat_gateway RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# CPack ships from boat-platform/ and the runtime image's build context is
+# boat-platform/, so the license texts are duplicated here (LICENSE already
+# was). Keep these copies in sync with the repository root.
+install(FILES
+          ${CMAKE_SOURCE_DIR}/LICENSE
+          ${CMAKE_SOURCE_DIR}/NOTICE
+          ${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/boat-platform)
