@@ -13,6 +13,16 @@ The plugin ABI is versioned separately from the project; see
 
 ### Added
 
+- **Plugin crash attribution (#19) — attribution, not containment.** The gateway installs a
+  fatal-signal handler (`SIGSEGV`/`SIGBUS`/`SIGILL`/`SIGFPE`/`SIGABRT`) at startup. When a
+  plugin crashes, the gateway now writes `[Gateway] FATAL: plugin '<so>' (key '<key>') via=pc|stack|callback`
+  to stderr, plus which callback the thread was in (`load`, `on_tick`, `on_frame`, `destroy`)
+  and a backtrace. This covers `abort()` and exceptions escaping a callback, faults in host
+  code a plugin called into, and faults on threads the plugin started itself. The handler then
+  chains to whatever disposition was there before, so the process still dies by the original
+  signal: exit status, core dumps and sanitizer reports are unchanged. A crashing plugin
+  **still takes the gateway down**; containment is still open under #19. No ABI, proto or CLI
+  change. `src/core/plugin/crash_attribution.{h,cpp}`.
 - **CAN bus health is observable.** `SocketCanDriver` requests a larger `SO_RCVBUF`
   (`BOAT_CAN_RCVBUF`, default 4 MiB, `0` = kernel default) and says so when the kernel capped
   it; RX drop counts (`SO_RXQ_OVFL`, device-level `rx_dropped`/`rx_errors` from netlink) and

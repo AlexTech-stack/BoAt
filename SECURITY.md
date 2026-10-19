@@ -36,7 +36,10 @@ startup when TLS is unconfigured; that warning is the whole protection.
 **The gateway loads arbitrary native code.** `BOAT_NODE_PLUGINS` and the plugin gRPC service
 `dlopen()` whatever `.so` path they are given, which then runs in-process with the gateway's
 full privileges. A plugin path is as trusted as the gateway binary itself. Don't accept plugin
-paths from anywhere you wouldn't accept a shell command.
+paths from anywhere you wouldn't accept a shell command. A crashing plugin takes the whole
+gateway down with it. The gateway's fatal-signal handler names the plugin responsible before
+dying, but that is cooperative diagnostics, not isolation: in-process code can replace the
+handler or forge what it reports.
 
 **Replay and frame-send write to real hardware.** If the gateway has a physical CAN interface
 open, `FrameService.SendFrame` and the replay pipeline put frames on that wire. On a bench
