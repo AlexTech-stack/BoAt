@@ -108,6 +108,25 @@ TEST_CASE("CanTp sends a single frame without needing a tick",
   REQUIRE(out[0].data[1] == 0x01);
 }
 
+TEST_CASE("CanTp rejects payloads above the 12-bit FF_DL limit",
+          "[unit][can_tp][tick]") {
+  Harness h;
+  REQUIRE(h.tp->Configure(Harness::Config()) == 0);
+
+  // 4096 bytes cannot be announced in a 12-bit FF_DL; sending it would make
+  // the receiver reassemble a wrapped length. It must fail before any frame.
+  std::vector<uint8_t> too_large(4096, 0xEE);
+  REQUIRE(h.tp->Send(kNsdu, too_large.data(), too_large.size()) < 0);
+  REQUIRE(h.Drain().empty());
+
+  // 4095 is the largest legal FF_DL value and must still start a transfer.
+  std::vector<uint8_t> max_ok(4095, 0x11);
+  REQUIRE(h.tp->Send(kNsdu, max_ok.data(), max_ok.size()) == 0);
+  auto out = h.Drain();
+  REQUIRE(out.size() == 1);
+  REQUIRE((out[0].data[0] & 0xF0) == 0x10);   // First Frame
+}
+
 TEST_CASE("CanTp N_Bs fires on the host clock, with no real waiting",
           "[unit][can_tp][tick][determinism]") {
   Harness h;
