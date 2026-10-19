@@ -825,13 +825,16 @@ should use the gateway's own trace recording, not a client stream.
   rather than a stale tail.
 - Drops surface as cumulative `grpc.<stream>.dropped` points (`stream_metrics::` in
   `stream_drop_registry.h`) through `GetMetrics` and `StreamMetrics` — zeros included,
-  so "no drops" and "does not report" are distinguishable. Two overflow sources are
+  so "no drops" and "does not report" are distinguishable. Three overflow sources are
   not registry-backed and are appended from their own counters:
-  `ReplayController::DroppedEventCount()` and `SignalRouter::DroppedEventCount()`
-  (`signal_router.dropped`). The router's ring sits *upstream* of the signal/bus
+  `ReplayController::DroppedEventCount()`, `SignalRouter::DroppedEventCount()`
+  (`signal_router.dropped`) and `EventBus::DroppedEventCount()`
+  (`event_bus.dropped`). The router's ring sits *upstream* of the signal/bus
   streams and drops the *newest* event when full — a lock-free SPSC ring cannot
   overwrite the oldest without a second producer — while the stream queues drop the
   oldest; both policies are counted, neither is silent anymore (issue #55).
+  `EventBus` drops events for types with no subscriber at publish time and drops the
+  oldest queued event once its 4096-entry cap is reached (issue #64).
 - The first drop and every 1000th log one `[Gateway] stream '...': dropped N event(s)`
   line on stderr, so a stalled client leaves a diagnostic, not just a metric.
 - `bus_service_impl`, `signal_service_impl` and `debug_service_impl` were still using

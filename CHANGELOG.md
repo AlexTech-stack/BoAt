@@ -42,6 +42,13 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **A bare gateway no longer grows without bound** (#64). `EventBus` queued every CAN/Ethernet
+  RX frame and every replayed record even when nothing subscribed to them, and the only drain
+  ran while a simulation was active; a README-quick-start gateway or a replay-only run leaked
+  memory until OOM. Events for unsubscribed types are now dropped at publish time, the queue is
+  capped at 4096 entries with drop-oldest, and overflow is reported as `event_bus.dropped`
+  through `MetricsService`. `HilBridge` and the replay phase also skip encoding when no handler
+  is subscribed.
 - **Documentation described storage that never existed** (#14). `docs/diagrams/class-diagrams.md`
   drew a `TimescaleEventStore` class and an `ISignalRouter`/`LocalSignalRouter`/
   `DistributedSignalRouter` hierarchy — none of those types exist anywhere in the tree — and

@@ -56,10 +56,11 @@ inline constexpr char kMetricsStream[]    = "grpc.metrics.stream.dropped";
    by StreamDropRegistry and are what MetricsService enumerates. */
 inline constexpr char kReplayStream[] = "grpc.replay.stream.dropped";
 
-/* Not a gRPC stream and not registry-backed: SignalRouter's own per-
-   subscription ring drops the newest event when full, upstream of any handler
-   queue, and reports one aggregate count. */
+/* Not gRPC streams and not registry-backed: SignalRouter's per-subscription
+   ring drops the newest event when full, and EventBus drops the oldest queued
+   event when its hard cap is reached. Both report one cumulative count. */
 inline constexpr char kSignalRouterDropped[] = "signal_router.dropped";
+inline constexpr char kEventBusDropped[] = "event_bus.dropped";
 
 inline constexpr std::array<const char*, 9> kRegistryBacked = {
     kFramesSubscribe, kFramesStream,     kPdusSubscribe,    kCanTpSubscribe,
