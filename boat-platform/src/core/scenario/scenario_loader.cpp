@@ -38,7 +38,17 @@ class JsonParser {
   }
 
  private:
+  static constexpr std::size_t kMaxJsonDepth = 64;
+
   JsonValue ParseValue() {
+    if (depth_ >= kMaxJsonDepth) {
+      throw std::runtime_error("JSON nesting too deep");
+    }
+    ++depth_;
+    struct DepthGuard {
+      std::size_t& depth;
+      ~DepthGuard() { --depth; }
+    } guard{depth_};
     SkipWs();
     if (Match('{')) return JsonValue{std::make_unique<JsonMap>(ParseObject()) };
     if (Match('[')) return JsonValue{ParseArray()};
@@ -134,6 +144,7 @@ class JsonParser {
 
   std::string_view text_;
   std::size_t pos_{0};
+  std::size_t depth_{0};
 };
 
 const std::unordered_map<std::string, JsonValue>& AsObject(const JsonValue& value) {
