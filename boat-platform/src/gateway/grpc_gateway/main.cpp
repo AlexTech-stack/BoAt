@@ -45,6 +45,7 @@
 #include "can_tp_service_impl.h"
 #include "node_plugin_service_impl.h"
 #include "metrics_service_impl.h"
+#include "plugin/crash_attribution.h"
 #include "plugin/plugin_manager.h"
 #include "plugin_service_impl.h"
 #include "replay_engine/replay_engine.h"
@@ -266,6 +267,17 @@ int main() {
 #ifdef BOAT_VERSION
   effective_config.version = BOAT_VERSION;
 #endif
+
+  // Plugin crash attribution (issue #19), installed before any plugin can
+  // load. Not containment: a crashing plugin still takes the gateway down,
+  // but the gateway names it on stderr first instead of just dying.
+  if (!boat::core::crash::InstallFatalSignalHandler()) {
+    const char* w =
+        "fatal-signal handler could not be installed; a plugin crash will not "
+        "be attributed to the plugin that caused it";
+    std::fprintf(stderr, "[Gateway] %s\n", w);
+    effective_config.warnings.push_back(w);
+  }
   effective_config.hil_enabled = [] {
     const char* v = std::getenv("BOAT_HIL_ENABLED");
     return v != nullptr && std::string(v) == "1";

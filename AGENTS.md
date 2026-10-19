@@ -697,6 +697,38 @@ dependency above.
     re-acquire per use, treating a null ref as "the plugin went away".
   - Acquire and release a ref on the same thread; the re-entrancy check is a per-thread counter.
 
+- **Plugin crash attribution, not containment (#19).** Plugins are in-process, so a crash in
+  one still kills the gateway. `src/core/plugin/crash_attribution.{h,cpp}` makes it say which
+  plugin did it:
+  - **Image registry.** `PluginManager::Load` registers each plugin's `PT_LOAD` address ranges
+    (found with `dl_iterate_phdr`) before running any plugin code. `DestroyHandle` frees the
+    slot after `destroy_fn` and before `dlclose` (`PluginHandle::crash_slot`). The registry has
+    a fixed 64 slots and is lock-free for readers. When full, attribution degrades and loading
+    never fails. Ranges identify a `.so`, not an instance: instances sharing a mapping are all
+    listed.
+  - **Per-thread marker.** `crash::ActiveCallbackScope` wraps every host → plugin call: the
+    `load` steps, `on_tick`, `on_frame`, `destroy_fn`. It is what attributes `abort()`, an
+    exception escaping a callback, or a fault in host code a plugin called back into, where the
+    faulting PC is not in the plugin. **Any new host → plugin call site must use it.** The
+    first scope on a thread also gives that thread an alternate signal stack, so a stack
+    overflow in a plugin is still reported. Plugin-owned threads (e.g. the TCP plugin's
+    `raw_rx_thread`) get no marker and no alternate stack, but they are still attributed by PC
+    or stack walk.
+  - **Handler.** `crash::InstallFatalSignalHandler()` is called once at the top of the
+    gateway's `main()`, before any plugin loads; failure lands in `EffectiveConfig.warnings`.
+    `PluginManager` never installs it itself. On `SIGSEGV`/`SIGBUS`/`SIGILL`/`SIGFPE`/`SIGABRT`
+    it writes `[Gateway] FATAL: …` lines with `write(2)` only: the signal, then
+    `plugin '<so>' (key '<key>') via=pc|stack|callback`, `thread was inside <kind> of …`,
+    `faulting pc is outside the plugin …` or `not attributed to any loaded plugin`, then a
+    backtrace. It then restores the previous disposition and re-raises (signals sent by
+    kill/raise/abort) or returns so the instruction faults again (hardware faults). The
+    process dies by the original signal, and sanitizer handlers still run.
+  - Tests: `boat_unit_plugin_crash_attribution` (registry, marker, no signal takeover) and
+    `boat_integration_plugin_crash`. The integration test spawns `boat_crash_host` and the
+    real `boat_gateway` with the test-only `crash_plugin.so` fixture (`src/tests/fixtures/`)
+    and asserts both the FATAL lines and the exit signal. Exit-signal assertions are relaxed
+    under ASan/TSan.
+
 - **Plugin ABI v9** (current, merged to `master`):
   - Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU)
   - Plugin vtable (10 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`
