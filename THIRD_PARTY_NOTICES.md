@@ -2,13 +2,13 @@
 
 BoAt itself is licensed under the Apache License 2.0 (see [LICENSE](LICENSE)).
 
-Nothing third-party is checked into or distributed by this repository. Every
-component below is fetched by CMake at build time, pulled in by `cargo`,
-installed as a package dependency, or downloaded on demand by a helper script,
-and each remains under its own license. Only **direct** dependencies are
-listed; their own transitive dependencies are not enumerated here and carry
-their own notices. This list is provided for convenience — the authoritative
-license text ships with each component.
+No third-party source is checked into this repository. The C++ components
+below are fetched by CMake at build time and **statically linked into the
+shipped `boat_gateway` binary**, so the CPack packages and the container image
+redistribute them in object form. Dependencies that are linked transitively are
+listed separately; each component remains under its own license. This list is
+provided for convenience — the authoritative license text ships with each
+component.
 
 ## C++ build-time dependencies
 
@@ -27,8 +27,21 @@ Declared via CMake `FetchContent` in `boat-platform/CMakeLists.txt` and
 | [Catch2](https://github.com/catchorg/Catch2) (tests only) | v3.6.0 | BSL-1.0 |
 
 Building also requires a Rust toolchain (`cargo`), which downloads the
-crates.io dependencies of iceoryx2's Rust core. Those crates are build-time
-only and are not enumerated here; they are predominantly MIT and/or Apache-2.0.
+crates.io dependencies of iceoryx2's Rust core. Their compiled code is linked
+into the shipped binary; they are predominantly MIT and/or Apache-2.0 (the
+exact set is pinned by iceoryx2's `Cargo.lock`).
+
+The following are built as part of gRPC v1.75.0 and linked into
+`boat_gateway`:
+
+| Component | License |
+| --- | --- |
+| [Abseil](https://abseil.io/) | Apache-2.0 |
+| [RE2](https://github.com/google/re2) | BSD-3-Clause |
+| [c-ares](https://c-ares.org/) | MIT |
+| [zlib](https://zlib.net/) | Zlib |
+| [BoringSSL](https://boringssl.googlesource.com/boringssl/) | OpenSSL/ISC-style |
+| [upb / utf8_range](https://github.com/protocolbuffers/upb) | BSD-3-Clause |
 
 **libacl.** `iceoryx_hoofs` needs `sys/acl.h`. If it is not installed
 system-wide, `boat-platform/CMakeLists.txt` downloads the Debian/Ubuntu
@@ -84,9 +97,9 @@ honour the LGPL's terms for those components.
 
 The CPack packages (`cpack -G "TGZ;DEB;RPM"`) and the container image built
 from `boat-platform/Dockerfile.runtime` (base: `ubuntu:22.04`) ship a
-`boat_gateway` binary that links the C++ dependencies above. Binary
-redistribution must therefore carry those components' licenses and notices in
-addition to this repository's [LICENSE](LICENSE) and [NOTICE](NOTICE).
+`boat_gateway` binary that links the C++ dependencies above. Both carry
+`LICENSE`, `NOTICE` and this file under `share/doc/boat-platform/`; binary
+redistributors must keep them alongside the binary.
 
 Those binaries are built in `boat-platform/Dockerfile.build` with AlmaLinux 8's
 `gcc-toolset-14`, which links the parts of libstdc++ newer than the system's
