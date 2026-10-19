@@ -240,7 +240,9 @@ Each web service resolves the SDK via `sys.path.insert(0, ...)` relative to its 
 `ui/launcher_agent.py` is the one service that is remote process execution rather than a
 dashboard: it spawns gateway binaries and node scripts from caller-supplied paths. It binds
 `127.0.0.1` by default; `BOAT_AGENT_BIND=0.0.0.0` is the explicit opt-in for federated
-`admin_gui` use (`SECURITY.md`, issue #39).
+`admin_gui` use (`SECURITY.md`, issue #39). An empty `BOAT_AGENT_BIND` also means loopback.
+Host/Origin checks block DNS-rebinding and cross-origin browser writes, and `external:<pid>`
+stop only signals a positive pid whose `/proc/<pid>/comm` is `boat_gateway`.
 
 ## Other conventions & gotchas
 

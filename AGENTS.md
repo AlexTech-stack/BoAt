@@ -384,10 +384,14 @@ over the network into one view. See `backlog/launcher_agent_backlog.md` for
 status/known gaps and `test/LauncherAgent.md` for verified behavior.
 
 It binds **`127.0.0.1` by default**; `BOAT_AGENT_BIND` is the override and
-`0.0.0.0` is the explicit opt-in for reaching it from another host. That
-default is deliberate: the API is unauthenticated and starts processes from
-caller-supplied paths, so reaching it is equivalent to running code on the
-host (see `SECURITY.md`, issue #39).
+`0.0.0.0` is the explicit opt-in for reaching it from another host. An empty
+or whitespace-only value also means loopback. That default is deliberate: the
+API is unauthenticated and starts processes from caller-supplied paths, so
+reaching it is equivalent to running code on the host (see `SECURITY.md`,
+issue #39). Mutating requests are rejected unless the `Host` header is an IP
+literal, a local name or in `BOAT_AGENT_ALLOWED_HOSTS`, and the `Origin` is
+absent or loopback (DNS-rebinding/CSRF guard). `external:<pid>` stop requires
+a positive pid whose `/proc/<pid>/comm` is `boat_gateway`.
 
 ```bash
 BOAT_AGENT_PORT=8090 python3 ui/launcher_agent.py   # default port 8090

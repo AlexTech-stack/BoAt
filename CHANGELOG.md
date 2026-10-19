@@ -42,6 +42,13 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **The launcher agent fails closed on an empty bind and guards browser request paths**
+  (#39). `BOAT_AGENT_BIND=""` is treated as unset (loopback) instead of uvicorn's
+  all-interfaces, loopback detection uses `ipaddress`, and requests are rejected when the
+  `Host` header is not an IP literal/local name/`BOAT_AGENT_ALLOWED_HOSTS` or when a mutating
+  request carries a non-loopback browser `Origin` (DNS-rebinding/CSRF defence).
+  `external:<pid>` stop now requires a positive pid whose `/proc/<pid>/comm` is
+  `boat_gateway`; previously `external:-1` signalled every process the user owned.
 - **Documentation described storage that never existed** (#14). `docs/diagrams/class-diagrams.md`
   drew a `TimescaleEventStore` class and an `ISignalRouter`/`LocalSignalRouter`/
   `DistributedSignalRouter` hierarchy — none of those types exist anywhere in the tree — and
