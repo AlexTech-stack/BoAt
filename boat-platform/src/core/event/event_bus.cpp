@@ -4,12 +4,35 @@
 #include "event/event_bus.h"
 
 #include <algorithm>
+#include <cstddef>
 
 namespace boat::core {
 
 void EventBus::Publish(BusEvent event) {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (subscribers_.find(event.type) == subscribers_.end()) {
+    return;  // no handler can ever receive it
+  }
+  if (queue_.size() >= max_queued_) {
+    queue_.pop();
+    ++dropped_;
+  }
   queue_.push(std::move(event));
+}
+
+bool EventBus::HasSubscribers(std::uint32_t type) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return subscribers_.find(type) != subscribers_.end();
+}
+
+std::uint64_t EventBus::DroppedEventCount() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return dropped_;
+}
+
+void EventBus::SetMaxQueued(std::size_t max) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  max_queued_ = std::max<std::size_t>(1, max);
 }
 
 EventBus::SubscriptionHandle EventBus::Subscribe(std::uint32_t type, HandlerFn handler) {

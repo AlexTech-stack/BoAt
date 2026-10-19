@@ -69,6 +69,8 @@ void AppendStreamDropMetrics(GatewayContext& ctx, std::uint64_t tick, Emit emit)
        static_cast<double>(ctx.replay_controller.DroppedEventCount()));
   emit(stream_metrics::kSignalRouterDropped,
        static_cast<double>(ctx.sim.signal_router().DroppedEventCount()));
+  emit(stream_metrics::kEventBusDropped,
+       static_cast<double>(ctx.sim.event_bus().DroppedEventCount()));
 }
 }  // namespace
 

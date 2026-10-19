@@ -52,6 +52,13 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **A bare gateway no longer grows without bound** (#64). `EventBus` queued every CAN/Ethernet
+  RX frame and every replayed record even when nothing subscribed to them, and the only drain
+  ran while a simulation was active; a README-quick-start gateway or a replay-only run leaked
+  memory until OOM. Events for unsubscribed types are now dropped at publish time, the queue is
+  capped at 4096 entries with drop-oldest, and overflow is reported as `event_bus.dropped`
+  through `MetricsService`. `HilBridge` and the replay phase also skip encoding when no handler
+  is subscribed.
 - **The launcher agent fails closed on an empty bind and guards browser request paths**
   (#39). `BOAT_AGENT_BIND=""` is treated as unset (loopback) instead of uvicorn's
   all-interfaces, loopback detection uses `ipaddress`, and requests are rejected when the

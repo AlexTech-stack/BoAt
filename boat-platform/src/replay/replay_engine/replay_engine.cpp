@@ -349,11 +349,13 @@ void ReplayController::DispatchRecord(const boat::v1::Frame& pf, std::uint64_t t
   // ── Publish replay event for gRPC streaming ───────────────────────────
   std::string proto_bytes(reinterpret_cast<const char*>(raw.data()), raw.size());
 
-  boat::core::BusEvent replay_event;
-  replay_event.type = kReplayBusEventType;
-  replay_event.tick = tick;
-  replay_event.payload = proto_bytes;
-  event_bus_.Publish(std::move(replay_event));
+  if (event_bus_.HasSubscribers(kReplayBusEventType)) {
+    boat::core::BusEvent replay_event;
+    replay_event.type = kReplayBusEventType;
+    replay_event.tick = tick;
+    replay_event.payload = proto_bytes;
+    event_bus_.Publish(std::move(replay_event));
+  }
 
   // ── Push to internal queue (StreamReplay) ─────────────────────────────
   {

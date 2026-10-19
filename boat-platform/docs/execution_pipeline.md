@@ -49,6 +49,9 @@ The following components ARE thread-safe and may be called from any
 thread:
 
 - `EventBus::Publish` / `Subscribe` / `Unsubscribe`
+  - `Publish` drops events whose type has no subscriber (they could never be delivered) and
+    drops the oldest queued event once the 4096-entry cap is reached; `DroppedEventCount()`
+    exposes the cumulative overflow count.
 - `SignalBus::Subscribe` / `Unsubscribe` / `Publish`
 - `PluginManager::Load` / `Unload` / `TickAll` (via snapshot pattern)
 
