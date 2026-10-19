@@ -36,7 +36,10 @@ startup when TLS is unconfigured; that warning is the whole protection.
 **The gateway loads arbitrary native code.** `BOAT_NODE_PLUGINS` and the plugin gRPC service
 `dlopen()` whatever `.so` path they are given, which then runs in-process with the gateway's
 full privileges. A plugin path is as trusted as the gateway binary itself. Don't accept plugin
-paths from anywhere you wouldn't accept a shell command.
+paths from anywhere you wouldn't accept a shell command. A crashing plugin takes the whole
+gateway down with it. The gateway's fatal-signal handler names the plugin responsible before
+dying, but that is cooperative diagnostics, not isolation: in-process code can replace the
+handler or forge what it reports.
 
 **Replay and frame-send write to real hardware.** If the gateway has a physical CAN interface
 open, `FrameService.SendFrame` and the replay pipeline put frames on that wire. On a bench
@@ -53,13 +56,21 @@ accept paths and shell out. They are development tools meant for `localhost`. Do
 them.
 
 **`ui/launcher_agent.py` is remote process execution, not just a dashboard.** It starts,
-stops and deletes `boat_gateway` instances on its host and runs node scripts, taking the
-gateway binary path, the script path, its arguments and its environment from the request
-(`BOAT_NODE_PLUGINS` is a path to a `.so` the gateway will `dlopen`). Anyone who can reach
-its port can run code on that machine. It binds `127.0.0.1` by default; `BOAT_AGENT_BIND`
-(e.g. `0.0.0.0`) is an explicit opt-in for a federated `admin_gui` setup, and belongs only
-on a trusted network. This is the one service whose exposure is qualitatively different
-from the others, and it is the reason that default changed (issue #39).
+stops and deletes `boat_gateway` instances on its host and runs node scripts. Its API can:
+launch any executable path as a gateway (`gateway_bin`), run any Python file with arbitrary
+arguments (`script_path`/`extra_args`), run `boat test run` manifests, make the gateway
+`dlopen` an arbitrary `.so` (`node_plugins` → `BOAT_NODE_PLUGINS`), and reconfigure
+interfaces through passwordless `sudo ip`. Anyone who can reach its port can run code on
+that machine.
+
+It binds `127.0.0.1` by default — an empty or whitespace-only `BOAT_AGENT_BIND` also means
+loopback; `BOAT_AGENT_BIND` (e.g. `0.0.0.0`) is an explicit opt-in for a federated
+`admin_gui` setup, and belongs only on a trusted network. The API has no authentication or
+TLS, by decision (issue #39). It does reject requests whose `Host` header is not an IP
+literal, an accepted local name or `BOAT_AGENT_ALLOWED_HOSTS`, and it rejects browser-origin
+(non-loopback `Origin`) mutating requests, which blocks DNS-rebinding and CSRF from a web
+page. Those checks do not stop a local process or a direct network client. This is the one
+service whose exposure is qualitatively different from the others.
 
 ## In scope
 

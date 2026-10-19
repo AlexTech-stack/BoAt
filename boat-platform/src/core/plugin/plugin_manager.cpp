@@ -3,6 +3,8 @@
 
 #include "plugin/plugin_manager.h"
 
+#include "plugin/crash_attribution.h"
+
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -104,7 +106,8 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
     throw std::runtime_error(dlerror());
   }
 
-  auto create_fn = reinterpret_cast<boat_plugin_create_fn>(dlsym(dl_handle, "boat_plugin_create"));
+  void* create_sym = dlsym(dl_handle, "boat_plugin_create");
+  auto create_fn = reinterpret_cast<boat_plugin_create_fn>(create_sym);
   auto destroy_fn = reinterpret_cast<boat_plugin_destroy_fn>(dlsym(dl_handle, "boat_plugin_destroy"));
   auto abi_fn = reinterpret_cast<boat_plugin_abi_version_fn>(dlsym(dl_handle, "boat_plugin_abi_version"));
   if (create_fn == nullptr || destroy_fn == nullptr || abi_fn == nullptr) {
@@ -120,24 +123,49 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
         " != " + std::to_string(BOAT_PLUGIN_ABI_VERSION) + ")");
   }
 
+  /* Register the image for crash attribution before running any of its code,
+     so a crash in create/initialize is attributed too. The guard frees the
+     slot on every failure path -- explicitly before dlclose where it can, and
+     on an exception thrown out of the plugin -- until the handle owns it. */
+  const std::string key = PluginKey(so_path, config_json);
+  struct CrashSlotGuard {
+    int slot;
+    ~CrashSlotGuard() { crash::UnregisterPluginImage(slot); }
+    void Release() noexcept {
+      crash::UnregisterPluginImage(slot);
+      slot = -1;
+    }
+    int Take() noexcept {
+      const int taken = slot;
+      slot = -1;
+      return taken;
+    }
+  } crash_slot{crash::RegisterPluginImage(key, so_path, create_sym)};
+  // Everything from here to the end of Load runs plugin code, or host code
+  // the plugin is calling back into, on this thread.
+  crash::ActiveCallbackScope load_scope(crash_slot.slot, crash::CallbackKind::kLoad);
+
   BoatPlugin* plugin = create_fn();
   if (plugin == nullptr || plugin->vtable == nullptr || plugin->vtable->initialize == nullptr ||
       plugin->vtable->on_tick == nullptr || plugin->vtable->shutdown == nullptr) {
     if (plugin != nullptr) {
       destroy_fn(plugin);
     }
+    crash_slot.Release();
     dlclose(dl_handle);
     throw std::runtime_error("Invalid plugin instance");
   }
 
   if (plugin->vtable->initialize(plugin->ctx, config_json.c_str()) != 0) {
     destroy_fn(plugin);
+    crash_slot.Release();
     dlclose(dl_handle);
     throw std::runtime_error("Plugin initialize() failed");
   }
 
-  PluginHandle handle{dl_handle, plugin, PluginKey(so_path, config_json),
+  PluginHandle handle{dl_handle, plugin, key,
                       abi_version, destroy_fn, config_json, {}};
+  handle.crash_slot = crash_slot.Take();
 
   // Cache the plugin's declared bus types so DispatchFrame can pre-filter
   // instead of calling on_frame for every plugin on every frame.
@@ -292,8 +320,13 @@ void PluginManager::ReleaseBusy() noexcept {
 void PluginManager::DestroyHandle(PluginHandle& handle) noexcept {
 #ifndef _WIN32
   if (handle.plugin != nullptr && handle.destroy_fn != nullptr) {
+    crash::ActiveCallbackScope scope(handle.crash_slot, crash::CallbackKind::kDestroy);
     handle.destroy_fn(handle.plugin);
   }
+  // After destroy_fn, so a crash in it is still attributed; before dlclose,
+  // so a later mapping at these addresses is never blamed on this plugin.
+  crash::UnregisterPluginImage(handle.crash_slot);
+  handle.crash_slot = -1;
   if (handle.dl_handle != nullptr) {
     dlclose(handle.dl_handle);
   }
@@ -392,7 +425,11 @@ void PluginManager::Unload(const std::string& name) {
 }
 
 void PluginManager::TickAll(std::uint64_t tick) {
-  std::vector<BoatPlugin*> snapshot;
+  struct Target {
+    BoatPlugin* plugin;
+    int crash_slot;
+  };
+  std::vector<Target> snapshot;
   {
     // The pin must happen under the same lock as the snapshot. Taking it
     // afterwards would leave a window in which Unload sees busy_count_ == 0,
@@ -401,15 +438,16 @@ void PluginManager::TickAll(std::uint64_t tick) {
     snapshot.reserve(plugins_.size());
     for (auto& [name, handle] : plugins_) {
       (void)name;
-      snapshot.push_back(handle.plugin);
+      snapshot.push_back({handle.plugin, handle.crash_slot});
     }
     AcquireBusyLocked();
   }
   // Released even if a plugin's on_tick throws, or the count leaks and
   // every later Unload blocks forever.
   BusyRelease unpin(*this);
-  for (auto* plugin : snapshot) {
-    plugin->vtable->on_tick(plugin->ctx, tick);
+  for (auto& t : snapshot) {
+    crash::ActiveCallbackScope scope(t.crash_slot, crash::CallbackKind::kOnTick);
+    t.plugin->vtable->on_tick(t.plugin->ctx, tick);
   }
 }
 
@@ -417,6 +455,7 @@ void PluginManager::DispatchFrame(const BoatFrame& frame) {
   struct Target {
     BoatPlugin* plugin;
     std::uint32_t bus_mask;
+    int crash_slot;
   };
   std::vector<Target> snapshot;
   {
@@ -424,7 +463,7 @@ void PluginManager::DispatchFrame(const BoatFrame& frame) {
     snapshot.reserve(plugins_.size());
     for (auto& [name, handle] : plugins_) {
       (void)name;
-      snapshot.push_back({handle.plugin, handle.declared_bus_mask});
+      snapshot.push_back({handle.plugin, handle.declared_bus_mask, handle.crash_slot});
     }
     AcquireBusyLocked();  // pin atomically with the snapshot -- see TickAll
   }
@@ -435,6 +474,7 @@ void PluginManager::DispatchFrame(const BoatFrame& frame) {
     // Skip plugins that didn't declare this bus type — avoids O(N) fan-out.
     if ((t.bus_mask & bus_bit) == 0) continue;
     if (t.plugin->vtable->on_frame != nullptr) {
+      crash::ActiveCallbackScope scope(t.crash_slot, crash::CallbackKind::kOnFrame);
       t.plugin->vtable->on_frame(t.plugin->ctx, &frame);
     }
   }

@@ -142,6 +142,9 @@ void ReplayController::Start(const ReplayConfig& config) {
   requested_seek_tick_.store(config.start_tick);
   seek_pending_.store(true);
   paused_.store(false);
+  resume_pending_.store(false);
+  paused_at_tick_ = 0;
+  paused_seen_ = false;
   {
     std::lock_guard<std::mutex> lock(error_mutex_);
     last_error_.clear();
@@ -180,8 +183,11 @@ void ReplayController::StartFromEvents(const boat::store::EventFilter& filter,
     return;
   }
 
-  std::string trace_id = "evtstore_replay_" +
-                         filter.simulation_id.value_or("default") + "_" +
+  const std::string simulation_id = filter.simulation_id.value_or("default");
+  if (!boat::store::IsValidTraceId(simulation_id)) {
+    throw std::runtime_error("invalid simulation_id for event replay");
+  }
+  std::string trace_id = "evtstore_replay_" + simulation_id + "_" +
                          std::to_string(events[0].tick);
   std::string storage_path = "/tmp/" + trace_id + ".trace";
 
@@ -229,6 +235,9 @@ void ReplayController::Seek(std::uint64_t tick) {
 void ReplayController::Pause() { paused_.store(true); }
 
 void ReplayController::Resume() {
+  // The pump thread shifts the timeline when it next runs; doing it here
+  // would need the authority tick, which only PumpDueRecords receives.
+  resume_pending_.store(true);
   paused_.store(false);
   pause_cv_.notify_all();
 }
@@ -437,7 +446,27 @@ void ReplayController::PumpDueRecords(std::uint64_t authority_tick) {
       authority_anchored_  = true;
     }
 
-    if (paused_.load()) return;
+    if (paused_.load()) {
+      // Remember the first tick observed after Pause(), not the latest: the
+      // pause duration is measured from where replay stopped, not from the
+      // last tick the caller happened to pump while waiting.
+      if (!paused_seen_) {
+        paused_at_tick_ = authority_tick;
+        paused_seen_ = true;
+      }
+      return;
+    }
+
+    // A resume must not replay the time spent paused as a burst: shift the
+    // anchor by the pause duration so elapsed replay time continues from where
+    // it stopped. Without this, every record that came due during the pause is
+    // dispatched on the first tick after Resume().
+    if (resume_pending_.exchange(false) && paused_seen_) {
+      const std::uint64_t pause_ticks =
+          authority_tick > paused_at_tick_ ? authority_tick - paused_at_tick_ : 0;
+      authority_base_tick_ += pause_ticks;
+      paused_seen_ = false;
+    }
 
     if (loop_resume_tick_ != 0) {
       if (authority_tick < loop_resume_tick_) return;

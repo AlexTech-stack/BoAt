@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "store/trace_store/trace_store.h"
+
 namespace boat::gateway {
 namespace {
 std::size_t ParseToken(const std::string& token) {
@@ -142,6 +144,10 @@ grpc::Status TraceServiceImpl::MarkStep(grpc::ServerContext*,
                                          boat::v1::MarkStepResponse* response) {
   try {
     const std::string& trace_id = request->trace_id();
+    if (!boat::store::IsValidTraceId(trace_id)) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "trace_id must match [A-Za-z0-9._-]+ and must not be '.' or '..'");
+    }
     const std::uint64_t tick = ctx_.sim.clock().tick();
 
     // Build JSON payload: {"step_id":N,"step_name":"...","metadata":{...}}

@@ -202,9 +202,13 @@ void CanBusRegistry::DispatchRx(const CanFrame& frame, const std::string& iface)
     }
   }
   if (!frame_cbs.empty()) {
-    std::vector<uint8_t> payload(frame.data, frame.data + frame.dlc);
+    // Guard against a producer that set dlc beyond data[64]: the wire struct
+    // only ever carries sizeof(data) bytes, and dlc is the payload byte count.
+    const std::uint8_t dlc =
+        std::min<std::uint8_t>(frame.dlc, static_cast<std::uint8_t>(sizeof(frame.data)));
+    std::vector<uint8_t> payload(frame.data, frame.data + dlc);
     const bool is_fd = (frame.flags & kCanFdFlagFdf) != 0;
-    auto core_frame = boat::core::Frame::FromCan(iface, frame.can_id, frame.dlc,
+    auto core_frame = boat::core::Frame::FromCan(iface, frame.can_id, dlc,
                                                   frame.flags, std::move(payload), is_fd);
     core_frame.set_timestamp_ns(frame.timestamp_ns);
     for (const auto& cb : frame_cbs) {

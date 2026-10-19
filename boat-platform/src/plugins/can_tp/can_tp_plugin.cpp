@@ -771,6 +771,12 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
 
   if (len == 0) return -1;
 
+  // FF_DL is 12 bits (ISO 15765-2 §9.6.3). The 32-bit escape format (FF_DL=0
+  // followed by a 4-byte length) is not implemented, so a longer payload would
+  // announce a wrapped length and then transmit every byte anyway -- a silent
+  // corruption the receiver cannot detect. Fail instead.
+  if (len > 4095) return -1;
+
   // connections is keyed by nsdu_id, so lookup is direct. Copy the fields
   // this function needs into locals while still holding tx_mutex -- a
   // concurrent can_tp_configure() targeting the same connection overwrites

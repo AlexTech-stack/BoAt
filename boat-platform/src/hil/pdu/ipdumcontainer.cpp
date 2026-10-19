@@ -128,9 +128,14 @@ std::vector<uint8_t> BuildUdpIpv4(const uint8_t src_ip[4],
                                    uint16_t src_port, uint16_t dst_port,
                                    uint8_t ttl,
                                    const std::vector<uint8_t>& container) {
-  const uint16_t udp_len   = static_cast<uint16_t>(8 + container.size());
-  const uint16_t total_len = static_cast<uint16_t>(20 + udp_len);
-  const uint16_t ip_id     = g_ipv4_id.fetch_add(1);
+  // UDP length is a 16-bit field and the IPv4 total length includes the
+  // 20-byte IP header, so at most 65535 - 20 - 8 = 65507 container bytes fit.
+  constexpr std::size_t kMaxContainerV4 = 65535 - 20 - 8;
+  if (container.size() > kMaxContainerV4) return {};
+
+  const std::size_t udp_len   = 8 + container.size();
+  const std::size_t total_len = 20 + udp_len;
+  const uint16_t ip_id        = g_ipv4_id.fetch_add(1);
 
   std::vector<uint8_t> pkt(total_len, 0);
 
@@ -166,7 +171,8 @@ std::vector<uint8_t> BuildUdpIpv4(const uint8_t src_ip[4],
   std::memcpy(&pkt[28], container.data(), container.size());
 
   // UDP checksum over pseudo-header + UDP header + container
-  const uint16_t udp_csum = UdpChecksumIPv4(src_ip, dst_ip, &pkt[20], udp_len);
+  const uint16_t udp_csum = UdpChecksumIPv4(src_ip, dst_ip, &pkt[20],
+                                             static_cast<uint16_t>(udp_len));
   pkt[26] = static_cast<uint8_t>(udp_csum >> 8);
   pkt[27] = static_cast<uint8_t>(udp_csum & 0xFF);
 
@@ -178,7 +184,12 @@ std::vector<uint8_t> BuildUdpIpv6(const uint8_t src_ip[16],
                                    uint16_t src_port, uint16_t dst_port,
                                    uint8_t hop_limit,
                                    const std::vector<uint8_t>& container) {
-  const uint16_t udp_len     = static_cast<uint16_t>(8 + container.size());
+  // The IPv6 payload-length field covers the UDP header: at most
+  // 65535 - 8 = 65527 container bytes fit in one datagram.
+  constexpr std::size_t kMaxContainerV6 = 65535 - 8;
+  if (container.size() > kMaxContainerV6) return {};
+
+  const std::size_t udp_len  = 8 + container.size();
   const std::size_t total    = 40 + udp_len;
 
   std::vector<uint8_t> pkt(total, 0);
@@ -206,7 +217,8 @@ std::vector<uint8_t> BuildUdpIpv6(const uint8_t src_ip[16],
   std::memcpy(&pkt[48], container.data(), container.size());
 
   // UDP checksum (mandatory in IPv6)
-  const uint16_t udp_csum = UdpChecksumIPv6(src_ip, dst_ip, &pkt[40], udp_len);
+  const uint16_t udp_csum = UdpChecksumIPv6(src_ip, dst_ip, &pkt[40],
+                                             static_cast<uint16_t>(udp_len));
   pkt[46] = static_cast<uint8_t>(udp_csum >> 8);
   pkt[47] = static_cast<uint8_t>(udp_csum & 0xFF);
 

@@ -21,7 +21,6 @@
 using namespace boat::hil;
 
 // ── Mock drivers ──────────────────────────────────────────────────────────────
-
 class MockCanDriver : public IHalDriver {
  public:
   bool Open()  override { return true; }
@@ -782,4 +781,21 @@ TEST_CASE("PduRouter on-change route SendPdu sends exactly once plus reps",
   // A changed payload fires once more.
   REQUIRE(f.router.SendPdu(0x200, {0xBB}));
   REQUIRE(f.mock_can->written.size() == 4);
+}
+
+TEST_CASE("UDP builders reject containers larger than the length field",
+          "[unit][pdu][ipdum]") {
+  const uint8_t ip4[4] = {10, 0, 0, 1};
+  const uint8_t ip6[16] = {0xFD, 0, 0, 0, 0, 0, 0, 0,
+                           0, 0, 0, 0, 0, 0, 0, 1};
+
+  // IPv4: 65535 total - 20 IP - 8 UDP = 65507 container bytes.
+  CHECK(BuildUdpIpv4(ip4, ip4, 1, 2, 64, std::vector<uint8_t>(65508, 0xAA)).empty());
+  CHECK(BuildUdpIpv4(ip4, ip4, 1, 2, 64, std::vector<uint8_t>(65507, 0xAA)).size() ==
+        65535);
+
+  // IPv6: 65535 payload length - 8 UDP = 65527 container bytes.
+  CHECK(BuildUdpIpv6(ip6, ip6, 1, 2, 64, std::vector<uint8_t>(65528, 0xAA)).empty());
+  CHECK(BuildUdpIpv6(ip6, ip6, 1, 2, 64, std::vector<uint8_t>(65527, 0xAA)).size() ==
+        65575);
 }

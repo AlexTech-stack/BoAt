@@ -287,6 +287,16 @@ grpc::Status PduServiceImpl::ConfigureRoute(
                         "transport must be CAN or ETHERNET");
   }
 
+  if (!route.dst_ip.empty() || !route.src_ip.empty()) {
+    const bool v4 = route.src_ip.size() == 4 && route.dst_ip.size() == 4;
+    const bool v6 = route.src_ip.size() == 16 && route.dst_ip.size() == 16;
+    if (!v4 && !v6) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "IP routes require src_ip and dst_ip of equal length "
+                          "(4 bytes for IPv4, 16 for IPv6)");
+    }
+  }
+
   GetRouter()->AddRoute(route);
 
   {

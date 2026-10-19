@@ -58,6 +58,16 @@ add_executable(boat_unit_frame unit/test_frame.cpp)
 target_link_libraries(boat_unit_frame PRIVATE boat_core Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_frame)
 
+add_executable(boat_unit_trace_id unit/test_trace_id.cpp)
+target_include_directories(boat_unit_trace_id PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(boat_unit_trace_id PRIVATE boat_store Catch2::Catch2WithMain)
+boat_discover_tests(boat_unit_trace_id)
+
+add_executable(boat_unit_scenario_json unit/test_scenario_json.cpp)
+target_include_directories(boat_unit_scenario_json PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(boat_unit_scenario_json PRIVATE boat_core Catch2::Catch2WithMain)
+boat_discover_tests(boat_unit_scenario_json)
+
 add_executable(boat_unit_sqlite_event_store unit/test_sqlite_event_store.cpp)
 target_link_libraries(boat_unit_sqlite_event_store PRIVATE boat_core boat_store Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_sqlite_event_store)
@@ -196,6 +206,40 @@ add_dependencies(boat_unit_plugin_time_source stale_abi_plugin)
 target_compile_definitions(boat_unit_plugin_time_source PRIVATE
   STALE_ABI_PLUGIN_SO="$<TARGET_FILE:stale_abi_plugin>")
 boat_discover_tests(boat_unit_plugin_time_source)
+
+# Plugin crash attribution (#19). crash_plugin crashes on demand (test-only,
+# no install rule); boat_crash_host loads it with the gateway's fatal-signal
+# handler installed, and is the process the integration test expects to die.
+add_library(crash_plugin MODULE fixtures/crash_plugin.cpp)
+target_include_directories(crash_plugin PRIVATE ${CMAKE_SOURCE_DIR}/sdk/cpp/include)
+find_package(Threads REQUIRED)
+target_link_libraries(crash_plugin PRIVATE Threads::Threads)
+set_target_properties(crash_plugin PROPERTIES PREFIX "" SUFFIX ".so")
+
+add_executable(boat_crash_host fixtures/crash_host.cpp)
+target_link_libraries(boat_crash_host PRIVATE boat_core)
+
+add_executable(boat_unit_plugin_crash_attribution unit/test_plugin_crash_attribution.cpp)
+target_link_libraries(boat_unit_plugin_crash_attribution PRIVATE
+  boat_core ${CMAKE_DL_LIBS} Catch2::Catch2WithMain)
+add_dependencies(boat_unit_plugin_crash_attribution crash_plugin stale_abi_plugin)
+target_compile_definitions(boat_unit_plugin_crash_attribution PRIVATE
+  CRASH_PLUGIN_SO="$<TARGET_FILE:crash_plugin>"
+  STALE_ABI_PLUGIN_SO="$<TARGET_FILE:stale_abi_plugin>")
+boat_discover_tests(boat_unit_plugin_crash_attribution)
+
+add_executable(boat_integration_plugin_crash integration/test_plugin_crash.cpp)
+target_link_libraries(boat_integration_plugin_crash PRIVATE Catch2::Catch2WithMain)
+add_dependencies(boat_integration_plugin_crash crash_plugin boat_crash_host)
+target_compile_definitions(boat_integration_plugin_crash PRIVATE
+  CRASH_PLUGIN_SO="$<TARGET_FILE:crash_plugin>"
+  CRASH_HOST_BIN="$<TARGET_FILE:boat_crash_host>")
+if(TARGET boat_gateway)
+  add_dependencies(boat_integration_plugin_crash boat_gateway)
+  target_compile_definitions(boat_integration_plugin_crash PRIVATE
+    BOAT_GATEWAY_BIN="$<TARGET_FILE:boat_gateway>")
+endif()
+boat_discover_tests(boat_integration_plugin_crash)
 
 add_executable(boat_unit_tick_authority unit/test_tick_authority.cpp)
 target_include_directories(boat_unit_tick_authority PRIVATE ${CMAKE_SOURCE_DIR}/src/hil)

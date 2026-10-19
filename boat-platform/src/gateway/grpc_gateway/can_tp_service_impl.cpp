@@ -235,6 +235,12 @@ grpc::Status CanTpServiceImpl::Send(
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "data must be non-empty");
   }
 
+  if (request->data().size() > 4095) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "payload exceeds the 4095-byte ISO 15765-2 FF_DL limit; "
+                        "the 32-bit length escape is not implemented");
+  }
+
   const uint32_t nsdu_id = request->nsdu_id();
   if (!can_tp->HasConnection(nsdu_id)) {
     std::ostringstream ss;

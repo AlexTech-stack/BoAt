@@ -41,11 +41,16 @@ both headlessly and with a real render pass (screenshot) on a real machine.
   stop/inspect it via the API — only `pkill`/manual intervention finds it
   again. No persistence (JSON file, SQLite) added yet. Add if agent
   restarts during real use turn out to be common enough to be painful.
-- **No auth / no TLS.** The agent's REST API is plain HTTP with no
-  authentication — anyone who can reach the port can start/stop/delete
-  gateway instances on that host. Fine for a trusted lab network (matches
-  every other `ui/*.py` service today); would need real auth before being
-  reachable from anything less trusted.
+- **No auth / no TLS — recorded decision (#39).** The agent's REST API is plain HTTP with no
+  authentication. That is deliberate for a trusted lab network. The dangerous configuration is
+  opt-in: it binds loopback by default (an empty or whitespace-only `BOAT_AGENT_BIND` also
+  means loopback), and `BOAT_AGENT_BIND=0.0.0.0` must be chosen explicitly. Mutating requests
+  are guarded against DNS rebinding and cross-origin browser writes (`Host`/`Origin` checks;
+  `BOAT_AGENT_ALLOWED_HOSTS` accepts extra DNS names), and `external:<pid>` stop only signals
+  a positive pid whose `/proc/<pid>/comm` is `boat_gateway`. A shared token or TLS+mTLS is
+  deferred until the agent must be reachable from a less-trusted network; then follow the
+  gateway's `BOAT_TLS_*` convention. The agent is now the only `ui/*.py` service bound to
+  loopback; the others still bind `0.0.0.0` and remain a separate exposure.
 - **`admin_gui/requirements.txt` doesn't (can't) capture the `libxcb-cursor0`
   system dependency** Qt6's `xcb` platform plugin needs on Linux —
   documented as a manual `apt install` step instead (see "visual

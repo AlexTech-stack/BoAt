@@ -9,6 +9,7 @@ add_library(boat_core STATIC
   signal/signal_bus.cpp
   event/event_bus.cpp
   plugin/plugin_manager.cpp
+  plugin/crash_attribution.cpp
   state/sim_state_machine.cpp
   determinism/determinism_engine.cpp
   fault/fault_injector.cpp
