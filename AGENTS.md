@@ -55,7 +55,7 @@ Windows-port scaffolding or docs that imply one.
     transport is core (see the `FrameSink` note under Replay).
     - `pdu_router/` — PduRouter plugin (routes PDUs over CAN/Ethernet, transmission engine, deadline monitoring, groups)
     - `can_tp/` — ISO 15765-2 CAN Transport Protocol (segmentation/reassembly)
-    - `someip/` — SOME/IP middleware (service discovery stub, request/response)
+    - `someip/` — SOME/IP plugin (experimental: protocol constants + a service-discovery stub; the request/response responder is not wired)
     - `tcp/` — TCP transport plugin (state machine only; transmits via the core Eth registry when gateway-resident)
     - `probe/` — gateway conformance probe (verifies delivery, declared_buses filtering, self-sent tagging, round-trip from inside the dispatch loop)
   - `src/replay/` — Replay engine
@@ -178,8 +178,8 @@ boat frame send --bus-type ethernet --ethertype 0x0800 --dst-ip 10.0.0.1 --data 
 
 ```bash
 # C++ (Catch2) — one test preset per configure preset: debug, release, asan, tsan, coverage
-ctest --preset debug                     # the 7 HIL ones report Skipped unless opted in
-BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # all 164 actually run
+ctest --preset debug                     # the HIL tests report Skipped unless opted in
+BOAT_HIL_ENABLED=1 BOAT_VCAN_IFACE=vcan0 ctest --preset debug   # includes the HIL tests
 ctest --test-dir build/debug -R TestName --timeout 30 --output-on-failure
 ctest --test-dir build/debug -N  # list tests
 
@@ -227,11 +227,10 @@ It asserts two different things:
 
 - **Frame content and ordering** — hard `REQUIRE`. Bit-identical across runs, including under CPU
   oversubscription (measured 10/10).
-- **Tick attribution** — tagged `[!mayfail]`. Replay and the node tick thread are independent clocks that
-  are never coupled, so which tick a frame lands in is not decided by the trace. Both sides schedule
-  against absolute deadlines (`TickTimer::WaitUntil`), which keeps them in lockstep on an idle host
-  (30/30 identical) but not under contention (0/6 identical, and the tick thread drops ticks outright).
-  Promote this to a plain `REQUIRE` once replay delivery and plugin ticks share one clock.
+- **Tick attribution** — hard `REQUIRE`. Replay delivery and node-plugin ticks are ordered
+  phases of a single `TickAuthority`, so which tick a record lands in is computed from elapsed
+  ticks, not from wall-clock scheduling. Verified 10/10 identical under 2× CPU oversubscription,
+  the load that previously failed 0/6.
 
 Manual verification runbooks for specific feature areas live under `boat-platform/docs/testing/`, e.g. `cantp-plugin-manager-verification.md` (CanTp gRPC bridge, multi-instance `--iface`, `NodePluginService`/`boat plugin list`, PDU-bus dispatch).
 
@@ -703,8 +702,9 @@ dependency above.
   - `BOAT_PLUGIN_ABI_VERSION = 9` — any other version rejected with a clear error
     (`boat_unit_plugin_time_source` loads a deliberately stale fixture to prove it)
   - `set_time_source(ctx, BoatNowNsFn, host_ctx)` — v9. The host hands each plugin a clock
-    returning monotonic nanoseconds: real time normally, virtual time under
-    `BOAT_TIME_SOURCE=virtual`. Called once, after `initialize()` succeeds and before the
+    returning monotonic nanoseconds: real time for the gateway, which always passes
+    `kRealTime`; library callers can opt into `virtual` through `BOAT_TIME_SOURCE=virtual`.
+    Called once, after `initialize()` succeeds and before the
     first tick; optional in both directions (a NULL entry, or a host that never calls
     `PluginManager::SetTimeSource`, are both fine). Plugins that need time **must** use it
     instead of `steady_clock::now()` — a plugin reading a system clock puts back exactly the
@@ -1248,9 +1248,12 @@ than `CanTpService`, `nsdu_id` must stay unique across every CanTp instance
 sharing that PDU-bus namespace, since there's no ambiguity-detection here
 the way `CanTpService.Send`'s "multiple instances loaded" error provides.
 
-### SOME/IP Plugin
+### SOME/IP Plugin (experimental)
 
-Service-oriented middleware over Ethernet UDP. Listens on configured ports, responds to SOME/IP requests, supports Service Discovery.
+SOME/IP protocol constants and a **service-discovery stub** over Ethernet UDP. The
+request/response responder is **not functional yet**: `local_services` is never
+populated, so no service can be registered and no REQUEST is answered. Treat the
+plugin as a stub, not as working SOME/IP middleware.
 
 ```bash
 BOAT_NODE_PLUGINS=./build/debug/src/plugins/someip/someip.so \
@@ -1258,7 +1261,7 @@ BOAT_NODE_PLUGINS=./build/debug/src/plugins/someip/someip.so \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
-Config: `{"sd_port": 30490}`. Registers offered services; responds to REQUEST messages with RESPONSE echoes.
+Config: `{"sd_port": 30490}` is parsed; the plugin currently offers and answers no services.
 
 ### Probe Plugin (gateway conformance)
 
