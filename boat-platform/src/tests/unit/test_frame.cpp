@@ -39,6 +39,18 @@ TEST_CASE("Frame FromCan factory", "[frame]") {
   CHECK(f.payload() == data);
 }
 
+TEST_CASE("Frame FromCan clamps dlc to the bytes actually stored", "[frame]") {
+  // A client-supplied dlc of 255 must not survive into CanFrame consumers.
+  auto f = Frame::FromCan("vcan0", 0x123, 255, 0,
+                          std::vector<uint8_t>{0xAA, 0xBB, 0xCC, 0xDD});
+  CHECK(f.can_meta().dlc == 4);
+
+  // CAN FD can carry 64 bytes; larger payloads are truncated by the wire type.
+  auto g = Frame::FromCan("vcan0", 0x123, 255, 0,
+                          std::vector<uint8_t>(70, 0x55), true);
+  CHECK(g.can_meta().dlc == 64);
+}
+
 TEST_CASE("Frame FromCan FD variant", "[frame]") {
   std::vector<uint8_t> data(64, 0xFF);
   auto f = Frame::FromCan("can0", 0x7FF, 15, 0x01, data, /*is_fd=*/true);
