@@ -266,6 +266,12 @@ target_include_directories(boat_unit_can_health PRIVATE ${CMAKE_SOURCE_DIR}/src/
 target_link_libraries(boat_unit_can_health PRIVATE boat_hil Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_can_health)
 
+add_executable(boat_unit_can_bus_registry unit/test_can_bus_registry.cpp)
+target_include_directories(boat_unit_can_bus_registry PRIVATE
+  ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/hil)
+target_link_libraries(boat_unit_can_bus_registry PRIVATE boat_hil boat_core Catch2::Catch2WithMain)
+boat_discover_tests(boat_unit_can_bus_registry)
+
 add_executable(boat_hil_smoke hil/test_hil.cpp)
 target_link_libraries(boat_hil_smoke PRIVATE boat_hil Catch2::Catch2WithMain)
 boat_discover_tests(boat_hil_smoke)

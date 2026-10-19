@@ -142,10 +142,22 @@ bool CanBusRegistry::Has(const std::string& iface) const {
 }
 
 void CanBusRegistry::StopAll() {
-  std::lock_guard<std::mutex> lock(bridges_mutex_);
-  for (auto& [name, entry] : bridges_) {
-    (void)name;
-    entry.bridge->Stop();
+  // Do not join RX threads while holding the mutex: a frame subscriber can
+  // call SendFrame (CanTp flow control does), which takes bridges_mutex_, and
+  // the join would then wait on the thread blocked on that same mutex.
+  // Entries are never erased, so their addresses stay valid after the lock is
+  // released. StopAll is for one caller at a time (shutdown).
+  std::vector<HilBridge*> bridges;
+  {
+    std::lock_guard<std::mutex> lock(bridges_mutex_);
+    bridges.reserve(bridges_.size());
+    for (auto& [name, entry] : bridges_) {
+      (void)name;
+      bridges.push_back(entry.bridge.get());
+    }
+  }
+  for (auto* bridge : bridges) {
+    bridge->Stop();
   }
 }
 

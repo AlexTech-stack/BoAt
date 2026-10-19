@@ -435,6 +435,8 @@ int main() {
   // clock reaches them and nobody has to infer elapsed time from a tick count.
   node_manager.SetTimeSource(host_now_ns);
   sim.plugin_manager().SetTimeSource(host_now_ns);
+  boat::hil::CanBusRegistry::RxCallbackId can_frame_sub_id = 0;
+  boat::hil::EthernetBusRegistry::RxCallbackId eth_frame_sub_id = 0;
   {
     node_manager.SetBusPublisher([&signal_bus](const char* name, double value) {
       signal_bus.Publish(name, value);
@@ -446,12 +448,12 @@ int main() {
     });
 
     // v8: Forward CAN/Eth frames to node plugins via unified dispatch.
-    can_registry.SubscribeFrame([&node_manager](const boat::core::Frame& f) {
+    can_frame_sub_id = can_registry.SubscribeFrame([&node_manager](const boat::core::Frame& f) {
       BoatFrame abi{};
       f.ToAbi(&abi);
       node_manager.DispatchFrame(abi);
     });
-    eth_registry.SubscribeFrame([&node_manager](const boat::core::Frame& f) {
+    eth_frame_sub_id = eth_registry.SubscribeFrame([&node_manager](const boat::core::Frame& f) {
       BoatFrame abi{};
       f.ToAbi(&abi);
       node_manager.DispatchFrame(abi);
@@ -512,6 +514,24 @@ int main() {
       }
     }
     }
+
+  // One idempotent teardown used by the success path and by a failed start.
+  // Order matters: quiesce producers, then tear down consumers. CAN RX threads
+  // must be joined before node_manager is destroyed/drained, because their
+  // callback dispatches into it; both registries must be stopped before their
+  // frames' subscribers are removed.
+  bool teardown_done = false;
+  auto run_teardown = [&]() {
+    if (teardown_done) return;
+    teardown_done = true;
+    sim.scheduler().Stop();
+    tick_authority.Stop();
+    can_registry.StopAll();
+    eth_registry.StopAll();
+    can_registry.UnsubscribeFrame(can_frame_sub_id);
+    eth_registry.UnsubscribeFrame(eth_frame_sub_id);
+    node_manager.ShutdownAll();
+  };
 
   // Replay transmits each trace frame straight through the single core sink.
   // The registry's RX dispatch then delivers it to node plugins' on_frame
@@ -668,7 +688,10 @@ int main() {
   RefuseIfPortInUse(grpc_port);
 
   grpc::ServerBuilder builder;
-  builder.AddListeningPort("0.0.0.0:" + std::to_string(grpc_port), MakeServerCredentials(&effective_config));
+  int selected_port = 0;
+  builder.AddListeningPort("0.0.0.0:" + std::to_string(grpc_port),
+                           MakeServerCredentials(&effective_config),
+                           &selected_port);
 
   // Keepalive policy for long-lived streams from mobile/remote clients.
   //
@@ -705,7 +728,15 @@ int main() {
   builder.RegisterService(&frame_impl);
 
   g_server = builder.BuildAndStart();
-  std::fprintf(stderr, "[Gateway] gRPC server listening on 0.0.0.0:%d\n", grpc_port);
+  if (!g_server || selected_port == 0) {
+    std::fprintf(stderr,
+                 "[Gateway] ERROR: failed to start gRPC server on 0.0.0.0:%d "
+                 "(check TLS certificate/key PEM contents, port availability)\n",
+                 grpc_port);
+    run_teardown();
+    return 1;
+  }
+  std::fprintf(stderr, "[Gateway] gRPC server listening on 0.0.0.0:%d\n", selected_port);
 
   // Everything is resolved by here, so this is the point at which the run's
   // configuration becomes a fact worth recording.
@@ -755,9 +786,6 @@ int main() {
   }
   g_shutdown_requested.store(true, std::memory_order_relaxed);
   shutdown_watcher.join();
-  sim.scheduler().Stop();
-  tick_authority.Stop();
-  node_manager.ShutdownAll();
-  eth_registry.StopAll();
+  run_teardown();
   return 0;
 }

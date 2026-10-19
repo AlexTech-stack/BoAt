@@ -42,6 +42,13 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **A failed gateway start now fails loudly, and shutdown joins RX threads safely** (#68).
+  If `BuildAndStart()` returns null or no port was selected (e.g. a readable but invalid TLS
+  PEM), the gateway prints an ERROR, tears down and exits 1 instead of logging "listening"
+  and returning 0. Teardown stops both bus registries and joins their RX threads before
+  `node_manager` is destroyed or drained, and `StopAll()` no longer joins RX threads while
+  holding the registry mutex — an RX callback that sends (CanTp flow control) can no longer
+  deadlock shutdown. CAN/Ethernet frame subscription ids are explicitly released.
 - **Documentation described storage that never existed** (#14). `docs/diagrams/class-diagrams.md`
   drew a `TimescaleEventStore` class and an `ISignalRouter`/`LocalSignalRouter`/
   `DistributedSignalRouter` hierarchy — none of those types exist anywhere in the tree — and

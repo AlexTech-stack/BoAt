@@ -3,7 +3,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <future>
 #include <memory>
 #include <string>
 #include <thread>
@@ -175,4 +177,65 @@ TEST_CASE("EthernetBusRegistry SendFrameAll reaches all registered ifaces", "[un
 
   registry.SendFrameAll(make_frame(0x0800));
   REQUIRE(hits == 2);
+}
+
+namespace {
+
+/* Produces one frame, then idles. The RX callback blocks so StopAll must join
+   a thread that may call SendFrame from inside the callback. */
+class OneFrameEthernetDriver : public IEthernetDriver {
+ public:
+  bool Open() override { return true; }
+  void Close() override {}
+  bool ReadFrame(EthernetFrame& frame) override {
+    if (!produced.exchange(true)) {
+      frame = EthernetFrame{};
+      frame.ethertype = 0x0800;
+      frame.payload = {0xAA};
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    return false;
+  }
+  bool WriteFrame(const EthernetFrame&) override { return true; }
+
+ private:
+  std::atomic<bool> produced{false};
+};
+
+}  // namespace
+
+TEST_CASE("EthernetBusRegistry StopAll joins without holding the send mutex",
+          "[unit][ethernet]") {
+  EthernetBusRegistry registry;
+  REQUIRE(registry.Add("veth9", std::make_unique<OneFrameEthernetDriver>()));
+
+  std::atomic<bool> entered{false};
+  std::atomic<bool> release{false};
+  std::atomic<bool> sent{false};
+
+  registry.Subscribe("", 0, [&](const EthernetFrame&, const std::string&) {
+    entered.store(true);
+    while (!release.load(std::memory_order_relaxed)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!sent.exchange(true)) {
+      (void)registry.SendFrame("veth9", make_frame(0x0800));
+    }
+  });
+
+  for (int i = 0; i < 500 && !entered.load(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  REQUIRE(entered.load());
+
+  auto stopping = std::async(std::launch::async, [&]() { registry.StopAll(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  release.store(true);
+
+  REQUIRE(stopping.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+  stopping.get();
+
+  // Idempotent: the destructor calls it again.
+  registry.StopAll();
 }
