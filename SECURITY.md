@@ -52,8 +52,10 @@ interfaces are the safe default; physical ones are chosen explicitly via
 gateway as root.
 
 **The web UIs and tools under `ui/` and `tools/` have no authentication either**, and some
-accept paths and shell out. They are development tools meant for `localhost`. Do not expose
-them.
+accept paths and shell out. They are development tools meant for `localhost`, and now bind
+`127.0.0.1` by default. Each has a `BOAT_*_BIND` override; setting it to `0.0.0.0` or a
+routable address is an explicit opt-in and belongs only on a trusted network. PDU/trace
+editing endpoints are confined to their config/traces roots. Do not expose these services.
 
 **`ui/launcher_agent.py` is remote process execution, not just a dashboard.** It starts,
 stops and deletes `boat_gateway` instances on its host and runs node scripts. Its API can:

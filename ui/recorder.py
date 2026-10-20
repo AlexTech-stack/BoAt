@@ -7,6 +7,9 @@ Manages recording sessions: subscribes to CAN / Ethernet / Bus streams and write
 ASC, BLF, or PCAP files plus an optional JSONL sidecar for BoAt bus signals.
 Run:  python3 demo/recorder.py
 Open: http://localhost:8083
+
+Bind: 127.0.0.1 by default. Set BOAT_REC_BIND to a routable address only on a
+trusted network; this tool is unauthenticated and writes trace files.
 """
 from __future__ import annotations
 import json
@@ -38,6 +41,7 @@ except ImportError:
 _DEFAULT_GW      = os.environ.get("BOAT_GATEWAY", "localhost:50051")
 _DEFAULT_OUT_DIR = Path(os.environ.get("BOAT_TRACES_DIR", "traces"))
 _PORT            = int(os.environ.get("BOAT_REC_PORT", "8083"))
+_BIND            = os.environ.get("BOAT_REC_BIND", "").strip() or "127.0.0.1"
 _DEFAULT_OUT_DIR.mkdir(parents=True, exist_ok=True)
 # ── PCAP constants ─────────────────────────────────────────────────────────────
 _PCAP_MAGIC   = 0xA1B2C3D4
@@ -426,7 +430,9 @@ def api_stop_all():
 def api_download(filename: str):
     # Security: only serve files from the traces directory, no path traversal
     p = (_DEFAULT_OUT_DIR / filename).resolve()
-    if not str(p).startswith(str(_DEFAULT_OUT_DIR.resolve())):
+    try:
+        p.relative_to(_DEFAULT_OUT_DIR.resolve())
+    except ValueError:
         raise HTTPException(403, "Forbidden")
     if not p.exists():
         # Also search all session output dirs
@@ -989,8 +995,8 @@ def index():
     return HTMLResponse(HTML)
 # ── Entry point ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print(f"BoAt Trace Recorder  → http://localhost:{_PORT}")
+    print(f"BoAt Trace Recorder  → http://{_BIND}:{_PORT}")
     print(f"Default gateway      : {_DEFAULT_GW}")
     print(f"Traces directory     : {_DEFAULT_OUT_DIR.resolve()}")
     print(f"python-can           : {'4.x installed' if _HAS_PYTHON_CAN else 'NOT FOUND — ASC/BLF unavailable'}")
-    uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")
+    uvicorn.run(app, host=_BIND, port=_PORT, log_level="warning")

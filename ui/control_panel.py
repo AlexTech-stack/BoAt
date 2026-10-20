@@ -5,6 +5,9 @@
 BoAt Platform — Node Control Panel
 Run:  python3 demo/control_panel.py
 Open: http://localhost:8081
+
+Bind: 127.0.0.1 by default. Set BOAT_CP_BIND to a routable address only on a
+trusted network; this tool is unauthenticated and starts node scripts.
 """
 from __future__ import annotations
 import os
@@ -27,6 +30,7 @@ _SDK_PATH    = Path(__file__).resolve().parent.parent / "boat-platform" / "sdk" 
 _DEFAULT_GW  = os.environ.get("BOAT_GATEWAY", "localhost:50051")
 _LOG_LINES   = 120   # rolling log lines kept per node
 _PORT        = int(os.environ.get("BOAT_CP_PORT", "8081"))
+_BIND        = os.environ.get("BOAT_CP_BIND", "").strip() or "127.0.0.1"
 # ── Node state ─────────────────────────────────────────────────────────────────
 @dataclass
 class NodeInfo:
@@ -642,7 +646,7 @@ init();
 def index():
     return HTMLResponse(HTML)
 if __name__ == "__main__":
-    print(f"BoAt Node Control Panel → http://localhost:{_PORT}")
+    print(f"BoAt Node Control Panel → http://{_BIND}:{_PORT}")
     print(f"Nodes directory : {_NODES_DIR}")
     print(f"Default gateway : {_DEFAULT_GW}")
-    uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")
+    uvicorn.run(app, host=_BIND, port=_PORT, log_level="warning")

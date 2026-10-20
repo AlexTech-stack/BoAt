@@ -8,3 +8,5 @@
 fastapi
 uvicorn
 pydantic
+# tools/pdu_editor.py validates PDU databases against the JSON schema.
+jsonschema

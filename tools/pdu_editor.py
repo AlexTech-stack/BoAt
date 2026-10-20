@@ -6,6 +6,9 @@ BoAt Platform — PDU Database Editor
 Create, modify, validate, and export PDU database JSON files.
 Run:  python3 tools/pdu_editor.py
 Open: http://localhost:8087
+
+Bind: 127.0.0.1 by default. Set BOAT_PDU_EDITOR_BIND to a routable address only
+on a trusted network; this tool is unauthenticated and edits PDU databases.
 """
 from __future__ import annotations
 
@@ -25,8 +28,26 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from boat.pdu_db import PduDatabase
 
 _PORT = int(os.environ.get("BOAT_PDU_EDITOR_PORT", "8087"))
+_BIND = os.environ.get("BOAT_PDU_EDITOR_BIND", "").strip() or "127.0.0.1"
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "config"
 _SCHEMA_PATH = _CONFIG_DIR / "pdu_db.schema.json"
+
+
+def _resolve_db_path(path_str: str) -> Path:
+    """Resolve a database path and reject anything outside _CONFIG_DIR.
+
+    The editor is reachable over HTTP (loopback by default), so an absolute
+    path from a request must not become an arbitrary file read or write.
+    """
+    fp = Path(path_str).expanduser()
+    if not fp.is_absolute():
+        fp = _CONFIG_DIR / fp.name
+    fp = fp.resolve()
+    try:
+        fp.relative_to(_CONFIG_DIR.resolve())
+    except ValueError:
+        raise HTTPException(403, f"Path must be inside {_CONFIG_DIR}")
+    return fp
 
 _current_db: dict[str, Any] = {"schema_version": "1.0", "messages": [], "signal_routes": []}
 _current_path: Optional[str] = None
@@ -160,9 +181,7 @@ def api_db_new():
 @app.get("/api/db/load")
 def api_db_load(path: str = Query(...)):
     global _current_db, _current_path
-    fp = Path(path)
-    if not fp.is_absolute():
-        fp = _CONFIG_DIR / fp.name
+    fp = _resolve_db_path(path)
     if not fp.exists():
         raise HTTPException(404, f"File not found: {fp}")
     try:
@@ -179,12 +198,10 @@ def api_db_save(body: dict):
     global _current_db, _current_path
     path_str = body.get("path")
     if path_str:
-        fp = Path(path_str)
-        if not fp.is_absolute():
-            fp = _CONFIG_DIR / fp.name
+        fp = _resolve_db_path(path_str)
     else:
         if _current_path:
-            fp = Path(_current_path)
+            fp = _resolve_db_path(_current_path)
         else:
             fp = _CONFIG_DIR / "pdu_db_custom.json"
 
@@ -1242,5 +1259,5 @@ def index():
 # ── Entry point ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(f"BoAt PDU Database Editor → http://localhost:{_PORT}")
-    uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")
+    print(f"BoAt PDU Database Editor → http://{_BIND}:{_PORT}")
+    uvicorn.run(app, host=_BIND, port=_PORT, log_level="warning")
