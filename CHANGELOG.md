@@ -13,6 +13,19 @@ The plugin ABI is versioned separately from the project; see
 
 ### Added
 
+- **Fault injection and metrics now have SDK and CLI surfaces (#27, #28, #41).**
+  `FaultNode`/`MetricsNode` wrap the existing gRPC services, and `boat fault
+  inject|list` / `boat metrics get|watch` make them usable without raw
+  protobuf. Fault injection exposes all five engine modes (`stuck`, `noise`,
+  `dropout`, `invert`, `delay`) over an inclusive tick range, with magnitude
+  and delay length; the proto and `FaultServiceImpl` previously exposed only
+  three modes and a fixed two-tick window. The new enum values and fields are
+  additive; an older gateway ignores the new fields and maps the new modes to
+  NOISE. `InjectFault` now rejects empty targets, invalid tick ranges, unknown
+  types, non-finite magnitudes and non-positive delay faults, and `end_tick=0`
+  now means a true one-tick window (previously `tick + 1`). The SDK test suite
+  now covers the node classes' address-resolution order and their differing
+  error contracts.
 - **Plugin crash attribution (#19) — attribution, not containment.** The gateway installs a
   fatal-signal handler (`SIGSEGV`/`SIGBUS`/`SIGILL`/`SIGFPE`/`SIGABRT`) at startup. When a
   plugin crashes, the gateway now writes `[Gateway] FATAL: plugin '<so>' (key '<key>') via=pc|stack|callback`

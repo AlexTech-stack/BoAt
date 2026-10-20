@@ -14,7 +14,7 @@ import pytest
 import grpc
 from typer.testing import CliRunner
 
-from boat.v1 import can_tp_pb2
+from boat.v1 import can_tp_pb2, fault_pb2, metrics_pb2
 from boat_cli.main import app
 
 runner = CliRunner()
@@ -80,13 +80,38 @@ def _fake_client() -> SimpleNamespace:
                             rx_state="IDLE", tx_state="IDLE"),
         ])),
     )
+    fault = SimpleNamespace(
+        InjectFault=Mock(return_value=fault_pb2.InjectFaultResponse(
+            fault=fault_pb2.FaultEvent(
+                fault_id="fault-1", simulation_id="sim-1", target="speed",
+                type=fault_pb2.FAULT_TYPE_SIGNAL_STUCK, tick=10, end_tick=20,
+                magnitude=42.5,
+            ),
+        )),
+        ListFaults=Mock(return_value=fault_pb2.ListFaultsResponse(faults=[
+            fault_pb2.FaultEvent(
+                fault_id="fault-1", simulation_id="sim-1", target="speed",
+                type=fault_pb2.FAULT_TYPE_SIGNAL_STUCK, tick=10, end_tick=20,
+                magnitude=42.5,
+            ),
+        ])),
+    )
+    metrics = SimpleNamespace(
+        GetMetrics=Mock(return_value=metrics_pb2.MetricsResponse(points=[
+            metrics_pb2.MetricPoint(name="can.vcan0.rx_dropped", value=3.0, tick=12),
+        ])),
+        StreamMetrics=Mock(return_value=iter([
+            metrics_pb2.MetricPoint(name="can.vcan0.rx_dropped", value=3.0, tick=12),
+        ])),
+    )
     # No `can`/`ethernet`: BoAtClient no longer exposes them, and a fake that
     # offers attributes the real client lacks lets a test pass against code
     # that would fail in production. Tests needing FrameService set .frame
     # themselves.
     return SimpleNamespace(
         simulation=simulation, scenario=scenario, replay=replay, plugin=plugin,
-        node_plugin=node_plugin, can_tp=can_tp, close=lambda: None,
+        node_plugin=node_plugin, can_tp=can_tp, fault=fault, metrics=metrics,
+        close=lambda: None,
     )
 
 
@@ -699,6 +724,55 @@ def test_frame_send_auto_pick_handles_no_interfaces() -> None:
     assert fake_client.frame.SendFrame.call_args[0][0].frame.iface == ""
 
 
+def test_fault_commands_call_expected_methods() -> None:
+    fake_client = _fake_client()
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        injected = runner.invoke(app, [
+            "fault", "inject", "speed",
+            "--type", "stuck",
+            "--tick", "10",
+            "--end-tick", "20",
+            "--magnitude", "42.5",
+            "--simulation-id", "sim-1",
+        ])
+        listed = runner.invoke(app, ["fault", "list", "--simulation-id", "sim-1"])
+
+    assert injected.exit_code == 0, injected.output
+    assert listed.exit_code == 0, listed.output
+    request = fake_client.fault.InjectFault.call_args[0][0]
+    assert request.target == "speed"
+    assert request.type == fault_pb2.FAULT_TYPE_SIGNAL_STUCK
+    assert request.tick == 10
+    assert request.end_tick == 20
+    assert request.magnitude == 42.5
+    assert request.simulation_id == "sim-1"
+    assert fake_client.fault.ListFaults.called
+
+
+def test_fault_inject_rejects_unknown_type() -> None:
+    fake_client = _fake_client()
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        result = runner.invoke(app, [
+            "fault", "inject", "speed", "--type", "not-a-fault", "--tick", "10",
+        ])
+
+    assert result.exit_code == 1
+    assert "unknown fault type" in result.output
+    assert not fake_client.fault.InjectFault.called
+
+
+def test_metrics_commands_call_expected_methods() -> None:
+    fake_client = _fake_client()
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        snapshot = runner.invoke(app, ["metrics", "get"])
+        streamed = runner.invoke(app, ["metrics", "watch"])
+
+    assert snapshot.exit_code == 0, snapshot.output
+    assert streamed.exit_code == 0, streamed.output
+    assert fake_client.metrics.GetMetrics.called
+    assert fake_client.metrics.StreamMetrics.called
+
+
 # ── Rendered-help probe ────────────────────────────────────────────────────────
 #
 # Deliberately asserts on Typer's *rendered* --help, which the tests above
@@ -719,6 +793,8 @@ _HELP_PROBE_COMMANDS = [
     ("can-tp", "configure"),
     ("replay", "import"),
     ("frame", "send"),
+    ("fault", "inject"),
+    ("metrics", "get"),
     ("trace", "replay"),
 ]
 

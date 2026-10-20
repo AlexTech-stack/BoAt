@@ -81,7 +81,7 @@ Replay session identity: `StartReplay` returns `ReplayControlResponse.replay_id`
 
 | Method | Type | Description |
 |---|---|---|
-| `InjectFault` | Unary | Schedule fault injection for simulation |
+| `InjectFault` | Unary | Schedule a stuck/noise/dropout/invert/delay fault over an inclusive tick range |
 | `ListFaults` | Unary | Paginated fault event listing |
 
 ### `frame.proto` — FrameService (4 RPCs)

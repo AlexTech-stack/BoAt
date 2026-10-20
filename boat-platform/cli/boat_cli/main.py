@@ -15,7 +15,9 @@ from .ai import ai_app
 from .can_tp import can_tp_app
 from .config import config_app
 from .db import db_app
+from .fault import fault_app
 from .frame import frame_app
+from .metrics import metrics_app
 from .pdu import pdu_app
 from .plugin import plugin_app
 from .replay import replay_app
@@ -37,6 +39,8 @@ app.add_typer(pdu_app,      name="pdu",  help="PDU routing and transmission.")
 app.add_typer(db_app,       name="db",   help="PDU database inspection.")
 app.add_typer(test_app,     name="test",  help="Run tests and inspect test configurations.")
 app.add_typer(config_app,   name="config", help="Inspect the gateway's effective configuration.")
+app.add_typer(fault_app,    name="fault",  help="Inject and inspect deterministic signal faults.")
+app.add_typer(metrics_app,  name="metrics", help="Read or stream gateway metrics.")
 app.add_typer(trace_app,    name="trace")
 
 

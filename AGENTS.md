@@ -62,13 +62,13 @@ Windows-port scaffolding or docs that imply one.
   - `proto/boat/v1/` — the protobuf files declaring the gRPC services; counts and the
     per-service RPC lists are generated into `docs/api/protobuf-definitions.md`
     (`tools/gen_proto_docs.py`, checked by CI)
-  - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame nodes, trace tools)
+  - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame/PDU/fault/metrics nodes, trace tools)
   - `sdk/cpp/include/boat/` — C++ SDK headers
     - `plugin.h` — Plugin ABI v9 (unified `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`)
     - `frame.h` — Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU bus types)
     - `can_tp.h` — Standalone CanTp C API (can_tp_send, can_tp_configure, can_tp_remove)
     - `someip.h` — SOME/IP protocol constants
-  - `cli/` — `boat-cli` package (Typer CLI: `boat ai|sim|scenario|replay|plugin|can-tp|frame|pdu|db|test|trace` — there is no `can`/`eth` subcommand, see "CLI CAN commands" below)
+  - `cli/` — `boat-cli` package (Typer CLI: `boat ai|sim|scenario|replay|plugin|can-tp|frame|pdu|db|fault|metrics|test|trace` — there is no `can`/`eth` subcommand, see "CLI CAN commands" below)
   - `config/` — PDU database JSON files
   - `demo/` — Demo node scripts (not web UI; scenario-specific, e.g. `cyclic_sender_node.py`'s CAN-ID start/stop trigger)
   - `nodes/` — General-purpose node scripts, discoverable/runnable two ways: `ui/control_panel.py`'s "Nodes" web UI (any `.py` file not prefixed `_`, auto-listed with its module docstring's first line), and `ui/launcher_agent.py`/`admin_gui`'s Nodes tab (same discovery, but as a tracked, multi-node, multi-host registry -- see "Launcher Agent"/"Admin GUI" below). Each script accepts `--address` (default `None`, so `BOAT_HOST` decides when omitted) and its own behavior flags -- see `cyclic_can_sender.py` (configurable periodic CAN(FD) frame) and `can_request_responder.py` (replies to one CAN ID with a fixed response) for the raw-CAN pattern, or `pdu_cyclic_publisher.py`/`can_tp_trigger_sender.py` for the equivalent pattern **through a plugin** (`pdu_router`/`can_tp` respectively) instead of the gateway's core FrameSink -- see "Plugin-based node scripts" below. `control_panel.py` always passes `--address <its gateway field>` explicitly; `launcher_agent.py` sets `BOAT_HOST` in the spawned process's env instead -- both work since `--address` defaults to `None`.
@@ -293,6 +293,9 @@ boat --help
 boat sim create --scenario <id>|start|pause|step|state|stop|reset|list|watch   # `create`, not `init`
 boat frame send|subscribe|list-ifaces
 boat scenario create|validate|get|list
+boat fault inject <signal> --type stuck|noise|dropout|invert|delay --tick N
+boat fault list
+boat metrics get|watch
 
 # SDK (programmatic) -- omit the address to resolve BOAT_HOST env var,
 # then "localhost:50051"; pass one explicitly to pin a specific gateway
@@ -303,8 +306,12 @@ node = FrameNode()              # or FrameNode("192.168.1.50:50052")
 node.send_can("vcan0", 0x123, b"hello")
 ```
 
-All `*Node` classes (`FrameNode`, `BusNode`, `PduNode`, `PduMessageNode`) and
-`BoAtClient` resolve their gateway address the same way:
+Faults are scheduled on the live simulation context; creating or resetting a
+run clears them, so inject after `sim create` (before or during the run).
+`boat fault list` keeps the injection history.
+
+All `*Node` classes (`FrameNode`, `BusNode`, `PduNode`, `PduMessageNode`,
+`FaultNode`, `MetricsNode`) and `BoAtClient` resolve their gateway address the same way:
 explicit `address=` argument > `BOAT_HOST` env var > `localhost:50051`. This is
 what keeps a node script portable across gateways/devices -- write it once with
 no address hardcoded, then `BOAT_HOST=192.168.1.50:50052 python my_node.py`

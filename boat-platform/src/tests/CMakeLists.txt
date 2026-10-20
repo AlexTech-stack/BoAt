@@ -110,6 +110,7 @@ add_executable(
   ../gateway/grpc_gateway/bus_service_impl.cpp
   ../gateway/grpc_gateway/debug_service_impl.cpp
   ../gateway/grpc_gateway/effective_config.cpp
+  ../gateway/grpc_gateway/fault_service_impl.cpp
   ../gateway/grpc_gateway/metrics_service_impl.cpp
 )
 target_include_directories(boat_integration_gateway PRIVATE
