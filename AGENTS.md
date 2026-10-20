@@ -62,7 +62,7 @@ Windows-port scaffolding or docs that imply one.
   - `proto/boat/v1/` — the protobuf files declaring the gRPC services; counts and the
     per-service RPC lists are generated into `docs/api/protobuf-definitions.md`
     (`tools/gen_proto_docs.py`, checked by CI)
-  - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame/PDU/fault/metrics nodes, trace tools)
+  - `sdk/python/` — `boat-py` package (BoAtClient gRPC client, frame/PDU/scenario/simulation/debug/fault/metrics/trace nodes, trace tools)
   - `sdk/cpp/include/boat/` — C++ SDK headers
     - `plugin.h` — Plugin ABI v9 (unified `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`)
     - `frame.h` — Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU bus types)
@@ -72,7 +72,7 @@ Windows-port scaffolding or docs that imply one.
   - `config/` — PDU database JSON files
   - `demo/` — Demo node scripts (not web UI; scenario-specific, e.g. `cyclic_sender_node.py`'s CAN-ID start/stop trigger)
   - `nodes/` — General-purpose node scripts, discoverable/runnable two ways: `ui/control_panel.py`'s "Nodes" web UI (any `.py` file not prefixed `_`, auto-listed with its module docstring's first line), and `ui/launcher_agent.py`/`admin_gui`'s Nodes tab (same discovery, but as a tracked, multi-node, multi-host registry -- see "Launcher Agent"/"Admin GUI" below). Each script accepts `--address` (default `None`, so `BOAT_HOST` decides when omitted) and its own behavior flags -- see `cyclic_can_sender.py` (configurable periodic CAN(FD) frame) and `can_request_responder.py` (replies to one CAN ID with a fixed response) for the raw-CAN pattern, or `pdu_cyclic_publisher.py`/`can_tp_trigger_sender.py` for the equivalent pattern **through a plugin** (`pdu_router`/`can_tp` respectively) instead of the gateway's core FrameSink -- see "Plugin-based node scripts" below. `control_panel.py` always passes `--address <its gateway field>` explicitly; `launcher_agent.py` sets `BOAT_HOST` in the spawned process's env instead -- both work since `--address` defaults to `None`.
-- **`ui/`** — 8 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, control_panel:8081, recorder:8083, debug:8084, system_dashboard:8081, launcher_agent:8090). `start_ui.sh` launches only 5 of them — see "UI services" below. Every port has a `BOAT_*_PORT` env override; note `control_panel` and `system_dashboard` share 8081 by default, as do `launcher_agent` and `tools/eth_trace_analyzer.py` on 8090. Every `ui/`/`tools/` web service binds `127.0.0.1` by default; each has a `BOAT_*_BIND` override, and a routable address is an explicit opt-in. The PDU/trace editing endpoints are confined to their config/traces roots.
+- **`ui/`** — 8 standalone FastAPI/uvicorn web services requiring a running gateway (launcher:8086, dashboard:8080, commander:8082, control_panel:8081, recorder:8083, debug:8084, system_dashboard:8081, launcher_agent:8090). `start_ui.sh` launches only 5 of them — see "UI services" below. Every port has a `BOAT_*_PORT` env override; note `control_panel` and `system_dashboard` share 8081 by default, as do `launcher_agent` and `tools/eth_trace_analyzer.py` on 8090. The dashboard also streams `MetricsService` into a live metrics panel. Every `ui/`/`tools/` web service binds `127.0.0.1` by default; each has a `BOAT_*_BIND` override, and a routable address is an explicit opt-in. The PDU/trace editing endpoints are confined to their config/traces roots.
 - **`tools/`** — 4 standalone web tools started by `start_tools.sh` (pdu_editor:8087, trace_analyzer:8088, trace_editor:8089, eth_trace_analyzer:8090), plus the plain scripts `dbc2boatjson.py` (DBC → PDU-database JSON) and `test_vw_mlb_replay.py`
 - **`tools/dbc/`** — on-demand fetch of comma.ai's opendbc DBC files (`fetch_opendbc.sh`, download-only; the fetched files and any derived JSON are gitignored and must not be committed — see `tools/dbc/README.md`)
 - **`admin_gui/`** — PySide6 desktop client for one or more launcher agents (repo root, **not** under `boat-platform/`) — see "Admin GUI" below
@@ -311,7 +311,8 @@ run clears them, so inject after `sim create` (before or during the run).
 `boat fault list` keeps the injection history.
 
 All `*Node` classes (`FrameNode`, `BusNode`, `PduNode`, `PduMessageNode`,
-`FaultNode`, `MetricsNode`) and `BoAtClient` resolve their gateway address the same way:
+`ScenarioNode`, `SimulationNode`, `DebugNode`, `FaultNode`, `MetricsNode`,
+`TraceNode`) and `BoAtClient` resolve their gateway address the same way:
 explicit `address=` argument > `BOAT_HOST` env var > `localhost:50051`. This is
 what keeps a node script portable across gateways/devices -- write it once with
 no address hardcoded, then `BOAT_HOST=192.168.1.50:50052 python my_node.py`

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-BoAt Platform — CAN Trace, Bus Signal Log & Event Log
+BoAt Platform — CAN Trace, Bus Signal Log, Metrics & Event Log
 Run:  python3 demo/dashboard.py
 Open: http://localhost:8080
 
@@ -23,7 +23,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from boat.client import BoAtClient
-from boat.v1 import bus_pb2, frame_pb2
+from boat.v1 import bus_pb2, frame_pb2, metrics_pb2
 # ── State ──────────────────────────────────────────────────────────────────────
 _BIND            = os.environ.get("BOAT_DASH_BIND", "").strip() or "127.0.0.1"
 MAX_CAN_FRAMES   = 2000
@@ -36,17 +36,21 @@ class DashboardState:
         self.can_frames: List[dict] = []
         self.eth_frames: List[dict] = []
         self.bus_signals: List[dict] = []
+        self.metrics: dict[str, dict] = {}
         self.event_log: List[dict] = []
         self._can_seq = 1
         self._eth_seq = 1
         self._bus_seq = 1
+        self._metrics_seq = 1
         self._log_seq = 1
         self._can_stream = None
         self._eth_stream = None
         self._bus_stream = None
+        self._metrics_stream = None
         self._can_thread: threading.Thread | None = None
         self._eth_thread: threading.Thread | None = None
         self._bus_thread: threading.Thread | None = None
+        self._metrics_thread: threading.Thread | None = None
     def log(self, msg: str, level: str = "info") -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         with self.lock:
@@ -118,6 +122,47 @@ class DashboardState:
             self._bus_seq += 1
             if len(self.bus_signals) > MAX_BUS_SIGNALS:
                 self.bus_signals.pop(0)
+    def push_metric(self, point) -> None:
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        with self.lock:
+            self.metrics[point.name] = {
+                "seq": self._metrics_seq,
+                "updated": ts,
+                "name": point.name,
+                "value": point.value,
+                "tick": point.tick,
+            }
+            self._metrics_seq += 1
+
+    def metrics_snapshot(self) -> list[dict]:
+        with self.lock:
+            return [self.metrics[name] for name in sorted(self.metrics)]
+
+    def start_metrics_subscribe(self, client: BoAtClient) -> None:
+        if self._metrics_thread and self._metrics_thread.is_alive():
+            return
+
+        def _worker() -> None:
+            self.log("Metrics subscription started")
+            while True:
+                try:
+                    stream = client.metrics.StreamMetrics(
+                        metrics_pb2.StreamMetricsRequest())
+                    with self.lock:
+                        self._metrics_stream = stream
+                    for point in stream:
+                        self.push_metric(point)
+                except grpc.RpcError as e:
+                    self.log(f"Metrics stream lost: {e.code().name} — retrying in 2 s", "warn")
+                    time.sleep(2)
+                except Exception as e:
+                    self.log(f"Metrics error: {e}", "error")
+                    time.sleep(2)
+
+        self._metrics_thread = threading.Thread(
+            target=_worker, daemon=True, name="metrics-sub")
+        self._metrics_thread.start()
+
     def start_can_subscribe(self, client: BoAtClient) -> None:
         if self._can_thread and self._can_thread.is_alive():
             return
@@ -193,6 +238,7 @@ app = FastAPI()
 dash.start_can_subscribe(client)
 dash.start_eth_subscribe(client)
 dash.start_bus_subscribe(client)
+dash.start_metrics_subscribe(client)
 @app.get("/api/gateway/health")
 def api_gw_health():
     try:
@@ -234,6 +280,11 @@ def api_bus_clear():
     with dash.lock:
         dash.bus_signals.clear()
     return {"ok": True}
+
+@app.get("/api/metrics")
+def api_metrics():
+    points = dash.metrics_snapshot()
+    return {"points": points, "total": len(points)}
 @app.get("/api/log")
 def api_log(since: int = 0):
     with dash.lock:
@@ -295,6 +346,10 @@ HTML = """<!DOCTYPE html>
     overflow: hidden;
   }
   .msg-pane { flex: 4; min-height: 0; }
+  .metrics-pane { flex: 1.6; min-height: 0; background: var(--panel); }
+  .metric-name { color: var(--purple); }
+  .metric-can { color: var(--blue); }
+  .metric-bad { color: var(--red); font-weight: 600; }
   /* ── Shared pane chrome ── */
   .pane {
     display: flex;
@@ -481,6 +536,27 @@ HTML = """<!DOCTYPE html>
       </table>
     </div>
   </div>
+  <!-- ══ Gateway metrics ══ -->
+  <div class="pane metrics-pane">
+    <div class="pane-header">
+      <div class="live-dot"></div>
+      <span class="pane-title">Metrics</span>
+      <span class="frame-count" id="metrics-count">0</span>
+    </div>
+    <div class="tbl-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th style="width:110px">Value</th>
+            <th style="width:80px">Tick</th>
+            <th style="width:90px">Updated</th>
+          </tr>
+        </thead>
+        <tbody id="metrics-tbody"></tbody>
+      </table>
+    </div>
+  </div>
   <!-- ══ Event log ══ -->
   <div class="pane log-pane">
     <div class="pane-header">
@@ -571,6 +647,29 @@ function fetchBus() {
       if (allMessages.length > 2000) allMessages.splice(0, allMessages.length - 2000);
       if (!msgPaused) renderMessages(items);
     }).catch(() => { busFetching = false; });
+}
+// ── Metrics fetch ────────────────────────────────────────────────────────────
+let metricsFetching = false;
+function fetchMetrics() {
+  if (metricsFetching) return;
+  metricsFetching = true;
+  fetch('/api/metrics')
+    .then(r => r.json())
+    .then(d => {
+      metricsFetching = false;
+      const tbody = document.getElementById('metrics-tbody');
+      tbody.innerHTML = d.points.map(p => {
+        const cls = (p.name.includes('.dropped') && p.value > 0) ? 'metric-bad'
+                  : (p.name.startsWith('can.') ? 'metric-can' : 'metric-name');
+        return `<tr>` +
+          `<td class="${cls}">${escHtml(p.name)}</td>` +
+          `<td>${p.value}</td>` +
+          `<td>${p.tick}</td>` +
+          `<td class="td-ts">${p.updated}</td>` +
+          `</tr>`;
+      }).join('');
+      document.getElementById('metrics-count').textContent = d.points.length;
+    }).catch(() => { metricsFetching = false; });
 }
 // ── Unified render ───────────────────────────────────────────────────────────
 function matchesFilter(m) {
@@ -674,8 +773,9 @@ function clearLog() {
 setInterval(fetchCan, 150);
 setInterval(fetchEth, 150);
 setInterval(fetchBus, 150);
+setInterval(fetchMetrics, 1000);
 setInterval(fetchLog, 500);
-fetchCan(); fetchEth(); fetchBus(); fetchLog();
+fetchCan(); fetchEth(); fetchBus(); fetchMetrics(); fetchLog();
 async function pollGatewayHealth() {
   try {
     const r = await fetch('/api/gateway/health');

@@ -18,12 +18,16 @@ import pytest
 
 import boat.bus_node as bus_node
 import boat.can_tp as can_tp
+import boat.debug_node as debug_node
 import boat.fault_node as fault_node
 import boat.frame_node as frame_node
 import boat.metrics_node as metrics_node
 import boat.pdu_message_node as pdu_message_node
 import boat.pdu_node as pdu_node
-from boat.v1 import common_pb2, fault_pb2, metrics_pb2
+import boat.scenario_node as scenario_node
+import boat.simulation_node as simulation_node
+import boat.trace_node as trace_node
+from boat.v1 import common_pb2, debug_pb2, fault_pb2, metrics_pb2, scenario_pb2, simulation_pb2, trace_pb2
 
 
 class _FakeClient:
@@ -37,6 +41,10 @@ class _FakeClient:
         self.can_tp = SimpleNamespace()
         self.fault = SimpleNamespace()
         self.metrics = SimpleNamespace()
+        self.scenario = SimpleNamespace()
+        self.simulation = SimpleNamespace()
+        self.debug = SimpleNamespace()
+        self.trace = SimpleNamespace()
 
     def close(self) -> None:
         self.closed = True
@@ -57,8 +65,12 @@ def _make_nodes():
         pdu_node.PduNode(),
         bus_node.BusNode(),
         can_tp.CanTpHandle(),
+        debug_node.DebugNode(),
         fault_node.FaultNode(),
         metrics_node.MetricsNode(),
+        scenario_node.ScenarioNode(),
+        simulation_node.SimulationNode(),
+        trace_node.TraceNode(),
     ]
 
 
@@ -83,8 +95,12 @@ def test_explicit_node_address_wins_over_boat_host(monkeypatch):
         pdu_node.PduNode("explicit.example:50053"),
         bus_node.BusNode("explicit.example:50053"),
         can_tp.CanTpHandle("explicit.example:50053"),
+        debug_node.DebugNode("explicit.example:50053"),
         fault_node.FaultNode("explicit.example:50053"),
         metrics_node.MetricsNode("explicit.example:50053"),
+        scenario_node.ScenarioNode("explicit.example:50053"),
+        simulation_node.SimulationNode("explicit.example:50053"),
+        trace_node.TraceNode("explicit.example:50053"),
     ]
     try:
         assert all(node._client.address == "explicit.example:50053" for node in nodes)
@@ -284,3 +300,116 @@ def test_metrics_node_returns_snapshot_and_stream():
     node = metrics_node.MetricsNode(client)
     assert node.get() == [point]
     assert list(node.stream()) == [point]
+
+
+def test_scenario_node_calls_expected_rpcs():
+    client = _FakeClient()
+    captured = {}
+
+    def create(req):
+        captured["create"] = req
+        return scenario_pb2.ScenarioResponse(scenario=req.scenario)
+
+    def list_scenarios(req):
+        captured["list_page"] = req
+        return scenario_pb2.ListScenariosResponse(
+            scenarios=[scenario_pb2.Scenario(scenario_id="scn-1", name="Scenario")],
+            page=common_pb2.PaginationResponse(next_page_token="next"),
+        )
+
+    client.scenario = SimpleNamespace(
+        CreateScenario=create,
+        GetScenario=lambda req: scenario_pb2.ScenarioResponse(
+            scenario=scenario_pb2.Scenario(scenario_id=req.scenario_id, name="Scenario")),
+        ListScenarios=list_scenarios,
+        ValidateScenario=lambda req: scenario_pb2.ValidateScenarioResponse(valid=True, issues=[]),
+        DeleteScenario=lambda req: scenario_pb2.DeleteScenarioResponse(deleted=True),
+    )
+
+    node = scenario_node.ScenarioNode(client)
+    created = node.create("scn-1", "Scenario", "{}")
+    assert created.scenario_id == "scn-1"
+    assert captured["create"].scenario.content == "{}"
+    assert node.get("scn-1").name == "Scenario"
+    assert node.list_page(page_size=2, page_token="tok").page.next_page_token == "next"
+    assert captured["list_page"].page.page_size == 2
+    assert node.list()[0].scenario_id == "scn-1"
+    assert node.validate("{}").valid is True
+    assert node.delete("scn-1") is True
+
+
+def test_simulation_node_calls_expected_rpcs():
+    client = _FakeClient()
+    captured = {}
+
+    def step(req):
+        captured["step"] = req
+        return simulation_pb2.SimulationResponse(
+            simulation=simulation_pb2.Simulation(simulation_id=req.simulation_id, tick=req.ticks))
+
+    client.simulation = SimpleNamespace(
+        CreateSimulation=lambda req: simulation_pb2.SimulationResponse(
+            simulation=simulation_pb2.Simulation(simulation_id="sim-1", scenario_id=req.scenario_id)),
+        StartSimulation=lambda req: simulation_pb2.SimulationResponse(
+            simulation=simulation_pb2.Simulation(simulation_id=req.simulation_id,
+                                                  state=common_pb2.SIMULATION_STATE_RUNNING)),
+        PauseSimulation=lambda req: simulation_pb2.SimulationResponse(
+            simulation=simulation_pb2.Simulation(simulation_id=req.simulation_id,
+                                                  state=common_pb2.SIMULATION_STATE_PAUSED)),
+        StepSimulation=step,
+        StopSimulation=lambda req: simulation_pb2.SimulationResponse(
+            simulation=simulation_pb2.Simulation(simulation_id=req.simulation_id,
+                                                  state=common_pb2.SIMULATION_STATE_STOPPED)),
+        ResetSimulation=lambda req: simulation_pb2.SimulationResponse(
+            simulation=simulation_pb2.Simulation(simulation_id=req.simulation_id,
+                                                  state=common_pb2.SIMULATION_STATE_IDLE)),
+        GetSimulationState=lambda req: simulation_pb2.SimulationResponse(
+            simulation=simulation_pb2.Simulation(simulation_id=req.simulation_id,
+                                                  state=common_pb2.SIMULATION_STATE_IDLE)),
+        ListSimulations=lambda req: simulation_pb2.ListSimulationsResponse(
+            simulations=[simulation_pb2.Simulation(simulation_id="sim-1")],
+            page=common_pb2.PaginationResponse(next_page_token="next")),
+        WatchSimulation=lambda req: iter([
+            simulation_pb2.SimulationResponse(
+                simulation=simulation_pb2.Simulation(simulation_id=req.simulation_id,
+                                                      state=common_pb2.SIMULATION_STATE_RUNNING)),
+        ]),
+    )
+
+    node = simulation_node.SimulationNode(client)
+    assert node.create("scn-1").scenario_id == "scn-1"
+    assert node.start("sim-1").state == common_pb2.SIMULATION_STATE_RUNNING
+    assert node.pause("sim-1").state == common_pb2.SIMULATION_STATE_PAUSED
+    assert node.step("sim-1", 7).tick == 7
+    assert captured["step"].ticks == 7
+    assert node.stop("sim-1").state == common_pb2.SIMULATION_STATE_STOPPED
+    assert node.reset("sim-1").state == common_pb2.SIMULATION_STATE_IDLE
+    assert node.state("sim-1").state == common_pb2.SIMULATION_STATE_IDLE
+    assert node.list_page(page_size=2).page.next_page_token == "next"
+    assert node.list()[0].simulation_id == "sim-1"
+    assert list(node.watch("sim-1"))[0].state == common_pb2.SIMULATION_STATE_RUNNING
+
+
+def test_debug_and_trace_nodes_call_expected_rpcs():
+    client = _FakeClient()
+    event = debug_pb2.RpcEvent(method="/boat.v1.FrameService/SendFrame")
+    client.debug = SimpleNamespace(
+        GetEffectiveConfig=lambda req: debug_pb2.GetEffectiveConfigResponse(config_json='{"ok":true}'),
+        StreamEvents=lambda req: iter([event]),
+    )
+    trace_event = trace_pb2.TraceEvent(trace_id="trace-1", tick=3, category="frame")
+    client.trace = SimpleNamespace(
+        GetTrace=lambda req: trace_pb2.TraceResponse(events=[trace_event]),
+        ListTraces=lambda req: trace_pb2.TraceResponse(events=[trace_event]),
+        StreamTrace=lambda req: iter([trace_event]),
+        MarkStep=lambda req: trace_pb2.MarkStepResponse(marker_timestamp_ns=123),
+    )
+
+    debug = debug_node.DebugNode(client)
+    trace = trace_node.TraceNode(client)
+    assert debug.effective_config() == '{"ok":true}'
+    assert list(debug.stream_events("FrameService")) == [event]
+    assert list(trace.get("trace-1")) == [trace_event]
+    assert list(trace.list()) == [trace_event]
+    assert list(trace.stream("trace-1")) == [trace_event]
+    assert trace.mark_step("trace-1", 1, "step", sim_tick=3) == 123

@@ -13,6 +13,13 @@ The plugin ABI is versioned separately from the project; see
 
 ### Added
 
+- **Dashboard metrics panel and the remaining SDK service wrappers (#28, #41).**
+  `ui/dashboard.py` now subscribes to `MetricsService.StreamMetrics` and renders
+  the latest value per series in a live panel, highlighting CAN metrics and
+  non-zero drop counters. The SDK gains `ScenarioNode`, `SimulationNode`,
+  `DebugNode` and `TraceNode`, completing the service wrappers started with
+  `FaultNode`/`MetricsNode`; all wrappers share the explicit-address >
+  `BOAT_HOST` > `localhost:50051` resolution order and have contract tests.
 - **Fault injection and metrics now have SDK and CLI surfaces (#27, #28, #41).**
   `FaultNode`/`MetricsNode` wrap the existing gRPC services, and `boat fault
   inject|list` / `boat metrics get|watch` make them usable without raw
