@@ -748,6 +748,11 @@ int main() {
     run_teardown();
     return 1;
   }
+  // Install the termination handlers before advertising readiness: a client
+  // that signals the gateway as soon as it sees "listening" must not race the
+  // handler installation and hit the default SIGTERM action.
+  std::signal(SIGINT, HandleSignal);
+  std::signal(SIGTERM, HandleSignal);
   std::fprintf(stderr, "[Gateway] gRPC server listening on 0.0.0.0:%d\n", selected_port);
 
   // Everything is resolved by here, so this is the point at which the run's
@@ -775,8 +780,6 @@ int main() {
     }
   }
   g_scheduler = &sim.scheduler();
-  std::signal(SIGINT, HandleSignal);
-  std::signal(SIGTERM, HandleSignal);
 
   // Shutdown() must not be called from the signal handler itself (see
   // HandleSignal); this thread polls the flag it sets and performs the

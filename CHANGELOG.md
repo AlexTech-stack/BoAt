@@ -58,7 +58,9 @@ The plugin ABI is versioned separately from the project; see
   and returning 0. Teardown stops both bus registries and joins their RX threads before
   `node_manager` is destroyed or drained, and `StopAll()` no longer joins RX threads while
   holding the registry mutex — an RX callback that sends (CanTp flow control) can no longer
-  deadlock shutdown. CAN/Ethernet frame subscription ids are explicitly released.
+  deadlock shutdown. CAN/Ethernet frame subscription ids are explicitly released. The
+  SIGINT/SIGTERM handlers are installed before the "listening" line is printed, so a signal
+  sent immediately after startup is handled gracefully instead of hitting the default action.
 - **A bare gateway no longer grows without bound** (#64). `EventBus` queued every CAN/Ethernet
   RX frame and every replayed record even when nothing subscribed to them, and the only drain
   ran while a simulation was active; a README-quick-start gateway or a replay-only run leaked
