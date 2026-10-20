@@ -5,6 +5,9 @@
 BoAt Platform — Commander Panel
 Run:  python3 demo/commander.py
 Open: http://localhost:8082
+
+Bind: 127.0.0.1 by default. Set BOAT_CMD_BIND to a routable address only on a
+trusted network; this tool is unauthenticated and can send bus traffic.
 """
 from __future__ import annotations
 import os
@@ -26,8 +29,21 @@ _CANFD_FDF = 0x04
 _CANFD_BRS = 0x01
 _DEFAULT_GW = os.environ.get("BOAT_GATEWAY", "localhost:50051")
 _PORT       = int(os.environ.get("BOAT_CMD_PORT", "8082"))
+_BIND       = os.environ.get("BOAT_CMD_BIND", "").strip() or "127.0.0.1"
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "config"
 _LAST_IMPORT_FILE = _CONFIG_DIR / ".last_import"
+
+
+def _resolve_config_path(filename: str) -> Path:
+    """Resolve a PDU database name under _CONFIG_DIR, rejecting traversal."""
+    fp = (_CONFIG_DIR / filename).expanduser().resolve()
+    try:
+        fp.relative_to(_CONFIG_DIR.resolve())
+    except ValueError:
+        raise HTTPException(403, f"Path must be inside {_CONFIG_DIR}")
+    return fp
+
+
 _PDU_DB: Optional[PduDatabase] = None
 _PDU_FILENAME: Optional[str] = None
 # ── gRPC client cache (one channel per address) ────────────────────────────────
@@ -414,7 +430,7 @@ def api_pdu_last_import():
 @app.post("/api/pdu/import")
 def api_pdu_import(filename: str):
     global _PDU_DB, _PDU_FILENAME
-    path = _CONFIG_DIR / filename
+    path = _resolve_config_path(filename)
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
     try:
@@ -1722,6 +1738,6 @@ pollGatewayHealth();
 def index():
     return HTMLResponse(HTML)
 if __name__ == "__main__":
-    print(f"BoAt Commander → http://localhost:{_PORT}")
+    print(f"BoAt Commander → http://{_BIND}:{_PORT}")
     print(f"Default gateway : {_DEFAULT_GW}")
-    uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")
+    uvicorn.run(app, host=_BIND, port=_PORT, log_level="warning")

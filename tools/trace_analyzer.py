@@ -6,6 +6,9 @@ BoAt Platform — Trace Analyzer
 Read BLF trace files, analyze CAN messages, derive PDU database JSON.
 Run:  python3 tools/trace_analyzer.py
 Open: http://localhost:8088
+
+Bind: 127.0.0.1 by default. Set BOAT_TRACE_ANALYZER_BIND to a routable address
+only on a trusted network; this tool is unauthenticated.
 """
 from __future__ import annotations
 
@@ -26,6 +29,7 @@ from boat.trace_analyzer import TraceAnalyzer
 from boat.trace_reverse_engineer import TraceReverseEngineer, _HAS_NUMPY, guess_e2e_profile
 
 _PORT = int(os.environ.get("BOAT_TRACE_ANALYZER_PORT", "8088"))
+_BIND = os.environ.get("BOAT_TRACE_ANALYZER_BIND", "").strip() or "127.0.0.1"
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "config"
 # The Trace Editor's own default save/scan location -- also used as the
 # target of the "Convert & Send to Trace Editor" action below, so a
@@ -856,5 +860,5 @@ def index(path: Optional[str] = Query(None)):
 # ── Entry point ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(f"BoAt Trace Analyzer → http://localhost:{_PORT}")
-    uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")
+    print(f"BoAt Trace Analyzer → http://{_BIND}:{_PORT}")
+    uvicorn.run(app, host=_BIND, port=_PORT, log_level="warning")

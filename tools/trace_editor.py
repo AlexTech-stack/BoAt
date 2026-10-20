@@ -7,6 +7,9 @@ View, filter, and edit the frames inside a gateway binary trace file
 (the format produced by `boat replay import` / TraceReplayer.convert_to_binary).
 Run:  python3 tools/trace_editor.py
 Open: http://localhost:8089
+
+Bind: 127.0.0.1 by default. Set BOAT_TRACE_EDITOR_BIND to a routable address
+only on a trusted network; this tool is unauthenticated and writes trace files.
 """
 from __future__ import annotations
 
@@ -27,6 +30,7 @@ from boat.trace_replay import TraceReplayer, TraceReplayError
 from boat.v1 import frame_pb2
 
 _PORT = int(os.environ.get("BOAT_TRACE_EDITOR_PORT", "8089"))
+_BIND = os.environ.get("BOAT_TRACE_EDITOR_BIND", "").strip() or "127.0.0.1"
 _EXPORT_DIR = Path(__file__).resolve().parent.parent / "traces"
 _EXPORT_DIR.mkdir(exist_ok=True)
 
@@ -602,9 +606,19 @@ def _reindex() -> None:
         f["index"] = i
 
 def _resolve_path(path_str: str) -> Path:
-    fp = Path(path_str).expanduser()
-    if not fp.is_absolute():
-        fp = _EXPORT_DIR / fp.name
+    """Resolve a trace path and confine it to the trace directories.
+
+    Reads and writes are allowed under /tmp (where the gateway imports traces)
+    and under this tool's traces/ directory -- never at an arbitrary absolute
+    path.
+    """
+    raw = Path(path_str).expanduser()
+    fp = raw if raw.is_absolute() else _EXPORT_DIR / raw.name
+    fp = fp.resolve()
+    roots = (_EXPORT_DIR, Path("/tmp"))
+    if not any(fp.is_relative_to(root.resolve()) for root in roots):
+        allowed = ", ".join(str(root.resolve()) for root in roots)
+        raise HTTPException(403, f"Path must be inside {allowed}")
     return fp
 
 # ── API routes ────────────────────────────────────────────────────────────────
@@ -615,8 +629,8 @@ def api_trace_list():
     # /tmp is where FlatFileTraceStore actually writes imported traces
     # (server-side path is hardcoded as /tmp/<trace_id>.trace in
     # replay_service_impl.cpp), so that's the most useful default place to
-    # look -- alongside traces/ (this tool's own save location) and $HOME.
-    for d in [Path("/tmp"), _EXPORT_DIR, Path.home()]:
+    # look -- alongside traces/ (this tool's own save location).
+    for d in [Path("/tmp"), _EXPORT_DIR]:
         try:
             for f in Path(d).glob("*.trace"):
                 files.append(str(f))
@@ -2600,5 +2614,5 @@ def howto():
 # ── Entry point ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(f"BoAt Trace Editor → http://localhost:{_PORT}")
-    uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")
+    print(f"BoAt Trace Editor → http://{_BIND}:{_PORT}")
+    uvicorn.run(app, host=_BIND, port=_PORT, log_level="warning")
