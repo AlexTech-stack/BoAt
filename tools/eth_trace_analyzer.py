@@ -7,6 +7,9 @@ Read .pcap/.pcapng captures, identify protocols (VLAN/EtherType, DoIP, SOME/IP),
 reconstruct TCP sessions, and classify UDP flows as cyclic vs event-driven.
 Run:  python3 tools/eth_trace_analyzer.py
 Open: http://localhost:8090
+
+Bind: 127.0.0.1 by default. Set BOAT_ETH_ANALYZER_BIND to a routable address
+only on a trusted network; this tool is unauthenticated.
 """
 from __future__ import annotations
 
@@ -26,6 +29,7 @@ from fastapi.responses import HTMLResponse
 from boat.eth_trace_analyzer import EthTraceAnalyzer
 
 _PORT = int(os.environ.get("BOAT_ETH_ANALYZER_PORT", "8090"))
+_BIND = os.environ.get("BOAT_ETH_ANALYZER_BIND", "").strip() or "127.0.0.1"
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "config"
 _RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "boat-platform" / "traces"
 # EthTraceAnalyzer supports both classic pcap (DLT_EN10MB only) and
@@ -684,5 +688,5 @@ def index(path: Optional[str] = Query(None)):
     return HTML
 
 if __name__ == "__main__":
-    print(f"BoAt Ethernet Trace Analyzer starting on http://0.0.0.0:{_PORT}")
-    uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")
+    print(f"BoAt Ethernet Trace Analyzer starting on http://{_BIND}:{_PORT}")
+    uvicorn.run(app, host=_BIND, port=_PORT, log_level="warning")

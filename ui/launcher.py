@@ -11,6 +11,9 @@ Usage:
 
 Environment:
     BOAT_LAUNCHER_PORT  — HTTP port (default 8086)
+    BOAT_LAUNCHER_BIND  — address to bind (default 127.0.0.1). Set to
+                          0.0.0.0 only on a trusted network; this API is
+                          unauthenticated and can create interfaces.
     BOAT_GATEWAY_BIN    — path to boat_gateway binary
     BOAT_GATEWAY        — gRPC address for state queries (default localhost:50051)
 
@@ -48,6 +51,7 @@ _GW_BIN         = os.environ.get("BOAT_GATEWAY_BIN", _DEFAULT_GW_BIN)
 _GW_ADDR        = os.environ.get("BOAT_GATEWAY", "localhost:50051")
 _LOG_LINES      = 500
 _PORT           = int(os.environ.get("BOAT_LAUNCHER_PORT", "8086"))
+_BIND           = os.environ.get("BOAT_LAUNCHER_BIND", "").strip() or "127.0.0.1"
 
 _SIM_STATE_NAMES = {0: "UNSPECIFIED", 1: "IDLE", 2: "RUNNING", 3: "PAUSED", 4: "STOPPED", 5: "ERROR"}
 
@@ -407,6 +411,16 @@ _CONFIG_DIR = _PROJECT_ROOT / "config"
 _LAST_IMPORT_FILE = _CONFIG_DIR / ".last_import"
 
 
+def _resolve_config_path(filename: str) -> Path:
+    """Resolve a PDU database name under _CONFIG_DIR, rejecting traversal."""
+    fp = (_CONFIG_DIR / filename).expanduser().resolve()
+    try:
+        fp.relative_to(_CONFIG_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail=f"Path must be inside {_CONFIG_DIR}")
+    return fp
+
+
 @app.get("/api/pdu/list")
 def api_pdu_list():
     if not _CONFIG_DIR.is_dir():
@@ -426,7 +440,7 @@ def api_pdu_last_import():
 
 @app.post("/api/pdu/import")
 def api_pdu_import(filename: str):
-    path = _CONFIG_DIR / filename
+    path = _resolve_config_path(filename)
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
 
@@ -493,7 +507,7 @@ def api_pdu_import(filename: str):
 @app.get("/api/pdu/select")
 def api_pdu_select(filename: str):
     """Just parse and return bus info without creating interfaces."""
-    path = _CONFIG_DIR / filename
+    path = _resolve_config_path(filename)
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
 
@@ -1504,7 +1518,7 @@ def index():
 
 
 if __name__ == "__main__":
-    print(f"BoAt Launcher → http://localhost:{_PORT}")
+    print(f"BoAt Launcher → http://{_BIND}:{_PORT}")
     print(f"Gateway binary: {_GW_BIN}")
     print(f"gRPC address : {_GW_ADDR}")
     can_sudo = True
@@ -1513,4 +1527,4 @@ if __name__ == "__main__":
     except Exception:
         can_sudo = False
         print("WARNING: passwordless sudo not available — interface creation will fail.")
-    uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")
+    uvicorn.run(app, host=_BIND, port=_PORT, log_level="warning")

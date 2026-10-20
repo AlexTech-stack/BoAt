@@ -5,6 +5,7 @@
 BoAt Platform — Gateway gRPC Traffic Inspector
 Run:  python3 demo/debug.py
 Open: http://localhost:8084
+
 Subscribes to the gateway's DebugService.StreamEvents gRPC stream and shows
 every internal RPC call in real time:
   - which method was called  (/boat.v1.CanService/SendCanFrame)
@@ -13,8 +14,12 @@ every internal RPC call in real time:
   - event lifecycle          CALL_START → MSG_RECV → MSG_SEND → CALL_END
   - message sizes in bytes
   - round-trip duration and gRPC status code
+
+Bind: 127.0.0.1 by default. Set BOAT_DEBUG_BIND to a routable address only on a
+trusted network; this tool is unauthenticated.
 """
 from __future__ import annotations
+import os
 import sys
 from pathlib import Path
 import threading
@@ -32,6 +37,7 @@ from boat.v1 import debug_pb2, frame_pb2
 # ── Config ─────────────────────────────────────────────────────────────────────
 _GW   = "localhost:50051"
 _PORT = 8084
+_BIND = os.environ.get("BOAT_DEBUG_BIND", "").strip() or "127.0.0.1"
 _MAX  = 5000
 # ── Ring buffer ────────────────────────────────────────────────────────────────
 _lock    = threading.Lock()
@@ -422,4 +428,5 @@ fetchEvents();
 if __name__ == "__main__":
     t = threading.Thread(target=_run_subscriber, daemon=True)
     t.start()
-    uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="warning")
+    print(f"BoAt gRPC Debug Inspector → http://{_BIND}:{_PORT}")
+    uvicorn.run(app, host=_BIND, port=_PORT, log_level="warning")

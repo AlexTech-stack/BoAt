@@ -52,6 +52,15 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **The web UIs and tools bind to loopback by default and confine file paths** (#96). The
+  eleven `ui/`/`tools/` FastAPI services hard-coded `0.0.0.0` despite `SECURITY.md` saying
+  they are localhost tools. Each now binds `127.0.0.1` unless its `BOAT_*_BIND` variable is
+  set (an empty or whitespace-only value still means loopback). The PDU editor's load/save
+  paths, the launcher/commander PDU imports, and the trace editor's load/save/export paths
+  are confined to their config or trace roots; the recorder's download check now uses
+  `relative_to()` so a sibling directory such as `traces_evil/` can no longer pass the old
+  string-prefix test. Regression tests cover every service's default bind, the bind override,
+  and traversal attempts.
 - **A failed gateway start now fails loudly, and shutdown joins RX threads safely** (#68).
   If `BuildAndStart()` returns null or no port was selected (e.g. a readable but invalid TLS
   PEM), the gateway prints an ERROR, tears down and exits 1 instead of logging "listening"

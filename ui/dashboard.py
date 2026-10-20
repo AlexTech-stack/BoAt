@@ -5,8 +5,12 @@
 BoAt Platform — CAN Trace, Bus Signal Log & Event Log
 Run:  python3 demo/dashboard.py
 Open: http://localhost:8080
+
+Bind: 127.0.0.1 by default. Set BOAT_DASH_BIND to a routable address only on a
+trusted network; this tool is unauthenticated.
 """
 from __future__ import annotations
+import os
 import sys
 from pathlib import Path
 import threading
@@ -21,6 +25,7 @@ from fastapi.responses import HTMLResponse
 from boat.client import BoAtClient
 from boat.v1 import bus_pb2, frame_pb2
 # ── State ──────────────────────────────────────────────────────────────────────
+_BIND            = os.environ.get("BOAT_DASH_BIND", "").strip() or "127.0.0.1"
 MAX_CAN_FRAMES   = 2000
 MAX_ETH_FRAMES   = 2000
 MAX_BUS_SIGNALS  = 2000
@@ -692,7 +697,6 @@ pollGatewayHealth();
 def index():
     return HTMLResponse(HTML)
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("BOAT_DASH_PORT", "8080"))
-    print(f"BoAt Live Monitor → http://localhost:{port}")
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    print(f"BoAt Live Monitor → http://{_BIND}:{port}")
+    uvicorn.run(app, host=_BIND, port=port, log_level="warning")

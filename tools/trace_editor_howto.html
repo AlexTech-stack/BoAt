@@ -100,16 +100,16 @@ pre code { background:none; border:none; padding:0; color:inherit; }
 # open http://localhost:8089  (port via BOAT_TRACE_EDITOR_PORT)</code></pre>
 
   <h2>Loading a trace</h2>
-  <p>The file dropdown auto-populates from three places, no Browse needed for the common case:</p>
+  <p>The file dropdown auto-populates from two places, no Browse needed for the common case:</p>
   <ul>
     <li><code>/tmp</code> — where the gateway actually writes imported traces
       (<code>ImportTraceData</code>'s hardcoded storage path is <code>/tmp/&lt;trace_id&gt;.trace</code>),
       so anything already imported shows up here.</li>
     <li><code>traces/</code> — this tool's own default save location.</li>
-    <li>your home directory.</li>
   </ul>
-  <p>Pick a file and click <strong>Load</strong>, or <strong>Browse...</strong> to type an
-  arbitrary path. <strong>New</strong> starts an empty trace from scratch.</p>
+  <p>Pick a file and click <strong>Load</strong>, or <strong>Browse...</strong> to type a path.
+  Paths are confined to those two directories; an absolute path elsewhere is rejected.
+  <strong>New</strong> starts an empty trace from scratch.</p>
 
   <h2>The frame table</h2>
   <p>
@@ -133,7 +133,8 @@ pre code { background:none; border:none; padding:0; color:inherit; }
   <h2>Saving and pushing to a gateway</h2>
   <ul>
     <li><strong>Save</strong> writes back to the currently loaded path; <strong>Save As</strong>
-      picks a new one (relative paths land under <code>traces/</code>).</li>
+      picks a new one (relative paths land under <code>traces/</code>; absolute paths must be
+      under <code>traces/</code> or <code>/tmp</code>).</li>
     <li><strong>Push to Gateway</strong> uploads the current in-memory frames straight to a
       running gateway via <code>ReplayService.ImportTraceData</code>, using the
       <strong>Gateway</strong> address field in the toolbar (remembered across sessions via a
