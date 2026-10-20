@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -1223,6 +1224,7 @@ TEST_CASE("A slow frame subscriber overflows into dropped-oldest, and metrics sa
   auto metrics_stub = boat::v1::MetricsService::NewStub(channel);
 
   grpc::ClientContext sub_ctx;
+  sub_ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(10));
   boat::v1::SubscribeFramesRequest request;
   request.add_bus_types(boat::v1::Frame::CAN);
   request.set_iface_filter("vcan0");
@@ -1231,8 +1233,31 @@ TEST_CASE("A slow frame subscriber overflows into dropped-oldest, and metrics sa
   boat::hil::CanFrame can_frame{};
   can_frame.can_id = 0x123;
   can_frame.dlc = 8;
-  // Deliberately never Read(): the client cannot keep up, which is the case
-  // being tested.
+
+  /* Read exactly one frame before the flood, then stop reading. This is a
+     handshake, not the failure mode: it proves the server handler has
+     registered in the registry and can deliver, so the 50k-frame flood below
+     cannot be lost to the subscription-startup race. (Without it, a slow CI
+     runner can process all 50k sends before the RPC handler runs, leaving the
+     drop counter at zero.) A feeder thread keeps producing until the read
+     returns; the deadline only stops a genuinely broken test from hanging. */
+  std::atomic<bool> stop_feeding{false};
+  std::thread feeder([&] {
+    int i = 0;
+    while (!stop_feeding.load(std::memory_order_relaxed)) {
+      can_frame.data[0] = static_cast<std::uint8_t>(i++);
+      can_registry.SendFrame("vcan0", can_frame);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  });
+  boat::v1::Frame first;
+  const bool got_first = reader->Read(&first);
+  stop_feeding.store(true, std::memory_order_relaxed);
+  feeder.join();
+  REQUIRE(got_first);
+
+  // The client stops reading here. The transport window fills, the server
+  // writer parks, and the capacity-8 queue must overflow.
   for (int i = 0; i < 50000; ++i) {
     can_frame.data[0] = static_cast<std::uint8_t>(i);
     can_registry.SendFrame("vcan0", can_frame);
