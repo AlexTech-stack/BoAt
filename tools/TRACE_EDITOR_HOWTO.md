@@ -12,15 +12,15 @@ python3 tools/trace_editor.py
 
 ## Loading a trace
 
-The file dropdown auto-populates from three places, no Browse needed for the common case:
+The file dropdown auto-populates from two places, no Browse needed for the common case:
 
 - `/tmp` — where the gateway actually writes imported traces (`ImportTraceData`'s hardcoded
   storage path is `/tmp/<trace_id>.trace`), so anything already imported shows up here.
 - `traces/` — this tool's own default save location.
-- your home directory.
 
-Pick a file and click **Load**, or **Browse...** to type an arbitrary path. **New** starts an
-empty trace from scratch.
+Pick a file and click **Load**, or **Browse...** to type a path. Paths are confined to those
+two directories; an absolute path elsewhere is rejected. **New** starts an empty trace from
+scratch.
 
 ## The frame table
 
@@ -39,7 +39,7 @@ and **Delete**. Checkboxes + **Delete Selected** for bulk removal.
 ## Saving and pushing to a gateway
 
 - **Save** writes back to the currently loaded path; **Save As** picks a new one (relative paths
-  land under `traces/`).
+  land under `traces/`; absolute paths must be under `traces/` or `/tmp`).
 - **Push to Gateway** uploads the current in-memory frames straight to a running gateway via
   `ReplayService.ImportTraceData`, using the **Gateway** address field in the toolbar (remembered
   across sessions via a cookie, so you don't retype it every time). This is *not* the same as

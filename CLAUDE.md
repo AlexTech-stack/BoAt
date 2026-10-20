@@ -235,7 +235,7 @@ Dispatch quirk: `python3 -m boat` routes `can|pdu|eth|db` to `boat/cmd.py` (one-
 - **`tools/`** — `pdu_editor.py` (8087), `trace_analyzer.py` (8088), `trace_editor.py` (8089), `eth_trace_analyzer.py` (8090) are services launched by `start_tools.sh`/`stop_tools.sh`; `dbc2boatjson.py` and `test_vw_mlb_replay.py` are plain scripts, not services.
 - **`admin_gui/`** — PySide6 desktop client (at the **repo root**, not under `boat-platform/`) for one or more launcher agents; pages: Gateway, Nodes, Test Runs, Interfaces, Settings. `python3 admin_gui/main.py`; headless verification via `QT_QPA_PLATFORM=offscreen`.
 
-Each web service resolves the SDK via `sys.path.insert(0, ...)` relative to its own script. **Port collisions to know about:** `control_panel` and `system_dashboard` both default to 8081, and `launcher_agent` and `eth_trace_analyzer` both default to 8090 — each has a `BOAT_*_PORT` env override.
+Each web service resolves the SDK via `sys.path.insert(0, ...)` relative to its own script. **Port collisions to know about:** `control_panel` and `system_dashboard` both default to 8081, and `launcher_agent` and `eth_trace_analyzer` both default to 8090 — each has a `BOAT_*_PORT` env override. Every `ui/`/`tools/` web service also binds `127.0.0.1` by default, with a `BOAT_*_BIND` override; a routable address is an explicit opt-in. PDU/trace editing endpoints are confined to their config/traces roots.
 
 `ui/launcher_agent.py` is the one service that is remote process execution rather than a
 dashboard: it spawns gateway binaries and node scripts from caller-supplied paths. It binds

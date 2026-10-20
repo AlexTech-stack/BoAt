@@ -5,6 +5,9 @@
 BoAt Platform — System Overview Dashboard
 Run:  python3 demo/system_dashboard.py
 Open: http://localhost:8081
+
+Bind: 127.0.0.1 by default. Set BOAT_SYSTEM_BIND to a routable address only on
+a trusted network; this tool is unauthenticated.
 """
 from __future__ import annotations
 import os
@@ -16,6 +19,9 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from boat.client import BoAtClient
 from boat.v1 import frame_pb2, simulation_pb2
+
+_BIND = os.environ.get("BOAT_SYSTEM_BIND", "").strip() or "127.0.0.1"
+
 app = FastAPI()
 client = BoAtClient("localhost:50051")
 
@@ -451,5 +457,5 @@ def index():
     return HTMLResponse(HTML)
 if __name__ == "__main__":
     port = int(os.environ.get("BOAT_SYSTEM_PORT", "8081"))
-    print(f"BoAt System Dashboard → http://localhost:{port}")
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    print(f"BoAt System Dashboard → http://{_BIND}:{port}")
+    uvicorn.run(app, host=_BIND, port=port, log_level="warning")
