@@ -17,7 +17,7 @@ Open work lives in [GitHub Issues](https://github.com/AlexTech-stack/BoAt/issues
 the milestones in [Roadmap](#roadmap). Longer-form gap analyses and incident write-ups live in
 [`backlog/`](../backlog/). The source code is authoritative over all of them.
 
-*Last reconciled against the tree: 2026-10-13, on `master` after `v0.1.1`.*
+*Last reconciled against the tree: 2026-10-20, on `master`.*
 
 ## Vision
 
@@ -96,7 +96,7 @@ HIL, GA) are all delivered, with the exceptions recorded under [Epics](#epics) a
 | Epic | Priority | Status |
 |---|---|---|
 | **E1: Simulation Core** — tick scheduler, signal router, state machine | P0 | **Delivered.** `src/core/`: `tick_scheduler`, `sim_clock`, `signal_router`, `signal_bus`, `sim_state_machine`, `determinism_engine`, `fault_injector`, `scenario_loader` |
-| **E2: Plugin SDK** — C++ SDK, Python bindings, example plugins | P0 | **Delivered, except Python bindings.** The C ABI, the C++ SDK and five in-tree plugins exist. There is no Python plugin-authoring path, and the Python SDK that does exist is a gRPC *client* SDK rather than a binding. Whether to build one, or amend the epic, is [#26](https://github.com/AlexTech-stack/BoAt/issues/26) |
+| **E2: Plugin SDK** — C++ SDK, example plugins, Python client SDK | P0 | **Delivered, scoped.** The C ABI, the C++ SDK and five in-tree plugins exist. Python *plugin* bindings were considered and deliberately dropped ([#26](https://github.com/AlexTech-stack/BoAt/issues/26), closed as a design decision): the GIL, GC pauses and allocation make tick-deadline behaviour unpredictable, and determinism is the product. Python logic belongs outside the tick domain, in node scripts over gRPC; the substantial `boat-py` SDK is a *client* SDK, not a binding. `boat ai plugin` generates those node scripts, not in-process plugins |
 | **E3: API Gateway** — gRPC server, service implementations | P0 | **Delivered**, plus TLS/mTLS, which was not in scope |
 | **E4: CLI Tool** | P1 | **Delivered, beyond scope.** The epic named four command groups; twelve shipped |
 | **E5: Observability** — event store, trace store, metrics, live streaming | P1 | **Partial.** Stores and `MetricsService` are implemented; nothing consumes the metrics, so they are plumbed but invisible ([#28](https://github.com/AlexTech-stack/BoAt/issues/28)) |
@@ -104,7 +104,14 @@ HIL, GA) are all delivered, with the exceptions recorded under [Epics](#epics) a
 | **E7: HIL Bridge** — HAL, SocketCAN, virtual stubs | P2 | **Delivered.** Bus health, RX-overflow visibility and error-frame counts shipped ([#20](https://github.com/AlexTech-stack/BoAt/issues/20), [#22](https://github.com/AlexTech-stack/BoAt/issues/22) — closed) |
 | **E8: Web Dashboard** | P2 | **Partial.** Signal viewing, scenario management, trace browsing and simulation control exist. No fault-injection panel ([#27](https://github.com/AlexTech-stack/BoAt/issues/27)), no metrics panel ([#28](https://github.com/AlexTech-stack/BoAt/issues/28)) |
 | **E9: AI Features** — scenario generation, anomaly detection | P3 | **Partial.** `boat ai` generates scenarios, bus setups, CLI invocations and plugin skeletons against a local LLM. Anomaly detection was not built; the timing-anomaly analysis in the SDK's trace analysers is statistical, not what this epic described |
-| **E10: Distributed Sim** — multi-node coordination, HLA bridge | P3 | **Not started.** Nothing exists. Keeping, scoping or dropping it is [#30](https://github.com/AlexTech-stack/BoAt/issues/30) |
+
+Distributed simulation (the former E10: multi-node coordination, HLA bridge) was **dropped**
+rather than deferred ([#30](https://github.com/AlexTech-stack/BoAt/issues/30), closed as a
+design decision). Every use case considered either needs timestamped bus bridging or
+record-and-replay rather than a shared tick across processes, or belongs to a different
+product (co-simulation via FMI/DDS, commercial multi-rack HIL orchestration). HLA has no
+automotive audience here. Multi-host *management* is already provided by `launcher_agent`
+and `admin_gui` federation; it makes no claim that ticks are synchronized.
 
 ## Functional Requirements
 
@@ -149,7 +156,7 @@ line item here.
 | | Target | Actual |
 |---|---|---|
 | Core language | C++20 | C++20 |
-| Bindings language | Python 3.11+ | 3.11 and 3.13 in CI |
+| Client SDK language | Python 3.11+ | 3.11 and 3.13 in CI |
 | Build system | CMake 3.24+ | 3.24 minimum; configures under CMake 4.x |
 | API stack | gRPC 1.60+, Protocol Buffers v3 | gRPC 1.75.0, protobuf 31.1 |
 | Storage | SQLite embedded | SQLite with WAL and `synchronous=NORMAL`. Writes are synchronous on the caller's thread ([#23](https://github.com/AlexTech-stack/BoAt/issues/23)) |
