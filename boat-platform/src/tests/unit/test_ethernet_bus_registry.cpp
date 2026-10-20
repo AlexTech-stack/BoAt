@@ -208,7 +208,6 @@ class OneFrameEthernetDriver : public IEthernetDriver {
 TEST_CASE("EthernetBusRegistry StopAll joins without holding the send mutex",
           "[unit][ethernet]") {
   EthernetBusRegistry registry;
-  REQUIRE(registry.Add("veth9", std::make_unique<OneFrameEthernetDriver>()));
 
   std::atomic<bool> entered{false};
   std::atomic<bool> release{false};
@@ -223,6 +222,10 @@ TEST_CASE("EthernetBusRegistry StopAll joins without holding the send mutex",
       (void)registry.SendFrame("veth9", make_frame(0x0800));
     }
   });
+
+  // Subscribe before Add. Add starts the RX thread, which can deliver the
+  // driver's single frame before a subscription made afterwards exists.
+  REQUIRE(registry.Add("veth9", std::make_unique<OneFrameEthernetDriver>()));
 
   for (int i = 0; i < 500 && !entered.load(); ++i) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
