@@ -25,25 +25,25 @@ _sym_db = _symbol_database.Default()
 from boat.v1 import common_pb2 as boat_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13\x62oat/v1/fault.proto\x12\x07\x62oat.v1\x1a\x14\x62oat/v1/common.proto\"k\n\x12InjectFaultRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\x12\x0e\n\x06target\x18\x02 \x01(\t\x12 \n\x04type\x18\x03 \x01(\x0e\x32\x12.boat.v1.FaultType\x12\x0c\n\x04tick\x18\x04 \x01(\x04\"T\n\x11ListFaultsRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\x12(\n\x04page\x18\x02 \x01(\x0b\x32\x1a.boat.v1.PaginationRequest\"u\n\nFaultEvent\x12\x10\n\x08\x66\x61ult_id\x18\x01 \x01(\t\x12\x15\n\rsimulation_id\x18\x02 \x01(\t\x12\x0e\n\x06target\x18\x03 \x01(\t\x12 \n\x04type\x18\x04 \x01(\x0e\x32\x12.boat.v1.FaultType\x12\x0c\n\x04tick\x18\x05 \x01(\x04\"^\n\x13InjectFaultResponse\x12\"\n\x05\x66\x61ult\x18\x01 \x01(\x0b\x32\x13.boat.v1.FaultEvent\x12#\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.boat.v1.ErrorDetail\"d\n\x12ListFaultsResponse\x12#\n\x06\x66\x61ults\x18\x01 \x03(\x0b\x32\x13.boat.v1.FaultEvent\x12)\n\x04page\x18\x02 \x01(\x0b\x32\x1b.boat.v1.PaginationResponse*{\n\tFaultType\x12\x1a\n\x16\x46\x41ULT_TYPE_UNSPECIFIED\x10\x00\x12 \n\x1c\x46\x41ULT_TYPE_SIGNAL_CORRUPTION\x10\x01\x12\x1a\n\x16\x46\x41ULT_TYPE_PACKET_DROP\x10\x02\x12\x14\n\x10\x46\x41ULT_TYPE_DELAY\x10\x03\x32\x9f\x01\n\x0c\x46\x61ultService\x12H\n\x0bInjectFault\x12\x1b.boat.v1.InjectFaultRequest\x1a\x1c.boat.v1.InjectFaultResponse\x12\x45\n\nListFaults\x12\x1a.boat.v1.ListFaultsRequest\x1a\x1b.boat.v1.ListFaultsResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x13\x62oat/v1/fault.proto\x12\x07\x62oat.v1\x1a\x14\x62oat/v1/common.proto\"\xa5\x01\n\x12InjectFaultRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\x12\x0e\n\x06target\x18\x02 \x01(\t\x12 \n\x04type\x18\x03 \x01(\x0e\x32\x12.boat.v1.FaultType\x12\x0c\n\x04tick\x18\x04 \x01(\x04\x12\x10\n\x08\x65nd_tick\x18\x05 \x01(\x04\x12\x11\n\tmagnitude\x18\x06 \x01(\x01\x12\x13\n\x0b\x64\x65lay_ticks\x18\x07 \x01(\x04\"T\n\x11ListFaultsRequest\x12\x15\n\rsimulation_id\x18\x01 \x01(\t\x12(\n\x04page\x18\x02 \x01(\x0b\x32\x1a.boat.v1.PaginationRequest\"\xaf\x01\n\nFaultEvent\x12\x10\n\x08\x66\x61ult_id\x18\x01 \x01(\t\x12\x15\n\rsimulation_id\x18\x02 \x01(\t\x12\x0e\n\x06target\x18\x03 \x01(\t\x12 \n\x04type\x18\x04 \x01(\x0e\x32\x12.boat.v1.FaultType\x12\x0c\n\x04tick\x18\x05 \x01(\x04\x12\x10\n\x08\x65nd_tick\x18\x06 \x01(\x04\x12\x11\n\tmagnitude\x18\x07 \x01(\x01\x12\x13\n\x0b\x64\x65lay_ticks\x18\x08 \x01(\x04\"^\n\x13InjectFaultResponse\x12\"\n\x05\x66\x61ult\x18\x01 \x01(\x0b\x32\x13.boat.v1.FaultEvent\x12#\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x14.boat.v1.ErrorDetail\"d\n\x12ListFaultsResponse\x12#\n\x06\x66\x61ults\x18\x01 \x03(\x0b\x32\x13.boat.v1.FaultEvent\x12)\n\x04page\x18\x02 \x01(\x0b\x32\x1b.boat.v1.PaginationResponse*\xb6\x01\n\tFaultType\x12\x1a\n\x16\x46\x41ULT_TYPE_UNSPECIFIED\x10\x00\x12 \n\x1c\x46\x41ULT_TYPE_SIGNAL_CORRUPTION\x10\x01\x12\x1a\n\x16\x46\x41ULT_TYPE_PACKET_DROP\x10\x02\x12\x14\n\x10\x46\x41ULT_TYPE_DELAY\x10\x03\x12\x1b\n\x17\x46\x41ULT_TYPE_SIGNAL_STUCK\x10\x04\x12\x1c\n\x18\x46\x41ULT_TYPE_SIGNAL_INVERT\x10\x05\x32\x9f\x01\n\x0c\x46\x61ultService\x12H\n\x0bInjectFault\x12\x1b.boat.v1.InjectFaultRequest\x1a\x1c.boat.v1.InjectFaultResponse\x12\x45\n\nListFaults\x12\x1a.boat.v1.ListFaultsRequest\x1a\x1b.boat.v1.ListFaultsResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boat.v1.fault_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_FAULTTYPE']._serialized_start=566
-  _globals['_FAULTTYPE']._serialized_end=689
-  _globals['_INJECTFAULTREQUEST']._serialized_start=54
-  _globals['_INJECTFAULTREQUEST']._serialized_end=161
-  _globals['_LISTFAULTSREQUEST']._serialized_start=163
-  _globals['_LISTFAULTSREQUEST']._serialized_end=247
-  _globals['_FAULTEVENT']._serialized_start=249
-  _globals['_FAULTEVENT']._serialized_end=366
-  _globals['_INJECTFAULTRESPONSE']._serialized_start=368
-  _globals['_INJECTFAULTRESPONSE']._serialized_end=462
-  _globals['_LISTFAULTSRESPONSE']._serialized_start=464
-  _globals['_LISTFAULTSRESPONSE']._serialized_end=564
-  _globals['_FAULTSERVICE']._serialized_start=692
-  _globals['_FAULTSERVICE']._serialized_end=851
+  _globals['_FAULTTYPE']._serialized_start=685
+  _globals['_FAULTTYPE']._serialized_end=867
+  _globals['_INJECTFAULTREQUEST']._serialized_start=55
+  _globals['_INJECTFAULTREQUEST']._serialized_end=220
+  _globals['_LISTFAULTSREQUEST']._serialized_start=222
+  _globals['_LISTFAULTSREQUEST']._serialized_end=306
+  _globals['_FAULTEVENT']._serialized_start=309
+  _globals['_FAULTEVENT']._serialized_end=484
+  _globals['_INJECTFAULTRESPONSE']._serialized_start=486
+  _globals['_INJECTFAULTRESPONSE']._serialized_end=580
+  _globals['_LISTFAULTSRESPONSE']._serialized_start=582
+  _globals['_LISTFAULTSRESPONSE']._serialized_end=682
+  _globals['_FAULTSERVICE']._serialized_start=870
+  _globals['_FAULTSERVICE']._serialized_end=1029
 # @@protoc_insertion_point(module_scope)

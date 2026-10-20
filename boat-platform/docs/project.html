@@ -822,20 +822,17 @@ BOAT_DASH_PORT=9090 python3 demo/dashboard.py
         <div class="usage-card-header">⚡ Fault injection</div>
 <pre>
 <span class="c"># Via CLI</span>
-boat fault inject \
-  --signal vehicle.speed \
-  --type noise --magnitude 5.0
+boat fault inject vehicle.speed \
+  --type noise --tick 100 --magnitude 5.0
+boat fault list
 
 <span class="c"># Via Python SDK</span>
-from boat.client import BoAtClient
-from boat.v1 import fault_pb2
+from boat.fault_node import FaultNode
 
-c = BoAtClient()
-c.fault.InjectFault(
-  fault_pb2.InjectFaultRequest(
-    signal_name="vehicle.speed",
-    fault_type="noise",
-    magnitude=5.0))
+faults = FaultNode()
+faults.inject_by_name("vehicle.speed", "noise", tick=100, magnitude=5.0)
+print(faults.list_faults())
+faults.close()
 </pre>
       </div>
 

@@ -12,13 +12,23 @@ enum FaultType {
   FAULT_TYPE_SIGNAL_CORRUPTION = 1;
   FAULT_TYPE_PACKET_DROP = 2;
   FAULT_TYPE_DELAY = 3;
+  // Held at magnitude for the whole [tick, end_tick] window.
+  FAULT_TYPE_SIGNAL_STUCK = 4;
+  // Negates booleans and numeric values; leaves other types unchanged.
+  FAULT_TYPE_SIGNAL_INVERT = 5;
 }
 
 message InjectFaultRequest {
   string simulation_id = 1;
   string target = 2;
   FaultType type = 3;
+  // Start tick. end_tick == 0 means a one-tick fault (end_tick = tick).
   uint64 tick = 4;
+  uint64 end_tick = 5;
+  // Stuck value / noise amplitude, depending on type.
+  double magnitude = 6;
+  // Only used by FAULT_TYPE_DELAY.
+  uint64 delay_ticks = 7;
 }
 
 message ListFaultsRequest { string simulation_id = 1; PaginationRequest page = 2; }
@@ -29,6 +39,9 @@ message FaultEvent {
   string target = 3;
   FaultType type = 4;
   uint64 tick = 5;
+  uint64 end_tick = 6;
+  double magnitude = 7;
+  uint64 delay_ticks = 8;
 }
 
 message InjectFaultResponse { FaultEvent fault = 1; ErrorDetail error = 2; }

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -19,6 +20,7 @@
 #include "boat/v1/bus.grpc.pb.h"
 #include "boat/v1/can_tp.grpc.pb.h"
 #include "boat/v1/debug.grpc.pb.h"
+#include "boat/v1/fault.grpc.pb.h"
 #include "boat/v1/frame.grpc.pb.h"
 #include "boat/v1/metrics.grpc.pb.h"
 #include "boat/v1/node_plugin.grpc.pb.h"
@@ -31,6 +33,7 @@
 #include "gateway/grpc_gateway/bus_service_impl.h"
 #include "gateway/grpc_gateway/can_tp_service_impl.h"
 #include "gateway/grpc_gateway/debug_service_impl.h"
+#include "gateway/grpc_gateway/fault_service_impl.h"
 #include "gateway/grpc_gateway/frame_sink.h"
 #include "gateway/grpc_gateway/frame_service_impl.h"
 #include "gateway/grpc_gateway/gateway_context.h"
@@ -96,6 +99,7 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   boat::gateway::ScenarioServiceImpl scenario_service(ctx);
   boat::gateway::SimulationServiceImpl simulation_service(sim, can_registry, eth_registry);
   boat::gateway::SignalServiceImpl signal_service(ctx);
+  boat::gateway::FaultServiceImpl fault_service(ctx);
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
@@ -103,6 +107,7 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   builder.RegisterService(&scenario_service);
   builder.RegisterService(&simulation_service);
   builder.RegisterService(&signal_service);
+  builder.RegisterService(&fault_service);
   std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
   REQUIRE(server != nullptr);
   auto channel = server->InProcessChannel({});
@@ -110,6 +115,7 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   auto scenario_stub = boat::v1::ScenarioService::NewStub(channel);
   auto simulation_stub = boat::v1::SimulationService::NewStub(channel);
   auto signal_stub = boat::v1::SignalService::NewStub(channel);
+  auto fault_stub = boat::v1::FaultService::NewStub(channel);
 
   boat::v1::CreateScenarioRequest create_scenario_request;
   auto* scenario = create_scenario_request.mutable_scenario();
@@ -154,6 +160,208 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   boat::v1::SimulationResponse stop_response;
   grpc::ClientContext stop_ctx;
   REQUIRE(simulation_stub->StopSimulation(&stop_ctx, stop_request, &stop_response).ok());
+
+  // ── FaultService integration RPC tests ──────────────────────────────────
+  {
+    boat::v1::InjectFaultRequest fault_request;
+    fault_request.set_simulation_id(simulation_id);
+    fault_request.set_target("speed");
+    fault_request.set_type(boat::v1::FAULT_TYPE_SIGNAL_STUCK);
+    fault_request.set_tick(10);
+    fault_request.set_end_tick(20);
+    fault_request.set_magnitude(42.5);
+    boat::v1::InjectFaultResponse fault_response;
+    grpc::ClientContext fault_ctx;
+    REQUIRE(fault_stub->InjectFault(&fault_ctx, fault_request, &fault_response).ok());
+    REQUIRE(fault_response.fault().target() == "speed");
+    REQUIRE(fault_response.fault().type() == boat::v1::FAULT_TYPE_SIGNAL_STUCK);
+    REQUIRE(fault_response.fault().tick() == 10);
+    REQUIRE(fault_response.fault().end_tick() == 20);
+    REQUIRE(fault_response.fault().magnitude() == 42.5);
+
+    // The RPC must have scheduled the full spec, not just recorded the event.
+    boat::core::SignalEvent routed_event{
+        .signal_id = static_cast<std::uint64_t>(std::hash<std::string>{}("speed")),
+        .tick = 15,
+        .value = 1.0,
+    };
+    REQUIRE(sim.fault_injector().Apply(routed_event, 15) ==
+            boat::core::FaultInjector::ApplyResult::PASS);
+    REQUIRE(std::get<double>(routed_event.value) == 42.5);
+
+    boat::v1::InjectFaultRequest invert_request;
+    invert_request.set_simulation_id(simulation_id);
+    invert_request.set_target("flag");
+    invert_request.set_type(boat::v1::FAULT_TYPE_SIGNAL_INVERT);
+    invert_request.set_tick(1);
+    invert_request.set_end_tick(2);
+    boat::v1::InjectFaultResponse invert_response;
+    grpc::ClientContext invert_ctx;
+    REQUIRE(fault_stub->InjectFault(&invert_ctx, invert_request, &invert_response).ok());
+
+    boat::core::SignalEvent flag_event{
+        .signal_id = static_cast<std::uint64_t>(std::hash<std::string>{}("flag")),
+        .tick = 1,
+        .value = true,
+    };
+    REQUIRE(sim.fault_injector().Apply(flag_event, 1) ==
+            boat::core::FaultInjector::ApplyResult::PASS);
+    REQUIRE(std::get<bool>(flag_event.value) == false);
+
+    boat::v1::InjectFaultRequest one_tick_request;
+    one_tick_request.set_simulation_id(simulation_id);
+    one_tick_request.set_target("one-tick");
+    one_tick_request.set_type(boat::v1::FAULT_TYPE_SIGNAL_STUCK);
+    one_tick_request.set_tick(30);
+    one_tick_request.set_magnitude(7.0);
+    boat::v1::InjectFaultResponse one_tick_response;
+    grpc::ClientContext one_tick_ctx;
+    REQUIRE(fault_stub->InjectFault(&one_tick_ctx, one_tick_request, &one_tick_response).ok());
+    REQUIRE(one_tick_response.fault().end_tick() == 30);
+
+    boat::core::SignalEvent one_tick_event{
+        .signal_id = static_cast<std::uint64_t>(std::hash<std::string>{}("one-tick")),
+        .tick = 30,
+        .value = 1.0,
+    };
+    REQUIRE(sim.fault_injector().Apply(one_tick_event, 30) ==
+            boat::core::FaultInjector::ApplyResult::PASS);
+    REQUIRE(std::get<double>(one_tick_event.value) == 7.0);
+
+    boat::core::SignalEvent after_one_tick{
+        .signal_id = static_cast<std::uint64_t>(std::hash<std::string>{}("one-tick")),
+        .tick = 31,
+        .value = 1.0,
+    };
+    REQUIRE(sim.fault_injector().Apply(after_one_tick, 31) ==
+            boat::core::FaultInjector::ApplyResult::PASS);
+    REQUIRE(std::get<double>(after_one_tick.value) == 1.0);
+
+    boat::v1::InjectFaultRequest delay_request;
+    delay_request.set_simulation_id(simulation_id);
+    delay_request.set_target("delayed");
+    delay_request.set_type(boat::v1::FAULT_TYPE_DELAY);
+    delay_request.set_tick(5);
+    delay_request.set_delay_ticks(3);
+    boat::v1::InjectFaultResponse delay_response;
+    grpc::ClientContext delay_ctx;
+    REQUIRE(fault_stub->InjectFault(&delay_ctx, delay_request, &delay_response).ok());
+    REQUIRE(delay_response.fault().delay_ticks() == 3);
+
+    boat::core::SignalEvent delayed_event{
+        .signal_id = static_cast<std::uint64_t>(std::hash<std::string>{}("delayed")),
+        .tick = 5,
+        .value = 1.0,
+    };
+    REQUIRE(sim.fault_injector().Apply(delayed_event, 5) ==
+            boat::core::FaultInjector::ApplyResult::DEFER);
+    REQUIRE(sim.fault_injector().FlushDelayed(7).empty());
+    REQUIRE(sim.fault_injector().FlushDelayed(8).size() == 1);
+
+    boat::v1::InjectFaultRequest invalid_range;
+    invalid_range.set_simulation_id(simulation_id);
+    invalid_range.set_target("speed");
+    invalid_range.set_type(boat::v1::FAULT_TYPE_SIGNAL_STUCK);
+    invalid_range.set_tick(40);
+    invalid_range.set_end_tick(39);
+    boat::v1::InjectFaultResponse invalid_response;
+    grpc::ClientContext invalid_ctx;
+    const auto invalid_status = fault_stub->InjectFault(&invalid_ctx, invalid_range, &invalid_response);
+    REQUIRE(invalid_status.error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+
+    boat::v1::InjectFaultRequest unspecified;
+    unspecified.set_target("speed");
+    unspecified.set_tick(40);
+    boat::v1::InjectFaultResponse unspecified_response;
+    grpc::ClientContext unspecified_ctx;
+    const auto unspecified_status = fault_stub->InjectFault(&unspecified_ctx, unspecified, &unspecified_response);
+    REQUIRE(unspecified_status.error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+
+    boat::v1::InjectFaultRequest non_finite;
+    non_finite.set_target("speed");
+    non_finite.set_type(boat::v1::FAULT_TYPE_SIGNAL_STUCK);
+    non_finite.set_tick(40);
+    non_finite.set_magnitude(std::numeric_limits<double>::quiet_NaN());
+    boat::v1::InjectFaultResponse non_finite_response;
+    grpc::ClientContext non_finite_ctx;
+    const auto non_finite_status = fault_stub->InjectFault(&non_finite_ctx, non_finite, &non_finite_response);
+    REQUIRE(non_finite_status.error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+
+    boat::v1::InjectFaultRequest empty_target;
+    empty_target.set_type(boat::v1::FAULT_TYPE_SIGNAL_STUCK);
+    empty_target.set_tick(40);
+    boat::v1::InjectFaultResponse empty_target_response;
+    grpc::ClientContext empty_target_ctx;
+    const auto empty_target_status = fault_stub->InjectFault(&empty_target_ctx, empty_target, &empty_target_response);
+    REQUIRE(empty_target_status.error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+
+    boat::v1::InjectFaultRequest unknown_type;
+    unknown_type.set_target("speed");
+    unknown_type.set_type(static_cast<boat::v1::FaultType>(99));
+    unknown_type.set_tick(40);
+    boat::v1::InjectFaultResponse unknown_type_response;
+    grpc::ClientContext unknown_type_ctx;
+    const auto unknown_type_status = fault_stub->InjectFault(&unknown_type_ctx, unknown_type, &unknown_type_response);
+    REQUIRE(unknown_type_status.error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+
+    boat::v1::InjectFaultRequest zero_delay;
+    zero_delay.set_target("speed");
+    zero_delay.set_type(boat::v1::FAULT_TYPE_DELAY);
+    zero_delay.set_tick(40);
+    boat::v1::InjectFaultResponse zero_delay_response;
+    grpc::ClientContext zero_delay_ctx;
+    const auto zero_delay_status = fault_stub->InjectFault(&zero_delay_ctx, zero_delay, &zero_delay_response);
+    REQUIRE(zero_delay_status.error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+
+    boat::v1::InjectFaultRequest overflow_delay;
+    overflow_delay.set_target("speed");
+    overflow_delay.set_type(boat::v1::FAULT_TYPE_DELAY);
+    overflow_delay.set_tick(std::numeric_limits<std::uint64_t>::max() - 1);
+    overflow_delay.set_delay_ticks(2);
+    boat::v1::InjectFaultResponse overflow_delay_response;
+    grpc::ClientContext overflow_delay_ctx;
+    const auto overflow_delay_status =
+        fault_stub->InjectFault(&overflow_delay_ctx, overflow_delay, &overflow_delay_response);
+    REQUIRE(overflow_delay_status.error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+
+    boat::v1::ListFaultsRequest list_request;
+    list_request.set_simulation_id(simulation_id);
+    boat::v1::ListFaultsResponse list_response;
+    grpc::ClientContext list_ctx;
+    REQUIRE(fault_stub->ListFaults(&list_ctx, list_request, &list_response).ok());
+    REQUIRE(list_response.faults_size() == 4);
+    REQUIRE(list_response.faults(0).fault_id() == fault_response.fault().fault_id());
+    REQUIRE(list_response.faults(0).end_tick() == 20);
+    REQUIRE(list_response.faults(1).type() == boat::v1::FAULT_TYPE_SIGNAL_INVERT);
+    REQUIRE(list_response.faults(2).end_tick() == 30);
+    REQUIRE(list_response.faults(3).delay_ticks() == 3);
+
+    boat::v1::ListFaultsRequest page_request;
+    page_request.set_simulation_id(simulation_id);
+    page_request.mutable_page()->set_page_size(2);
+    boat::v1::ListFaultsResponse page_response;
+    grpc::ClientContext page_ctx;
+    REQUIRE(fault_stub->ListFaults(&page_ctx, page_request, &page_response).ok());
+    REQUIRE(page_response.faults_size() == 2);
+    REQUIRE(page_response.page().next_page_token() == "2");
+
+    boat::v1::ListFaultsRequest next_page_request;
+    next_page_request.set_simulation_id(simulation_id);
+    next_page_request.mutable_page()->set_page_size(2);
+    next_page_request.mutable_page()->set_page_token(page_response.page().next_page_token());
+    boat::v1::ListFaultsResponse next_page_response;
+    grpc::ClientContext next_page_ctx;
+    REQUIRE(fault_stub->ListFaults(&next_page_ctx, next_page_request, &next_page_response).ok());
+    REQUIRE(next_page_response.faults_size() == 2);
+    REQUIRE(next_page_response.page().next_page_token().empty());
+
+    boat::v1::ListFaultsRequest bad_page_request;
+    bad_page_request.mutable_page()->set_page_token("not-a-number");
+    boat::v1::ListFaultsResponse bad_page_response;
+    grpc::ClientContext bad_page_ctx;
+    const auto bad_page_status = fault_stub->ListFaults(&bad_page_ctx, bad_page_request, &bad_page_response);
+    REQUIRE(bad_page_status.error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+  }
 
   const std::vector<boat::store::EventRecord> expected = {
       {.id = "e1",

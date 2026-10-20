@@ -187,7 +187,7 @@ Key env vars (`src/gateway/grpc_gateway/main.cpp` is the authoritative list):
 
 ## Python CLI / SDK
 
-Subcommands (`cli/boat_cli/main.py`): `ai`, `sim`, `scenario`, `replay`, `plugin`, `can-tp`, `frame`, `pdu`, `db`, `test`, `trace`, `config`.
+Subcommands (`cli/boat_cli/main.py`): `ai`, `sim`, `scenario`, `replay`, `plugin`, `can-tp`, `frame`, `pdu`, `db`, `fault`, `metrics`, `test`, `trace`, `config`.
 
 ```bash
 boat sim create --scenario <id>|start|pause|step|state|stop|reset|list|watch   # `create`, not `init`
@@ -222,7 +222,7 @@ only emits. The tree does contain one hand-rolled JSON parser, in
 `src/core/scenario/scenario_loader.cpp`, used solely to load scenario documents
 -- don't take it as licence to parse config.
 
-Programmatic: `from boat.client import BoAtClient` / `from boat.frame_node import FrameNode` (e.g. `node.send_can("vcan0", 0x123, b"...")`). `FrameNode` is **composed, not subclassed** — `subscribe(callback, bus_types=[...], iface_filter="")` takes a callback, and the callback receives a unified `boat.v1.Frame` whose metadata is under `.can` / `.eth` and whose bytes are `.payload`. Every `*Node` class and `BoAtClient` resolve their gateway address the same way: explicit `address=` > `BOAT_HOST` env var > `localhost:50051` — which is what keeps node scripts portable across gateways. The `boat` CLI's `--host` flag follows the same order.
+Programmatic: `from boat.client import BoAtClient` / `from boat.frame_node import FrameNode` (e.g. `node.send_can("vcan0", 0x123, b"...")`), plus `FaultNode` (`inject_by_name`/`list_faults`) and `MetricsNode` (`get`/`stream`) for the FaultService and MetricsService surfaces. `FrameNode` is **composed, not subclassed** — `subscribe(callback, bus_types=[...], iface_filter="")` takes a callback, and the callback receives a unified `boat.v1.Frame` whose metadata is under `.can` / `.eth` and whose bytes are `.payload`. Every `*Node` class and `BoAtClient` resolve their gateway address the same way: explicit `address=` > `BOAT_HOST` env var > `localhost:50051` — which is what keeps node scripts portable across gateways. The `boat` CLI's `--host` flag follows the same order, and exposes the same surfaces as `boat fault inject|list` and `boat metrics get|watch`. Faults are cleared by `sim create`/`reset`; inject after creating the simulation, and treat `fault list` as history.
 
 Dispatch quirk: `python3 -m boat` routes `can|pdu|eth|db` to `boat/cmd.py` (one-shot, PDU-database-driven `can send`/`eth send` only — unrelated to the `boat` console script above, which has no `can`/`eth` subcommand), everything else to `boat/cli.py` (REPL).
 

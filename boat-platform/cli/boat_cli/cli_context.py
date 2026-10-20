@@ -89,6 +89,16 @@ _CLI_REFERENCE = """\
   boat db show --msg <name> [--bus <name>]    # show message details
   boat db signal-routes                        # list signal routing table
 
+### fault — deterministic signal faults
+  boat fault inject <signal> --type <mode>     # schedule a fault
+         --tick N [--end-tick N] [--magnitude X] [--delay-ticks N]
+         # modes: stuck, noise, dropout, invert, delay
+  boat fault list [--simulation-id <id>]       # list injected faults
+
+### metrics — gateway metrics
+  boat metrics get [--simulation-id <id>]      # current snapshot
+  boat metrics watch                           # stream gateway metrics until Ctrl-C
+
 ### gen — AI-assisted code generation (DEPRECATED, use 'boat ai')
   boat gen plugin --desc <text> [--out <path>]  # (moved to boat ai plugin)
 

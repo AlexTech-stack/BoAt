@@ -54,10 +54,13 @@ Plugin
   capabilities: [ENUM]
 
 FaultEvent
-  tick: uint64
-  target_signal: UUID
-  fault_type: ENUM(STUCK|NOISE|DROPOUT|INVERT)
-  parameters: map<string,string>
+  simulation_id: String
+  target: String          # signal name; gateway hashes it to a signal id
+  tick: uint64            # inclusive start
+  end_tick: uint64        # inclusive end; 0 means one tick
+  fault_type: ENUM(STUCK|NOISE|DROPOUT|INVERT|DELAY)
+  magnitude: double
+  delay_ticks: uint64
 
 Frame  (ABI v9 unified frame — src/core Frame / boat.v1.Frame / BoatFrame)
   bus_type: ENUM(CAN|CANFD|ETH|PDU|TCP)   # single type for all buses

@@ -6,6 +6,8 @@ syntax = "proto3";
 package boat.v1;
 
 message GetMetricsRequest { string simulation_id = 1; }
+// The live stream is gateway-scoped (CAN health / drop counters and events);
+// simulation_id is accepted for API symmetry but is not used.
 message StreamMetricsRequest { string simulation_id = 1; }
 
 message MetricPoint {
