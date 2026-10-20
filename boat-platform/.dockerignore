@@ -5,5 +5,12 @@
 # COPYs dist/<arch>/boat_gateway, and Dockerfile.build / Dockerfile.dev take the
 # source as a bind mount. Without this file, every `docker build` shipped the
 # whole build/ tree (gigabytes of FetchContent checkouts) to the daemon.
+#
+# Dockerfile.runtime also COPYs the legal files below. They live under
+# boat-platform/ precisely because this is the build context, so they must be
+# re-included after the catch-all above or the build fails on a missing file.
 *
 !dist/
+!LICENSE
+!NOTICE
+!THIRD_PARTY_NOTICES.md
