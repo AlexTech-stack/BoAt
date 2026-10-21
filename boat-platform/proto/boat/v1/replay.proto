@@ -47,8 +47,13 @@ message StartReplayFromEventsRequest {
 
 message ReplayEvent {
   string replay_id = 1;
-  uint64 tick = 2;
+  uint64 tick = 2;  // the record's position in the *trace* (milliseconds), not a gateway tick
   bytes payload = 3;
+  // The gateway's TickAuthority tick this record was delivered in. A replay's
+  // authority ticks are anchor + f(trace): the anchor depends on when
+  // StartReplay arrived, f does not, so subtract the first event's value to
+  // compare runs. See "What deterministic means here" in the README.
+  uint64 authority_tick = 4;
 }
 
 message ReplayControlResponse {

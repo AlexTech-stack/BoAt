@@ -127,8 +127,10 @@ The generated stubs are committed and CI fails if they drift from `proto/`.
 replay code, and don't give replay or a plugin a clock of its own. Since ABI v9 a plugin that
 needs time receives it from the host via `set_time_source`. This is the whole point of the
 `TickAuthority` design: `boat_determinism_replay` asserts that frame content, ordering *and*
-tick attribution are bit-identical across runs, with a plain `REQUIRE` and no tolerance. If
-your change makes that test need a tolerance, the change is wrong.
+tick attribution relative to the replay's session anchor are bit-identical across runs, with
+a plain `REQUIRE` and no tolerance. Absolute authority ticks depend on when `StartReplay`
+arrived; compare `authority_tick - anchor`. If your change makes that test need a tolerance,
+the change is wrong.
 
 **Adding a dependency?** Add it to [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) too.
 Nothing third-party is vendored into this tree — C++ deps arrive via CMake `FetchContent` at

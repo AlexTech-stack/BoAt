@@ -146,3 +146,18 @@ started a new instance on the identical port -- it bound and started
 listening right away, no refusal, and the still-running client
 transparently re-established its connection and resumed sending traffic
 on the wire within its next retry cycle.
+
+## FUTURE — optional absolute replay anchor (`start_at_tick`)
+
+Replay tick attribution is deliberately relative to a session anchor (#76): the
+`TickAuthority` tick a replayed record lands in is `anchor + f(trace, speed,
+tick interval, loop delay)`, and only `f` is reproducible across runs because
+`anchor` depends on when `StartReplay` arrived. `ReplayEvent.authority_tick` and
+`ReplayController::SessionAnchorTick()` expose it.
+
+If cross-component alignment ever needs an absolute start, add an additive
+`optional uint64 anchor_authority_tick` to `StartReplayRequest`/`ReplayConfig`
+rather than inferring one. The pump would hold the session until that authority
+tick; a target already in the past should return an error and leave
+`running=false`, not silently start late. Do not add a second field called
+`start_tick`: `ReplayConfig::start_tick` already means the trace seek position.

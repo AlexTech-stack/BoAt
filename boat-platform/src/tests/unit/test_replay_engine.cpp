@@ -170,6 +170,40 @@ TEST_CASE("ReplayController Start/Stop lifecycle", "[unit][replay]") {
   REQUIRE(trace_store.Released() == std::vector<std::string>{"lifecycle"});
 }
 
+TEST_CASE("ReplayController anchor and authority ticks are offset-independent",
+          "[unit][replay][determinism]") {
+  for (const std::uint64_t offset : {std::uint64_t{0}, std::uint64_t{1},
+                                    std::uint64_t{7}, std::uint64_t{250},
+                                    std::uint64_t{10000}}) {
+    MockTraceStore trace_store;
+    MockEventStore event_store;
+    boat::core::EventBus event_bus;
+    ReplayController controller(trace_store, event_store, event_bus);
+    trace_store.traces["anchor"] = BuildSimultaneousTrace(100, 1);
+
+    ReplayConfig config{.trace_id = "anchor", .speed = ReplaySpeed::REAL_TIME,
+                        .speed_multiplier = 1.0};
+    controller.Start(config);
+
+    Pump pump{controller};
+    pump.tick = offset;
+    pump.Ticks(1);
+
+    const auto anchor = controller.SessionAnchorTick();
+    REQUIRE(anchor.has_value());
+    REQUIRE(*anchor == offset + 1);
+
+    const auto events = controller.ConsumeEvents();
+    REQUIRE(events.size() == 1);
+    REQUIRE(events[0].tick == 100);
+    REQUIRE(events[0].authority_tick == offset + 1);
+    REQUIRE(events[0].authority_tick - *anchor == 0);
+
+    controller.Stop();
+    REQUIRE_FALSE(controller.SessionAnchorTick().has_value());
+  }
+}
+
 TEST_CASE("ReplayController replays records in tick order", "[unit][replay]") {
   MockTraceStore trace_store;
   MockEventStore event_store;

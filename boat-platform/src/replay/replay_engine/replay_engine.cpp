@@ -164,6 +164,13 @@ struct ReplayController::Session {
   std::atomic<bool> seek_pending{true};
   std::atomic<std::uint64_t> requested_seek_tick;
 
+  // The session's anchor: the first authority tick it was pumped at (see
+  // SessionAnchorTick). Written once by the pump, read by anyone, so the value
+  // is published through the flag. Unlike authority_base_tick it is never
+  // re-based by Seek, Resume or a loop pass.
+  std::atomic<bool>          anchor_set{false};
+  std::atomic<std::uint64_t> anchor_tick{0};
+
   // ── Pump thread only ─────────────────────────────────────────────────────
   // Tick-driven scheduling: replay_base_tick is the trace tick the current
   // pass is anchored to and authority_base_tick the authority tick it was
@@ -381,6 +388,12 @@ bool ReplayController::IsRunning() const {
   return session_ != nullptr && session_->running.load();
 }
 
+std::optional<std::uint64_t> ReplayController::SessionAnchorTick() const {
+  const auto s = CurrentSession();
+  if (s == nullptr || !s->anchor_set.load(std::memory_order_acquire)) return std::nullopt;
+  return s->anchor_tick.load(std::memory_order_relaxed);
+}
+
 void ReplayController::SetEventForwarder(EventForwarder forwarder) {
   auto shared = forwarder ? std::make_shared<const EventForwarder>(std::move(forwarder))
                           : nullptr;
@@ -457,7 +470,7 @@ std::span<const std::uint8_t> ReplayController::ReadRecordAt(
 }
 
 void ReplayController::DispatchRecord(const Session& s, const boat::v1::Frame& pf,
-                                      std::uint64_t tick,
+                                      std::uint64_t tick, std::uint64_t authority_tick,
                                       std::span<const std::uint8_t> raw) {
   // ── Dispatch via core::Frame ──────────────────────────────────────────
   auto core_frame = ProtoToCoreFrame(pf, s.config);
@@ -487,7 +500,7 @@ void ReplayController::DispatchRecord(const Session& s, const boat::v1::Frame& p
   // ── Push to internal queue (StreamReplay) ─────────────────────────────
   {
     std::lock_guard<std::mutex> lock(event_queue_mutex_);
-    PushEventLocked(tick, proto_bytes);
+    PushEventLocked(tick, proto_bytes, authority_tick);
   }
 
   // ── Store in event store ──────────────────────────────────────────────
@@ -589,6 +602,16 @@ void ReplayController::PumpDueRecords(std::uint64_t authority_tick) {
 void ReplayController::PumpSession(Session& s, std::uint64_t authority_tick) {
   try {
     if (s.stop_requested.load()) return;
+
+    // The first tick this session is pumped at is its anchor, whatever it then
+    // does with it (pause, seek, wait). Everything a replay delivers is
+    // anchor + f(trace); recording it is what lets a caller subtract the part
+    // that depends on when Start happened to arrive.
+    if (!s.anchor_set.load(std::memory_order_relaxed)) {
+      s.anchor_tick.store(authority_tick, std::memory_order_relaxed);
+      s.anchor_set.store(true, std::memory_order_release);
+    }
+
     if (s.bytes.empty()) {
       s.running.store(false);
       return;
@@ -645,7 +668,7 @@ void ReplayController::PumpSession(Session& s, std::uint64_t authority_tick) {
 
       s.pump_offset      = probe;
       s.pump_has_records = true;
-      DispatchRecord(s, pf, record_tick, raw);
+      DispatchRecord(s, pf, record_tick, authority_tick, raw);
 
       if (stepping) {
         s.paused.store(true);
@@ -668,12 +691,14 @@ void ReplayController::PumpSession(Session& s, std::uint64_t authority_tick) {
   }
 }
 
-void ReplayController::PushEvent(std::uint64_t tick, std::string payload) {
+void ReplayController::PushEvent(std::uint64_t tick, std::string payload,
+                                 std::uint64_t authority_tick) {
   std::lock_guard<std::mutex> lock(event_queue_mutex_);
-  PushEventLocked(tick, std::move(payload));
+  PushEventLocked(tick, std::move(payload), authority_tick);
 }
 
-void ReplayController::PushEventLocked(std::uint64_t tick, std::string payload) {
+void ReplayController::PushEventLocked(std::uint64_t tick, std::string payload,
+                                       std::uint64_t authority_tick) {
   if (event_queue_.size() >= kMaxStreamEvents) {
     event_queue_.pop_front();
     ++dropped_events_;
@@ -684,7 +709,7 @@ void ReplayController::PushEventLocked(std::uint64_t tick, std::string payload) 
                    static_cast<unsigned long long>(dropped_events_));
     }
   }
-  event_queue_.push_back({tick, std::move(payload)});
+  event_queue_.push_back({tick, std::move(payload), authority_tick});
 }
 
 std::uint64_t ReplayController::DroppedEventCount() const {

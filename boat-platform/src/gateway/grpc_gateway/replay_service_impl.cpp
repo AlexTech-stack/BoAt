@@ -133,6 +133,7 @@ grpc::Status ReplayServiceImpl::StreamReplay(grpc::ServerContext* context, const
       boat::v1::ReplayEvent replay_event;
       replay_event.set_replay_id(request->replay_id());
       replay_event.set_tick(e.tick);
+      replay_event.set_authority_tick(e.authority_tick);
       replay_event.set_payload(e.payload);
       if (!writer->Write(replay_event)) {
         return grpc::Status::OK;
