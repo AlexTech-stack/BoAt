@@ -43,6 +43,39 @@ class OneFrameCanDriver : public IHalDriver {
   std::atomic<bool> produced{false};
 };
 
+class BlockingCanDriver : public IHalDriver {
+ public:
+  bool Open() override { return true; }
+  void Close() override {}
+  bool ReadFrame(CanFrame&) override {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    return false;
+  }
+  bool WriteFrame(const CanFrame&) override {
+    entered.store(true);
+    while (!release.load(std::memory_order_relaxed)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+  }
+  CanInterfaceInfo GetInfo() const override { return {}; }
+
+  std::atomic<bool> entered{false};
+  std::atomic<bool> release{false};
+};
+
+class FailingCanDriver : public IHalDriver {
+ public:
+  bool Open() override { return true; }
+  void Close() override {}
+  bool ReadFrame(CanFrame&) override {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    return false;
+  }
+  bool WriteFrame(const CanFrame&) override { return false; }
+  CanInterfaceInfo GetInfo() const override { return {}; }
+};
+
 }  // namespace
 
 TEST_CASE("CanBusRegistry StopAll joins without holding the send mutex",
@@ -88,4 +121,52 @@ TEST_CASE("CanBusRegistry StopAll joins without holding the send mutex",
 
   // Idempotent: the destructor calls it again.
   registry.StopAll();
+}
+
+TEST_CASE("CanBusRegistry releases its lock while a write is blocked",
+          "[unit][can_registry][tx]") {
+  boat::core::EventBus bus;
+  CanBusRegistry registry;
+
+  auto blocker = std::make_shared<BlockingCanDriver>();
+  auto* blocker_ptr = blocker.get();
+  REQUIRE(registry.Add("can0", std::move(blocker), bus));
+  REQUIRE(registry.Add("can1", std::make_shared<OneFrameCanDriver>(), bus));
+
+  CanFrame frame{};
+  frame.can_id = 0x123;
+  frame.dlc = 1;
+
+  auto sending = std::async(std::launch::async, [&]() {
+    return registry.SendFrame("can0", frame);
+  });
+
+  for (int i = 0; i < 500 && !blocker_ptr->entered.load(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  REQUIRE(blocker_ptr->entered.load());
+
+  // These all take bridges_mutex_. They must return while write() is parked.
+  REQUIRE(registry.Has("can1"));
+  REQUIRE(registry.Interfaces().size() == 2);
+
+  blocker_ptr->release.store(true);
+  REQUIRE(sending.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+  REQUIRE(sending.get());
+}
+
+TEST_CASE("CanBusRegistry failed writes are rejected and not echoed",
+          "[unit][can_registry][tx]") {
+  boat::core::EventBus bus;
+  CanBusRegistry registry;
+  REQUIRE(registry.Add("can0", std::make_shared<FailingCanDriver>(), bus));
+
+  int echoes = 0;
+  registry.SubscribeFrame([&](const boat::core::Frame&) { ++echoes; });
+
+  CanFrame frame{};
+  frame.can_id = 0x123;
+  frame.dlc = 1;
+  REQUIRE_FALSE(registry.SendFrame("can0", frame));
+  REQUIRE(echoes == 0);
 }

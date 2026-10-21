@@ -18,8 +18,8 @@ typedef enum BoatBusType {
 } BoatBusType;
 
 /* CAN metadata — valid when bus_type is BOAT_BUS_CAN or BOAT_BUS_CANFD.
-   flags bits: CANFD_BRS=0x01, CANFD_ESI=0x02, CANFD_FDF=0x04.
-   BOAT_BUS_CANFD implicitly sets CANFD_FDF. */
+   flags bits: CANFD_BRS=0x01, CANFD_ESI=0x02, CANFD_FDF=0x04,
+   extended=0x10, RTR=0x20. BOAT_BUS_CANFD implicitly sets CANFD_FDF. */
 typedef struct BoatCanMeta {
   uint32_t can_id;
   uint8_t  dlc;   /* actual byte count: 0-8 classic, 0-64 FD */

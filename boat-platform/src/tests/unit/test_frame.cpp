@@ -51,6 +51,13 @@ TEST_CASE("Frame FromCan clamps dlc to the bytes actually stored", "[frame]") {
   CHECK(g.can_meta().dlc == 64);
 }
 
+TEST_CASE("Frame FromCan can preserve an RTR requested length", "[frame]") {
+  auto rtr = Frame::FromCan("vcan0", 0x123, 8, 0x20, {}, /*is_fd=*/false,
+                            /*preserve_dlc=*/true);
+  CHECK(rtr.can_meta().dlc == 8);
+  CHECK(rtr.payload().empty());
+}
+
 TEST_CASE("Frame FromCan FD variant", "[frame]") {
   std::vector<uint8_t> data(64, 0xFF);
   auto f = Frame::FromCan("can0", 0x7FF, 15, 0x01, data, /*is_fd=*/true);

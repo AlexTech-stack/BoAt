@@ -35,6 +35,8 @@ class RawSocketEthernetDriver : public IEthernetDriver {
   std::string       iface_;
   int               sock_{-1};
   int               if_index_{-1};
+  std::uint8_t      iface_mac_[6]{};
+  bool              iface_mac_valid_{false};
   std::atomic<bool> open_{false};
 };
 

@@ -19,6 +19,7 @@
 
 #include "boat/v1/frame.pb.h"
 #include "core/frame.h"
+#include "hal/hal_driver.h"
 
 namespace boat::replay {
 namespace {
@@ -77,10 +78,12 @@ boat::core::Frame ProtoToCoreFrame(const boat::v1::Frame& pf, const ReplayConfig
     case boat::v1::Frame::CANFD: {
       const auto& cm = pf.can();
       std::string iface = ResolveCanIface(config, cm.channel());
+      const bool is_rtr = (cm.flags() & boat::hil::kCanFlagRtr) != 0;
       f = boat::core::Frame::FromCan(
           std::move(iface), cm.can_id(), static_cast<std::uint8_t>(cm.dlc()),
           static_cast<std::uint8_t>(cm.flags()), std::move(payload),
-          pf.bus_type() == boat::v1::Frame::CANFD);
+          pf.bus_type() == boat::v1::Frame::CANFD,
+          /*preserve_dlc=*/is_rtr);
       break;
     }
     case boat::v1::Frame::ETHERNET: {

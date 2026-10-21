@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -173,19 +174,55 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
           switch (f.bus_type) {
             case BOAT_BUS_CAN:
             case BOAT_BUS_CANFD: {
+              const bool is_fd = f.bus_type == BOAT_BUS_CANFD;
+              const bool is_rtr = (f.meta.can.flags & boat::hil::kCanFlagRtr) != 0;
+              const std::size_t payload_len = f.payload == nullptr ? 0 : f.payload_len;
+              if (f.payload == nullptr && f.payload_len != 0) {
+                std::fprintf(stderr, "[Simulation] CAN frame has null payload\n");
+                break;
+              }
+              if (is_fd && is_rtr) {
+                std::fprintf(stderr, "[Simulation] rejecting FD+RTR frame\n");
+                break;
+              }
+              if (is_rtr) {
+                if (payload_len != 0 || f.meta.can.dlc > 8) {
+                  std::fprintf(stderr, "[Simulation] rejecting RTR frame with payload/DLC\n");
+                  break;
+                }
+              } else if (f.meta.can.dlc != payload_len ||
+                         payload_len > (is_fd ? 64U : 8U)) {
+                std::fprintf(stderr,
+                             "[Simulation] rejecting CAN frame with dlc=%u payload=%zu\n",
+                             static_cast<unsigned>(f.meta.can.dlc), payload_len);
+                break;
+              }
+
               boat::hil::CanFrame cf{};
               cf.can_id = f.meta.can.can_id;
               cf.dlc    = f.meta.can.dlc;
               cf.flags  = f.meta.can.flags;
-              const auto copy_len = f.payload_len > 64 ? 64U : f.payload_len;
-              if (f.payload && copy_len > 0) std::memcpy(cf.data, f.payload, copy_len);
+              if (is_fd) {
+                cf.flags |= boat::hil::kCanFdFlagFdf;
+              } else {
+                cf.flags &= static_cast<std::uint8_t>(~boat::hil::kCanFdFlagFdf);
+              }
+              if (!is_rtr && payload_len > 0) std::memcpy(cf.data, f.payload, payload_len);
               if (f.iface && f.iface[0])
-                can_registry_.SendFrame(f.iface, cf);
+                (void)can_registry_.SendFrame(f.iface, cf);
               else
-                can_registry_.SendFrameAll(cf);
+                (void)can_registry_.SendFrameAll(cf);
               break;
             }
             case BOAT_BUS_ETHERNET: {
+              if (f.payload == nullptr && f.payload_len != 0) {
+                std::fprintf(stderr, "[Simulation] Ethernet frame has null payload\n");
+                break;
+              }
+              if (f.payload_len > 1500) {
+                std::fprintf(stderr, "[Simulation] rejecting oversize Ethernet payload\n");
+                break;
+              }
               boat::hil::EthernetFrame ef{};
               std::memcpy(ef.dst_mac, f.meta.eth.dst_mac, 6);
               std::memcpy(ef.src_mac, f.meta.eth.src_mac, 6);
@@ -194,9 +231,9 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
               if (f.payload && f.payload_len > 0)
                 ef.payload.assign(f.payload, f.payload + f.payload_len);
               if (f.iface && f.iface[0])
-                eth_registry_.SendFrame(f.iface, ef);
+                (void)eth_registry_.SendFrame(f.iface, ef);
               else
-                eth_registry_.SendFrameAll(ef);
+                (void)eth_registry_.SendFrameAll(ef);
               break;
             }
             default:
@@ -211,10 +248,15 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
         "",  // all interfaces
         [this](const boat::hil::CanFrame& f, const std::string& iface) {
           (void)iface;
-          std::vector<uint8_t> payload(f.data, f.data + f.dlc);
+          const bool is_rtr = (f.flags & boat::hil::kCanFlagRtr) != 0;
+          std::vector<uint8_t> payload;
+          if (!is_rtr) {
+            payload.assign(f.data, f.data + f.dlc);
+          }
           const bool is_fd = (f.flags & boat::hil::kCanFdFlagFdf) != 0;
           auto core_frame = boat::core::Frame::FromCan("", f.can_id, f.dlc, f.flags,
-                                                        std::move(payload), is_fd);
+                                                        std::move(payload), is_fd,
+                                                        /*preserve_dlc=*/is_rtr);
           BoatFrame abi{};
           core_frame.ToAbi(&abi);
           sim_.plugin_manager().DispatchFrame(abi);

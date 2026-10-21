@@ -156,6 +156,17 @@ source file's IDE and `boat replay export` writes `CAN_EFF_FLAG` back, so an
 extended identifier below `0x800` round-trips through replay, export and RX —
 before this it was silently emitted as a standard frame (issue #34).
 
+**TX reports what the driver did, and never mangles a frame.** `CanFrame.flags`
+bit `0x20` (`kCanFlagRtr` / `BOAT_CAN_FLAG_RTR`) carries classic-CAN remote
+frames; CAN FD cannot also be RTR. `HilBridge::SendFrame` returns the driver
+result, `CanBusRegistry`/`EthernetBusRegistry` propagate it (and skip the local
+self-sent echo on failure), `FrameSink` validates lengths before dispatch, and
+`FrameService.SendFrame` returns `UNAVAILABLE` rather than `accepted=true` when
+the wire write fails. CAN writes are bounded by a 100 ms `SO_SNDTIMEO` and are
+not made while the registry mutex is held. Classic CAN >8 bytes, CAN FD >64,
+Ethernet >1500 and FD+RTR are rejected; use `PduRoute.can_flags` (proto field
+13, CLI `--can-flags`) for FD/extended/RTR routes.
+
 ### CLI CAN commands
 
 The standalone `boat can` / `boat eth` Typer commands (including `list-buses` and

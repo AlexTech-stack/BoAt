@@ -89,13 +89,16 @@ const PduMeta& Frame::pdu_meta() const {
 /* ── Factory methods ────────────────────────────────────────────────── */
 
 Frame Frame::FromCan(std::string iface, uint32_t can_id, uint8_t dlc,
-                     uint8_t flags, std::vector<uint8_t> payload, bool is_fd) {
+                     uint8_t flags, std::vector<uint8_t> payload, bool is_fd,
+                     bool preserve_dlc) {
   CanMeta m;
   m.can_id = can_id;
   // dlc is the payload byte count. Clamp it to what the wire struct can hold
   // and to the actual payload: a client-supplied 255 otherwise makes consumers
-  // read past CanFrame.data[64].
-  const std::size_t max_payload = std::min<std::size_t>(payload.size(), 64);
+  // read past CanFrame.data[64]. An RTR frame is the exception: it carries a
+  // requested length with no data bytes, so preserve_dlc keeps that length.
+  const std::size_t max_payload =
+      preserve_dlc ? std::size_t{64} : std::min<std::size_t>(payload.size(), 64);
   m.dlc = static_cast<uint8_t>(std::min<std::size_t>(dlc, max_payload));
   m.flags  = flags;
   return Frame(is_fd ? BusType::kCanFd : BusType::kCan,

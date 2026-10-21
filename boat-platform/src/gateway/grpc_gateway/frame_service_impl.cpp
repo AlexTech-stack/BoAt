@@ -35,15 +35,19 @@ static boat::core::Frame ProtoToFrame(const boat::v1::Frame& pf) {
     case boat::v1::Frame::CAN:
     case boat::v1::Frame::CANFD: {
       const auto& cm = pf.can();
+      const bool is_rtr = (cm.flags() & boat::hil::kCanFlagRtr) != 0;
       return Frame::FromCan(std::move(iface), cm.can_id(),
                             static_cast<uint8_t>(cm.dlc()),
                             static_cast<uint8_t>(cm.flags()),
                             std::move(payload),
-                            pf.bus_type() == boat::v1::Frame::CANFD);
+                            pf.bus_type() == boat::v1::Frame::CANFD,
+                            /*preserve_dlc=*/is_rtr);
     }
     case boat::v1::Frame::ETHERNET: {
       const auto& em = pf.eth();
-      uint8_t dm[6], sm[6];
+      // Zero-fill first: a short/missing MAC must not put stack bytes on the
+      // wire (and dst_mac=zero is the documented "broadcast" request).
+      uint8_t dm[6]{}, sm[6]{};
       std::memcpy(dm, em.dst_mac().data(), std::min(em.dst_mac().size(), 6UL));
       std::memcpy(sm, em.src_mac().data(), std::min(em.src_mac().size(), 6UL));
       const uint8_t* sip = em.src_ip().empty() ? nullptr
@@ -188,6 +192,49 @@ class FrameSubscription {
 /* Transmit one client-supplied frame. Shared by SendFrame and StreamFrames so
    both apply identical interface validation and take the same FrameSink path. */
 static grpc::Status PublishFrame(GatewayContext& ctx, const boat::v1::Frame& pf) {
+  // Validate the wire shape before ProtoToFrame clamps anything. Otherwise a
+  // CAN(FD) request whose DLC disagrees with its payload would silently become
+  // a shorter frame, which is exactly the success-on-data-loss failure #75
+  // is about.
+  if (pf.bus_type() == boat::v1::Frame::CAN || pf.bus_type() == boat::v1::Frame::CANFD) {
+    const auto& cm = pf.can();
+    const bool is_fd = pf.bus_type() == boat::v1::Frame::CANFD;
+    const bool is_rtr = (cm.flags() & boat::hil::kCanFlagRtr) != 0;
+    const std::size_t payload_len = pf.payload().size();
+    if (cm.dlc() > 64 || cm.can_id() > 0x1FFFFFFF) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "CAN DLC must be 0..64 and CAN ID must fit 29 bits");
+    }
+    if (is_rtr) {
+      if (is_fd || cm.dlc() > 8 || payload_len != 0) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "RTR is classic-CAN-only, limited to DLC 8, and carries no payload");
+      }
+    } else {
+      if (cm.dlc() != payload_len) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "CAN DLC must equal the payload length");
+      }
+      if (!is_fd && payload_len > 8) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "classic CAN payload cannot exceed 8 bytes; use CANFD");
+      }
+    }
+  } else if (pf.bus_type() == boat::v1::Frame::ETHERNET) {
+    const auto& em = pf.eth();
+    const auto& sip = em.src_ip();
+    const auto& dip = em.dst_ip();
+    if (!sip.empty() || !dip.empty()) {
+      const bool v4 = em.ip_version() == 4 && sip.size() == 4 && dip.size() == 4;
+      const bool v6 = em.ip_version() == 6 && sip.size() == 16 && dip.size() == 16;
+      if (!v4 && !v6) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "Ethernet IP fields must be 4 bytes for IPv4 or "
+                            "16 bytes for IPv6, matching ip_version");
+      }
+    }
+  }
+
   auto frame = ProtoToFrame(pf);
 
   switch (frame.bus_type()) {
@@ -196,15 +243,22 @@ static grpc::Status PublishFrame(GatewayContext& ctx, const boat::v1::Frame& pf)
       if (frame.iface().empty() || !ctx.can_bus_registry.Has(frame.iface())) {
         return grpc::Status(grpc::NOT_FOUND, "CAN interface not found");
       }
-      ctx.frame_sink.Publish(frame);
+      if (!ctx.frame_sink.Publish(frame)) {
+        return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                            "CAN transmit failed (driver rejected or timed out)");
+      }
       return grpc::Status::OK;
 
-    case boat::core::Frame::BusType::kEthernet:
+    case boat::core::Frame::BusType::kEthernet: {
       if (frame.iface().empty() || !ctx.ethernet_bus_registry.Has(frame.iface())) {
         return grpc::Status(grpc::NOT_FOUND, "Ethernet interface not found");
       }
-      ctx.frame_sink.Publish(frame);
+      if (!ctx.frame_sink.Publish(frame)) {
+        return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                            "Ethernet transmit failed (driver rejected or timed out)");
+      }
       return grpc::Status::OK;
+    }
 
     case boat::core::Frame::BusType::kPdu: {
       // PDU frames are not a wire bus — dispatch to the plugin frame bus so the

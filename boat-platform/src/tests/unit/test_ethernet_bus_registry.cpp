@@ -34,6 +34,17 @@ class MockEthernetDriver : public IEthernetDriver {
   std::vector<EthernetFrame> written;
 };
 
+class FailingEthernetDriver : public IEthernetDriver {
+ public:
+  bool Open() override { return true; }
+  void Close() override {}
+  bool ReadFrame(EthernetFrame&) override {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    return false;
+  }
+  bool WriteFrame(const EthernetFrame&) override { return false; }
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 static EthernetFrame make_frame(uint16_t ethertype, uint8_t byte = 0xAB) {
@@ -64,6 +75,34 @@ TEST_CASE("EthernetBusRegistry SendFrame dispatches to subscriber", "[unit][ethe
 TEST_CASE("EthernetBusRegistry SendFrame returns false for unknown iface", "[unit][ethernet]") {
   EthernetBusRegistry registry;
   REQUIRE_FALSE(registry.SendFrame("veth99", make_frame(0x0800)));
+}
+
+TEST_CASE("EthernetBusRegistry failed writes are rejected and not echoed",
+          "[unit][ethernet][tx]") {
+  EthernetBusRegistry registry;
+  REQUIRE(registry.Add("veth0", std::make_unique<FailingEthernetDriver>()));
+
+  int echoes = 0;
+  registry.Subscribe("", 0, [&](const EthernetFrame&, const std::string&) { ++echoes; });
+
+  REQUIRE_FALSE(registry.SendFrame("veth0", make_frame(0x0800)));
+  REQUIRE(echoes == 0);
+}
+
+TEST_CASE("EthernetBusRegistry SendFrameAll reports partial failures",
+          "[unit][ethernet][tx]") {
+  EthernetBusRegistry registry;
+  REQUIRE(registry.Add("veth0", std::make_unique<MockEthernetDriver>()));
+  REQUIRE(registry.Add("veth1", std::make_unique<FailingEthernetDriver>()));
+
+  int echoes = 0;
+  registry.Subscribe("", 0, [&](const EthernetFrame&, const std::string& iface) {
+    if (iface == "veth0") ++echoes;
+  });
+
+  REQUIRE_FALSE(registry.SendFrameAll(make_frame(0x0800)));
+  REQUIRE(echoes == 1);
+  REQUIRE_FALSE(EthernetBusRegistry{}.SendFrameAll(make_frame(0x0800)));
 }
 
 TEST_CASE("EthernetBusRegistry iface filter excludes non-matching iface", "[unit][ethernet]") {

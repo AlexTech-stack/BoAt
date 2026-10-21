@@ -74,6 +74,7 @@ TEST_CASE("Virtual CAN HIL: CAN FD payload over 8 bytes is rounded to a valid IS
   REQUIRE(rx_driver.ReadFrame(received));
   REQUIRE(received.can_id == 0x200);
   REQUIRE(received.dlc == 12);  // next valid ISO 11898-1 CAN FD length above 9
+  REQUIRE((received.flags & boat::hil::kCanFdFlagFdf) != 0);
   REQUIRE(std::memcmp(received.data, payload, sizeof(payload)) == 0);
   REQUIRE(received.data[9] == 0);
   REQUIRE(received.data[10] == 0);
@@ -82,6 +83,63 @@ TEST_CASE("Virtual CAN HIL: CAN FD payload over 8 bytes is rounded to a valid IS
   tx_driver.Close();
   rx_driver.Close();
   SUCCEED("HIL CAN FD DLC rounding: PASS");
+}
+
+TEST_CASE("Virtual CAN HIL: a classic frame over 8 bytes is rejected, not truncated",
+          "[hil]") {
+  const char* enabled = std::getenv("BOAT_HIL_ENABLED");
+  if (enabled == nullptr || *enabled == '\0') {
+    SKIP("BOAT_HIL_ENABLED not set");
+  }
+
+  const char* iface_env = std::getenv("BOAT_VCAN_IFACE");
+  const char* iface = (iface_env != nullptr && *iface_env != '\0') ? iface_env : "vcan0";
+  boat::hil::VirtualCanDriver tx_driver(iface);
+  REQUIRE(tx_driver.Open());
+
+  boat::hil::CanFrame frame{};
+  frame.can_id = 0x201;
+  frame.dlc = 9;
+  for (int i = 0; i < 9; ++i) frame.data[i] = static_cast<std::uint8_t>(i);
+  REQUIRE_FALSE(tx_driver.WriteFrame(frame));
+
+  frame.flags = boat::hil::kCanFdFlagFdf;
+  REQUIRE(tx_driver.WriteFrame(frame));  // the same length is valid as FD
+
+  tx_driver.Close();
+}
+
+TEST_CASE("Virtual CAN HIL: RTR frames keep their flag and carry no data", "[hil]") {
+  const char* enabled = std::getenv("BOAT_HIL_ENABLED");
+  if (enabled == nullptr || *enabled == '\0') {
+    SKIP("BOAT_HIL_ENABLED not set");
+  }
+
+  const char* iface_env = std::getenv("BOAT_VCAN_IFACE");
+  const char* iface = (iface_env != nullptr && *iface_env != '\0') ? iface_env : "vcan0";
+  boat::hil::VirtualCanDriver tx_driver(iface);
+  boat::hil::VirtualCanDriver rx_driver(iface);
+  REQUIRE(tx_driver.Open());
+  REQUIRE(rx_driver.Open());
+
+  boat::hil::CanFrame rtr{};
+  rtr.can_id = 0x321;
+  rtr.dlc = 4;
+  rtr.flags = boat::hil::kCanFlagRtr;
+  REQUIRE(tx_driver.WriteFrame(rtr));
+
+  boat::hil::CanFrame received{};
+  REQUIRE(rx_driver.ReadFrame(received));
+  REQUIRE(received.can_id == 0x321);
+  REQUIRE((received.flags & boat::hil::kCanFlagRtr) != 0);
+  REQUIRE(received.dlc == 4);
+
+  // CAN FD has no remote frames.
+  rtr.flags |= boat::hil::kCanFdFlagFdf;
+  REQUIRE_FALSE(tx_driver.WriteFrame(rtr));
+
+  tx_driver.Close();
+  rx_driver.Close();
 }
 
 TEST_CASE("Virtual CAN HIL: a small extended identifier keeps its IDE bit", "[hil]") {
