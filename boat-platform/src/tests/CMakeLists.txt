@@ -63,6 +63,11 @@ target_include_directories(boat_unit_trace_id PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(boat_unit_trace_id PRIVATE boat_store Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_trace_id)
 
+add_executable(boat_unit_trace_store unit/test_trace_store.cpp)
+target_include_directories(boat_unit_trace_store PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(boat_unit_trace_store PRIVATE boat_store Catch2::Catch2WithMain)
+boat_discover_tests(boat_unit_trace_store)
+
 add_executable(boat_unit_scenario_json unit/test_scenario_json.cpp)
 target_include_directories(boat_unit_scenario_json PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(boat_unit_scenario_json PRIVATE boat_core Catch2::Catch2WithMain)
@@ -176,6 +181,33 @@ target_link_libraries(
     Catch2::Catch2WithMain
 )
 boat_discover_tests(boat_integration_replay_service)
+
+# Trace mapping lifetimes across concurrent GetTrace/StreamTrace/StopReplay
+# RPCs (issue #63) -- needs both service impls against one real trace store.
+add_executable(
+  boat_integration_trace_service
+  integration/test_trace_service.cpp
+  ../gateway/grpc_gateway/trace_service_impl.cpp
+  ../gateway/grpc_gateway/replay_service_impl.cpp
+)
+target_include_directories(boat_integration_trace_service PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/hil
+  ${BOAT_PROTO_GENERATED_DIR}
+)
+target_link_libraries(
+  boat_integration_trace_service
+  PRIVATE
+    boat_core
+    boat_hil
+    boat_store
+    boat_replay
+    boat_proto_generated
+    grpc++
+    protobuf::libprotobuf
+    Catch2::Catch2WithMain
+)
+boat_discover_tests(boat_integration_trace_service)
 
 # A plugin reporting the previous ABI version, so the loader's rejection path
 # can be tested rather than assumed.

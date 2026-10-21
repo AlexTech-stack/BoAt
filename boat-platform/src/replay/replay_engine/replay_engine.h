@@ -47,6 +47,34 @@ struct ReplayConfig {
                                     // empty = every channel maps to "vcan0".
 };
 
+/* Thread safety (issue #63).
+
+   Control calls (Start, StartFromEvents, Stop, Seek, Pause, Resume) arrive on
+   gRPC threads while a TickAuthority phase runs PumpDueRecords on the tick
+   thread. Everything one replay needs -- its config, the trace mapping, the
+   read cursor and the pacing anchors -- lives in one Session, published
+   through a shared_ptr:
+
+   - Start builds a complete new Session (mapping the trace first) and only
+     then swaps it in, so the pump never sees a half-written config or cursor.
+   - The pump snapshots the Session and pins it (pumps_in_flight_) under
+     session_mutex_, then works with no lock held. Its own reference keeps the
+     trace mapped, so a concurrent Stop can never unmap bytes it is reading.
+   - Stop unpublishes the Session, flags it stopped (the pump checks before
+     every record), and waits -- bounded by kStopDrainTimeout -- for an
+     in-flight pump to finish, so no frame of a stopped replay reaches the sink
+     after Stop returns. Memory safety does not depend on that wait; only the
+     "nothing after Stop" guarantee does.
+
+   Lock order: ReplayServiceImpl::replay_mutex_ -> control_mutex_ ->
+   session_mutex_. forwarder_mutex_, event_queue_mutex_ and error_mutex_ are
+   leaves, never held while taking another lock. The tick thread only ever
+   takes session_mutex_ (briefly) and the leaves, and no lock it takes is held
+   across trace I/O, mmap/munmap, or a callback. control_mutex_ is held across
+   mapping a trace, but only control calls ever wait on it.
+
+   PumpDueRecords must be driven from one thread at a time (the TickAuthority);
+   a concurrent call returns without doing anything. */
 class ReplayController {
  public:
   ReplayController(boat::store::ITraceStore& trace_store,
@@ -54,6 +82,9 @@ class ReplayController {
                    boat::core::EventBus& event_bus);
   ~ReplayController();
 
+  /* Replace whatever is playing with `config`. The trace is mapped before the
+     current replay is touched, so a Start that throws (unknown trace id, I/O
+     error) leaves the previous replay running. */
   void Start(const ReplayConfig& config);
   void StartFromEvents(const boat::store::EventFilter& filter,
                        const ReplayConfig& config = {});
@@ -79,9 +110,13 @@ class ReplayController {
   void Seek(std::uint64_t tick);
   void Pause();
   void Resume();
+  /* Stop the current replay and release its trace. Once this returns, no
+     record of that replay is handed to the forwarder (unless an in-flight
+     dispatch exceeds kStopDrainTimeout, which is reported on stderr). Safe to
+     call from a forwarder callback, where it does not wait. */
   void Stop();
   bool HasError() const;
-  bool IsRunning() const { return running_.load(); }
+  bool IsRunning() const;
   std::string LastError() const;
 
   struct ReplayEventEntry {
@@ -108,40 +143,65 @@ class ReplayController {
 
   using EventForwarder = std::function<void(const boat::core::Frame& frame)>;
   void SetEventForwarder(EventForwarder forwarder);
-  const ReplayConfig& GetActiveConfig() const;
+  /* A copy of the playing replay's config; default-constructed when nothing
+     has been started or the last replay was stopped. */
+  ReplayConfig GetActiveConfig() const;
+
+  /* Upper bound on how long Stop waits for an in-flight dispatch to finish. A
+     dispatch writes to a bus, and a blocking write on a wedged physical
+     interface must not hang every replay RPC behind it. */
+  static constexpr std::chrono::seconds kStopDrainTimeout{2};
 
  private:
-  bool SeekToTick(std::uint64_t tick, std::size_t& offset, std::uint64_t& landed_tick) const;
-  void ParseTickDurationFromEnv();
+  // One replay: config, trace mapping, cursor and pacing state. Defined in the
+  // .cpp; see the thread-safety note above the class.
+  struct Session;
+
+  // Both require control_mutex_.
+  void StartLocked(const ReplayConfig& config);
+  void StopLocked(bool bounded = true);
+
+  [[nodiscard]] std::shared_ptr<Session> CurrentSession() const;
+
+  /* The body of PumpDueRecords, run with no lock held against a pinned
+     Session. */
+  void PumpSession(Session& s, std::uint64_t authority_tick);
+
+  static bool SeekToTick(std::span<const std::uint8_t> bytes, std::uint64_t tick,
+                         std::size_t& offset, std::uint64_t& landed_tick);
+  static std::chrono::nanoseconds TickDurationFromEnv();
 
   /* Has `record_tick` come due as of `authority_tick`? Pure function of the
      two anchors, the tick interval and the speed multiplier -- deliberately
      free of any clock reading. */
-  [[nodiscard]] bool IsRecordDue(std::uint64_t record_tick,
-                                 std::uint64_t authority_tick) const;
+  [[nodiscard]] static bool IsRecordDue(const Session& s, std::uint64_t record_tick,
+                                        std::uint64_t authority_tick);
 
   /* Reset the read cursor and re-anchor both clocks to the record we land on
      seeking to `target_tick`. */
-  void AnchorAt(std::uint64_t target_tick, std::uint64_t authority_tick);
+  static void AnchorAt(Session& s, std::uint64_t target_tick, std::uint64_t authority_tick);
 
   /* Called when the read cursor reaches the end of the trace: either arm the
      loop delay or finish the replay. */
-  void FinishPass(std::uint64_t authority_tick);
+  static void FinishPass(Session& s, std::uint64_t authority_tick);
 
   /* Parse the length-delimited protobuf record starting at `offset` into `pf`,
      advancing `offset` past it. Returns a view of the record's raw bytes
      inside the mapped trace, so callers republish exactly what was stored
      rather than re-serialising. Throws on a malformed record. */
-  std::span<const std::uint8_t> ReadRecordAt(std::size_t& offset,
-                                             boat::v1::Frame& pf) const;
+  static std::span<const std::uint8_t> ReadRecordAt(std::span<const std::uint8_t> bytes,
+                                                    std::size_t& offset,
+                                                    boat::v1::Frame& pf);
 
   /* Everything that happens once a record is due: hand the frame to the
-     forwarder, publish it on the EventBus, queue it for StreamReplay, persist
-     it, and advance current_tick_. Deliberately free of any pacing -- the
-     caller decides when a record is due, which is what lets the same body
-     serve both the self-paced loop and an externally driven tick. */
-  void DispatchRecord(const boat::v1::Frame& pf, std::uint64_t tick,
+     forwarder, publish it on the EventBus, queue it for StreamReplay, and
+     persist it. Deliberately free of any pacing -- the caller decides when a
+     record is due, which is what lets the same body serve both the self-paced
+     loop and an externally driven tick. */
+  void DispatchRecord(const Session& s, const boat::v1::Frame& pf, std::uint64_t tick,
                       std::span<const std::uint8_t> raw);
+
+  void RecordError(std::string message);
 
   /* Append one event to event_queue_, dropping the oldest first once the
      backlog is at kMaxStreamEvents. Caller holds event_queue_mutex_. */
@@ -151,26 +211,26 @@ class ReplayController {
   boat::store::IEventStore& event_store_;
   boat::core::EventBus& event_bus_;
 
-  EventForwarder event_forwarder_;
+  // Held only to copy the pointer: the forwarder itself (FrameSink -> bus ->
+  // plugins' on_frame) runs with no lock held.
+  std::shared_ptr<const EventForwarder> event_forwarder_;
   std::mutex forwarder_mutex_;
 
-  std::atomic<std::uint64_t> current_tick_{0};
-  std::atomic<bool> running_{false};
-  std::atomic<bool> paused_{false};
-  // Resume() must shift authority_base_tick_ by the time spent paused; the
-  // shift happens on the pump thread, which is the only one that knows the
-  // current authority tick.
-  std::atomic<bool> resume_pending_{false};
-  std::uint64_t paused_at_tick_{0};  // pump thread only: first tick observed paused
-  bool          paused_seen_{false}; // pump thread only
-  std::condition_variable pause_cv_;
-  std::mutex pause_mutex_;
-  mutable std::mutex error_mutex_;
+  // Serialises Start/StartFromEvents/Stop. Never taken by the tick thread.
+  std::mutex control_mutex_;
 
-  ReplayConfig active_config_{};
-  std::span<const std::uint8_t> mapped_trace_{};
-  std::atomic<std::uint64_t> requested_seek_tick_{0};
-  std::atomic<bool> seek_pending_{false};
+  // Guards session_, pumps_in_flight_, tick_duration_, tick_interval_explicit_.
+  mutable std::mutex session_mutex_;
+  std::condition_variable pump_idle_cv_;
+  std::shared_ptr<Session> session_;
+  std::uint32_t pumps_in_flight_{0};
+  // How long one authority tick is; copied into each Session at Start. Set
+  // once SetTickInterval() has been called, so a later Start() does not
+  // clobber the driving authority's interval with the environment's.
+  std::chrono::nanoseconds tick_duration_{std::chrono::milliseconds(1)};
+  bool tick_interval_explicit_{false};
+
+  mutable std::mutex error_mutex_;
   std::string last_error_;
 
   // Replay event queue — used by StreamReplay to consume events without going
@@ -179,24 +239,6 @@ class ReplayController {
   std::deque<ReplayEventEntry> event_queue_;
   mutable std::mutex event_queue_mutex_;
   std::uint64_t dropped_events_ = 0;  // guarded by event_queue_mutex_
-
-  // Tick-driven scheduling. tick_duration_ is how long one authority tick is;
-  // replay_base_tick_ is the trace tick the current pass is anchored to and
-  // authority_base_tick_ the authority tick it was anchored at. A record's due
-  // time is the difference between those two deltas -- no wall clock anywhere.
-  std::chrono::nanoseconds tick_duration_{std::chrono::milliseconds(1)};
-  std::uint64_t replay_base_tick_{0};
-  std::uint64_t authority_base_tick_{0};
-  bool          authority_anchored_{false};
-  // Set once SetTickInterval() has been called, so a later Start() does not
-  // clobber the driving authority's interval with the environment's.
-  bool          tick_interval_explicit_{false};
-
-  // Read cursor into mapped_trace_, and the tick at which a looping replay may
-  // begin its next pass (0 = not waiting on a loop delay).
-  std::size_t   pump_offset_{0};
-  bool          pump_has_records_{false};
-  std::uint64_t loop_resume_tick_{0};
 };
 
 }  // namespace boat::replay

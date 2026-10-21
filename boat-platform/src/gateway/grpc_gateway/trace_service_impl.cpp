@@ -37,10 +37,11 @@ TraceServiceImpl::TraceServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
 
 grpc::Status TraceServiceImpl::GetTrace(grpc::ServerContext*, const boat::v1::GetTraceRequest* request,
                                         boat::v1::TraceResponse* response) {
-  bool mapped = false;
   try {
-    auto bytes = ctx_.trace_store.ReadTraceMmap(request->trace_id());
-    mapped = true;
+    // The handle keeps the bytes mapped for this call alone; no other RPC can
+    // release them out from under us.
+    const auto trace = ctx_.trace_store.MapTrace(request->trace_id());
+    const auto bytes = trace->bytes;
     const auto* ptr = bytes.data();
     std::size_t offset = 0;
     while (offset + sizeof(boat::store::TraceRecordHeader) <= bytes.size()) {
@@ -58,17 +59,10 @@ grpc::Status TraceServiceImpl::GetTrace(grpc::ServerContext*, const boat::v1::Ge
       offset += header.payload_size;
     }
     response->mutable_page()->set_total_size(static_cast<std::uint32_t>(response->events_size()));
-    ctx_.trace_store.UnmapTrace(request->trace_id());
     return grpc::Status::OK;
   } catch (const std::exception& ex) {
-    if (mapped) {
-      ctx_.trace_store.UnmapTrace(request->trace_id());
-    }
     return MapTraceException(ex);
   } catch (...) {
-    if (mapped) {
-      ctx_.trace_store.UnmapTrace(request->trace_id());
-    }
     return grpc::Status(grpc::StatusCode::INTERNAL, "unexpected get trace error");
   }
 }
@@ -101,10 +95,11 @@ grpc::Status TraceServiceImpl::ListTraces(grpc::ServerContext*, const boat::v1::
 
 grpc::Status TraceServiceImpl::StreamTrace(grpc::ServerContext* context, const boat::v1::StreamTraceRequest* request,
                                            grpc::ServerWriter<boat::v1::TraceEvent>* writer) {
-  bool mapped = false;
   try {
-    auto bytes = ctx_.trace_store.ReadTraceMmap(request->trace_id());
-    mapped = true;
+    // Held for the whole stream, across Write() blocking on a slow client.
+    // StopReplay, or another stream of the same trace, has its own handle.
+    const auto trace = ctx_.trace_store.MapTrace(request->trace_id());
+    const auto bytes = trace->bytes;
     const auto* ptr = bytes.data();
     std::size_t offset = 0;
     while (!context->IsCancelled() && offset + sizeof(boat::store::TraceRecordHeader) <= bytes.size()) {
@@ -124,17 +119,10 @@ grpc::Status TraceServiceImpl::StreamTrace(grpc::ServerContext* context, const b
       }
       offset += header.payload_size;
     }
-    ctx_.trace_store.UnmapTrace(request->trace_id());
     return grpc::Status::OK;
   } catch (const std::exception& ex) {
-    if (mapped) {
-      ctx_.trace_store.UnmapTrace(request->trace_id());
-    }
     return MapTraceException(ex);
   } catch (...) {
-    if (mapped) {
-      ctx_.trace_store.UnmapTrace(request->trace_id());
-    }
     return grpc::Status(grpc::StatusCode::INTERNAL, "unexpected stream trace error");
   }
 }

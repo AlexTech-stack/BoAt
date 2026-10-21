@@ -6,10 +6,10 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 struct sqlite3;
@@ -52,14 +52,29 @@ struct TraceRecord {
   std::uint64_t size_bytes;
 };
 
+/* A read-only view of one stored trace's bytes. */
+struct MappedTrace {
+  std::span<const std::uint8_t> bytes;
+};
+
+/* Owning handle: the bytes stay mapped for as long as any copy lives, and are
+   released when the last one goes -- on whichever thread drops it. Handles are
+   independent of one another and of the store that produced them (they may
+   outlive it). There is deliberately no unmap-by-id: the store used to keep one
+   mapping per trace id, so a second mapping of the same id replaced the first
+   and the next unmap tore down another caller's live mapping (issue #63). */
+using MappedTracePtr = std::shared_ptr<const MappedTrace>;
+
 class ITraceStore {
  public:
   virtual ~ITraceStore() = default;
   virtual void WriteTrace(const TraceRecord& meta, std::span<const std::uint8_t> data) = 0;
-  virtual std::span<const std::uint8_t> ReadTraceMmap(const std::string& trace_id) = 0;
+  /* Map `trace_id` for reading. Every call returns a fresh, independent handle.
+     An empty trace yields a handle with empty bytes. Throws if the id is not
+     indexed or the file cannot be mapped. */
+  virtual MappedTracePtr MapTrace(const std::string& trace_id) = 0;
   virtual std::vector<TraceRecord> ListTraces(const std::string& simulation_id) = 0;
   virtual std::vector<TraceRecord> ListAllTraces() = 0;
-  virtual void UnmapTrace(const std::string& trace_id) = 0;
 };
 
 class FlatFileTraceStore : public ITraceStore {
@@ -67,22 +82,20 @@ class FlatFileTraceStore : public ITraceStore {
   explicit FlatFileTraceStore(const std::string& index_db_path);
   ~FlatFileTraceStore() override;
 
+  /* Rewriting a trace while handles to it are live is safe: the old file is
+     unlinked before the new one is created, so existing handles keep reading
+     the old inode. AppendTraceRecord grows a file in place, which leaves an
+     existing mapping's (fixed) length intact. */
   void WriteTrace(const TraceRecord& meta, std::span<const std::uint8_t> data) override;
   void AppendTraceRecord(const TraceRecord& meta, std::span<const std::uint8_t> record_data);
-  std::span<const std::uint8_t> ReadTraceMmap(const std::string& trace_id) override;
+  MappedTracePtr MapTrace(const std::string& trace_id) override;
   std::vector<TraceRecord> ListTraces(const std::string& simulation_id) override;
   std::vector<TraceRecord> ListAllTraces() override;
-  void UnmapTrace(const std::string& trace_id) override;
 
  private:
-  struct MmapRegion {
-    void* addr{nullptr};
-    std::size_t length{0};
-    int fd{-1};
-  };
-
+  // The only shared state; opened SQLITE_OPEN_FULLMUTEX, so concurrent calls
+  // are serialised by sqlite. Mappings are owned by their handles, not here.
   sqlite3* db_{nullptr};
-  std::unordered_map<std::string, MmapRegion> mmap_regions_;
 };
 
 }  // namespace boat::store
