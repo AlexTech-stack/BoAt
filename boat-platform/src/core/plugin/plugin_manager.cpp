@@ -76,22 +76,27 @@ std::string PluginKey(const std::string& so_path, const std::string& config_json
 }  // namespace
 
 void PluginManager::SetPublisher(SignalPublishFn fn) {
+  std::lock_guard<std::mutex> lock(publisher_mutex_);
   publisher_fn_ = std::move(fn);
 }
 
 void PluginManager::SetBusPublisher(BusPublishFn fn) {
+  std::lock_guard<std::mutex> lock(publisher_mutex_);
   bus_publisher_fn_ = std::move(fn);
 }
 
 void PluginManager::SetPduPublisher(PduPublishFn fn) {
+  std::lock_guard<std::mutex> lock(publisher_mutex_);
   pdu_publisher_fn_ = std::move(fn);
 }
 
 void PluginManager::SetFramePublisher(FramePublishFn fn) {
+  std::lock_guard<std::mutex> lock(publisher_mutex_);
   frame_publisher_fn_ = std::move(fn);
 }
 
 void PluginManager::SetTimeSource(TimeSourceFn fn) {
+  std::lock_guard<std::mutex> lock(publisher_mutex_);
   time_source_fn_ = std::move(fn);
 }
 
@@ -191,9 +196,26 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
     }
   }
 
+  // Snapshot the publisher callbacks under publisher_mutex_; each plugin gets
+  // its own shared copy, so a concurrent Start/Stop cannot replace a function
+  // the plugin is already invoking.
+  SignalPublishFn signal_fn;
+  BusPublishFn bus_fn;
+  PduPublishFn pdu_fn;
+  TimeSourceFn time_fn;
+  FramePublishFn frame_fn;
+  {
+    std::lock_guard<std::mutex> lock(publisher_mutex_);
+    signal_fn = publisher_fn_;
+    bus_fn = bus_publisher_fn_;
+    pdu_fn = pdu_publisher_fn_;
+    time_fn = time_source_fn_;
+    frame_fn = frame_publisher_fn_;
+  }
+
   // Wire signal publisher.
-  if (plugin->vtable->set_publisher != nullptr && publisher_fn_) {
-    auto fn_shared = std::make_shared<SignalPublishFn>(publisher_fn_);
+  if (plugin->vtable->set_publisher != nullptr && signal_fn) {
+    auto fn_shared = std::make_shared<SignalPublishFn>(std::move(signal_fn));
     plugin->vtable->set_publisher(
         plugin->ctx,
         [](void* pctx, const char* signal_id, uint64_t tick, double value) {
@@ -204,8 +226,8 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
   }
 
   // Wire bus-signal publisher.
-  if (plugin->vtable->set_bus_publisher != nullptr && bus_publisher_fn_) {
-    auto fn_shared = std::make_shared<BusPublishFn>(bus_publisher_fn_);
+  if (plugin->vtable->set_bus_publisher != nullptr && bus_fn) {
+    auto fn_shared = std::make_shared<BusPublishFn>(std::move(bus_fn));
     plugin->vtable->set_bus_publisher(
         plugin->ctx,
         [](void* pctx, const char* name, double value) {
@@ -216,8 +238,8 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
   }
 
   // Wire PDU publisher.
-  if (plugin->vtable->set_pdu_publisher != nullptr && pdu_publisher_fn_) {
-    auto fn_shared = std::make_shared<PduPublishFn>(pdu_publisher_fn_);
+  if (plugin->vtable->set_pdu_publisher != nullptr && pdu_fn) {
+    auto fn_shared = std::make_shared<PduPublishFn>(std::move(pdu_fn));
     plugin->vtable->set_pdu_publisher(
         plugin->ctx,
         [](void* pctx, const BoatPduFrame* frame) {
@@ -229,8 +251,8 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
 
   // v9: Wire the host clock. Done before the frame publisher so a plugin can
   // legitimately read the time from inside its first publish callback.
-  if (plugin->vtable->set_time_source != nullptr && time_source_fn_) {
-    auto fn_shared = std::make_shared<TimeSourceFn>(time_source_fn_);
+  if (plugin->vtable->set_time_source != nullptr && time_fn) {
+    auto fn_shared = std::make_shared<TimeSourceFn>(std::move(time_fn));
     plugin->vtable->set_time_source(
         plugin->ctx,
         [](void* pctx) -> std::uint64_t {
@@ -241,8 +263,8 @@ PluginHandle PluginManager::Load(const std::string& so_path, const std::string& 
   }
 
   // v8: Wire unified frame publisher.
-  if (plugin->vtable->set_frame_publisher != nullptr && frame_publisher_fn_) {
-    auto fn_shared = std::make_shared<FramePublishFn>(frame_publisher_fn_);
+  if (plugin->vtable->set_frame_publisher != nullptr && frame_fn) {
+    auto fn_shared = std::make_shared<FramePublishFn>(std::move(frame_fn));
     plugin->vtable->set_frame_publisher(
         plugin->ctx,
         [](void* pctx, const BoatFrame* frame) {

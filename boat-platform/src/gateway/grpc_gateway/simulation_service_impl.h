@@ -70,6 +70,15 @@ class SimulationServiceImpl final : public boat::v1::SimulationService::Service 
   boat::hil::CanBusRegistry& can_registry_;
   boat::hil::EthernetBusRegistry& eth_registry_;
   std::unordered_map<std::string, boat::core::ScenarioDef> simulations_;
+
+  /* Serialises every lifecycle RPC (Create/Start/Pause/Step/Reset/Stop).
+     The gateway hosts one run; without this, Start's setup and Stop's
+     teardown could interleave their plugin-manager loads/setters and registry
+     subscriptions, and a Start that failed halfway could leave RUNNING with
+     no scheduler. Lock order: lifecycle_mutex_ -> simulations_mutex_ ->
+     active_mutex_. Never take lifecycle_mutex_ while holding one of the
+     others. */
+  std::mutex lifecycle_mutex_;
   mutable std::mutex simulations_mutex_;
   boat::store::SqliteTomlConfigStore config_store_{"boat_config.db"};
   std::optional<std::size_t> can_rx_sub_id_;

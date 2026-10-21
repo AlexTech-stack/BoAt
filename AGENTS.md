@@ -982,6 +982,16 @@ session is live, so a new definition reports tick 0. Resetting only one of clock
 what produced the `tick must be monotonically increasing` INTERNAL a long-lived gateway used
 to hit; the pair must stay together.
 
+**Simulation lifecycle is serialised, and setup precedes RUNNING.** `SimulationService` holds
+one `lifecycle_mutex_` across Create/Start/Pause/Step/Reset/Stop, so plugin-manager setters,
+registry subscriptions and teardown cannot interleave. `StartSimulation` now installs the
+publisher callbacks, subscriptions and scenario plugins first and only then transitions to
+RUNNING; any setup failure runs `PrepareFreshRun()` and leaves the service IDLE, so a failed
+plugin load can never leave a "running" simulation with no scheduler. Starting a PAUSED run
+resumes it without rebuilding the runtime. Scenario plugins subscribe through the unified
+`SubscribeFrame` paths, preserving `iface`, `SELF_SENT` and Ethernet IP metadata (issue #70),
+rather than rebuilding frames from the raw CAN/Ethernet callbacks.
+
 **The scenario's seed is the run's seed.** `ScenarioDef.seed` is applied with
 `DeterminismEngine::SetSeed()` at `StartSimulation` and restored by `ResetSimulation`, so
 `"seed": N` in a scenario actually decides that run's random stream (fault-injector noise and

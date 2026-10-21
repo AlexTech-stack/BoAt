@@ -199,6 +199,10 @@ class PluginManager {
      Unload() was itself inside a plugin callback (waiting would deadlock on
      its own reference). Drained by whoever drops the last reference. */
   std::vector<PluginHandle> pending_destroy_;  // guarded by mutex_
+  // Serialised against Load(): Load snapshots these under the lock and hands
+  // each plugin its own shared copy, so a lifecycle Start/Stop cannot mutate a
+  // function a plugin is already holding.
+  std::mutex publisher_mutex_;
   SignalPublishFn publisher_fn_;
   BusPublishFn bus_publisher_fn_;
   PduPublishFn pdu_publisher_fn_;

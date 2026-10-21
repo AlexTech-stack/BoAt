@@ -78,6 +78,18 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **Simulation start can no longer leave a half-started RUNNING session, and lifecycle RPCs
+  are serialized** (#69). `SimulationService` now holds one lifecycle mutex across
+  Create/Start/Pause/Step/Reset/Stop, installs the publisher callbacks, frame subscriptions
+  and scenario plugins before transitioning to RUNNING, and rolls back to IDLE via
+  `PrepareFreshRun()` if setup fails. A failed plugin load therefore returns an error and
+  leaves no RUNNING-with-no-scheduler state; Start on a PAUSED run resumes instead of
+  rebuilding. `PluginManager`'s publisher/time-source setters are now mutex-protected and
+  `Load` snapshots them under that lock.
+- **Simulation-scoped plugins now receive the full frame metadata** (#70). They subscribe
+  through the unified `SubscribeFrame` paths, so CAN frames keep their `iface` and Ethernet
+  frames keep `iface`, `SELF_SENT` and IP metadata instead of being rebuilt with empty
+  interface names and zero flags.
 - **Replay Start/Stop no longer race the tick thread, and trace reads can no longer unmap each
   other's memory** (#63). `StartReplay`/`StopReplay` rewrote the replay controller's config,
   trace mapping and cursor on a gRPC thread while the tick phase was reading them, and Stop

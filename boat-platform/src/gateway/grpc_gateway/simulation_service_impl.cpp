@@ -61,11 +61,11 @@ void SimulationServiceImpl::CleanupRuntime() {
   // RunPipeline holds while calling the hook.
   sim_.scheduler().SetOnTickHook(nullptr);
   if (can_rx_sub_id_.has_value()) {
-    can_registry_.Unsubscribe(*can_rx_sub_id_);
+    can_registry_.UnsubscribeFrame(*can_rx_sub_id_);
     can_rx_sub_id_.reset();
   }
   if (eth_rx_sub_id_.has_value()) {
-    eth_registry_.Unsubscribe(*eth_rx_sub_id_);
+    eth_registry_.UnsubscribeFrame(*eth_rx_sub_id_);
     eth_rx_sub_id_.reset();
   }
   sim_.plugin_manager().ShutdownAll();
@@ -82,6 +82,7 @@ void SimulationServiceImpl::PrepareFreshRun() {
 
 grpc::Status SimulationServiceImpl::CreateSimulation(grpc::ServerContext*, const boat::v1::CreateSimulationRequest* request,
                                                      boat::v1::SimulationResponse* response) {
+  std::lock_guard<std::mutex> lifecycle(lifecycle_mutex_);
   try {
     const auto scenario_key = std::string("scenario.") + request->scenario_id();
     const auto stored = config_store_.Get(scenario_key);
@@ -120,6 +121,7 @@ grpc::Status SimulationServiceImpl::CreateSimulation(grpc::ServerContext*, const
 
 grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const boat::v1::StartSimulationRequest* request,
                                                     boat::v1::SimulationResponse* response) {
+  std::lock_guard<std::mutex> lifecycle(lifecycle_mutex_);
   try {
     boat::core::ScenarioDef scenario;
     {
@@ -143,151 +145,172 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
                 "' is already active; stop or reset it before starting another");
       }
     }
-    {
-      const auto current = sim_.state_machine().Current();
-      if (current == boat::core::SimState::RUNNING) {
-        // Already running — idempotent, nothing to do.
-        FillSimulation(request->simulation_id(), scenario, response->mutable_simulation());
-        return grpc::Status::OK;
-      }
-      // Allow STOPPED → IDLE → RUNNING so callers don't need an explicit reset.
-      if (current == boat::core::SimState::STOPPED) {
-        sim_.state_machine().Transition(boat::core::SimState::IDLE);
-      }
-      if (!sim_.state_machine().Transition(boat::core::SimState::RUNNING)) {
-        return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "invalid state transition to RUNNING");
-      }
+    const auto current = sim_.state_machine().Current();
+    if (current == boat::core::SimState::RUNNING) {
+      // Already running — idempotent, nothing to do.
+      FillSimulation(request->simulation_id(), scenario, response->mutable_simulation());
+      return grpc::Status::OK;
     }
-    // Load plugins declared in the scenario (idempotent: unload first if present).
-    sim_.plugin_manager().ShutdownAll();
-    sim_.plugin_manager().SetPublisher(
-        [this](const char* signal_id, std::uint64_t tick, double value) {
-          boat::core::SignalEvent ev{};
-          ev.signal_id = static_cast<std::uint64_t>(std::hash<std::string>{}(signal_id));
-          ev.tick      = tick;
-          ev.value     = value;
-          sim_.signal_router().Publish(ev);
-        });
-    // v8: Wire unified frame publisher for simulation-scoped plugins.
-    sim_.plugin_manager().SetFramePublisher(
-        [this](const BoatFrame& f) {
-          switch (f.bus_type) {
-            case BOAT_BUS_CAN:
-            case BOAT_BUS_CANFD: {
-              const bool is_fd = f.bus_type == BOAT_BUS_CANFD;
-              const bool is_rtr = (f.meta.can.flags & boat::hil::kCanFlagRtr) != 0;
-              const std::size_t payload_len = f.payload == nullptr ? 0 : f.payload_len;
-              if (f.payload == nullptr && f.payload_len != 0) {
-                std::fprintf(stderr, "[Simulation] CAN frame has null payload\n");
-                break;
-              }
-              if (is_fd && is_rtr) {
-                std::fprintf(stderr, "[Simulation] rejecting FD+RTR frame\n");
-                break;
-              }
-              if (is_rtr) {
-                if (payload_len != 0 || f.meta.can.dlc > 8) {
-                  std::fprintf(stderr, "[Simulation] rejecting RTR frame with payload/DLC\n");
+
+    if (current == boat::core::SimState::PAUSED) {
+      // Re-Start means resume; do not tear down a healthy paused run.
+      if (!sim_.state_machine().Transition(boat::core::SimState::RUNNING)) {
+        return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+                            "invalid state transition to RUNNING");
+      }
+      sim_.scheduler().Resume();
+      {
+        std::lock_guard<std::mutex> lock(active_mutex_);
+        active_simulation_id_ = request->simulation_id();
+      }
+      FillSimulation(request->simulation_id(), scenario, response->mutable_simulation());
+      return grpc::Status::OK;
+    }
+
+    // Any other state must reach IDLE before setup. In particular, do not
+    // claim RUNNING until the scenario plugins and subscriptions are ready:
+    // a failed setup used to leave a "running" simulation that never ticked.
+    if (current != boat::core::SimState::IDLE &&
+        !sim_.state_machine().Transition(boat::core::SimState::IDLE)) {
+      return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+                          "invalid state transition to IDLE");
+    }
+
+    const auto rollback_start = [this] {
+      // CleanupRuntime is idempotent; even a failure here must not leave the
+      // half-installed subscriptions/plugins behind.
+      try {
+        PrepareFreshRun();
+      } catch (...) {
+      }
+      std::lock_guard<std::mutex> lock(active_mutex_);
+      active_simulation_id_.clear();
+    };
+
+    try {
+      // Load plugins declared in the scenario (idempotent: unload first if present).
+      sim_.plugin_manager().ShutdownAll();
+      sim_.plugin_manager().SetPublisher(
+          [this](const char* signal_id, std::uint64_t tick, double value) {
+            boat::core::SignalEvent ev{};
+            ev.signal_id = static_cast<std::uint64_t>(std::hash<std::string>{}(signal_id));
+            ev.tick      = tick;
+            ev.value     = value;
+            sim_.signal_router().Publish(ev);
+          });
+      // v8: Wire unified frame publisher for simulation-scoped plugins.
+      sim_.plugin_manager().SetFramePublisher(
+          [this](const BoatFrame& f) {
+            switch (f.bus_type) {
+              case BOAT_BUS_CAN:
+              case BOAT_BUS_CANFD: {
+                const bool is_fd = f.bus_type == BOAT_BUS_CANFD;
+                const bool is_rtr = (f.meta.can.flags & boat::hil::kCanFlagRtr) != 0;
+                const std::size_t payload_len = f.payload == nullptr ? 0 : f.payload_len;
+                if (f.payload == nullptr && f.payload_len != 0) {
+                  std::fprintf(stderr, "[Simulation] CAN frame has null payload\n");
                   break;
                 }
-              } else if (f.meta.can.dlc != payload_len ||
-                         payload_len > (is_fd ? 64U : 8U)) {
-                std::fprintf(stderr,
-                             "[Simulation] rejecting CAN frame with dlc=%u payload=%zu\n",
-                             static_cast<unsigned>(f.meta.can.dlc), payload_len);
-                break;
-              }
+                if (is_fd && is_rtr) {
+                  std::fprintf(stderr, "[Simulation] rejecting FD+RTR frame\n");
+                  break;
+                }
+                if (is_rtr) {
+                  if (payload_len != 0 || f.meta.can.dlc > 8) {
+                    std::fprintf(stderr, "[Simulation] rejecting RTR frame with payload/DLC\n");
+                    break;
+                  }
+                } else if (f.meta.can.dlc != payload_len ||
+                           payload_len > (is_fd ? 64U : 8U)) {
+                  std::fprintf(stderr,
+                               "[Simulation] rejecting CAN frame with dlc=%u payload=%zu\n",
+                               static_cast<unsigned>(f.meta.can.dlc), payload_len);
+                  break;
+                }
 
-              boat::hil::CanFrame cf{};
-              cf.can_id = f.meta.can.can_id;
-              cf.dlc    = f.meta.can.dlc;
-              cf.flags  = f.meta.can.flags;
-              if (is_fd) {
-                cf.flags |= boat::hil::kCanFdFlagFdf;
-              } else {
-                cf.flags &= static_cast<std::uint8_t>(~boat::hil::kCanFdFlagFdf);
-              }
-              if (!is_rtr && payload_len > 0) std::memcpy(cf.data, f.payload, payload_len);
-              if (f.iface && f.iface[0])
-                (void)can_registry_.SendFrame(f.iface, cf);
-              else
-                (void)can_registry_.SendFrameAll(cf);
-              break;
-            }
-            case BOAT_BUS_ETHERNET: {
-              if (f.payload == nullptr && f.payload_len != 0) {
-                std::fprintf(stderr, "[Simulation] Ethernet frame has null payload\n");
+                boat::hil::CanFrame cf{};
+                cf.can_id = f.meta.can.can_id;
+                cf.dlc    = f.meta.can.dlc;
+                cf.flags  = f.meta.can.flags;
+                if (is_fd) {
+                  cf.flags |= boat::hil::kCanFdFlagFdf;
+                } else {
+                  cf.flags &= static_cast<std::uint8_t>(~boat::hil::kCanFdFlagFdf);
+                }
+                if (!is_rtr && payload_len > 0) std::memcpy(cf.data, f.payload, payload_len);
+                if (f.iface && f.iface[0])
+                  (void)can_registry_.SendFrame(f.iface, cf);
+                else
+                  (void)can_registry_.SendFrameAll(cf);
                 break;
               }
-              if (f.payload_len > 1500) {
-                std::fprintf(stderr, "[Simulation] rejecting oversize Ethernet payload\n");
+              case BOAT_BUS_ETHERNET: {
+                if (f.payload == nullptr && f.payload_len != 0) {
+                  std::fprintf(stderr, "[Simulation] Ethernet frame has null payload\n");
+                  break;
+                }
+                if (f.payload_len > 1500) {
+                  std::fprintf(stderr, "[Simulation] rejecting oversize Ethernet payload\n");
+                  break;
+                }
+                boat::hil::EthernetFrame ef{};
+                std::memcpy(ef.dst_mac, f.meta.eth.dst_mac, 6);
+                std::memcpy(ef.src_mac, f.meta.eth.src_mac, 6);
+                ef.ethertype = f.meta.eth.ethertype;
+                ef.vlan_id   = f.meta.eth.vlan_id;
+                if (f.payload && f.payload_len > 0)
+                  ef.payload.assign(f.payload, f.payload + f.payload_len);
+                if (f.iface && f.iface[0])
+                  (void)eth_registry_.SendFrame(f.iface, ef);
+                else
+                  (void)eth_registry_.SendFrameAll(ef);
                 break;
               }
-              boat::hil::EthernetFrame ef{};
-              std::memcpy(ef.dst_mac, f.meta.eth.dst_mac, 6);
-              std::memcpy(ef.src_mac, f.meta.eth.src_mac, 6);
-              ef.ethertype = f.meta.eth.ethertype;
-              ef.vlan_id   = f.meta.eth.vlan_id;
-              if (f.payload && f.payload_len > 0)
-                ef.payload.assign(f.payload, f.payload + f.payload_len);
-              if (f.iface && f.iface[0])
-                (void)eth_registry_.SendFrame(f.iface, ef);
-              else
-                (void)eth_registry_.SendFrameAll(ef);
-              break;
+              default:
+                break;
             }
-            default:
-              break;
-          }
-        });
-    // v8: Subscribe to all frames and dispatch via unified DispatchFrame.
-    if (can_rx_sub_id_.has_value()) {
-      can_registry_.Unsubscribe(*can_rx_sub_id_);
-    }
-    can_rx_sub_id_ = can_registry_.Subscribe(
-        "",  // all interfaces
-        [this](const boat::hil::CanFrame& f, const std::string& iface) {
-          (void)iface;
-          const bool is_rtr = (f.flags & boat::hil::kCanFlagRtr) != 0;
-          std::vector<uint8_t> payload;
-          if (!is_rtr) {
-            payload.assign(f.data, f.data + f.dlc);
-          }
-          const bool is_fd = (f.flags & boat::hil::kCanFdFlagFdf) != 0;
-          auto core_frame = boat::core::Frame::FromCan("", f.can_id, f.dlc, f.flags,
-                                                        std::move(payload), is_fd,
-                                                        /*preserve_dlc=*/is_rtr);
-          BoatFrame abi{};
-          core_frame.ToAbi(&abi);
-          sim_.plugin_manager().DispatchFrame(abi);
-        });
-    if (eth_rx_sub_id_.has_value()) {
-      eth_registry_.Unsubscribe(*eth_rx_sub_id_);
-    }
-    eth_rx_sub_id_ = eth_registry_.Subscribe(
-        "", 0,
-        [this](const boat::hil::EthernetFrame& f, const std::string& iface) {
-          (void)iface;
-          auto core_frame = boat::core::Frame::FromEthernet(
-              "", const_cast<uint8_t*>(f.dst_mac), const_cast<uint8_t*>(f.src_mac),
-              f.ethertype, f.vlan_id,
-              nullptr, 0, nullptr, f.payload);
-          BoatFrame abi{};
-          core_frame.ToAbi(&abi);
-          sim_.plugin_manager().DispatchFrame(abi);
-        });
-    for (const auto& plugin_ref : scenario.plugins) {
-      try {
-        sim_.plugin_manager().Load(plugin_ref.so_path, plugin_ref.config_json);
-      } catch (const std::exception& ex) {
-        return grpc::Status(grpc::StatusCode::INTERNAL,
-                            std::string("failed to load plugin: ") + ex.what());
+          });
+      // Subscribe through the unified frame path: it preserves the interface
+      // name, SELF_SENT and IP metadata. Rebuilding a frame from the raw
+      // CAN/Ethernet callbacks used to drop them (issue #70).
+      if (can_rx_sub_id_.has_value()) {
+        can_registry_.UnsubscribeFrame(*can_rx_sub_id_);
       }
+      can_rx_sub_id_ = can_registry_.SubscribeFrame([this](const boat::core::Frame& f) {
+        BoatFrame abi{};
+        f.ToAbi(&abi);
+        sim_.plugin_manager().DispatchFrame(abi);
+      });
+      if (eth_rx_sub_id_.has_value()) {
+        eth_registry_.UnsubscribeFrame(*eth_rx_sub_id_);
+      }
+      eth_rx_sub_id_ = eth_registry_.SubscribeFrame([this](const boat::core::Frame& f) {
+        BoatFrame abi{};
+        f.ToAbi(&abi);
+        sim_.plugin_manager().DispatchFrame(abi);
+      });
+      for (const auto& plugin_ref : scenario.plugins) {
+        sim_.plugin_manager().Load(plugin_ref.so_path, plugin_ref.config_json);
+      }
+
+      // Wire plugin ticks into the scheduler loop.
+      sim_.scheduler().SetOnTickHook(
+          [this](std::uint64_t tick) { sim_.plugin_manager().TickAll(tick); });
+    } catch (const std::exception& ex) {
+      rollback_start();
+      return grpc::Status(grpc::StatusCode::INTERNAL,
+                          std::string("failed to start simulation: ") + ex.what());
+    } catch (...) {
+      rollback_start();
+      return grpc::Status(grpc::StatusCode::INTERNAL,
+                          "unexpected start simulation setup error");
     }
 
-    // Wire plugin ticks into the scheduler loop.
-    sim_.scheduler().SetOnTickHook(
-        [this](std::uint64_t tick) { sim_.plugin_manager().TickAll(tick); });
+    if (!sim_.state_machine().Transition(boat::core::SimState::RUNNING)) {
+      rollback_start();
+      return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+                          "invalid state transition to RUNNING");
+    }
 
     // The scenario's own seed decides this run's random stream. The engine is
     // gateway-scoped and used to keep whatever seed the gateway started with,
@@ -295,7 +318,7 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
     // (issue #53): two scenarios asking for different streams got the same one.
     sim_.determinism().SetSeed(scenario.seed);
 
-    sim_.scheduler().Start();   // no-op if already running (e.g. PAUSED→RUNNING)
+    sim_.scheduler().Start();
     sim_.scheduler().Resume();  // clears paused_ so the tick phase starts ticking
     {
       std::lock_guard<std::mutex> lock(active_mutex_);
@@ -312,6 +335,7 @@ grpc::Status SimulationServiceImpl::StartSimulation(grpc::ServerContext*, const 
 
 grpc::Status SimulationServiceImpl::PauseSimulation(grpc::ServerContext*, const boat::v1::PauseSimulationRequest* request,
                                                     boat::v1::SimulationResponse* response) {
+  std::lock_guard<std::mutex> lifecycle(lifecycle_mutex_);
   try {
     boat::core::ScenarioDef scenario;
     {
@@ -337,6 +361,7 @@ grpc::Status SimulationServiceImpl::PauseSimulation(grpc::ServerContext*, const 
 
 grpc::Status SimulationServiceImpl::StepSimulation(grpc::ServerContext*, const boat::v1::StepSimulationRequest* request,
                                                    boat::v1::SimulationResponse* response) {
+  std::lock_guard<std::mutex> lifecycle(lifecycle_mutex_);
   try {
     boat::core::ScenarioDef scenario;
     {
@@ -362,6 +387,7 @@ grpc::Status SimulationServiceImpl::StepSimulation(grpc::ServerContext*, const b
 
 grpc::Status SimulationServiceImpl::ResetSimulation(grpc::ServerContext*, const boat::v1::ResetSimulationRequest* request,
                                                     boat::v1::SimulationResponse* response) {
+  std::lock_guard<std::mutex> lifecycle(lifecycle_mutex_);
   try {
     boat::core::ScenarioDef scenario;
     {
@@ -400,6 +426,7 @@ grpc::Status SimulationServiceImpl::ResetSimulation(grpc::ServerContext*, const 
 
 grpc::Status SimulationServiceImpl::StopSimulation(grpc::ServerContext*, const boat::v1::StopSimulationRequest* request,
                                                    boat::v1::SimulationResponse* response) {
+  std::lock_guard<std::mutex> lifecycle(lifecycle_mutex_);
   try {
     boat::core::ScenarioDef scenario;
     {
