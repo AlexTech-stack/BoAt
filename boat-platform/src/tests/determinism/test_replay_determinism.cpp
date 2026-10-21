@@ -28,6 +28,7 @@
 #include <cstring>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -123,9 +124,21 @@ std::vector<std::uint8_t> BuildCanTrace() {
   return out;
 }
 
-/* Drive one full replay through the production path and return the wire log. */
-std::vector<WireLogEntry> RunReplayOnce(const std::string& prefix,
-                                        const std::vector<std::uint8_t>& trace_bytes) {
+struct RunOptions {
+  bool authority_first{false};
+  std::chrono::milliseconds delay{0};
+};
+
+struct RunResult {
+  std::vector<WireLogEntry> log;
+  std::optional<std::uint64_t> anchor;
+};
+
+/* Drive one full replay through the production path and return the wire log
+   plus the session anchor the controller actually used. */
+RunResult RunReplayOnce(const std::string& prefix,
+                        const std::vector<std::uint8_t>& trace_bytes,
+                        const RunOptions& options = {}) {
   const auto tmp = std::filesystem::temp_directory_path();
   const auto event_db = (tmp / (prefix + "_events.db")).string();
   const auto trace_db = (tmp / (prefix + "_traces.db")).string();
@@ -133,7 +146,7 @@ std::vector<WireLogEntry> RunReplayOnce(const std::string& prefix,
   std::filesystem::remove(event_db);
   std::filesystem::remove(trace_db);
 
-  std::vector<WireLogEntry> log;
+  RunResult result;
   {
     boat::store::SqliteEventStore event_store(event_db);
     boat::store::FlatFileTraceStore trace_store(trace_db);
@@ -172,24 +185,32 @@ std::vector<WireLogEntry> RunReplayOnce(const std::string& prefix,
     cfg.trace_id = meta.id;
     cfg.speed = boat::replay::ReplaySpeed::REAL_TIME;
     cfg.buses = {"vcan0"};
-    replay_controller.Start(cfg);
-    authority.Start(std::chrono::milliseconds(1), boat::hil::TimeSource::kRealTime);
+    if (options.authority_first) {
+      authority.Start(std::chrono::milliseconds(1), boat::hil::TimeSource::kRealTime);
+      if (options.delay.count() > 0) std::this_thread::sleep_for(options.delay);
+      replay_controller.Start(cfg);
+    } else {
+      replay_controller.Start(cfg);
+      authority.Start(std::chrono::milliseconds(1), boat::hil::TimeSource::kRealTime);
+    }
 
     while (replay_controller.IsRunning()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    const auto anchor = replay_controller.SessionAnchorTick();
     authority.Stop();
     replay_controller.Stop();
     INFO("replay error: " << replay_controller.LastError());
     REQUIRE_FALSE(replay_controller.HasError());
 
-    log = driver->Log();
+    result.log = driver->Log();
+    result.anchor = anchor;
   }
 
   std::filesystem::remove(event_db);
   std::filesystem::remove(trace_db);
   std::filesystem::remove(trace_file);
-  return log;
+  return result;
 }
 
 /* Frame content and ordering only -- what was put on the wire. */
@@ -214,6 +235,19 @@ std::vector<std::uint8_t> TickAttributedProjection(const std::vector<WireLogEntr
   return out;
 }
 
+/* Content plus the tick relative to the replay's own anchor. This is the
+   projection that must match across runs started at different times. */
+std::vector<std::uint8_t> RelativeTickProjection(const std::vector<WireLogEntry>& log,
+                                                 std::uint64_t anchor) {
+  std::vector<std::uint8_t> out = ContentProjection(log);
+  for (const auto& e : log) {
+    const std::uint64_t relative = e.observer_tick >= anchor ? e.observer_tick - anchor : 0;
+    const auto* t_p = reinterpret_cast<const std::uint8_t*>(&relative);
+    out.insert(out.end(), t_p, t_p + sizeof(relative));
+  }
+  return out;
+}
+
 }  // namespace
 
 TEST_CASE("Replay puts bit-identical frame content on the wire across runs",
@@ -223,9 +257,9 @@ TEST_CASE("Replay puts bit-identical frame content on the wire across runs",
   const auto run_a = RunReplayOnce("boat_det_a", trace);
   const auto run_b = RunReplayOnce("boat_det_b", trace);
 
-  REQUIRE(run_a.size() == static_cast<std::size_t>(kFrameCount));
-  REQUIRE(run_b.size() == static_cast<std::size_t>(kFrameCount));
-  REQUIRE(ContentProjection(run_a) == ContentProjection(run_b));
+  REQUIRE(run_a.log.size() == static_cast<std::size_t>(kFrameCount));
+  REQUIRE(run_b.log.size() == static_cast<std::size_t>(kFrameCount));
+  REQUIRE(ContentProjection(run_a.log) == ContentProjection(run_b.log));
 }
 
 /* Tick attribution, now a hard requirement.
@@ -247,6 +281,36 @@ TEST_CASE("Replay attributes frames to identical ticks across runs",
   const auto run_a = RunReplayOnce("boat_det_tick_a", trace);
   const auto run_b = RunReplayOnce("boat_det_tick_b", trace);
 
-  REQUIRE(run_a.size() == run_b.size());
-  REQUIRE(TickAttributedProjection(run_a) == TickAttributedProjection(run_b));
+  REQUIRE(run_a.log.size() == run_b.log.size());
+  REQUIRE(TickAttributedProjection(run_a.log) == TickAttributedProjection(run_b.log));
+}
+
+/* Production case: the authority is already running before StartReplay
+   arrives. The absolute tick shifts by the RPC arrival time; the projection
+   relative to the session anchor must not. */
+TEST_CASE("Replay attributes frames to identical ticks relative to a running authority",
+          "[determinism][replay][system]") {
+  const auto trace = BuildCanTrace();
+  const std::vector<std::chrono::milliseconds> delays{
+      std::chrono::milliseconds{0}, std::chrono::milliseconds{23},
+      std::chrono::milliseconds{157}, std::chrono::milliseconds{611}};
+
+  std::vector<RunResult> runs;
+  for (std::size_t i = 0; i < delays.size(); ++i) {
+    runs.push_back(RunReplayOnce("boat_det_running_" + std::to_string(i), trace,
+                                 RunOptions{true, delays[i]}));
+  }
+
+  REQUIRE(runs.front().anchor.has_value());
+  REQUIRE(runs.front().log.size() == static_cast<std::size_t>(kFrameCount));
+  const auto baseline = RelativeTickProjection(runs.front().log, *runs.front().anchor);
+  for (const auto& run : runs) {
+    REQUIRE(run.anchor.has_value());
+    REQUIRE(run.log.size() == static_cast<std::size_t>(kFrameCount));
+    REQUIRE(run.log.front().observer_tick == *run.anchor);
+    REQUIRE(RelativeTickProjection(run.log, *run.anchor) == baseline);
+  }
+
+  // The long delay must actually have produced a non-trivial offset.
+  REQUIRE(*runs.back().anchor > 1);
 }

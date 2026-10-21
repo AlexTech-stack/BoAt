@@ -939,10 +939,14 @@ The gateway prints the interval and phase order at startup
 This replaced two independent wall-clock threads. **`ReplayController` now owns no thread and
 no clock**: `Start()` maps the trace and anchors the pass, and the replay phase pumps it.
 A record is due when elapsed *authority ticks* (scaled by `speed_multiplier`) reach its
-offset from the pass anchor — no wall clock is read, so a loaded host makes the authority
-tick later in real terms without ever changing which tick a record lands in. That is what
-made `boat_determinism_replay`'s tick-attribution case a hard `REQUIRE`: 10/10 identical
-under 2× CPU oversubscription, where the old design managed 0/6.
+offset from the session anchor — no wall clock is read, so a loaded host makes the authority
+tick later in real terms without ever changing which tick a record lands in. The session
+anchor is the first authority tick at which a started replay is pumped; the absolute tick is
+`anchor + f(trace, speed, tick interval, loop delay)`, and only `f` is reproducible across
+different `StartReplay` arrival times. Compare `authority_tick - anchor` (exposed as
+`ReplayEvent.authority_tick` / `SessionAnchorTick()`), not absolute ticks. That is what made
+`boat_determinism_replay`'s tick-attribution case a hard `REQUIRE`: 10/10 identical under 2×
+CPU oversubscription, where the old design managed 0/6.
 
 Consequences worth knowing:
 

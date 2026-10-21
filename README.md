@@ -42,7 +42,7 @@ actually reached the wire:
 |---|---|
 | Seeded PRNG and fault-injection streams | **Yes** — by construction (`DeterminismEngine`) |
 | Replayed frame content and ordering on the wire | **Yes** — asserted bit-identical, including under CPU load |
-| Which tick a replayed frame is observed in | **Yes** — asserted identical, including under CPU load |
+| Which tick a replayed frame is observed in | **Yes — relative to the replay's session anchor**, including under CPU load |
 
 Tick attribution used to be the gap: replay and the node tick thread were separate time
 domains, both scheduling against absolute wall-clock deadlines, which held them in lockstep
@@ -50,13 +50,19 @@ on an idle machine but not on a loaded one. They are now ordered phases of a sin
 `TickAuthority` (`node_plugins` → `sim_plugins` → `replay`), and a replay record's due time
 is computed from elapsed **ticks** rather than elapsed wall time. A loaded host therefore
 makes the authority tick later in real terms without ever changing which tick a record comes
-due on — which is what lets the test assert this with a plain `REQUIRE` rather than a
-tolerance. Verified 10/10 identical under 2× CPU oversubscription, the load that previously
-failed 0/6.
+due on.
 
-So a test may assert on tick numbers, not just on frame content and ordering. The one thing
-that is *not* promised is wall-clock timing: a tick happens later on a busy host, it just
-never contains different frames.
+For one replay session, a record's authority tick is **anchor + f(trace, speed, tick
+interval, loop delay)**. The anchor is the first authority tick at which that session is
+pumped; it depends on when `StartReplay` arrived. `f` does not, and is what the determinism
+test compares. The anchor is observable as `ReplayController::SessionAnchorTick()` and,
+remotely, as the first `ReplayEvent.authority_tick`; compare `authority_tick - anchor`, not
+absolute tick numbers. `Seek`, `Pause`/`Resume` and the step-by-step mode are RPC-timed and
+are outside that uninterrupted-span guarantee. Verified 10/10 identical under 2× CPU
+oversubscription, the load that previously failed 0/6.
+
+The one thing that is *not* promised is wall-clock timing: a tick happens later on a busy
+host, it just never contains different frames.
 
 ## Platforms
 

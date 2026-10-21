@@ -12,6 +12,7 @@
 #include <grpcpp/grpcpp.h>
 #include <unistd.h>
 
+#include "boat/v1/frame.pb.h"
 #include "boat/v1/replay.grpc.pb.h"
 #include "can_bus_registry.h"
 #include "ethernet_bus_registry.h"
@@ -61,6 +62,31 @@ std::vector<std::uint8_t> BuildTestTraceData() {
   return data;
 }
 
+/* Length-delimited boat.v1.Frame records, the format ReplayController reads.
+   BuildTestTraceData above is the TraceStore header format used by the
+   trace-service tests; feeding it to PumpDueRecords just records a parse
+   error. */
+std::vector<std::uint8_t> BuildReplayTraceData() {
+  std::vector<std::uint8_t> data;
+  for (std::uint64_t tick = 100; tick <= 200; tick += 10) {
+    boat::v1::Frame pf;
+    pf.set_bus_type(boat::v1::Frame::CAN);
+    pf.set_timestamp_ns(tick * 1'000'000ULL);
+    pf.set_payload(std::string(2, static_cast<char>(tick & 0xFF)));
+    auto* cm = pf.mutable_can();
+    cm->set_can_id(0x123);
+    cm->set_dlc(2);
+    cm->set_channel(1);
+
+    const std::string raw = pf.SerializeAsString();
+    const auto len = static_cast<std::uint32_t>(raw.size());
+    const auto* len_bytes = reinterpret_cast<const std::uint8_t*>(&len);
+    data.insert(data.end(), len_bytes, len_bytes + sizeof(len));
+    data.insert(data.end(), raw.begin(), raw.end());
+  }
+  return data;
+}
+
 struct IntegrationFixture {
   std::string event_db;
   std::string trace_db;
@@ -96,7 +122,8 @@ struct IntegrationFixture {
   };
   boat::gateway::ReplayServiceImpl replay_service{ctx};
 
-  IntegrationFixture(const std::string& prefix)
+  IntegrationFixture(const std::string& prefix,
+                     const std::vector<std::uint8_t>& trace_data = BuildTestTraceData())
       : event_db(UniquePath(prefix + "_events.db")),
         trace_db(UniquePath(prefix + "_traces.db")),
         trace_file(UniquePath(prefix + "_trace.bin")),
@@ -104,7 +131,6 @@ struct IntegrationFixture {
         trace_store(trace_db) {
     std::filesystem::remove(event_db);
     std::filesystem::remove(trace_db);
-    auto trace_data = BuildTestTraceData();
     boat::store::TraceRecord meta;
     meta.id = prefix;
     meta.storage_path = trace_file;
@@ -159,6 +185,42 @@ TEST_CASE("ReplayService StartReplay accepts valid trace and rejects empty", "[i
   auto stop_status = stub->StopReplay(&stop_ctx, stop_req, &stop_resp);
   REQUIRE(stop_status.ok());
 
+  server->Shutdown();
+}
+
+TEST_CASE("ReplayService StreamReplay exposes the authority tick", "[integration][replay]") {
+  IntegrationFixture f("r_anchor", BuildReplayTraceData());
+
+  grpc::ServerBuilder builder;
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
+  builder.RegisterService(&f.replay_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  auto channel = server->InProcessChannel({});
+  auto stub = boat::v1::ReplayService::NewStub(channel);
+
+  grpc::ClientContext start_ctx;
+  boat::v1::StartReplayRequest start_req;
+  start_req.set_trace_id("r_anchor");
+  start_req.set_speed(boat::v1::REPLAY_SPEED_ACCELERATED);
+  start_req.set_speed_multiplier(1000.0);
+  boat::v1::ReplayControlResponse start_resp;
+  REQUIRE(stub->StartReplay(&start_ctx, start_req, &start_resp).ok());
+
+  // The controller has no thread in this fixture: drive the first replay phase
+  // at a non-zero authority tick.
+  f.replay_controller.PumpDueRecords(500);
+
+  grpc::ClientContext stream_ctx;
+  boat::v1::StreamReplayRequest stream_req;
+  stream_req.set_replay_id(start_resp.replay_id());
+  auto reader = stub->StreamReplay(&stream_ctx, stream_req);
+  boat::v1::ReplayEvent event;
+  REQUIRE(reader->Read(&event));
+  REQUIRE(event.authority_tick() == 500);
+
+  stream_ctx.TryCancel();
+  (void)reader->Finish();
   server->Shutdown();
 }
 

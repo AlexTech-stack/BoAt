@@ -18,6 +18,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -119,13 +120,30 @@ class ReplayController {
   bool IsRunning() const;
   std::string LastError() const;
 
+  /* The anchor of the current session: the first authority tick at which it
+     was pumped (the first PumpDueRecords call that found it running).
+
+     This is what "tick attribution is reproducible" is relative to. For one
+     session, the authority tick a record is delivered in is
+     anchor + f(trace, speed_multiplier, tick interval, loop_delay_ms); f is
+     the same on every run and under any load, while the anchor depends on when
+     the Start call happened to arrive. Compare runs by subtracting it.
+
+     Deliberately not moved by Seek, Resume or a loop pass -- those re-base the
+     pacing, this is the session's first tick. nullopt until the first pump, for
+     an empty trace (never pumped), and once the session has been stopped. */
+  [[nodiscard]] std::optional<std::uint64_t> SessionAnchorTick() const;
+
   struct ReplayEventEntry {
-    std::uint64_t tick;
+    std::uint64_t tick;            // position in the trace, milliseconds
     std::string payload;
+    std::uint64_t authority_tick;  // TickAuthority tick it was delivered in
   };
 
   /// Thread-safe: push a replay event onto the internal queue.
-  void PushEvent(std::uint64_t tick, std::string payload);
+  /// `authority_tick` is 0 for events not produced by the pump.
+  void PushEvent(std::uint64_t tick, std::string payload,
+                 std::uint64_t authority_tick = 0);
 
   /// Thread-safe: consume (pop) all queued replay events.
   std::vector<ReplayEventEntry> ConsumeEvents();
@@ -199,13 +217,14 @@ class ReplayController {
      record is due, which is what lets the same body serve both the self-paced
      loop and an externally driven tick. */
   void DispatchRecord(const Session& s, const boat::v1::Frame& pf, std::uint64_t tick,
-                      std::span<const std::uint8_t> raw);
+                      std::uint64_t authority_tick, std::span<const std::uint8_t> raw);
 
   void RecordError(std::string message);
 
   /* Append one event to event_queue_, dropping the oldest first once the
      backlog is at kMaxStreamEvents. Caller holds event_queue_mutex_. */
-  void PushEventLocked(std::uint64_t tick, std::string payload);
+  void PushEventLocked(std::uint64_t tick, std::string payload,
+                       std::uint64_t authority_tick);
 
   boat::store::ITraceStore& trace_store_;
   boat::store::IEventStore& event_store_;

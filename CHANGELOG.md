@@ -13,6 +13,12 @@ The plugin ABI is versioned separately from the project; see
 
 ### Added
 
+- **Replay events expose the authority tick, and tick attribution is defined relative to a
+  session anchor (#76).** `ReplayEvent.authority_tick` (additive field 4) and
+  `ReplayController::SessionAnchorTick()` let a caller compare `authority_tick - anchor`
+  instead of absolute ticks, which shift with `StartReplay` arrival time. The README and
+  determinism test now cover an already-running `TickAuthority` at several start offsets;
+  an explicit `start_at_tick` remains a future option.
 - **Dashboard metrics panel and the remaining SDK service wrappers (#28, #41).**
   `ui/dashboard.py` now subscribes to `MetricsService.StreamMetrics` and renders
   the latest value per series in a live panel, highlighting CAN metrics and
