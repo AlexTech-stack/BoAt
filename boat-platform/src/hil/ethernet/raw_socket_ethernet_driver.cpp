@@ -69,6 +69,18 @@ bool RawSocketEthernetDriver::Open() {
   }
   if_index_ = ifr.ifr_ifindex;
 
+  // Remember the hardware address: a PDU route (or any caller that leaves
+  // src_mac zero) still needs a valid source MAC on the wire. Without this the
+  // raw driver put six zero bytes in the source field.
+  if (ioctl(sock_, SIOCGIFHWADDR, &ifr) == 0) {
+    std::memcpy(iface_mac_, ifr.ifr_hwaddr.sa_data, sizeof(iface_mac_));
+    iface_mac_valid_ = true;
+  } else {
+    iface_mac_valid_ = false;
+    std::fprintf(stderr, "[RawSocket] SIOCGIFHWADDR failed for %s: %s\n",
+                 iface_.c_str(), std::strerror(errno));
+  }
+
   // Bind to this interface only so we don't capture frames from other NICs.
   struct sockaddr_ll sll{};
   sll.sll_family   = AF_PACKET;
@@ -92,6 +104,17 @@ bool RawSocketEthernetDriver::Open() {
   tv.tv_usec = 100000;  // 100 ms
   setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
+  // Bound TX too: a full packet-socket queue must not block the caller while
+  // it holds the registry lock (the write now happens without that lock, but
+  // the caller still needs a bounded result).
+  tv.tv_usec = 100000;
+  if (setsockopt(sock_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) {
+    std::fprintf(stderr, "[RawSocket] SO_SNDTIMEO failed for %s: %s\n",
+                 iface_.c_str(), std::strerror(errno));
+    ::close(sock_); sock_ = -1;
+    return false;
+  }
+
   open_.store(true);
   return true;
 }
@@ -100,6 +123,7 @@ void RawSocketEthernetDriver::Close() {
   if (open_.exchange(false)) {
     if (sock_ >= 0) { ::close(sock_); sock_ = -1; }
   }
+  iface_mac_valid_ = false;
 }
 
 bool RawSocketEthernetDriver::ReadFrame(EthernetFrame& out) {
@@ -137,7 +161,16 @@ bool RawSocketEthernetDriver::ReadFrame(EthernetFrame& out) {
 bool RawSocketEthernetDriver::WriteFrame(const EthernetFrame& frame) {
   if (!open_.load() || sock_ < 0 || if_index_ < 0) return false;
 
-  const std::size_t payload_len = std::min(frame.payload.size(), kMaxPayload);
+  // Never truncate an oversized frame and report success (#75). The caller
+  // must split or the route is wrong.
+  if (frame.payload.size() > kMaxPayload) {
+    std::fprintf(stderr,
+                 "[RawSocket] refusing %zu-byte payload on %s (max %zu)\n",
+                 frame.payload.size(), iface_.c_str(), kMaxPayload);
+    return false;
+  }
+
+  const std::size_t payload_len = frame.payload.size();
   const bool        has_vlan    = frame.vlan_id != 0;
   const std::size_t hdr_size    = has_vlan ? kVlanHdrSize : kEthHdrSize;
   // Ethernet minimum payload is 46 bytes; pad to 60-byte minimum frame.
@@ -153,8 +186,23 @@ bool RawSocketEthernetDriver::WriteFrame(const EthernetFrame& frame) {
   for (int i = 0; i < 6; ++i) { if (frame.dst_mac[i]) { all_zero = false; break; } }
   if (all_zero) dst = kBroadcast;
 
-  std::memcpy(buf,     dst,            6);
-  std::memcpy(buf + 6, frame.src_mac,  6);
+  // A zero source is not a valid Ethernet address. PDU routes omit it, so use
+  // the interface's own hardware address rather than emitting 00:00:...
+  const unsigned char* src = frame.src_mac;
+  bool src_zero = true;
+  for (int i = 0; i < 6; ++i) { if (frame.src_mac[i]) { src_zero = false; break; } }
+  if (src_zero) {
+    if (!iface_mac_valid_) {
+      std::fprintf(stderr,
+                   "[RawSocket] no source MAC available for %s; refusing frame\n",
+                   iface_.c_str());
+      return false;
+    }
+    src = iface_mac_;
+  }
+
+  std::memcpy(buf,     dst, 6);
+  std::memcpy(buf + 6, src, 6);
 
   if (has_vlan) {
     buf[12] = 0x81; buf[13] = 0x00;

@@ -58,6 +58,19 @@ add_executable(boat_unit_frame unit/test_frame.cpp)
 target_link_libraries(boat_unit_frame PRIVATE boat_core Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_frame)
 
+add_executable(
+  boat_unit_frame_sink
+  unit/test_frame_sink.cpp
+  ../gateway/grpc_gateway/frame_sink.cpp
+)
+target_include_directories(boat_unit_frame_sink PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/src/hil
+  ${CMAKE_SOURCE_DIR}/src/gateway/grpc_gateway
+)
+target_link_libraries(boat_unit_frame_sink PRIVATE boat_core boat_hil Catch2::Catch2WithMain)
+boat_discover_tests(boat_unit_frame_sink)
+
 add_executable(boat_unit_trace_id unit/test_trace_id.cpp)
 target_include_directories(boat_unit_trace_id PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(boat_unit_trace_id PRIVATE boat_store Catch2::Catch2WithMain)

@@ -40,11 +40,14 @@ class EthernetBusRegistry {
   bool Add(const std::string& iface,
            std::unique_ptr<IEthernetDriver> driver);
 
-  /* Send a frame on the named interface.  Returns false if not found. */
+  /* Send a frame on the named interface. Returns false if the interface is
+     unknown or the driver rejected the write; the self-sent echo is only
+     dispatched after a successful write. */
   bool SendFrame(const std::string& iface, const EthernetFrame& frame);
 
-  /* Send a frame on every registered interface. */
-  void SendFrameAll(const EthernetFrame& frame);
+  /* Send a frame on every registered interface. Returns true only if there is
+     at least one interface and every write succeeded. */
+  bool SendFrameAll(const EthernetFrame& frame);
 
   /* Subscribe to incoming frames.
      iface_filter = "" → all interfaces.
@@ -69,7 +72,9 @@ class EthernetBusRegistry {
 
   struct IfaceEntry {
     std::string                      iface;
-    std::unique_ptr<IEthernetDriver> driver;
+    // Shared so SendFrame can snapshot the driver under the lock and write
+    // without holding ifaces_mutex_ (sendto can block on a full queue).
+    std::shared_ptr<IEthernetDriver> driver;
     std::thread                      rx_thread;
     std::atomic<bool>                running{false};
   };

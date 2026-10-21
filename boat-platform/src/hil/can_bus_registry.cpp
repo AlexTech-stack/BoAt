@@ -5,6 +5,7 @@
 
 #include <boat/plugin.h>
 
+#include <cstdio>
 #include <ctime>
 #include <utility>
 
@@ -14,6 +15,8 @@ namespace boat::hil {
 // a plugin reading meta.can.flags must see the same bit the driver sets.
 static_assert(kCanFlagExtended == BOAT_CAN_FLAG_EXTENDED,
               "kCanFlagExtended and BOAT_CAN_FLAG_EXTENDED must stay in sync");
+static_assert(kCanFlagRtr == BOAT_CAN_FLAG_RTR,
+              "kCanFlagRtr and BOAT_CAN_FLAG_RTR must stay in sync");
 
 namespace {
 
@@ -48,7 +51,7 @@ bool CanBusRegistry::Add(const std::string& iface, std::shared_ptr<IHalDriver> d
   // and a netlink health read must not run under bridges_mutex_.
   auto health_driver = driver;
 
-  auto bridge = std::make_unique<HilBridge>(std::move(driver), bus);
+  auto bridge = std::make_shared<HilBridge>(std::move(driver), bus);
 
   // Capture iface by value so the lambda stays valid after Add() returns.
   bridge->SetOnReceive([this, iface](const CanFrame& frame) {
@@ -64,14 +67,24 @@ bool CanBusRegistry::Add(const std::string& iface, std::shared_ptr<IHalDriver> d
 }
 
 bool CanBusRegistry::SendFrame(const std::string& iface, const CanFrame& frame) {
+  std::shared_ptr<HilBridge> bridge;
   {
     std::lock_guard<std::mutex> lock(bridges_mutex_);
     const auto it = bridges_.find(iface);
     if (it == bridges_.end()) {
       return false;
     }
-    it->second.bridge->SendFrame(frame);
+    // Snapshot the bridge and release bridges_mutex_ before write(): a
+    // physical CAN write can block on a full TX queue, and this mutex also
+    // guards Interfaces()/Has() and every other interface's send.
+    bridge = it->second.bridge;
   }
+
+  if (!bridge->SendFrame(frame)) {
+    std::fprintf(stderr, "[CanRegistry] WriteFrame failed on '%s'\n", iface.c_str());
+    return false;
+  }
+
   // Tag as self-sent so subscribers (especially plugins) can distinguish
   // internally-dispatched loopback from frames received from the wire.
   // Timestamp is captured fresh here (right after the write), not copied
@@ -83,22 +96,34 @@ bool CanBusRegistry::SendFrame(const std::string& iface, const CanFrame& frame) 
   return true;
 }
 
-void CanBusRegistry::SendFrameAll(const CanFrame& frame) {
-  // Collect iface names while holding the lock, then dispatch without it.
-  std::vector<std::string> dispatched_ifaces;
+bool CanBusRegistry::SendFrameAll(const CanFrame& frame) {
+  // Snapshot the bridges under the lock, then write and dispatch without it.
+  std::vector<std::pair<std::string, std::shared_ptr<HilBridge>>> bridges;
   {
     std::lock_guard<std::mutex> lock(bridges_mutex_);
+    bridges.reserve(bridges_.size());
     for (auto& [name, entry] : bridges_) {
-      entry.bridge->SendFrame(frame);
-      dispatched_ifaces.push_back(name);
+      bridges.emplace_back(name, entry.bridge);
     }
   }
+
+  if (bridges.empty()) {
+    return false;
+  }
+
+  bool all_written = true;
   CanFrame self = frame;
   self.flags |= BOAT_CAN_FLAG_SELF_SENT;
   self.timestamp_ns = NowNs();
-  for (const auto& iface : dispatched_ifaces) {
+  for (const auto& [iface, bridge] : bridges) {
+    if (!bridge->SendFrame(frame)) {
+      std::fprintf(stderr, "[CanRegistry] WriteFrame failed on '%s'\n", iface.c_str());
+      all_written = false;
+      continue;
+    }
     DispatchRx(self, iface);
   }
+  return all_written;
 }
 
 CanBusRegistry::RxCallbackId CanBusRegistry::Subscribe(const std::string& iface_filter,
@@ -216,12 +241,20 @@ void CanBusRegistry::DispatchRx(const CanFrame& frame, const std::string& iface)
   if (!frame_cbs.empty()) {
     // Guard against a producer that set dlc beyond data[64]: the wire struct
     // only ever carries sizeof(data) bytes, and dlc is the payload byte count.
+    // An RTR frame has a requested DLC but no data bytes; keep the DLC and
+    // hand downstream consumers an empty payload plus the RTR flag.
+    const bool is_rtr = (frame.flags & kCanFlagRtr) != 0;
     const std::uint8_t dlc =
-        std::min<std::uint8_t>(frame.dlc, static_cast<std::uint8_t>(sizeof(frame.data)));
-    std::vector<uint8_t> payload(frame.data, frame.data + dlc);
+        std::min<std::uint8_t>(frame.dlc, static_cast<std::uint8_t>(
+                                             is_rtr ? 8 : sizeof(frame.data)));
+    std::vector<std::uint8_t> payload;
+    if (!is_rtr) {
+      payload.assign(frame.data, frame.data + dlc);
+    }
     const bool is_fd = (frame.flags & kCanFdFlagFdf) != 0;
     auto core_frame = boat::core::Frame::FromCan(iface, frame.can_id, dlc,
-                                                  frame.flags, std::move(payload), is_fd);
+                                                  frame.flags, std::move(payload), is_fd,
+                                                  /*preserve_dlc=*/is_rtr);
     core_frame.set_timestamp_ns(frame.timestamp_ns);
     for (const auto& cb : frame_cbs) {
       cb(core_frame);

@@ -63,6 +63,7 @@ static boat::hil::PduRoute ProtoToRoute(const boat::v1::PduRoute& pr) {
   r.iface     = pr.iface();
   r.vlan_id   = static_cast<uint16_t>(pr.vlan_id()   & 0x0FFF);
   r.can_id    = pr.can_id();
+  r.can_flags = static_cast<uint8_t>(pr.can_flags() & 0xFF);
   r.ethertype = static_cast<uint16_t>(pr.ethertype() & 0xFFFF);
   r.src_ip.assign(pr.src_ip().begin(), pr.src_ip().end());
   r.dst_ip.assign(pr.dst_ip().begin(), pr.dst_ip().end());
@@ -88,6 +89,7 @@ static void RouteToProto(const boat::hil::PduRoute& r, boat::v1::PduRoute* pr) {
   pr->set_iface(r.iface);
   pr->set_vlan_id(r.vlan_id);
   pr->set_can_id(r.can_id);
+  pr->set_can_flags(r.can_flags);
   pr->set_ethertype(r.ethertype);
   pr->set_src_ip(r.src_ip.data(), r.src_ip.size());
   pr->set_dst_ip(r.dst_ip.data(), r.dst_ip.size());
@@ -277,7 +279,7 @@ grpc::Status PduServiceImpl::ConfigureRoute(
     boat::v1::ConfigureRouteResponse* response) {
   if (!GetRouter()) return grpc::Status(grpc::StatusCode::NOT_FOUND, "PduRouter plugin not loaded");
 
-  const boat::hil::PduRoute route = ProtoToRoute(request->route());
+  boat::hil::PduRoute route = ProtoToRoute(request->route());
 
   if (route.pdu_id == 0) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "pdu_id must be non-zero");
@@ -285,6 +287,28 @@ grpc::Status PduServiceImpl::ConfigureRoute(
   if (route.transport == boat::hil::PduTransport::kUnspecified) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "transport must be CAN or ETHERNET");
+  }
+  if (route.transport == boat::hil::PduTransport::kCan) {
+    // Validate the wire field before ProtoToRoute narrows it to uint8; high
+    // bits must not disappear silently.
+    constexpr std::uint32_t kAllowedCanFlags = 0x37;
+    if ((request->route().can_flags() & ~kAllowedCanFlags) != 0) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "can_flags contains an unknown CAN flag bit");
+    }
+    const bool fd = (route.can_flags & boat::hil::kCanFdFlagFdf) != 0;
+    const bool rtr = (route.can_flags & boat::hil::kCanFlagRtr) != 0;
+    if (fd && rtr) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "CAN FD and RTR are mutually exclusive");
+    }
+    if (route.can_id > 0x1FFFFFFF) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "can_id must fit in 29 bits");
+    }
+    if ((route.can_flags & boat::hil::kCanFlagExtended) == 0 && route.can_id > 0x7FF) {
+      route.can_flags |= boat::hil::kCanFlagExtended;
+    }
   }
 
   if (!route.dst_ip.empty() || !route.src_ip.empty()) {

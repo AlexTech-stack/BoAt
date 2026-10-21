@@ -208,23 +208,45 @@ bool PduRouter::TransmitRoute(const PduRoute& route,
 
   if (route.transport == PduTransport::kCan) {
     const uint32_t can_id = route.can_id != 0 ? route.can_id : pdu_id;
-    const uint8_t dlc = static_cast<uint8_t>(std::min(payload.size(), std::size_t{64}));
+    const bool is_fd = (route.can_flags & kCanFdFlagFdf) != 0;
+    const bool is_rtr = (route.can_flags & kCanFlagRtr) != 0;
+
+    // A classic CAN route cannot carry more than 8 bytes, and a CAN FD route
+    // cannot carry more than 64. Reject instead of emitting a truncated frame
+    // with success (#75). RTR is classic-only and carries no payload.
+    if (is_fd && is_rtr) return false;
+    if (is_rtr) {
+      if (!payload.empty()) return false;
+    } else if (payload.size() > (is_fd ? 64U : 8U)) {
+      return false;
+    }
+    if (can_id > 0x1FFFFFFF) return false;
+
+    const uint8_t dlc = static_cast<uint8_t>(payload.size());
+    uint8_t flags = route.can_flags;
+    if (can_id > 0x7FF) {
+      flags |= kCanFlagExtended;
+    }
+
     if (frame_publisher_) {
       BoatFrame bf{};
-      bf.bus_type = BOAT_BUS_CAN;
+      bf.bus_type = is_fd ? BOAT_BUS_CANFD : BOAT_BUS_CAN;
       bf.meta.can.can_id = can_id;
       bf.meta.can.dlc = dlc;
-      bf.meta.can.flags = 0;
+      bf.meta.can.flags = flags;
       bf.iface = route.iface.c_str();
       bf.payload = const_cast<uint8_t*>(payload.data());
-      bf.payload_len = dlc;
+      bf.payload_len = is_rtr ? 0 : dlc;
       frame_publisher_(bf);
       sent = true;
     } else if (can_) {
       CanFrame frame{};
       frame.can_id = can_id;
       frame.dlc    = dlc;
-      std::memcpy(frame.data, payload.data(), frame.dlc);
+      frame.flags  = flags;
+      if (!is_rtr && dlc > 0) {
+        std::memcpy(frame.data, payload.data(), dlc);
+      }
       sent = can_->SendFrame(route.iface, frame);
     }
   } else if (route.transport == PduTransport::kEthernet) {
@@ -261,6 +283,10 @@ bool PduRouter::TransmitRoute(const PduRoute& route,
       frame.payload[3] = static_cast<uint8_t>(pdu_id & 0xFF);
       std::memcpy(frame.payload.data() + 4, payload.data(), payload.size());
     }
+    // The raw Ethernet driver rejects oversize frames now; reject here too so
+    // the in-process plugin path cannot report success for a frame that would
+    // be truncated downstream (#75).
+    if (frame.payload.size() > 1500) return false;
     if (frame_publisher_) {
       BoatFrame bf{};
       bf.bus_type = BOAT_BUS_ETHERNET;

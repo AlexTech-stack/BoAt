@@ -32,6 +32,10 @@ struct PduRoute {
   std::string  iface;
   uint16_t     vlan_id{0};         // 0 = untagged (Ethernet)
   uint32_t     can_id{0};          // 0 = use pdu_id as CAN ID
+  // CAN format/control bits: kCanFdFlagFdf, kCanFlagExtended, kCanFlagRtr.
+  // Without these a >8-byte PDU or an extended ID below 0x800 could only be
+  // guessed at (and the router used to send a truncated classic frame).
+  uint8_t      can_flags{0};
   uint16_t     ethertype{0x88B5};  // used only when dst_ip is empty (sim-only path)
 
   // IP/UDP/IpduM path — active when dst_ip is non-empty.

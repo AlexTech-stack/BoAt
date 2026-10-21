@@ -95,6 +95,54 @@ TEST_CASE("PduRouter SendPdu over CAN writes correct frame", "[unit][pdu]") {
   REQUIRE(fr.data[2] == 0x03);
 }
 
+TEST_CASE("PduRouter rejects a classic CAN payload over eight bytes", "[unit][pdu][tx]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id    = 0x100;
+  route.transport = PduTransport::kCan;
+  route.iface     = "vcan0";
+  f.router.AddRoute(route);
+
+  REQUIRE_FALSE(f.router.SendPdu(0x100, std::vector<std::uint8_t>(9, 0xAA)));
+  REQUIRE(f.mock_can->written.empty());
+
+  route.can_flags = kCanFdFlagFdf;
+  f.router.AddRoute(route);
+  REQUIRE(f.router.SendPdu(0x100, std::vector<std::uint8_t>(16, 0xAA)));
+  REQUIRE(f.mock_can->written.size() == 1);
+  REQUIRE(f.mock_can->written[0].dlc == 16);
+  REQUIRE((f.mock_can->written[0].flags & kCanFdFlagFdf) != 0);
+}
+
+TEST_CASE("PduRouter preserves an explicit CAN extended identifier", "[unit][pdu][tx]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id    = 0x100;
+  route.transport = PduTransport::kCan;
+  route.iface     = "vcan0";
+  route.can_id    = 0x123;
+  route.can_flags = kCanFlagExtended;
+  f.router.AddRoute(route);
+
+  REQUIRE(f.router.SendPdu(0x100, {0xAA}));
+  REQUIRE(f.mock_can->written.size() == 1);
+  REQUIRE(f.mock_can->written[0].can_id == 0x123);
+  REQUIRE((f.mock_can->written[0].flags & kCanFlagExtended) != 0);
+}
+
+TEST_CASE("PduRouter rejects an Ethernet payload that cannot fit one frame",
+          "[unit][pdu][tx]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id    = 0x100;
+  route.transport = PduTransport::kEthernet;
+  route.iface     = "veth0";
+  f.router.AddRoute(route);
+
+  REQUIRE_FALSE(f.router.SendPdu(0x100, std::vector<std::uint8_t>(1500, 0xAA)));
+  REQUIRE(f.mock_eth->written.empty());
+}
+
 TEST_CASE("PduRouter SendPdu over CAN uses explicit can_id", "[unit][pdu]") {
   Fixture f;
   PduRoute route;

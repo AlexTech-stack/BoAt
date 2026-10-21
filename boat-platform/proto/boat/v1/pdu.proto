@@ -34,6 +34,7 @@ message PduRoute {
   string       iface     = 3;  // CAN iface (e.g. "vcan0") or Ethernet iface (e.g. "eth0")
   uint32       vlan_id   = 4;  // 802.1Q VID — 0 = untagged (Ethernet only)
   uint32       can_id    = 5;  // override CAN frame ID — 0 = use pdu_id (CAN only)
+  uint32       can_flags = 13; // CAN format bits: FDF 0x04, EXTENDED 0x10, RTR 0x20
   uint32       ethertype = 6;  // used only when dst_ip is empty (sim-only, default 0x88B5)
 
   // IP/UDP/IpduM transport — active when dst_ip is non-empty.

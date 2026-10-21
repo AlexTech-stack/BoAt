@@ -37,11 +37,15 @@ class CanBusRegistry {
   bool Add(const std::string& iface, std::shared_ptr<IHalDriver> driver,
            boat::core::EventBus& bus);
 
-  /* Send a frame on the named interface. Returns false if iface is unknown. */
+  /* Send a frame on the named interface. Returns false if the interface is
+     unknown or its driver rejected the write. The local self-sent echo is
+     dispatched only after a successful write. */
   bool SendFrame(const std::string& iface, const CanFrame& frame);
 
-  /* Send a frame on every registered interface. */
-  void SendFrameAll(const CanFrame& frame);
+  /* Send a frame on every registered interface. Returns true only if there is
+     at least one interface and every write succeeded; successful interfaces
+     still receive their local echo when another one fails. */
+  bool SendFrameAll(const CanFrame& frame);
 
   /* Subscribe to incoming frames.
      iface_filter = "" receives frames from ALL interfaces.
@@ -73,7 +77,9 @@ class CanBusRegistry {
 
   struct BridgeEntry {
     std::string iface;
-    std::unique_ptr<HilBridge> bridge;
+    // Shared so SendFrame can snapshot a bridge under the lock and write
+    // without holding bridges_mutex_ (a CAN write can block on a full queue).
+    std::shared_ptr<HilBridge> bridge;
     CanInterfaceInfo info;
     // The bridge owns the driver; this shared copy exists so health queries can
     // outlive the lock (a netlink read must not run under bridges_mutex_).

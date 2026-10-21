@@ -85,6 +85,19 @@ The plugin ABI is versioned separately from the project; see
   reaches the bus (it waits, for at most 2 s, for a dispatch already in progress).
   Concurrent `StartReplay` calls are also serialized now, so the registered `replay_id` always
   names the replay that is actually playing.
+- **CAN/Ethernet transmit failures are no longer reported as success, and oversized frames
+  are rejected instead of truncated** (#66, #75). CAN writes are bounded by `SO_SNDTIMEO`
+  (100 ms) and happen outside the bus-registry mutex, so one full/no-ACK TX queue can no
+  longer stall every interface and the tick thread. `HilBridge`, both registries,
+  `FrameSink` and `FrameService` propagate the driver result; a failed write is not echoed
+  locally and `FrameService.SendFrame` returns `UNAVAILABLE` rather than `accepted=true`.
+  Classic CAN payloads over 8 bytes, CAN FD over 64, Ethernet over 1500, and FD/RTR
+  combinations are rejected. The frame model now carries the classic-CAN RTR flag, and
+  `PduRoute`/the proto gain an additive `can_flags` field (FD `0x04`, extended `0x10`, RTR
+  `0x20`) with a `boat pdu route --can-flags` option; PDU CAN routes over 8 bytes without
+  the FD bit fail instead of silently becoming classic frames. The raw Ethernet driver
+  fills a zero source MAC from the interface's hardware address rather than emitting
+  `00:00:00:00:00:00`.
 - **The web UIs and tools bind to loopback by default and confine file paths** (#96). The
   eleven `ui/`/`tools/` FastAPI services hard-coded `0.0.0.0` despite `SECURITY.md` saying
   they are localhost tools. Each now binds `127.0.0.1` unless its `BOAT_*_BIND` variable is

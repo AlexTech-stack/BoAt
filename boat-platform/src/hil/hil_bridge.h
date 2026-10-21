@@ -22,7 +22,9 @@ class HilBridge {
 
   void Start();
   void Stop();
-  void SendFrame(const CanFrame& frame);
+  /* Returns the driver's write result. The EventBus TX subscription path has
+     no caller to report to, so it logs a failure instead. */
+  bool SendFrame(const CanFrame& frame);
 
   /* Register a callback invoked for every received CAN frame.
      Safe to call before or after Start(); replaces any previous callback. */

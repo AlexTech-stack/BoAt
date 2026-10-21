@@ -952,6 +952,23 @@ class LoopbackCanDriver : public boat::hil::IHalDriver {
   }
 };
 
+class FailingCanDriver : public boat::hil::IHalDriver {
+ public:
+  bool Open() override { return true; }
+  void Close() override {}
+  bool ReadFrame(boat::hil::CanFrame&) override {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    return false;
+  }
+  bool WriteFrame(const boat::hil::CanFrame&) override { return false; }
+  boat::hil::CanInterfaceInfo GetInfo() const override {
+    boat::hil::CanInterfaceInfo info;
+    info.driver_name = "failing";
+    info.state = "up";
+    return info;
+  }
+};
+
 }  // namespace
 
 TEST_CASE("Subscription teardown races cleanly with dispatch",
@@ -1503,6 +1520,71 @@ TEST_CASE("A slow frame subscriber overflows into dropped-oldest, and metrics sa
   (void)reader->Finish();
   server->Shutdown();
   std::filesystem::remove("boat_config.db");
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+}
+
+TEST_CASE("FrameService reports a failed CAN write as UNAVAILABLE",
+          "[integration][gateway][frame][tx]") {
+  const auto temp_dir = std::filesystem::temp_directory_path();
+  const auto event_db_path = temp_dir / "boat_integration_tx_events.db";
+  const auto trace_db_path = temp_dir / "boat_integration_tx_traces.db";
+  std::filesystem::remove(event_db_path);
+  std::filesystem::remove(trace_db_path);
+
+  boat::core::SimulationContext sim(781, 2);
+  boat::core::SignalBus signal_bus;
+  boat::core::ScenarioLoader scenario_loader;
+  boat::store::SqliteEventStore event_store(event_db_path.string());
+  boat::store::FlatFileTraceStore trace_store(trace_db_path.string());
+  boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
+  boat::hil::CanBusRegistry can_registry;
+  REQUIRE(can_registry.Add("vcan0", std::make_shared<FailingCanDriver>(), sim.event_bus()));
+  boat::hil::EthernetBusRegistry eth_registry;
+  boat::core::PluginManager plugin_manager;
+  boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
+  boat::gateway::RpcAuditLog audit_log;
+
+  boat::gateway::GatewayContext ctx{
+      .sim = sim,
+      .signal_bus = signal_bus,
+      .scenario_loader = scenario_loader,
+      .event_store = event_store,
+      .trace_store = trace_store,
+      .replay_controller = replay_controller,
+      .can_bus_registry = can_registry,
+      .ethernet_bus_registry = eth_registry,
+      .plugin_manager = plugin_manager,
+      .frame_sink = frame_sink,
+      .audit_log = audit_log,
+      .effective_config = kTestEffectiveConfig,
+  };
+
+  boat::gateway::FrameServiceImpl frame_service(ctx);
+  grpc::ServerBuilder builder;
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
+  builder.RegisterService(&frame_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  auto channel = server->InProcessChannel({});
+  auto stub = boat::v1::FrameService::NewStub(channel);
+
+  boat::v1::SendFrameRequest request;
+  auto* frame = request.mutable_frame();
+  frame->set_bus_type(boat::v1::Frame::CAN);
+  frame->set_iface("vcan0");
+  auto* can = frame->mutable_can();
+  can->set_can_id(0x123);
+  can->set_dlc(1);
+  frame->set_payload("\xAA", 1);
+
+  boat::v1::SendFrameResponse response;
+  grpc::ClientContext context;
+  const auto status = stub->SendFrame(&context, request, &response);
+  REQUIRE(status.error_code() == grpc::StatusCode::UNAVAILABLE);
+  REQUIRE_FALSE(response.accepted());
+
+  server->Shutdown();
   std::filesystem::remove(event_db_path);
   std::filesystem::remove(trace_db_path);
 }

@@ -28,6 +28,10 @@ typedef void (*BoatPublishFn)(void* publisher_ctx, const char* signal_id,
    honours it on TX, falling back to `can_id > 0x7FF` when unset. */
 #define BOAT_CAN_FLAG_EXTENDED 0x10
 
+/* Classic-CAN remote-transmission-request frame. Mirrors
+   boat::hil::kCanFlagRtr; a CAN FD frame cannot also be an RTR frame. */
+#define BOAT_CAN_FLAG_RTR 0x20
+
 /* Ethernet self-sent flag — set by EthernetBusRegistry when a frame was
    sourced locally (loopback prevention). */
 #define BOAT_ETH_FLAG_SELF_SENT 0x01

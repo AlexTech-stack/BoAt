@@ -103,9 +103,11 @@ class Frame {
 
   /* ── Factory methods ───────────────────────────────────────────────── */
 
+  /* `preserve_dlc` keeps a remote frame's requested length when the payload is
+     empty; ordinary frames clamp dlc to the bytes actually stored. */
   static Frame FromCan(std::string iface, uint32_t can_id, uint8_t dlc,
                        uint8_t flags, std::vector<uint8_t> payload,
-                       bool is_fd = false);
+                       bool is_fd = false, bool preserve_dlc = false);
 
   static Frame FromEthernet(std::string iface,
                             uint8_t dst_mac[6], uint8_t src_mac[6],

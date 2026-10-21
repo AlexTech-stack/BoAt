@@ -3,6 +3,7 @@
 
 #include "hil_bridge.h"
 
+#include <cstdio>
 #include <cstring>
 #include <utility>
 
@@ -43,7 +44,10 @@ void HilBridge::Start() {
     if (!DecodeCanFrame(unknown->data, frame)) {
       return;
     }
-    (void)driver_->WriteFrame(frame);
+    if (!driver_->WriteFrame(frame)) {
+      std::fprintf(stderr, "[HilBridge] CAN TX failed (id=0x%X, dlc=%u)\n",
+                   frame.can_id, static_cast<unsigned>(frame.dlc));
+    }
   });
 
   rx_thread_ = std::thread([this]() {
@@ -83,10 +87,8 @@ void HilBridge::Stop() {
   }
 }
 
-void HilBridge::SendFrame(const CanFrame& frame) {
-  if (driver_ != nullptr) {
-    driver_->WriteFrame(frame);
-  }
+bool HilBridge::SendFrame(const CanFrame& frame) {
+  return driver_ != nullptr && driver_->WriteFrame(frame);
 }
 
 void HilBridge::SetOnReceive(std::function<void(const CanFrame&)> cb) {

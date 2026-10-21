@@ -24,7 +24,7 @@ bool EthernetBusRegistry::Add(const std::string& iface,
   std::lock_guard<std::mutex> lock(ifaces_mutex_);
   auto& entry   = ifaces_[iface];
   entry.iface   = iface;
-  entry.driver  = std::move(driver);
+  entry.driver  = std::shared_ptr<IEthernetDriver>(std::move(driver));
   entry.running.store(true);
 
   // Capture raw pointer — safe because the entry lives in the map for the
@@ -69,7 +69,7 @@ std::uint64_t NowNs() {
 
 bool EthernetBusRegistry::SendFrame(const std::string& iface,
                                     const EthernetFrame& frame) {
-  bool written = false;
+  std::shared_ptr<IEthernetDriver> driver;
   {
     std::lock_guard<std::mutex> lock(ifaces_mutex_);
     const auto it = ifaces_.find(iface);
@@ -78,36 +78,52 @@ bool EthernetBusRegistry::SendFrame(const std::string& iface,
                    iface.c_str());
       return false;
     }
-    written = it->second.driver->WriteFrame(frame);
+    // Snapshot the driver, then release ifaces_mutex_ before sendto().
+    driver = it->second.driver;
   }
-  if (!written) {
+
+  if (!driver->WriteFrame(frame)) {
     std::fprintf(stderr, "[EthRegistry] WriteFrame failed on '%s'\n", iface.c_str());
+    return false;
   }
-  // Always dispatch locally so gRPC subscribers receive the frame even when
-  // the physical write fails (simulation mode still needs delivery).
+
+  // The local echo is the loopback path, not a second transmission attempt:
+  // deliver it only after the wire accepted the frame.
   EthernetFrame local = frame;
   local.flags |= BOAT_ETH_FLAG_SELF_SENT;  // single loopback-prevention marker
   local.timestamp_ns = NowNs();
   DispatchRx(local, iface);
-  return written;
+  return true;
 }
 
-void EthernetBusRegistry::SendFrameAll(const EthernetFrame& frame) {
-  // Collect iface names while holding the lock, then dispatch without it.
-  std::vector<std::string> dispatched_ifaces;
+bool EthernetBusRegistry::SendFrameAll(const EthernetFrame& frame) {
+  // Snapshot the drivers while holding the lock, then write without it.
+  std::vector<std::pair<std::string, std::shared_ptr<IEthernetDriver>>> drivers;
   {
     std::lock_guard<std::mutex> lock(ifaces_mutex_);
+    drivers.reserve(ifaces_.size());
     for (auto& [name, entry] : ifaces_) {
-      entry.driver->WriteFrame(frame);
-      dispatched_ifaces.push_back(name);
+      drivers.emplace_back(name, entry.driver);
     }
   }
+
+  if (drivers.empty()) {
+    return false;
+  }
+
+  bool all_written = true;
   EthernetFrame local = frame;
   local.flags |= BOAT_ETH_FLAG_SELF_SENT;  // single loopback-prevention marker
   local.timestamp_ns = NowNs();
-  for (const auto& iface : dispatched_ifaces) {
+  for (const auto& [iface, driver] : drivers) {
+    if (!driver->WriteFrame(frame)) {
+      std::fprintf(stderr, "[EthRegistry] WriteFrame failed on '%s'\n", iface.c_str());
+      all_written = false;
+      continue;
+    }
     DispatchRx(local, iface);
   }
+  return all_written;
 }
 
 EthernetBusRegistry::RxCallbackId EthernetBusRegistry::Subscribe(

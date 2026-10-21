@@ -143,6 +143,17 @@ bool SocketCanDriver::Open() {
     return false;
   }
 
+  // Bound TX as well. A CAN_RAW socket is blocking by default, and a full TX
+  // queue / no-ACK bus can otherwise sleep indefinitely inside write() while
+  // the caller (and, before #66, the registry mutex) waits. Timed-out writes
+  // fail and propagate as a rejected frame; they never become a live-lock.
+  timeout.tv_sec = 0;
+  timeout.tv_usec = 100000;  // 100 ms per attempt
+  if (setsockopt(socket_fd_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
+    Close();
+    return false;
+  }
+
   struct sockaddr_can addr {};
   addr.can_family = AF_CAN;
   addr.can_ifindex = static_cast<int>(if_index);
@@ -254,6 +265,7 @@ bool SocketCanDriver::ReadFrame(CanFrame& out_frame) {
   }
 
   const bool is_fd = (bytes == static_cast<ssize_t>(sizeof(struct canfd_frame)));
+  const bool is_rtr = (raw.can_id & CAN_RTR_FLAG) != 0;
   const std::uint8_t data_len = (raw.len <= CANFD_MAX_DLEN) ? raw.len : CANFD_MAX_DLEN;
 
   // raw.can_id carries CAN_EFF_FLAG/CAN_RTR_FLAG/CAN_ERR_FLAG in its top
@@ -269,11 +281,19 @@ bool SocketCanDriver::ReadFrame(CanFrame& out_frame) {
   out_frame.can_id = raw.can_id & (is_extended ? CAN_EFF_MASK : CAN_SFF_MASK);
   out_frame.dlc    = data_len;
   out_frame.flags  = is_fd ? raw.flags : 0;
+  if (is_fd) {
+    out_frame.flags |= kCanFdFlagFdf;
+  }
   if (is_extended) {
     out_frame.flags |= kCanFlagExtended;
   }
+  if (is_rtr) {
+    out_frame.flags |= kCanFlagRtr;
+  }
   std::memset(out_frame.data, 0, sizeof(out_frame.data));
-  std::memcpy(out_frame.data, raw.data, data_len);
+  if (!is_rtr) {
+    std::memcpy(out_frame.data, raw.data, data_len);
+  }
 
   struct timespec ts {};
   if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
@@ -290,6 +310,9 @@ bool SocketCanDriver::WriteFrame(const CanFrame& frame) {
   if (socket_fd_ < 0) {
     return false;
   }
+  if (frame.can_id > 0x1FFFFFFF) {
+    return false;  // neither an 11-bit nor a 29-bit CAN identifier fits
+  }
 
   // Format comes from the explicit kCanFlagExtended bit; `can_id > 0x7FF` is
   // kept as a fallback for callers that predate the bit (a 29-bit ID above
@@ -299,23 +322,37 @@ bool SocketCanDriver::WriteFrame(const CanFrame& frame) {
   const std::uint32_t ext_flag = extended ? CAN_EFF_FLAG : 0U;
   const std::uint32_t wire_id =
       frame.can_id & (extended ? CAN_EFF_MASK : CAN_SFF_MASK);
+  const bool rtr = (frame.flags & kCanFlagRtr) != 0;
 
   if (frame.flags & kCanFdFlagFdf) {
+    // CAN FD has no remote frames. Reject rather than emitting a data frame
+    // that looks like an RTR request to the caller.
+    if (rtr) {
+      return false;
+    }
     // CAN FD frame
+    if (frame.dlc > CANFD_MAX_DLEN) {
+      return false;  // never clamp a caller-supplied length
+    }
     struct canfd_frame raw {};  // zero-initializes raw.data, so any padding added below is 0x00
     raw.can_id = wire_id | ext_flag;
-    const std::uint8_t requested_len = frame.dlc <= CANFD_MAX_DLEN ? frame.dlc : CANFD_MAX_DLEN;
-    raw.len    = RoundUpToValidCanFdLen(requested_len);
+    raw.len    = RoundUpToValidCanFdLen(frame.dlc);
     raw.flags  = frame.flags & (kCanFdFlagFdf | kCanFdFlagBrs | kCanFdFlagEsi);
-    std::memcpy(raw.data, frame.data, requested_len);
+    std::memcpy(raw.data, frame.data, frame.dlc);
     const ssize_t bytes = write(socket_fd_, &raw, sizeof(raw));
     return bytes == static_cast<ssize_t>(sizeof(raw));
   } else {
-    // Classic CAN frame
+    // Classic CAN frame. A payload larger than 8 bytes needs an FD route;
+    // truncating it and reporting success is the failure #75 is about.
+    if (frame.dlc > CAN_MAX_DLEN) {
+      return false;
+    }
     struct can_frame raw {};
-    raw.can_id  = wire_id | ext_flag;
-    raw.can_dlc = frame.dlc <= CAN_MAX_DLEN ? frame.dlc : CAN_MAX_DLEN;
-    std::memcpy(raw.data, frame.data, raw.can_dlc);
+    raw.can_id  = wire_id | ext_flag | (rtr ? CAN_RTR_FLAG : 0U);
+    raw.can_dlc = frame.dlc;
+    if (!rtr) {
+      std::memcpy(raw.data, frame.data, raw.can_dlc);
+    }
     const ssize_t bytes = write(socket_fd_, &raw, sizeof(raw));
     return bytes == static_cast<ssize_t>(sizeof(raw));
   }

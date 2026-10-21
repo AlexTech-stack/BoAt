@@ -23,10 +23,16 @@ static constexpr std::uint8_t kCanFdFlagEsi = 0x02;  // error state indicator
    Mirrors BOAT_CAN_FLAG_EXTENDED in the public plugin ABI (plugin.h). */
 static constexpr std::uint8_t kCanFlagExtended = 0x10;
 
+/* Remote-transmission-request frame. SocketCAN carries this as CAN_RTR_FLAG
+   in can_id; the numeric ID and this flag survive the raw-header conversion.
+   RTR is classic-CAN only (CAN FD has no remote frames), so a frame carrying
+   both kCanFdFlagFdf and this bit is invalid. */
+static constexpr std::uint8_t kCanFlagRtr = 0x20;
+
 struct CanFrame {
   std::uint32_t can_id;        // numeric ID, without CAN_EFF_FLAG
-  std::uint8_t  dlc;           // actual byte count (0-8 classic, 0-64 FD)
-  std::uint8_t  flags;         // kCanFdFlag* | kCanFlagExtended; 0 = classic CAN
+  std::uint8_t  dlc;           // actual byte count (0-8 classic, 0-64 FD); RTR requested length
+  std::uint8_t  flags;         // kCanFdFlag* | kCanFlagExtended | kCanFlagRtr
   std::uint8_t  data[64];
   std::uint64_t timestamp_ns;
 };
