@@ -72,6 +72,19 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **Replay Start/Stop no longer race the tick thread, and trace reads can no longer unmap each
+  other's memory** (#63). `StartReplay`/`StopReplay` rewrote the replay controller's config,
+  trace mapping and cursor on a gRPC thread while the tick phase was reading them, and Stop
+  unmapped a trace the tick phase might be mid-read. Separately, the trace store kept one
+  mapping per trace id, so two `GetTrace` calls on one trace, or a `StopReplay` landing while a
+  `StreamTrace` of the same trace was streaming, unmapped a mapping another RPC was still
+  reading -- a SIGSEGV in the gateway. Each replay now runs from one immutable session that the
+  tick phase pins while it reads; trace bytes are handed out as refcounted handles
+  (`ITraceStore::MapTrace`, replacing `ReadTraceMmap`/`UnmapTrace`) that stay mapped for as
+  long as their holder needs them. Once `StopReplay` returns, no further frame of that replay
+  reaches the bus (it waits, for at most 2 s, for a dispatch already in progress).
+  Concurrent `StartReplay` calls are also serialized now, so the registered `replay_id` always
+  names the replay that is actually playing.
 - **The web UIs and tools bind to loopback by default and confine file paths** (#96). The
   eleven `ui/`/`tools/` FastAPI services hard-coded `0.0.0.0` despite `SECURITY.md` saying
   they are localhost tools. Each now binds `127.0.0.1` unless its `BOAT_*_BIND` variable is
@@ -200,6 +213,11 @@ The plugin ABI is versioned separately from the project; see
 
 ### Changed
 
+- **A `StartReplay` that fails leaves the running replay alone** (#63). The new trace is mapped
+  before the current replay is touched, so an unknown or unreadable `trace_id` now returns its
+  error with the previous replay still playing and its `replay_id` still valid; it used to stop
+  the previous replay first. Relatedly, `GetTrace`/`StreamTrace` of an empty trace file now
+  succeed with no events instead of failing with `INTERNAL` ("mmap failed").
 - **Configuring the C++ project on a non-Linux host now fails immediately** with a message
   pointing at the supported-platforms docs. It could never build there anyway (SocketCAN,
   `AF_PACKET`, `timerfd`, `dlopen`), but used to fail much later on a missing system header.

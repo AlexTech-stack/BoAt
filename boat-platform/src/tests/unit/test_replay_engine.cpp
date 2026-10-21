@@ -8,13 +8,19 @@
 #include <cstdint>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <future>
 #include <mutex>
+#include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 #include "boat/v1/frame.pb.h"
 #include "event/event_bus.h"
@@ -56,25 +62,50 @@ std::vector<std::uint8_t> BuildSequentialTrace(std::uint64_t start_tick, std::ui
   return trace_data;
 }
 
+/* `count` records sharing one timestamp: all due on the very first tick. */
+std::vector<std::uint8_t> BuildSimultaneousTrace(std::uint64_t tick_ms, std::uint64_t count) {
+  std::vector<std::uint8_t> trace_data;
+  for (std::uint64_t i = 0; i < count; ++i) {
+    auto record = MakeTraceRecord(100, tick_ms, {static_cast<std::uint8_t>(i & 0xFF)});
+    trace_data.insert(trace_data.end(), record.begin(), record.end());
+  }
+  return trace_data;
+}
+
 struct MockTraceStore : ITraceStore {
   std::unordered_map<std::string, std::vector<std::uint8_t>> traces;
-  std::vector<std::string> unmapped;
 
   void WriteTrace(const TraceRecord& meta, std::span<const std::uint8_t> data) override {
     traces[meta.id] = std::vector<std::uint8_t>(data.begin(), data.end());
   }
-  std::span<const std::uint8_t> ReadTraceMmap(const std::string& trace_id) override {
+  // Each handle owns a copy of the bytes, and records its trace id when the
+  // last reference goes -- the mock's equivalent of the real store's munmap.
+  MappedTracePtr MapTrace(const std::string& trace_id) override {
     const auto it = traces.find(trace_id);
     if (it == traces.end()) {
       throw std::runtime_error("trace id not found");
     }
-    return it->second;
+    auto owned = std::make_shared<const std::vector<std::uint8_t>>(it->second);
+    auto* view = new MappedTrace{std::span<const std::uint8_t>(*owned)};
+    return MappedTracePtr(view, [this, trace_id, owned](const MappedTrace* p) {
+      {
+        std::lock_guard<std::mutex> lock(released_mutex_);
+        released_.push_back(trace_id);
+      }
+      delete p;
+    });
   }
   std::vector<TraceRecord> ListTraces(const std::string&) override { return {}; }
   std::vector<TraceRecord> ListAllTraces() override { return {}; }
-  void UnmapTrace(const std::string& trace_id) override {
-    unmapped.push_back(trace_id);
+
+  std::vector<std::string> Released() const {
+    std::lock_guard<std::mutex> lock(released_mutex_);
+    return released_;
   }
+
+ private:
+  mutable std::mutex released_mutex_;
+  std::vector<std::string> released_;
 };
 
 struct MockEventStore : IEventStore {
@@ -136,8 +167,7 @@ TEST_CASE("ReplayController Start/Stop lifecycle", "[unit][replay]") {
 
   REQUIRE_FALSE(controller.HasError());
   REQUIRE(event_store.inserted.size() == 3);
-  REQUIRE(trace_store.unmapped.size() == 1);
-  REQUIRE(trace_store.unmapped[0] == "lifecycle");
+  REQUIRE(trace_store.Released() == std::vector<std::string>{"lifecycle"});
 }
 
 TEST_CASE("ReplayController replays records in tick order", "[unit][replay]") {
@@ -382,7 +412,7 @@ TEST_CASE("ReplayController empty trace finishes immediately", "[unit][replay]")
   REQUIRE(event_store.inserted.empty());
 }
 
-TEST_CASE("ReplayController Stop unmaps trace", "[unit][replay]") {
+TEST_CASE("ReplayController Stop releases the trace mapping", "[unit][replay]") {
   MockTraceStore trace_store;
   MockEventStore event_store;
   boat::core::EventBus event_bus;
@@ -396,14 +426,15 @@ TEST_CASE("ReplayController Stop unmaps trace", "[unit][replay]") {
   config.speed = ReplaySpeed::REAL_TIME;
   config.speed_multiplier = 1000.0;
 
-  REQUIRE(trace_store.unmapped.empty());
+  REQUIRE(trace_store.Released().empty());
   controller.Start(config);
   Pump pump{controller};
   pump.UntilDone();
+  // Finishing a pass does not release the trace; Stop does.
+  REQUIRE(trace_store.Released().empty());
   controller.Stop();
 
-  REQUIRE(trace_store.unmapped.size() == 1);
-  REQUIRE(trace_store.unmapped[0] == "unmap_test");
+  REQUIRE(trace_store.Released() == std::vector<std::string>{"unmap_test"});
 }
 
 TEST_CASE("ReplayController multiple Start calls stop previous replay", "[unit][replay]") {
@@ -423,11 +454,43 @@ TEST_CASE("ReplayController multiple Start calls stop previous replay", "[unit][
   Pump warmup{controller};
   warmup.Ticks(1);
   controller.Start(config2);
+  // The superseded replay's trace is released by the Start that replaced it.
+  REQUIRE(trace_store.Released() == std::vector<std::string>{"first"});
+  REQUIRE(controller.GetActiveConfig().trace_id == "second");
   Pump pump{controller};
   pump.UntilDone();
   controller.Stop();
 
-  REQUIRE(trace_store.unmapped.size() == 2);
+  REQUIRE(trace_store.Released() == std::vector<std::string>{"first", "second"});
+}
+
+TEST_CASE("ReplayController Start of a missing trace leaves the running replay untouched",
+          "[unit][replay]") {
+  MockTraceStore trace_store;
+  MockEventStore event_store;
+  boat::core::EventBus event_bus;
+  ReplayController controller(trace_store, event_store, event_bus);
+
+  trace_store.traces["playing"] = BuildSequentialTrace(100, 5);
+
+  ReplayConfig playing{.trace_id = "playing", .speed = ReplaySpeed::REAL_TIME,
+                       .speed_multiplier = 1.0};
+  controller.Start(playing);
+  Pump pump{controller};
+  pump.Ticks(1);
+  REQUIRE(event_store.inserted.size() == 1);
+
+  ReplayConfig missing{.trace_id = "nonexistent"};
+  REQUIRE_THROWS_AS(controller.Start(missing), std::runtime_error);
+
+  // The trace is mapped before the current replay is touched, so the failed
+  // Start neither stopped nor released what was playing.
+  REQUIRE(controller.IsRunning());
+  REQUIRE(controller.GetActiveConfig().trace_id == "playing");
+  REQUIRE(trace_store.Released().empty());
+  pump.UntilDone();
+  REQUIRE(event_store.inserted.size() == 5);
+  REQUIRE_FALSE(controller.HasError());
 }
 
 TEST_CASE("ReplayController StartFromEvents replays events from event store", "[unit][replay]") {
@@ -805,4 +868,189 @@ TEST_CASE("ReplayController bounds the StreamReplay queue and counts drops",
   REQUIRE(events.back().tick == kCapacity + 9);
   REQUIRE(controller.DroppedEventCount() == 10);
   REQUIRE(controller.ConsumeEvents().empty());
+}
+
+/* ── Concurrency (issue #63) ───────────────────────────────────────────────
+   Start/Stop arrive on gRPC threads while a TickAuthority phase pumps on the
+   tick thread. These drive that split for real: a dedicated pump thread
+   against control calls from the test thread. Catch2 assertions are only
+   made on the test thread; worker threads report through atomics. */
+
+TEST_CASE("ReplayController Stop returns only after the in-flight pump drains",
+          "[unit][replay][concurrency]") {
+  MockTraceStore trace_store;
+  MockEventStore event_store;
+  boat::core::EventBus event_bus;
+  ReplayController controller(trace_store, event_store, event_bus);
+
+  // Every record is due on the first tick, so one pump would dispatch all 50
+  // if nothing stopped it.
+  trace_store.traces["drain"] = BuildSimultaneousTrace(100, 50);
+
+  std::atomic<int> forwarded{0};
+  std::promise<void> entered;
+  std::promise<void> release;
+  std::shared_future<void> released = release.get_future().share();
+  controller.SetEventForwarder([&](const boat::core::Frame&) {
+    if (++forwarded == 1) {
+      entered.set_value();
+      released.wait();  // park the tick thread mid-dispatch
+    }
+  });
+
+  ReplayConfig config{.trace_id = "drain", .speed = ReplaySpeed::ACCELERATED,
+                      .speed_multiplier = 1e9};
+  controller.Start(config);
+
+  std::thread pumper([&] { controller.PumpDueRecords(1); });
+  entered.get_future().wait();
+
+  std::atomic<bool> stop_returned{false};
+  std::thread stopper([&] {
+    controller.Stop();
+    stop_returned.store(true);
+  });
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  const bool returned_while_dispatching = stop_returned.load();
+  // The stopped session is unpublished at once, even though Stop still waits.
+  const bool running_while_dispatching = controller.IsRunning();
+  release.set_value();
+  stopper.join();
+  pumper.join();
+
+  REQUIRE_FALSE(returned_while_dispatching);
+  REQUIRE_FALSE(running_while_dispatching);
+  REQUIRE(stop_returned.load());
+  // The pump honoured the stop before its next record, not after all 50.
+  REQUIRE(forwarded.load() == 1);
+  // Released by Stop's drain, i.e. by the time Stop returned.
+  REQUIRE(trace_store.Released() == std::vector<std::string>{"drain"});
+
+  controller.PumpDueRecords(2);
+  REQUIRE(forwarded.load() == 1);
+  REQUIRE_FALSE(controller.HasError());
+}
+
+TEST_CASE("ReplayController Stop from inside the forwarder does not deadlock",
+          "[unit][replay][concurrency]") {
+  MockTraceStore trace_store;
+  MockEventStore event_store;
+  boat::core::EventBus event_bus;
+  ReplayController controller(trace_store, event_store, event_bus);
+
+  trace_store.traces["reentrant"] = BuildSimultaneousTrace(100, 10);
+
+  int forwarded = 0;
+  controller.SetEventForwarder([&](const boat::core::Frame&) {
+    ++forwarded;
+    // Runs on the pump thread with the session pinned: waiting for the pump
+    // to drain here would wait on ourselves.
+    controller.Stop();
+  });
+
+  ReplayConfig config{.trace_id = "reentrant", .speed = ReplaySpeed::ACCELERATED,
+                      .speed_multiplier = 1e9};
+  controller.Start(config);
+  controller.PumpDueRecords(1);
+
+  REQUIRE(forwarded == 1);
+  REQUIRE_FALSE(controller.IsRunning());
+  // The pump held the last reference, and dropped it on the way out.
+  REQUIRE(trace_store.Released() == std::vector<std::string>{"reentrant"});
+  controller.PumpDueRecords(2);
+  REQUIRE(forwarded == 1);
+}
+
+TEST_CASE("ReplayController survives concurrent Start/Stop/Seek/Pause against a running pump",
+          "[unit][replay][concurrency]") {
+  // A real FlatFileTraceStore, not the mock: an unmapped read must fault
+  // rather than land in a still-allocated vector.
+  const auto tmp = std::filesystem::temp_directory_path();
+  const auto suffix = std::to_string(::getpid());
+  const auto index_db = (tmp / ("boat_replay_stress_traces_" + suffix + ".db")).string();
+  const auto file_a = (tmp / ("boat_replay_stress_a_" + suffix + ".bin")).string();
+  const auto file_b = (tmp / ("boat_replay_stress_b_" + suffix + ".bin")).string();
+  std::filesystem::remove(index_db);
+
+  {
+    FlatFileTraceStore trace_store(index_db);
+    for (const auto& [id, path] : {std::pair{"stress_a", file_a}, std::pair{"stress_b", file_b}}) {
+      TraceRecord meta{};
+      meta.id = id;
+      meta.storage_path = path;
+      meta.format = TraceRecord::Format::BINARY;
+      const auto bytes = BuildSequentialTrace(1000, 300);
+      trace_store.WriteTrace(meta, std::span<const std::uint8_t>(bytes));
+    }
+
+    MockEventStore event_store;
+    boat::core::EventBus event_bus;
+    ReplayController controller(trace_store, event_store, event_bus);
+    controller.SetTickInterval(std::chrono::milliseconds(1));
+
+    std::atomic<std::uint64_t> forwarded{0};
+    controller.SetEventForwarder([&](const boat::core::Frame&) { ++forwarded; });
+
+    // Stands in for the TickAuthority thread, minus the pacing: as many pumps
+    // as possible, to maximise interleavings with the control calls below.
+    std::atomic<bool> done{false};
+    std::thread pumper([&] {
+      std::uint64_t tick = 0;
+      while (!done.load()) controller.PumpDueRecords(++tick);
+    });
+
+    // Seeded: the operation sequence is identical on every run.
+    std::mt19937_64 rng(63);
+    int stops_checked = 0;
+    int frames_after_stop = 0;
+    for (int op = 0; op < 2000; ++op) {
+      switch (rng() % 6) {
+        case 0:
+        case 1: {
+          ReplayConfig config{.trace_id = (rng() % 2) ? "stress_a" : "stress_b",
+                              .speed = ReplaySpeed::ACCELERATED,
+                              .speed_multiplier = 100.0,
+                              .loop_delay_ms = static_cast<int>(rng() % 2)};
+          controller.Start(config);
+          break;
+        }
+        case 2: {
+          controller.Stop();
+          // Spot-check the drain guarantee: once Stop has returned, nothing
+          // more reaches the forwarder while no replay is started.
+          if (op % 50 == 0) {
+            const auto before = forwarded.load();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            if (forwarded.load() != before) ++frames_after_stop;
+            ++stops_checked;
+          }
+          break;
+        }
+        case 3:
+          controller.Seek(1000 + (rng() % 3000));
+          break;
+        case 4:
+          controller.Pause();
+          break;
+        default:
+          controller.Resume();
+          break;
+      }
+    }
+
+    done.store(true);
+    pumper.join();
+    controller.Stop();
+
+    INFO("replay error: " << controller.LastError());
+    REQUIRE_FALSE(controller.HasError());
+    REQUIRE(forwarded.load() > 0);
+    REQUIRE(stops_checked > 0);
+    REQUIRE(frames_after_stop == 0);
+  }
+
+  std::filesystem::remove(index_db);
+  std::filesystem::remove(file_a);
+  std::filesystem::remove(file_b);
 }

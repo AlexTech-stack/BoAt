@@ -48,10 +48,6 @@ FlatFileTraceStore::FlatFileTraceStore(const std::string& index_db_path) {
 }
 
 FlatFileTraceStore::~FlatFileTraceStore() {
-  for (auto it = mmap_regions_.begin(); it != mmap_regions_.end();) {
-    UnmapTrace(it->first);
-    it = mmap_regions_.begin();
-  }
   if (db_ != nullptr) {
     sqlite3_close_v2(db_);
     db_ = nullptr;
@@ -147,7 +143,7 @@ void FlatFileTraceStore::AppendTraceRecord(const TraceRecord& meta,
   sqlite3_finalize(stmt);
 }
 
-std::span<const std::uint8_t> FlatFileTraceStore::ReadTraceMmap(const std::string& trace_id) {
+MappedTracePtr FlatFileTraceStore::MapTrace(const std::string& trace_id) {
   constexpr const char* kSelectSql = "SELECT storage_path FROM traces WHERE id = ?;";
   sqlite3_stmt* stmt = nullptr;
   if (sqlite3_prepare_v2(db_, kSelectSql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -165,7 +161,7 @@ std::span<const std::uint8_t> FlatFileTraceStore::ReadTraceMmap(const std::strin
   const std::string storage_path = path != nullptr ? path : "";
   sqlite3_finalize(stmt);
 
-  const int fd = open(storage_path.c_str(), O_RDONLY);
+  const int fd = open(storage_path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) {
     throw std::runtime_error("failed to open trace for mmap");
   }
@@ -176,25 +172,24 @@ std::span<const std::uint8_t> FlatFileTraceStore::ReadTraceMmap(const std::strin
     throw std::runtime_error("failed to stat trace file");
   }
   const std::size_t length = static_cast<std::size_t>(file_stat.st_size);
-  void* addr = mmap(nullptr, length, PROT_READ, MAP_SHARED | MAP_POPULATE, fd, 0);
-  if (addr == MAP_FAILED) {
+  if (length == 0) {
+    // mmap rejects a zero length; an empty trace is a valid, empty handle.
     close(fd);
+    return std::make_shared<const MappedTrace>();
+  }
+  void* addr = mmap(nullptr, length, PROT_READ, MAP_SHARED | MAP_POPULATE, fd, 0);
+  // The mapping holds its own reference to the file, so the fd is not needed
+  // past this point.
+  close(fd);
+  if (addr == MAP_FAILED) {
     throw std::runtime_error("mmap failed");
   }
 
-  mmap_regions_[trace_id] = MmapRegion{addr, length, fd};
-  return {static_cast<const std::uint8_t*>(addr), length};
-}
-
-void FlatFileTraceStore::UnmapTrace(const std::string& trace_id) {
-  const auto it = mmap_regions_.find(trace_id);
-  if (it == mmap_regions_.end()) {
-    return;
-  }
-
-  munmap(it->second.addr, it->second.length);
-  close(it->second.fd);
-  mmap_regions_.erase(it);
+  auto* view = new MappedTrace{{static_cast<const std::uint8_t*>(addr), length}};
+  return MappedTracePtr(view, [addr, length](const MappedTrace* p) {
+    munmap(addr, length);
+    delete p;
+  });
 }
 
 std::vector<TraceRecord> FlatFileTraceStore::ListTraces(const std::string& simulation_id) {

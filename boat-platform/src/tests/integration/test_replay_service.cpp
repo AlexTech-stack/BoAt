@@ -3,11 +3,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include <grpcpp/grpcpp.h>
+#include <unistd.h>
 
 #include "boat/v1/replay.grpc.pb.h"
 #include "can_bus_registry.h"
@@ -27,6 +30,11 @@ static const boat::gateway::EffectiveConfig kTestEffectiveConfig;
 
 
 namespace {
+
+std::string UniquePath(const std::string& name) {
+  return (std::filesystem::temp_directory_path() /
+          (name + "_" + std::to_string(::getpid()))).string();
+}
 
 std::vector<std::uint8_t> BuildTestTraceData() {
   std::vector<std::uint8_t> data;
@@ -89,9 +97,9 @@ struct IntegrationFixture {
   boat::gateway::ReplayServiceImpl replay_service{ctx};
 
   IntegrationFixture(const std::string& prefix)
-      : event_db((std::filesystem::temp_directory_path() / (prefix + "_events.db")).string()),
-        trace_db((std::filesystem::temp_directory_path() / (prefix + "_traces.db")).string()),
-        trace_file((std::filesystem::temp_directory_path() / (prefix + "_trace.bin")).string()),
+      : event_db(UniquePath(prefix + "_events.db")),
+        trace_db(UniquePath(prefix + "_traces.db")),
+        trace_file(UniquePath(prefix + "_trace.bin")),
         event_store(event_db),
         trace_store(trace_db) {
     std::filesystem::remove(event_db);
@@ -361,6 +369,100 @@ TEST_CASE("ReplayService speed proto mapping works for all modes", "[integration
     boat::v1::ReplayControlResponse stop_resp;
     stub->StopReplay(&stop_ctx, stop_req, &stop_resp);
   }
+
+  server->Shutdown();
+}
+
+TEST_CASE("ReplayService concurrent StartReplay calls leave the registered replay_id controlling the playing trace",
+          "[integration][replay][concurrency]") {
+  // StartReplay used to call the controller outside replay_mutex_, so two
+  // concurrent calls could interleave as A.Start, B.Start, B.register,
+  // A.register: B playing, A's id registered -- and pausing "A" would then
+  // pause B. Whatever the interleaving, the one id left registered must name
+  // the trace actually playing.
+  IntegrationFixture f("r6a");
+  boat::store::TraceRecord meta_b;
+  meta_b.id = "r6b";
+  meta_b.storage_path = f.trace_file + "_b";
+  meta_b.format = boat::store::TraceRecord::Format::BINARY;
+  f.trace_store.WriteTrace(meta_b, std::span<const std::uint8_t>(BuildTestTraceData()));
+
+  grpc::ServerBuilder builder;
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
+  builder.RegisterService(&f.replay_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  auto channel = server->InProcessChannel({});
+
+  constexpr int kStartsPerThread = 100;
+  std::atomic<int> failed_starts{0};
+  auto starter = [&](const std::string& trace_id) {
+    auto stub = boat::v1::ReplayService::NewStub(channel);
+    for (int i = 0; i < kStartsPerThread; ++i) {
+      grpc::ClientContext ctx;
+      boat::v1::StartReplayRequest req;
+      req.set_trace_id(trace_id);
+      boat::v1::ReplayControlResponse resp;
+      if (!stub->StartReplay(&ctx, req, &resp).ok()) ++failed_starts;
+    }
+  };
+  std::thread a(starter, "r6a");
+  std::thread b(starter, "r6b");
+  a.join();
+  b.join();
+  REQUIRE(failed_starts.load() == 0);
+
+  const std::string playing = f.replay_controller.GetActiveConfig().trace_id;
+  REQUIRE((playing == "r6a" || playing == "r6b"));
+  const std::string other = playing == "r6a" ? "r6b" : "r6a";
+
+  auto stub = boat::v1::ReplayService::NewStub(channel);
+  auto pause = [&](const std::string& trace_id) {
+    grpc::ClientContext ctx;
+    boat::v1::PauseReplayRequest req;
+    req.set_replay_id("trace:" + trace_id);
+    boat::v1::ReplayControlResponse resp;
+    return stub->PauseReplay(&ctx, req, &resp).error_code();
+  };
+  REQUIRE(pause(playing) == grpc::StatusCode::OK);
+  REQUIRE(pause(other) == grpc::StatusCode::NOT_FOUND);
+
+  server->Shutdown();
+}
+
+TEST_CASE("ReplayService failed StartReplay leaves the previous replay and its id in place",
+          "[integration][replay]") {
+  IntegrationFixture f("r7");
+
+  grpc::ServerBuilder builder;
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
+  builder.RegisterService(&f.replay_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  auto stub = boat::v1::ReplayService::NewStub(server->InProcessChannel({}));
+
+  grpc::ClientContext start_ctx;
+  boat::v1::StartReplayRequest start_req;
+  start_req.set_trace_id("r7");
+  boat::v1::ReplayControlResponse start_resp;
+  REQUIRE(stub->StartReplay(&start_ctx, start_req, &start_resp).ok());
+
+  grpc::ClientContext bad_ctx;
+  boat::v1::StartReplayRequest bad_req;
+  bad_req.set_trace_id("r7_does_not_exist");
+  boat::v1::ReplayControlResponse bad_resp;
+  REQUIRE(stub->StartReplay(&bad_ctx, bad_req, &bad_resp).error_code() ==
+          grpc::StatusCode::NOT_FOUND);
+
+  // The trace is mapped before anything is stopped, so the failed call
+  // neither stopped the running replay nor unregistered its id.
+  REQUIRE(f.replay_controller.IsRunning());
+  REQUIRE(f.replay_controller.GetActiveConfig().trace_id == "r7");
+  grpc::ClientContext stop_ctx;
+  boat::v1::StopReplayRequest stop_req;
+  stop_req.set_replay_id(start_resp.replay_id());
+  boat::v1::ReplayControlResponse stop_resp;
+  REQUIRE(stub->StopReplay(&stop_ctx, stop_req, &stop_resp).ok());
 
   server->Shutdown();
 }
