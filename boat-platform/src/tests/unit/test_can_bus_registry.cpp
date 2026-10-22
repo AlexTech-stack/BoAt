@@ -9,8 +9,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <future>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include "can_bus_registry.h"
@@ -73,6 +75,20 @@ class FailingCanDriver : public IHalDriver {
     return false;
   }
   bool WriteFrame(const CanFrame&) override { return false; }
+  CanInterfaceInfo GetInfo() const override { return {}; }
+};
+
+/* No RX frames: the metadata test is about the synchronous self-sent echo,
+   and must not race an RX callback against its stack-local assertions. */
+class SilentCanDriver : public IHalDriver {
+ public:
+  bool Open() override { return true; }
+  void Close() override {}
+  bool ReadFrame(CanFrame&) override {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    return false;
+  }
+  bool WriteFrame(const CanFrame&) override { return true; }
   CanInterfaceInfo GetInfo() const override { return {}; }
 };
 
@@ -153,6 +169,38 @@ TEST_CASE("CanBusRegistry releases its lock while a write is blocked",
   blocker_ptr->release.store(true);
   REQUIRE(sending.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
   REQUIRE(sending.get());
+}
+
+TEST_CASE("CanBusRegistry SubscribeFrame preserves iface and self-sent flags",
+          "[unit][can_registry][tx]") {
+  boat::core::EventBus bus;
+  CanBusRegistry registry;
+  REQUIRE(registry.Add("can0", std::make_shared<SilentCanDriver>(), bus));
+
+  bool got = false;
+  std::string received_iface;
+  std::uint8_t received_flags = 0;
+  std::uint32_t received_id = 0;
+  registry.SubscribeFrame([&](const boat::core::Frame& f) {
+    got = true;
+    received_iface = f.iface();
+    received_flags = f.can_meta().flags;
+    received_id = f.can_meta().can_id;
+  });
+
+  CanFrame frame{};
+  frame.can_id = 0x123;
+  frame.dlc = 2;
+  frame.data[0] = 0xAA;
+  frame.data[1] = 0xBB;
+  REQUIRE(registry.SendFrame("can0", frame));
+  REQUIRE(got);
+  REQUIRE(received_iface == "can0");
+  REQUIRE((received_flags & 0x08) != 0);  // BOAT_CAN_FLAG_SELF_SENT
+  REQUIRE(received_id == 0x123);
+
+  // Join the RX thread while the callback's captured locals are still alive.
+  registry.StopAll();
 }
 
 TEST_CASE("CanBusRegistry failed writes are rejected and not echoed",

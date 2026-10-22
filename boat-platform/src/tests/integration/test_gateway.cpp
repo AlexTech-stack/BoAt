@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -1239,6 +1240,31 @@ TEST_CASE("Reset rewinds the tick and only one simulation can be active",
     REQUIRE(scenario_stub->CreateScenario(&context, req, &resp).ok());
   };
 
+  const auto create_scenario_with_plugin = [&](const std::string& id,
+                                                const std::string& plugin_path,
+                                                std::uint64_t seed,
+                                                const std::string& config_json = "{}") {
+    // config_json is embedded as a JSON string value; escape its quotes.
+    std::string escaped_config;
+    for (char c : config_json) {
+      if (c == '"' || c == '\\') escaped_config += '\\';
+      escaped_config += c;
+    }
+    boat::v1::CreateScenarioRequest req;
+    req.mutable_scenario()->set_scenario_id(id);
+    req.mutable_scenario()->set_name(id);
+    req.mutable_scenario()->set_content(
+        R"({"id":")" + id +
+        R"(","name":")" + id +
+        R"(","version":"1.0","duration_ticks":1000,"seed":)" + std::to_string(seed) +
+        R"(,"plugins":[{"so_path":")" + plugin_path +
+        R"(","config_json":")" + escaped_config +
+        R"("}],"signals":[],"faults":[]})");
+    boat::v1::ScenarioResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(scenario_stub->CreateScenario(&context, req, &resp).ok());
+  };
+
   const auto create_sim = [&](const std::string& scenario_id) {
     boat::v1::CreateSimulationRequest req;
     req.set_scenario_id(scenario_id);
@@ -1263,6 +1289,24 @@ TEST_CASE("Reset rewinds the tick and only one simulation can be active",
     // (issue #53); the gateway's fixed seed used to win and make the field
     // meaningless.
     REQUIRE(sim.determinism().Seed() == 1);
+  }
+
+  // Starting a PAUSED run resumes it rather than tearing down and reloading
+  // its plugins.
+  {
+    boat::v1::PauseSimulationRequest req;
+    req.set_simulation_id(created_a.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->PauseSimulation(&context, req, &resp).ok());
+  }
+  {
+    boat::v1::StartSimulationRequest req;
+    req.set_simulation_id(created_a.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->StartSimulation(&context, req, &resp).ok());
+    REQUIRE(resp.simulation().state() == boat::v1::SIMULATION_STATE_RUNNING);
   }
 
   // A second definition can be created while one session runs -- it is staged,
@@ -1373,6 +1417,138 @@ TEST_CASE("Reset rewinds the tick and only one simulation can be active",
     grpc::ClientContext context;
     REQUIRE(simulation_stub->ResetSimulation(&context, req, &resp).ok());
     REQUIRE(sim.clock().tick() == 0);
+  }
+
+  // A failed plugin load must roll the run back to IDLE, not leave a RUNNING
+  // simulation with no scheduler and no active id (#69). A retry of a known
+  // good scenario must still work afterwards.
+  create_scenario_with_plugin("scn-bad-plugin", "/nonexistent/boat-plugin.so", 9);
+  const auto bad_sim = create_sim("scn-bad-plugin");
+  {
+    boat::v1::StartSimulationRequest req;
+    req.set_simulation_id(bad_sim.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    const auto status = simulation_stub->StartSimulation(&context, req, &resp);
+    REQUIRE_FALSE(status.ok());
+    REQUIRE(status.error_code() == grpc::StatusCode::INTERNAL);
+  }
+  {
+    boat::v1::GetSimulationStateRequest req;
+    req.set_simulation_id(bad_sim.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->GetSimulationState(&context, req, &resp).ok());
+    REQUIRE(resp.simulation().state() == boat::v1::SIMULATION_STATE_IDLE);
+    REQUIRE(sim.plugin_manager().List().empty());
+  }
+  {
+    boat::v1::StartSimulationRequest req;
+    req.set_simulation_id(created_c.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->StartSimulation(&context, req, &resp).ok());
+  }
+  {
+    boat::v1::StopSimulationRequest req;
+    req.set_simulation_id(created_c.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->StopSimulation(&context, req, &resp).ok());
+  }
+
+  // A simulation-scoped plugin must receive the same iface/flags as the
+  // unified frame bus, not a hand-rebuilt frame with iface="" (#70).
+  {
+    const auto meta_path = std::filesystem::temp_directory_path() /
+                           "boat_frame_meta_test.txt";
+    std::filesystem::remove(meta_path);
+    REQUIRE(can_registry.Add("vcan0", std::make_shared<LoopbackCanDriver>(),
+                             sim.event_bus()));
+    create_scenario_with_plugin(
+        "scn-frame-meta", FRAME_META_PLUGIN_SO, 3,
+        std::string("{\"out\":\"") + meta_path.string() + "\"}");
+    const auto meta_sim = create_sim("scn-frame-meta");
+    {
+      boat::v1::StartSimulationRequest req;
+      req.set_simulation_id(meta_sim.simulation_id());
+      boat::v1::SimulationResponse resp;
+      grpc::ClientContext context;
+      REQUIRE(simulation_stub->StartSimulation(&context, req, &resp).ok());
+    }
+    boat::hil::CanFrame frame{};
+    frame.can_id = 0x321;
+    frame.dlc = 1;
+    frame.data[0] = 0xAA;
+    REQUIRE(can_registry.SendFrame("vcan0", frame));
+
+    bool saw_metadata = false;
+    for (int i = 0; i < 200 && !saw_metadata; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      std::ifstream in(meta_path);
+      std::string line;
+      while (std::getline(in, line)) {
+        if (line == "can|vcan0|8|801") {
+          saw_metadata = true;
+          break;
+        }
+      }
+    }
+    REQUIRE(saw_metadata);
+    {
+      boat::v1::StopSimulationRequest req;
+      req.set_simulation_id(meta_sim.simulation_id());
+      boat::v1::SimulationResponse resp;
+      grpc::ClientContext context;
+      REQUIRE(simulation_stub->StopSimulation(&context, req, &resp).ok());
+    }
+    std::filesystem::remove(meta_path);
+  }
+
+  // Concurrent lifecycle RPCs must serialize, not interleave their plugin
+  // manager setup/teardown. Start/Stop may legitimately return
+  // FAILED_PRECONDITION depending on which state they observe; anything else
+  // (especially INTERNAL) indicates a race.
+  {
+    std::atomic<int> unexpected{0};
+    std::vector<std::thread> workers;
+    for (int t = 0; t < 4; ++t) {
+      workers.emplace_back([&] {
+        auto stub = boat::v1::SimulationService::NewStub(channel);
+        for (int i = 0; i < 10; ++i) {
+          {
+            grpc::ClientContext context;
+            boat::v1::StartSimulationRequest req;
+            req.set_simulation_id(created_c.simulation_id());
+            boat::v1::SimulationResponse resp;
+            const auto status = stub->StartSimulation(&context, req, &resp);
+            if (!status.ok() && status.error_code() != grpc::StatusCode::FAILED_PRECONDITION) {
+              ++unexpected;
+            }
+          }
+          {
+            grpc::ClientContext context;
+            boat::v1::StopSimulationRequest req;
+            req.set_simulation_id(created_c.simulation_id());
+            boat::v1::SimulationResponse resp;
+            const auto status = stub->StopSimulation(&context, req, &resp);
+            if (!status.ok() && status.error_code() != grpc::StatusCode::FAILED_PRECONDITION) {
+              ++unexpected;
+            }
+          }
+        }
+      });
+    }
+    for (auto& worker : workers) worker.join();
+    REQUIRE(unexpected.load() == 0);
+  }
+  {
+    boat::v1::ResetSimulationRequest req;
+    req.set_simulation_id(created_c.simulation_id());
+    boat::v1::SimulationResponse resp;
+    grpc::ClientContext context;
+    REQUIRE(simulation_stub->ResetSimulation(&context, req, &resp).ok());
+    REQUIRE(resp.simulation().state() == boat::v1::SIMULATION_STATE_IDLE);
   }
 
   server->Shutdown();

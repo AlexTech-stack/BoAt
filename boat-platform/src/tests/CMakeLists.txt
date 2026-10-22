@@ -228,6 +228,15 @@ add_library(stale_abi_plugin MODULE fixtures/stale_abi_plugin.cpp)
 target_include_directories(stale_abi_plugin PRIVATE ${CMAKE_SOURCE_DIR}/sdk/cpp/include)
 set_target_properties(stale_abi_plugin PROPERTIES PREFIX "" SUFFIX ".so")
 
+# Records the iface/flags of frames delivered to a simulation-scoped plugin,
+# for the #70 regression test.
+add_library(frame_meta_plugin MODULE fixtures/frame_meta_plugin.cpp)
+target_include_directories(frame_meta_plugin PRIVATE ${CMAKE_SOURCE_DIR}/sdk/cpp/include)
+set_target_properties(frame_meta_plugin PROPERTIES PREFIX "" SUFFIX ".so")
+add_dependencies(boat_integration_gateway frame_meta_plugin)
+target_compile_definitions(boat_integration_gateway PRIVATE
+  FRAME_META_PLUGIN_SO="$<TARGET_FILE:frame_meta_plugin>")
+
 add_executable(boat_unit_can_tp_tick unit/test_can_tp_tick.cpp)
 target_include_directories(boat_unit_can_tp_tick PRIVATE
   ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/sdk/cpp/include)
