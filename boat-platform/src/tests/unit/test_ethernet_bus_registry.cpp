@@ -82,10 +82,12 @@ TEST_CASE("EthernetBusRegistry SubscribeFrame preserves iface, flags and IP meta
   std::uint8_t received_flags = 0;
   std::vector<std::uint8_t> received_src_ip;
   std::vector<std::uint8_t> received_dst_ip;
+  std::uint64_t received_timestamp = 0;
   registry.SubscribeFrame([&](const boat::core::Frame& f) {
     got = true;
     received_iface = f.iface();
     received_flags = f.eth_meta().flags;
+    received_timestamp = f.timestamp_ns();
     const auto& m = f.eth_meta();
     received_src_ip.assign(m.src_ip, m.src_ip + 4);
     received_dst_ip.assign(m.dst_ip, m.dst_ip + 4);
@@ -94,12 +96,14 @@ TEST_CASE("EthernetBusRegistry SubscribeFrame preserves iface, flags and IP meta
   EthernetFrame frame = make_frame(0x0800);
   frame.src_ip = {10, 0, 0, 1};
   frame.dst_ip = {10, 0, 0, 2};
+  frame.timestamp_ns = 654321;
   REQUIRE(registry.SendFrame("veth0", frame));
   REQUIRE(got);
   REQUIRE(received_iface == "veth0");
   REQUIRE((received_flags & 0x01) != 0);  // BOAT_ETH_FLAG_SELF_SENT
   REQUIRE(received_src_ip == std::vector<std::uint8_t>({10, 0, 0, 1}));
   REQUIRE(received_dst_ip == std::vector<std::uint8_t>({10, 0, 0, 2}));
+  REQUIRE(received_timestamp == 654321);
 }
 
 TEST_CASE("EthernetBusRegistry SendFrame returns false for unknown iface", "[unit][ethernet]") {

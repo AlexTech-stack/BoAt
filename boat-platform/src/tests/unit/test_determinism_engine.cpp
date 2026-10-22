@@ -16,6 +16,21 @@ TEST_CASE("DeterminismEngine produces deterministic sequences", "[unit][determin
   }
 }
 
+TEST_CASE("Different seed/tick pairs that collided under XOR select different streams",
+          "[unit][determinism_engine]") {
+  // The old seed was seed ^ tick. These pairs all had the same old seed and
+  // therefore produced the same random sequence.
+  const auto stream = [](std::uint64_t seed, std::uint64_t tick) {
+    boat::core::DeterminismEngine engine(seed);
+    engine.BeforeTick(tick);
+    return engine.NextRandom();
+  };
+
+  REQUIRE(stream(0, 1) != stream(1, 0));
+  REQUIRE(stream(7, 3) != stream(6, 2));
+  REQUIRE(stream(0x12345678, 0x9ABCDEF0) != stream(0x9ABCDEF0, 0x12345678));
+}
+
 TEST_CASE("Reset lets a rewound run replay the identical stream",
           "[unit][determinism_engine]") {
   boat::core::DeterminismEngine engine(99);

@@ -78,6 +78,16 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **Deterministic seed/tick mixing and exact 64-bit scenario integers** (#53). The per-tick
+  PRNG now uses a SplitMix64 mix of `(seed, tick)` instead of `seed ^ tick`, whose collisions
+  made different scenarios share a stream (e.g. seed 0/tick 1 and seed 1/tick 0). Scenario
+  JSON integers are stored as 64-bit integers rather than parsed through `double`, so seeds
+  and ticks above 2^53 round-trip exactly.
+- **Process-global and unseeded wire state is removed** (#79). IPv4 identification is fixed
+  at 0 (DF is set and the builder never fragments), TCP initial sequence numbers come from a
+  deterministic `isn_seed`/counter instead of `random_device`, and self-sent echoes preserve
+  a producer-supplied timestamp with real time only as the zero-timestamp fallback. The
+  uninitialised Ethernet MACs and IP-length validation were already fixed in #66.
 - **Simulation start can no longer leave a half-started RUNNING session, and lifecycle RPCs
   are serialized** (#69). `SimulationService` now holds one lifecycle mutex across
   Create/Start/Pause/Step/Reset/Stop, installs the publisher callbacks, frame subscriptions

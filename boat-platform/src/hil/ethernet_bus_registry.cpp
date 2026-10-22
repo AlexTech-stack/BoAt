@@ -52,12 +52,9 @@ bool EthernetBusRegistry::Add(const std::string& iface,
 namespace {
 
 // Matches the RX fallback just above (Add()'s rx_thread) -- wall-clock
-// nanoseconds since epoch. Used below to stamp the self-sent echo with
-// when the write actually happened, not whatever the client's outbound
-// frame carried (usually 0: nothing on the send path -- gRPC clients, the
-// CLI -- ever sets timestamp_ns on a frame it's asking the gateway to
-// transmit). Same gap as CanBusRegistry::SendFrame() had (see its NowNs()
-// for the fuller explanation); fixed here too for consistency.
+// nanoseconds since epoch. Used only when the producer supplied no timestamp;
+// a replay frame already carries a trace timestamp and preserving it keeps the
+// self-sent echo reproducible rather than wall-clock dependent.
 std::uint64_t NowNs() {
   return static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -91,7 +88,9 @@ bool EthernetBusRegistry::SendFrame(const std::string& iface,
   // deliver it only after the wire accepted the frame.
   EthernetFrame local = frame;
   local.flags |= BOAT_ETH_FLAG_SELF_SENT;  // single loopback-prevention marker
-  local.timestamp_ns = NowNs();
+  if (local.timestamp_ns == 0) {
+    local.timestamp_ns = NowNs();
+  }
   DispatchRx(local, iface);
   return true;
 }
@@ -114,7 +113,9 @@ bool EthernetBusRegistry::SendFrameAll(const EthernetFrame& frame) {
   bool all_written = true;
   EthernetFrame local = frame;
   local.flags |= BOAT_ETH_FLAG_SELF_SENT;  // single loopback-prevention marker
-  local.timestamp_ns = NowNs();
+  if (local.timestamp_ns == 0) {
+    local.timestamp_ns = NowNs();
+  }
   for (const auto& [iface, driver] : drivers) {
     if (!driver->WriteFrame(frame)) {
       std::fprintf(stderr, "[EthRegistry] WriteFrame failed on '%s'\n", iface.c_str());

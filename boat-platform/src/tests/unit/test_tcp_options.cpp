@@ -11,6 +11,17 @@
 
 using namespace boat::tcp;
 
+TEST_CASE("Tcp plugin initial sequence number comes from deterministic config",
+          "[unit][tcp][determinism]") {
+  BoatPlugin* raw = boat_plugin_create();
+  REQUIRE(raw != nullptr);
+  REQUIRE(raw->vtable->initialize(raw->ctx, R"({"isn_seed":42})") == 0);
+  auto* plugin = static_cast<TcpPlugin*>(raw->ctx);
+  REQUIRE(plugin->isn_seed == 42);
+  REQUIRE(plugin->next_isn == 42);
+  boat_plugin_destroy(raw);
+}
+
 TEST_CASE("ParseMssOption - MSS option present", "[unit][tcp]") {
   // MSS option: kind=2, len=4, value=1400
   uint8_t options[] = {0x02, 0x04, 0x05, 0x78};  // 0x0578 = 1400

@@ -997,7 +997,18 @@ rather than rebuilding frames from the raw CAN/Ethernet callbacks.
 `"seed": N` in a scenario actually decides that run's random stream (fault-injector noise and
 plugin randomness) and a reset run replays it identically. Before issue #53 the field was
 parsed and ignored — every scenario ran on the gateway's fixed seed, so two scenarios asking
-for different streams got the same one.
+for different streams got the same one. The per-tick stream is now seeded from a SplitMix64
+mix of `(seed, tick)`, not `seed ^ tick`: the old expression made `(seed 0, tick 1)` and
+`(seed 1, tick 0)` select the same stream. Scenario JSON integers are parsed into 64-bit
+integer values rather than `double`, so seeds and ticks above 2^53 survive exactly.
+
+**Deterministic wire state.** The IPv4 identification field is fixed at 0 (DF is set and this
+builder never fragments) rather than a process-global counter, and TCP's initial sequence
+number comes from the deterministic `isn_seed`/counter instead of `random_device`. A
+self-sent echo preserves a producer-supplied timestamp (replay) and falls back to real time
+only when the input timestamp is 0 (gRPC/CLI); timestamps are observability metadata, not wire
+bytes.
+
 - Determinism test runs simulation twice with same seed and expects bit-exact output.
 - Coverage report: `gcovr --root . --exclude build/ --xml coverage.xml`.
 - Release packaging: `cpack -G "TGZ;DEB;RPM"`. **Everything shipped -- the TGZ/DEB/RPM and
