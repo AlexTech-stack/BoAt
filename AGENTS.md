@@ -1180,6 +1180,14 @@ boat pdu group --id 1 --pdu 0x100
 boat pdu disable-group --id 1
 ```
 
+**PDU deadline monitoring.** `PduRouter::ConfigureDeadline(pdu_id, {cycle_time_ms,
+timeout_factor})` arms a receive deadline; `OnTick` is fed host-elapsed milliseconds by the
+plugin wrapper, and reception stamps the same domain (never a frame's wall-clock timestamp or
+the raw tick counter). Self-sent registry echoes still reach PDU subscribers but do not refresh
+the deadline. A miss increments a per-PDU counter, exposed through
+`IPduRouter::DeadlineTimeoutCounts()` and `MetricsService` as
+`pdu.<decimal-id>.deadline_timeouts`.
+
 ### CanTp — CAN Transport Protocol (Plugin)
 
 ISO 15765-2 segmentation/reassembly for PDUs larger than 8 bytes. Operates as a `BOAT_NODE_PLUGINS` node plugin using the v9 ABI (`on_frame`/`set_frame_publisher`). `boat can-tp configure`/`send` talk to the live plugin instance inside the gateway process via the `CanTpService` gRPC service (`CanTpServiceImpl` looks it up via `PluginManager::FindService("can_tp:" + iface)`) — there is no offline/local mode.

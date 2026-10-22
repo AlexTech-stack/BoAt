@@ -156,6 +156,41 @@ TEST_CASE("PduRouter SendPdu over CAN uses explicit can_id", "[unit][pdu]") {
   REQUIRE(f.mock_can->written[0].can_id == 0x7FF);
 }
 
+TEST_CASE("PduRouter deadline monitoring uses host elapsed time and reports misses",
+          "[unit][pdu][deadline]") {
+  Fixture f;
+  PduRoute route;
+  route.pdu_id    = 0x100;
+  route.transport = PduTransport::kCan;
+  route.iface     = "vcan0";
+  f.router.AddRoute(route);
+  f.router.ConfigureDeadline(0x100, PduDeadlineConfig{10, 3});  // deadline 30 ms
+
+  f.router.OnTick(10);
+  CanFrame wire{};
+  wire.can_id = 0x100;
+  wire.dlc = 1;
+  wire.data[0] = 0xAA;
+  f.router.OnCanFrame(wire, "vcan0");
+
+  f.router.OnTick(40);  // deadline = 40; strict comparison does not fire
+  REQUIRE(f.router.DeadlineTimeoutCounts().at(0x100) == 0);
+  f.router.OnTick(41);
+  REQUIRE(f.router.DeadlineTimeoutCounts().at(0x100) == 1);
+
+  // Re-arm with a real reception, then prove a self-sent echo with a huge
+  // wall-clock timestamp cannot refresh the deadline.
+  f.router.OnTick(100);
+  f.router.OnCanFrame(wire, "vcan0");
+  f.router.OnTick(130);
+  CanFrame self = wire;
+  self.flags = 0x08;  // BOAT_CAN_FLAG_SELF_SENT
+  self.timestamp_ns = 1'000'000'000;  // old code used this as 1000 ms
+  f.router.OnCanFrame(self, "vcan0");
+  f.router.OnTick(131);
+  REQUIRE(f.router.DeadlineTimeoutCounts().at(0x100) == 2);
+}
+
 TEST_CASE("PduRouter SendPdu returns false for unknown pdu_id", "[unit][pdu]") {
   Fixture f;
   REQUIRE_FALSE(f.router.SendPdu(0x999, {0x00}));

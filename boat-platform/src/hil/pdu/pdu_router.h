@@ -87,9 +87,11 @@ class PduRouter : public boat::core::IPduRouter {
 
   // ── Deadline monitoring ─────────────────────────────────────────────
   void ConfigureDeadline(uint32_t pdu_id, const PduDeadlineConfig& cfg);
+  [[nodiscard]] std::unordered_map<uint32_t, std::uint64_t>
+  DeadlineTimeoutCounts() const;
 
  private:
-  void DispatchPdu(const PduFrame& pdu);
+  void DispatchPdu(const PduFrame& pdu, bool update_deadline = true);
 
   bool SendContainer(const PduContainerDef& def,
                      const std::vector<IpduMEntry>& entries);
@@ -156,6 +158,10 @@ class PduRouter : public boat::core::IPduRouter {
   };
   mutable std::mutex deadline_mutex_;
   std::unordered_map<uint32_t, DeadlineState> deadlines_;
+  // Host-elapsed milliseconds from the most recent OnTick; reception stamps
+  // from this domain, never from a frame's wall-clock timestamp (#74).
+  std::uint64_t last_tick_ms_{0};
+  std::unordered_map<uint32_t, std::uint64_t> deadline_timeouts_;
 };
 
 }  // namespace boat::hil

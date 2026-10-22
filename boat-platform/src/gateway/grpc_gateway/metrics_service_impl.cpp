@@ -13,6 +13,8 @@
 #include <vector>
 
 #include "can_bus_registry.h"
+#include "core/pdu_router_interface.h"
+#include "core/plugin/plugin_manager.h"
 #include "subscriber_queue.h"
 
 namespace boat::gateway {
@@ -72,6 +74,24 @@ void AppendStreamDropMetrics(GatewayContext& ctx, std::uint64_t tick, Emit emit)
   emit(stream_metrics::kEventBusDropped,
        static_cast<double>(ctx.sim.event_bus().DroppedEventCount()));
 }
+/* PDU deadline misses are counted inside the router plugin (the only place
+   that knows which PDUs are configured and when they were last received).
+   Poll both managers because pdu_router can be loaded as a node plugin or as a
+   simulation-scoped plugin. */
+template <typename Emit>
+void AppendPduDeadlineMetrics(GatewayContext& ctx, Emit emit) {
+  const auto append = [&](boat::core::PluginManager& manager) {
+    auto router = manager.AcquireService<boat::core::IPduRouter>("pdu_router");
+    if (!router) return;
+    for (const auto& [pdu_id, count] : router->DeadlineTimeoutCounts()) {
+      emit("pdu." + std::to_string(pdu_id) + ".deadline_timeouts",
+           static_cast<double>(count));
+    }
+  };
+  append(ctx.plugin_manager);
+  append(ctx.sim.plugin_manager());
+}
+
 }  // namespace
 
 MetricsServiceImpl::MetricsServiceImpl(GatewayContext& ctx) : ctx_(ctx) {}
@@ -95,6 +115,12 @@ grpc::Status MetricsServiceImpl::GetMetrics(grpc::ServerContext*, const boat::v1
     point->set_value(value);
   });
   AppendStreamDropMetrics(ctx_, tick, [&](const std::string& name, double value) {
+    auto* point = response->add_points();
+    point->set_tick(tick);
+    point->set_name(name);
+    point->set_value(value);
+  });
+  AppendPduDeadlineMetrics(ctx_, [&](const std::string& name, double value) {
     auto* point = response->add_points();
     point->set_tick(tick);
     point->set_name(name);
@@ -175,6 +201,18 @@ grpc::Status MetricsServiceImpl::StreamMetrics(grpc::ServerContext* context, con
         }
       });
       AppendStreamDropMetrics(ctx_, tick, [&](const std::string& name, double value) {
+        if (!write_ok) {
+          return;
+        }
+        boat::v1::MetricPoint point;
+        point.set_tick(tick);
+        point.set_name(name);
+        point.set_value(value);
+        if (!writer->Write(point)) {
+          write_ok = false;
+        }
+      });
+      AppendPduDeadlineMetrics(ctx_, [&](const std::string& name, double value) {
         if (!write_ok) {
           return;
         }
