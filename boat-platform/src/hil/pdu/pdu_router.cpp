@@ -3,6 +3,8 @@
 
 #include "pdu/pdu_router.h"
 
+#include <boat/plugin.h>
+
 #include <chrono>
 #include <cstring>
 
@@ -386,16 +388,18 @@ bool PduRouter::IsPduGated(uint32_t pdu_id) const {
 void PduRouter::OnTick(uint64_t tick_ms) {
   tx_engine_->OnTick(tick_ms);
 
-  // Check deadline timers.
+  // Check deadline timers. `tick_ms` and last_rx_tick_ms are both host-elapsed
+  // milliseconds; before #74 reception stored a wall-clock epoch instead, so
+  // the comparison could never fire after the first PDU.
   std::lock_guard<std::mutex> lock(deadline_mutex_);
+  last_tick_ms_ = tick_ms;
   for (auto& [pdu_id, ds] : deadlines_) {
-    (void)pdu_id;
     if (ds.cfg.cycle_time_ms == 0) continue;
     const uint64_t deadline = ds.last_rx_tick_ms +
-        ds.cfg.cycle_time_ms * ds.cfg.timeout_factor;
+        static_cast<uint64_t>(ds.cfg.cycle_time_ms) * ds.cfg.timeout_factor;
     if (tick_ms > deadline && !ds.timeout_fired) {
       ds.timeout_fired = true;
-      // TODO: push timeout event to EventBus when available in scope
+      ++deadline_timeouts_[pdu_id];
     }
   }
 }
@@ -407,14 +411,27 @@ void PduRouter::ConfigureDeadline(uint32_t pdu_id,
   std::lock_guard<std::mutex> lock(deadline_mutex_);
   if (cfg.cycle_time_ms == 0) {
     deadlines_.erase(pdu_id);
+    deadline_timeouts_.erase(pdu_id);
   } else {
     deadlines_[pdu_id] = DeadlineState{cfg, 0, false};
+    deadline_timeouts_[pdu_id] = 0;
   }
+}
+
+std::unordered_map<uint32_t, std::uint64_t>
+PduRouter::DeadlineTimeoutCounts() const {
+  std::lock_guard<std::mutex> lock(deadline_mutex_);
+  return deadline_timeouts_;
 }
 
 // ── Internal frame handlers ───────────────────────────────────────────────────
 
 void PduRouter::OnCanFrame(const CanFrame& frame, const std::string& iface) {
+  // Our own outbound frames are echoed back by the registry. They may still
+  // reach PDU subscribers (the historical loopback behaviour), but they must
+  // not look like peer traffic for deadline monitoring (#74).
+  const bool update_deadline = (frame.flags & BOAT_CAN_FLAG_SELF_SENT) == 0;
+
   // Find a CAN route whose effective CAN ID matches.
   std::vector<PduRoute> matches;
   {
@@ -435,12 +452,14 @@ void PduRouter::OnCanFrame(const CanFrame& frame, const std::string& iface) {
     pdu.timestamp_ns = frame.timestamp_ns;
     pdu.source       = PduTransport::kCan;
     pdu.iface        = iface;
-    DispatchPdu(pdu);
+    DispatchPdu(pdu, update_deadline);
   }
 }
 
 void PduRouter::OnEthernetFrame(const EthernetFrame& frame,
                                 const std::string& iface) {
+  const bool update_deadline = (frame.flags & BOAT_ETH_FLAG_SELF_SENT) == 0;
+
   if (frame.ethertype == 0x0800 || frame.ethertype == 0x86DD) {
     // IP/UDP/IpduM path
     uint16_t src_port = 0, dst_port = 0;
@@ -475,7 +494,7 @@ void PduRouter::OnEthernetFrame(const EthernetFrame& frame,
       pdu.timestamp_ns = frame.timestamp_ns;
       pdu.source       = PduTransport::kEthernet;
       pdu.iface        = iface;
-      DispatchPdu(pdu);
+      DispatchPdu(pdu, update_deadline);
     }
     return;
   }
@@ -512,17 +531,17 @@ void PduRouter::OnEthernetFrame(const EthernetFrame& frame,
   pdu.timestamp_ns = frame.timestamp_ns;
   pdu.source       = PduTransport::kEthernet;
   pdu.iface        = iface;
-  DispatchPdu(pdu);
+  DispatchPdu(pdu, update_deadline);
 }
 
-void PduRouter::DispatchPdu(const PduFrame& pdu) {
+void PduRouter::DispatchPdu(const PduFrame& pdu, bool update_deadline) {
   // Update deadline monitoring for received PDUs.
-  {
+  if (update_deadline) {
     std::lock_guard<std::mutex> lock(deadline_mutex_);
     auto dit = deadlines_.find(pdu.pdu_id);
     if (dit != deadlines_.end()) {
-      dit->second.last_rx_tick_ms =
-          static_cast<uint64_t>(pdu.timestamp_ns / 1000000);
+      // Reception is observed in the same host-elapsed-ms domain as OnTick.
+      dit->second.last_rx_tick_ms = last_tick_ms_;
       dit->second.timeout_fired = false;
     }
   }
