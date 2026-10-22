@@ -78,6 +78,12 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **Replay storage writes are off the tick thread, lossless across IDs, and non-fatal** (#78).
+  `ReplayController` now hands event records to a bounded batching writer instead of running a
+  SQLite transaction on the tick path; the writer logs/drops under backpressure and treats store
+  errors as non-fatal, so a full disk cannot abort a replay. Record IDs use the trace byte
+  offset rather than `(tick, can_id)`, so same-tick/same-ID frames no longer overwrite each
+  other and loop passes replace their own rows instead of growing the database without bound.
 - **Deterministic seed/tick mixing and exact 64-bit scenario integers** (#53). The per-tick
   PRNG now uses a SplitMix64 mix of `(seed, tick)` instead of `seed ^ tick`, whose collisions
   made different scenarios share a stream (e.g. seed 0/tick 1 and seed 1/tick 0). Scenario

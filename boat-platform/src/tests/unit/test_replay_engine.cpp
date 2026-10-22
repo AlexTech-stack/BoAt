@@ -17,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -120,12 +121,20 @@ struct MockEventStore : IEventStore {
   std::vector<EventRecord> Query(const EventFilter&) override { return QueryResult; }
 };
 
+struct ThrowingEventStore : IEventStore {
+  void InsertBatch(std::span<const EventRecord>) override {
+    throw std::runtime_error("simulated disk full");
+  }
+  std::vector<EventRecord> Query(const EventFilter&) override { return {}; }
+};
+
 }  // namespace
 
 namespace {
 
-/* ReplayController owns no thread and no clock: in the gateway a TickAuthority
-   phase calls PumpDueRecords once per tick. Pump stands in for that authority,
+/* ReplayController owns no delivery thread and no clock: in the gateway a
+   TickAuthority phase calls PumpDueRecords once per tick. Its storage writer is
+   drained explicitly by the test Pump. Pump stands in for that authority,
    so these tests drive replay exactly the way production does -- and, unlike
    the sleep-and-hope they replace, they assert on an exact number of ticks. */
 struct Pump {
@@ -134,11 +143,15 @@ struct Pump {
 
   void Ticks(std::uint64_t n) {
     for (std::uint64_t i = 0; i < n; ++i) controller.PumpDueRecords(++tick);
+    // Event records are written by a background batching thread; tests inspect
+    // the mock store synchronously, so drain it before asserting.
+    controller.FlushEventStore();
   }
   void UntilDone(std::uint64_t budget = 200000) {
     for (std::uint64_t i = 0; i < budget && controller.IsRunning(); ++i) {
       controller.PumpDueRecords(++tick);
     }
+    controller.FlushEventStore();
   }
 };
 
@@ -168,6 +181,50 @@ TEST_CASE("ReplayController Start/Stop lifecycle", "[unit][replay]") {
   REQUIRE_FALSE(controller.HasError());
   REQUIRE(event_store.inserted.size() == 3);
   REQUIRE(trace_store.Released() == std::vector<std::string>{"lifecycle"});
+}
+
+TEST_CASE("ReplayController event ids never collide for same-tick same-ID records",
+          "[unit][replay][storage]") {
+  MockTraceStore trace_store;
+  MockEventStore event_store;
+  boat::core::EventBus event_bus;
+  ReplayController controller(trace_store, event_store, event_bus);
+
+  trace_store.traces["same"] = BuildSimultaneousTrace(100, 4);
+  ReplayConfig config{.trace_id = "same", .speed = ReplaySpeed::ACCELERATED,
+                      .speed_multiplier = 1e9};
+  controller.Start(config);
+  Pump pump{controller};
+  pump.UntilDone();
+
+  REQUIRE(event_store.inserted.size() == 4);
+  std::unordered_set<std::string> ids;
+  for (const auto& event : event_store.inserted) {
+    ids.insert(event.id);
+  }
+  REQUIRE(ids.size() == 4);
+}
+
+TEST_CASE("ReplayController keeps playing when event storage rejects writes",
+          "[unit][replay][storage]") {
+  MockTraceStore trace_store;
+  ThrowingEventStore event_store;
+  boat::core::EventBus event_bus;
+  ReplayController controller(trace_store, event_store, event_bus);
+
+  trace_store.traces["diskfull"] = BuildSequentialTrace(100, 3);
+  ReplayConfig config{.trace_id = "diskfull", .speed = ReplaySpeed::ACCELERATED,
+                      .speed_multiplier = 1e9};
+  controller.Start(config);
+
+  int forwarded = 0;
+  controller.SetEventForwarder([&](const boat::core::Frame&) { ++forwarded; });
+  Pump pump{controller};
+  pump.UntilDone();
+
+  REQUIRE(forwarded == 3);
+  REQUIRE_FALSE(controller.HasError());
+  controller.FlushEventStore();
 }
 
 TEST_CASE("ReplayController anchor and authority ticks are offset-independent",
