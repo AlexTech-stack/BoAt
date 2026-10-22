@@ -376,22 +376,27 @@ def cmd_import(
         raise typer.Exit(1)
 
     # ── Upload ────────────────────────────────────────────────────────────
+    # Client-stream in fixed-size chunks. A single unary message is capped at
+    # gRPC's 4 MiB receive limit on the gateway; realistic traces are larger.
     suffix = file.suffix.lstrip(".").upper()
-    try:
-        response = ctx.obj["client"].replay.ImportTraceData(
-            replay_pb2.ImportTraceDataRequest(
-                trace_id=tid,
-                format=suffix,
-                data=binary_data,
+    chunk_size = 1024 * 1024
+
+    def upload_chunks():
+        yield replay_pb2.ImportTraceDataChunk(trace_id=tid, format=suffix)
+        for offset in range(0, len(binary_data), chunk_size):
+            yield replay_pb2.ImportTraceDataChunk(
+                data=binary_data[offset:offset + chunk_size]
             )
-        )
+
+    try:
+        response = ctx.obj["client"].replay.ImportTraceDataStream(upload_chunks())
     except Exception as e:
-        print_error(f"ImportTraceData failed: {e}")
+        print_error(f"ImportTraceDataStream failed: {e}")
         raise typer.Exit(1)
 
     if not response.accepted:
         msg = response.error.message if response.error and response.error.message else "unknown error"
-        print_error(f"ImportTraceData rejected: {msg}")
+        print_error(f"ImportTraceDataStream rejected: {msg}")
         raise typer.Exit(1)
 
     # ▸ Each record is a 4-byte little-endian length prefix followed by that

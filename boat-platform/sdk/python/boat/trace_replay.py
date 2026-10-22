@@ -10,7 +10,7 @@ There is no server-side mode here.
 
 For Ethernet (.pcap, or the Ethernet records of a mixed .pcapng) replay,
 use ``convert_to_binary()`` to produce the gateway's internal binary trace
-format, upload it via ReplayService.ImportTraceData, then play it back with
+format, upload it via ReplayService.ImportTraceDataStream, then play it back with
 ReplayService.StartReplay + StreamReplay (this is what the ``boat replay
 import`` / ``boat replay start`` / ``boat replay stream`` CLI commands do).
 ``export_to_pcapng()`` is the inverse: turn an already-imported/edited
@@ -35,7 +35,7 @@ Quick example::
         replay_dst_ip="192.168.1.100",
     )
     binary_data = replayer.convert_to_binary("capture.pcap")
-    # ... upload via ReplayService.ImportTraceData, then StartReplay/StreamReplay
+    # ... upload via ReplayService.ImportTraceDataStream, then StartReplay/StreamReplay
 """
 from __future__ import annotations
 
@@ -275,7 +275,7 @@ class TraceReplayer:
             raise TraceReplayError(
                 "Ethernet/.pcap replay is not supported by TraceReplayer.replay() "
                 "(direct per-frame CAN injection only). Use convert_to_binary() + "
-                "ReplayService.ImportTraceData/StartReplay/StreamReplay instead "
+                "ReplayService.ImportTraceDataStream/StartReplay/StreamReplay instead "
                 "(the `boat replay import` + `boat replay start`/`stream` CLI "
                 "commands do this)."
             )

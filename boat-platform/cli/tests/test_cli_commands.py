@@ -457,15 +457,18 @@ def test_replay_import_reports_correct_frame_count(tmp_path) -> None:
     fake_client = _fake_client()
     fake_client.replay = SimpleNamespace(
         **vars(fake_client.replay),
-        ImportTraceData=Mock(return_value=SimpleNamespace(accepted=True)),
+        ImportTraceDataStream=Mock(return_value=SimpleNamespace(accepted=True)),
     )
 
     with patch("boat_cli.main.BoAtClient", return_value=fake_client):
         result = runner.invoke(app, ["replay", "import", str(asc_file), "--trace-id", "t-count"])
 
     assert result.exit_code == 0
-    assert fake_client.replay.ImportTraceData.called
-    uploaded = fake_client.replay.ImportTraceData.call_args[0][0].data
+    assert fake_client.replay.ImportTraceDataStream.called
+    chunks = list(fake_client.replay.ImportTraceDataStream.call_args[0][0])
+    assert chunks[0].trace_id == "t-count"
+    assert chunks[0].format == "ASC"
+    uploaded = b"".join(chunk.data for chunk in chunks[1:])
 
     # Independently verify the actual record count by walking the same
     # length-prefixed stream the fix is supposed to parse correctly.

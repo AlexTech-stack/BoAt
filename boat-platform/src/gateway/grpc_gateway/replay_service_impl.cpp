@@ -232,6 +232,7 @@ grpc::Status ReplayServiceImpl::ImportTraceData(grpc::ServerContext*, const boat
     meta.simulation_id = "";
     meta.format = boat::store::TraceRecord::Format::BINARY;
     meta.storage_path = storage_path;
+    meta.size_bytes = request->data().size();
 
     std::span<const std::uint8_t> data_span(
         reinterpret_cast<const std::uint8_t*>(request->data().data()),
@@ -246,6 +247,69 @@ grpc::Status ReplayServiceImpl::ImportTraceData(grpc::ServerContext*, const boat
     return MapReplayException(ex);
   } catch (...) {
     return grpc::Status(grpc::StatusCode::INTERNAL, "unexpected import trace error");
+  }
+}
+
+grpc::Status ReplayServiceImpl::ImportTraceDataStream(
+    grpc::ServerContext*,
+    grpc::ServerReader<boat::v1::ImportTraceDataChunk>* reader,
+    boat::v1::ReplayControlResponse* response) {
+  try {
+    constexpr std::size_t kMaxTraceImportBytes = 512ULL * 1024 * 1024;
+
+    std::string trace_id;
+    std::string format;
+    std::vector<std::uint8_t> data;
+    boat::v1::ImportTraceDataChunk chunk;
+    while (reader->Read(&chunk)) {
+      if (trace_id.empty()) {
+        trace_id = chunk.trace_id();
+      } else if (!chunk.trace_id().empty() && chunk.trace_id() != trace_id) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "trace_id must be identical in every import chunk");
+      }
+      if (!chunk.format().empty()) format = chunk.format();
+      if (chunk.data().empty()) continue;
+      if (data.size() + chunk.data().size() > kMaxTraceImportBytes) {
+        return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
+                            "trace import exceeds the 512 MiB limit");
+      }
+      const auto* bytes = reinterpret_cast<const std::uint8_t*>(chunk.data().data());
+      data.insert(data.end(), bytes, bytes + chunk.data().size());
+    }
+
+    // The source format is informational; the gateway stores the converted
+    // binary trace format regardless.
+    (void)format;
+    if (trace_id.empty()) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "trace_id must be non-empty");
+    }
+    if (data.empty()) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "trace data must be non-empty");
+    }
+    if (!boat::store::IsValidTraceId(trace_id)) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "trace_id must match [A-Za-z0-9._-]+ and must not be '.' or '..'");
+    }
+
+    boat::store::TraceRecord meta;
+    meta.id = trace_id;
+    meta.simulation_id = "";
+    meta.format = boat::store::TraceRecord::Format::BINARY;
+    meta.storage_path = "/tmp/" + trace_id + ".trace";
+    meta.size_bytes = data.size();
+
+    ctx_.trace_store.WriteTrace(meta, std::span<const std::uint8_t>(data));
+    response->set_accepted(true);
+    response->set_replay_id(trace_id);
+    return grpc::Status::OK;
+  } catch (const std::exception& ex) {
+    return MapReplayException(ex);
+  } catch (...) {
+    return grpc::Status(grpc::StatusCode::INTERNAL,
+                        "unexpected streaming import trace error");
   }
 }
 

@@ -188,6 +188,47 @@ TEST_CASE("ReplayService StartReplay accepts valid trace and rejects empty", "[i
   server->Shutdown();
 }
 
+TEST_CASE("ReplayService streams trace data past the unary message limit",
+          "[integration][replay]") {
+  IntegrationFixture f("r_stream_import");
+
+  grpc::ServerBuilder builder;
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials());
+  builder.RegisterService(&f.replay_service);
+  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
+  REQUIRE(server != nullptr);
+  auto channel = server->InProcessChannel({});
+  auto stub = boat::v1::ReplayService::NewStub(channel);
+
+  grpc::ClientContext context;
+  boat::v1::ReplayControlResponse response;
+  auto writer = stub->ImportTraceDataStream(&context, &response);
+
+  boat::v1::ImportTraceDataChunk first;
+  first.set_trace_id("big-stream");
+  first.set_format("ASC");
+  REQUIRE(writer->Write(first));
+
+  constexpr std::size_t kChunkBytes = 1024 * 1024;
+  const std::string chunk(kChunkBytes, 'x');
+  for (int i = 0; i < 5; ++i) {
+    boat::v1::ImportTraceDataChunk data;
+    data.set_data(chunk);
+    REQUIRE(writer->Write(data));
+  }
+  REQUIRE(writer->WritesDone());
+  const auto status = writer->Finish();
+  REQUIRE(status.ok());
+  REQUIRE(response.accepted());
+  REQUIRE(response.replay_id() == "big-stream");
+
+  const auto mapped = f.trace_store.MapTrace("big-stream");
+  REQUIRE(mapped != nullptr);
+  REQUIRE(mapped->bytes.size() == 5 * kChunkBytes);
+
+  server->Shutdown();
+}
+
 TEST_CASE("ReplayService StreamReplay exposes the authority tick", "[integration][replay]") {
   IntegrationFixture f("r_anchor", BuildReplayTraceData());
 
