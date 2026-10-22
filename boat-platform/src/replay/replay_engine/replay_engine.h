@@ -27,6 +27,8 @@
 
 namespace boat::replay {
 
+class ReplayEventWriter;
+
 inline constexpr std::uint32_t kReplayBusEventType = 9001;
 
 enum class ReplaySpeed {
@@ -92,10 +94,12 @@ class ReplayController {
 
   /* Deliver every record that has come due by `authority_tick`.
      
-     ReplayController owns no thread and no clock: a TickAuthority phase calls
-     this once per tick, after the plugins have been ticked, so a replayed
+     ReplayController owns no clock and no delivery thread: a TickAuthority
+     phase calls this once per tick, after the plugins have been ticked, so a replayed
      frame always lands in a definite tick rather than wherever the host
-     scheduler happened to put it. Records are due on elapsed authority ticks
+     scheduler happened to put it. It does own a bounded event-storage writer
+     thread (see FlushEventStore), so SQLite never runs on the tick path.
+     Records are due on elapsed authority ticks
      scaled by speed_multiplier -- no wall clock is consulted, which is what
      makes two runs agree.
 
@@ -111,6 +115,10 @@ class ReplayController {
   void Seek(std::uint64_t tick);
   void Pause();
   void Resume();
+  /* Wait until every event record handed to the storage writer has been
+     committed (or dropped after a store error). Production replay does not
+     call this on the tick path; tests and shutdown do. */
+  void FlushEventStore();
   /* Stop the current replay and release its trace. Once this returns, no
      record of that replay is handed to the forwarder (unless an in-flight
      dispatch exceeds kStopDrainTimeout, which is reported on stderr). Safe to
@@ -229,6 +237,10 @@ class ReplayController {
   boat::store::ITraceStore& trace_store_;
   boat::store::IEventStore& event_store_;
   boat::core::EventBus& event_bus_;
+  // Replay's SQLite writes are intentionally off the tick thread: DispatchRecord
+  // enqueues a record and the writer batches it. The writer is owned here so
+  // its queue drains before the controller is destroyed.
+  std::unique_ptr<ReplayEventWriter> event_writer_;
 
   // Held only to copy the pointer: the forwarder itself (FrameSink -> bus ->
   // plugins' on_frame) runs with no lock held.

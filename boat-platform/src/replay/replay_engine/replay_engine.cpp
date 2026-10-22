@@ -5,13 +5,18 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -136,6 +141,131 @@ thread_local bool t_in_pump = false;
 
 }  // namespace
 
+/* Bounded, ordered writer for replay event records. DispatchRecord used to
+   call InsertBatch (a SQLite transaction) once per frame on the tick thread;
+   that delayed every phase after replay and made a disk error abort the run.
+   Records now enter this FIFO and a single worker commits them in batches.
+   Dropping when the queue is full is deliberate: blocking the tick thread is
+   worse than losing stored observations, and the wire dispatcher has already
+   delivered the frame by then. */
+class ReplayEventWriter {
+ public:
+  explicit ReplayEventWriter(boat::store::IEventStore& store) : store_(store) {
+    writer_ = std::thread([this] { WriterLoop(); });
+  }
+
+  ~ReplayEventWriter() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stopping_ = true;
+    }
+    cv_.notify_all();
+    if (writer_.joinable()) writer_.join();
+  }
+
+  ReplayEventWriter(const ReplayEventWriter&) = delete;
+  ReplayEventWriter& operator=(const ReplayEventWriter&) = delete;
+
+  void Enqueue(boat::store::EventRecord record) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (queue_.size() >= kMaxQueued) {
+        queue_.pop_front();
+        ++dropped_;
+        if (dropped_ == 1 || dropped_ % 1000 == 0) {
+          std::fprintf(stderr,
+                       "[Replay] event store queue full: dropped %llu record(s) "
+                       "total\n",
+                       static_cast<unsigned long long>(dropped_));
+        }
+      }
+      queue_.push_back(std::move(record));
+    }
+    cv_.notify_one();
+  }
+
+  void Flush() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (queue_.empty() && !writing_) return;
+    flush_requested_ = true;
+    cv_.notify_all();
+    idle_cv_.wait(lock, [this] { return queue_.empty() && !writing_; });
+  }
+
+ private:
+  static constexpr std::size_t kBatchSize = 256;
+  static constexpr std::size_t kMaxQueued = 16384;
+
+  void WriterLoop() {
+    for (;;) {
+      std::vector<boat::store::EventRecord> batch;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] {
+          return stopping_ || !queue_.empty() || flush_requested_;
+        });
+        if (queue_.empty()) {
+          if (stopping_) break;
+          flush_requested_ = false;
+          idle_cv_.notify_all();
+          continue;
+        }
+        if (!flush_requested_ && !stopping_ && queue_.size() < kBatchSize) {
+          cv_.wait_for(lock, std::chrono::milliseconds(10), [this] {
+            return stopping_ || flush_requested_ || queue_.size() >= kBatchSize;
+          });
+        }
+        const std::size_t count = std::min(queue_.size(), kBatchSize);
+        batch.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+          batch.push_back(std::move(queue_.front()));
+          queue_.pop_front();
+        }
+        writing_ = true;
+      }
+
+      try {
+        store_.InsertBatch(std::span<const boat::store::EventRecord>(
+            batch.data(), batch.size()));
+      } catch (const std::exception& ex) {
+        ++write_errors_;
+        if (write_errors_ == 1 || write_errors_ % 1000 == 0) {
+          std::fprintf(stderr,
+                       "[Replay] event store write failed (%llu batches total): %s\n",
+                       static_cast<unsigned long long>(write_errors_.load()),
+                       ex.what());
+        }
+      } catch (...) {
+        ++write_errors_;
+        std::fprintf(stderr, "[Replay] event store write failed (unknown error)\n");
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        writing_ = false;
+        if (queue_.empty()) {
+          flush_requested_ = false;
+          idle_cv_.notify_all();
+        } else {
+          cv_.notify_one();
+        }
+      }
+    }
+  }
+
+  boat::store::IEventStore& store_;
+  std::thread writer_;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::condition_variable idle_cv_;
+  std::deque<boat::store::EventRecord> queue_;
+  bool stopping_{false};
+  bool writing_{false};
+  bool flush_requested_{false};
+  std::uint64_t dropped_{0};
+  std::atomic<std::uint64_t> write_errors_{0};
+};
+
 struct ReplayController::Session {
   Session(ReplayConfig cfg, boat::store::MappedTracePtr mapped,
           std::chrono::nanoseconds tick)
@@ -194,14 +324,23 @@ struct ReplayController::Session {
 ReplayController::ReplayController(boat::store::ITraceStore& trace_store,
                                    boat::store::IEventStore& event_store,
                                    boat::core::EventBus& event_bus)
-    : trace_store_(trace_store), event_store_(event_store), event_bus_(event_bus) {}
+    : trace_store_(trace_store),
+      event_store_(event_store),
+      event_bus_(event_bus),
+      event_writer_(std::make_unique<ReplayEventWriter>(event_store_)) {}
 
 ReplayController::~ReplayController() {
   // Destructors cannot leave a pump holding `this`: wait without the bounded
   // timeout even if a wedged bus write makes that slow.
   std::lock_guard<std::mutex> control(control_mutex_);
   StopLocked(/*bounded=*/false);
+  // The writer member is destroyed after this body; flushing explicitly makes
+  // the ordering obvious and lets a clean shutdown persist everything before
+  // the event store itself is destroyed.
+  event_writer_->Flush();
 }
+
+void ReplayController::FlushEventStore() { event_writer_->Flush(); }
 
 void ReplayController::Start(const ReplayConfig& config) {
   std::lock_guard<std::mutex> control(control_mutex_);
@@ -506,20 +645,29 @@ void ReplayController::DispatchRecord(const Session& s, const boat::v1::Frame& p
     PushEventLocked(tick, proto_bytes, authority_tick);
   }
 
-  // ── Store in event store ──────────────────────────────────────────────
-  {
-    std::vector<std::uint8_t> payload_copy(proto_bytes.begin(), proto_bytes.end());
+  // ── Store in event store (off the tick thread) ───────────────────────
+  try {
     boat::store::EventRecord record;
-    record.id = std::to_string(tick) + "_" + std::to_string(pf.can().can_id());
+    // Key by the record's byte offset in this trace, not (tick, can_id): two
+    // frames sharing a tick/CAN ID (or two Ethernet frames, can_id=0) must not
+    // overwrite each other. The offset is also stable across loop passes, so a
+    // looping replay replaces its own rows instead of growing the database
+    // without bound.
+    const auto record_offset =
+        static_cast<std::uint64_t>(raw.data() - s.bytes.data());
+    record.id = s.config.trace_id + "_" + std::to_string(record_offset);
     record.simulation_id = s.config.trace_id;
     record.tick = tick;
     record.wall_time_ns = static_cast<std::int64_t>(pf.timestamp_ns());
     record.signal_id = std::to_string(pf.can().can_id());
     record.value_type = 0;
-    record.value_blob = std::move(payload_copy);
+    record.value_blob.assign(proto_bytes.begin(), proto_bytes.end());
     record.tags = "{}";
-    std::array<boat::store::EventRecord, 1> batch{record};
-    event_store_.InsertBatch(std::span<const boat::store::EventRecord>(batch));
+    event_writer_->Enqueue(std::move(record));
+  } catch (const std::exception& ex) {
+    std::fprintf(stderr, "[Replay] event store enqueue failed: %s\n", ex.what());
+  } catch (...) {
+    std::fprintf(stderr, "[Replay] event store enqueue failed (unknown error)\n");
   }
 }
 

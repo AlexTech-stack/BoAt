@@ -936,8 +936,13 @@ registers two:
 The gateway prints the interval and phase order at startup
 (`[Gateway] Tick authority: 1000 us/tick, phases: node_plugins -> replay`).
 
-This replaced two independent wall-clock threads. **`ReplayController` now owns no thread and
-no clock**: `Start()` maps the trace and anchors the pass, and the replay phase pumps it.
+This replaced two independent wall-clock threads. **`ReplayController` owns no delivery thread
+and no clock**: `Start()` maps the trace and anchors the pass, and the replay phase pumps it.
+It does own one bounded event-storage writer thread: `DispatchRecord` enqueues an
+`EventRecord`, the writer batches it into SQLite off the tick path, and `FlushEventStore()`
+drains it for tests/shutdown. Store failures are counted/logged, not allowed to abort the
+replay. Records are keyed by the trace byte offset, so same-tick/same-ID frames do not
+overwrite each other and loop passes replace their own rows rather than growing the DB forever.
 A record is due when elapsed *authority ticks* (scaled by `speed_multiplier`) reach its
 offset from the session anchor — no wall clock is read, so a loaded host makes the authority
 tick later in real terms without ever changing which tick a record lands in. The session
