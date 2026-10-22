@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "pdu/pdu_types.h"
@@ -39,6 +40,12 @@ class IPduRouter {
 
   virtual void ConfigureDeadline(uint32_t pdu_id,
                                  const hil::PduDeadlineConfig& cfg) = 0;
+
+  /* Cumulative deadline misses per PDU ID, since ConfigureDeadline() (or the
+     last reset of that entry). Polled by MetricsService; a map rather than a
+     callback keeps the plugin free of host-specific plumbing. */
+  [[nodiscard]] virtual std::unordered_map<uint32_t, std::uint64_t>
+  DeadlineTimeoutCounts() const = 0;
 };
 
 }  // namespace boat::core

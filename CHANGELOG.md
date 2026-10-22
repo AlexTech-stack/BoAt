@@ -84,6 +84,12 @@ The plugin ABI is versioned separately from the project; see
   errors as non-fatal, so a full disk cannot abort a replay. Record IDs use the trace byte
   offset rather than `(tick, can_id)`, so same-tick/same-ID frames no longer overwrite each
   other and loop passes replace their own rows instead of growing the database without bound.
+- **PDU deadline monitoring now fires in the host clock domain and reports misses** (#74).
+  Reception is stamped from the host-elapsed-millisecond tick fed to `PduRouter::OnTick`,
+  not from a frame's wall-clock epoch timestamp, and self-sent registry echoes no longer
+  refresh a receive deadline. A miss increments a per-PDU counter exposed through
+  `IPduRouter::DeadlineTimeoutCounts()` and `MetricsService` as
+  `pdu.<id>.deadline_timeouts`.
 - **Deterministic seed/tick mixing and exact 64-bit scenario integers** (#53). The per-tick
   PRNG now uses a SplitMix64 mix of `(seed, tick)` instead of `seed ^ tick`, whose collisions
   made different scenarios share a stream (e.g. seed 0/tick 1 and seed 1/tick 0). Scenario
