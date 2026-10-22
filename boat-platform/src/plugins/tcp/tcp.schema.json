@@ -29,6 +29,11 @@
     "default": 65535,
     "help": "Advertised receive window size in bytes"
   },
+  "isn_seed": {
+    "type": "int",
+    "default": 1,
+    "help": "Starting initial sequence number for accepted connections (deterministic, not random)"
+  },
   "nagle": {
     "type": "bool",
     "default": true,

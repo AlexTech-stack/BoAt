@@ -21,14 +21,11 @@ static_assert(kCanFlagRtr == BOAT_CAN_FLAG_RTR,
 namespace {
 
 // Wall-clock nanoseconds since epoch, matching SocketCanDriver::ReadFrame()'s
-// own clock_gettime(CLOCK_REALTIME) call for RX (socket_can_driver.cpp) --
-// used below to stamp the self-sent echo with when the write actually
-// happened, not whatever the client's outbound frame carried (usually 0:
-// nothing on the send path -- gRPC clients, the CLI -- ever sets
-// timestamp_ns on a frame it's asking the gateway to transmit; blindly
-// reusing that value left every self-sent/outbound-observed frame
-// permanently stamped 0, which silently broke anything computing an
-// elapsed time against it, trace recording included).
+// own clock_gettime(CLOCK_REALTIME) call for RX (socket_can_driver.cpp). Used
+// only as the fallback for a self-sent echo whose producer supplied no
+// timestamp (gRPC clients and the CLI usually leave it 0). A replay frame
+// already carries a trace timestamp, and preserving that makes its echo
+// reproducible instead of depending on the wall clock.
 std::uint64_t NowNs() {
   struct timespec ts {};
   if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
@@ -87,11 +84,15 @@ bool CanBusRegistry::SendFrame(const std::string& iface, const CanFrame& frame) 
 
   // Tag as self-sent so subscribers (especially plugins) can distinguish
   // internally-dispatched loopback from frames received from the wire.
-  // Timestamp is captured fresh here (right after the write), not copied
-  // from the client-supplied frame -- see NowNs()'s comment above.
+  // Preserve a source timestamp when the producer supplied one (replay does;
+  // gRPC/CLI usually does not), otherwise stamp the actual write time. The
+  // preserved form keeps replayed echoes reproducible; the fallback keeps
+  // elapsed-time consumers working for fire-and-forget clients.
   CanFrame self = frame;
   self.flags |= BOAT_CAN_FLAG_SELF_SENT;
-  self.timestamp_ns = NowNs();
+  if (self.timestamp_ns == 0) {
+    self.timestamp_ns = NowNs();
+  }
   DispatchRx(self, iface);
   return true;
 }
@@ -114,7 +115,9 @@ bool CanBusRegistry::SendFrameAll(const CanFrame& frame) {
   bool all_written = true;
   CanFrame self = frame;
   self.flags |= BOAT_CAN_FLAG_SELF_SENT;
-  self.timestamp_ns = NowNs();
+  if (self.timestamp_ns == 0) {
+    self.timestamp_ns = NowNs();
+  }
   for (const auto& [iface, bridge] : bridges) {
     if (!bridge->SendFrame(frame)) {
       std::fprintf(stderr, "[CanRegistry] WriteFrame failed on '%s'\n", iface.c_str());

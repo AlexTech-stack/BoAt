@@ -17,7 +17,12 @@ namespace {
 
 struct JsonMap;
 struct JsonValue {
-  std::variant<std::nullptr_t, bool, double, std::string, std::vector<JsonValue>, std::unique_ptr<JsonMap> > value;
+  // Integers are stored exactly. Parsing them through `double` silently
+  // rounded seeds/ticks above 2^53; JSON numbers without a fraction/exponent
+  // therefore use a 64-bit integer alternative.
+  std::variant<std::nullptr_t, bool, std::int64_t, std::uint64_t, double,
+               std::string, std::vector<JsonValue>,
+               std::unique_ptr<JsonMap> > value;
 };
 struct JsonMap {
   std::unordered_map<std::string, JsonValue> map;
@@ -53,7 +58,7 @@ class JsonParser {
     if (Match('{')) return JsonValue{std::make_unique<JsonMap>(ParseObject()) };
     if (Match('[')) return JsonValue{ParseArray()};
     if (Match('"')) return JsonValue{ParseString()};
-    if (std::isdigit(Peek()) || Peek() == '-') return JsonValue{ParseNumber()};
+    if (std::isdigit(Peek()) || Peek() == '-') return ParseNumber();
     if (ConsumeWord("true")) return JsonValue{true};
     if (ConsumeWord("false")) return JsonValue{false};
     if (ConsumeWord("null")) return JsonValue{nullptr};
@@ -109,15 +114,34 @@ class JsonParser {
     return out;
   }
 
-  double ParseNumber() {
+  JsonValue ParseNumber() {
     const std::size_t start = pos_;
-    if (Peek() == '-') ++pos_;
+    bool negative = false;
+    bool integral = true;
+    if (Peek() == '-') {
+      negative = true;
+      ++pos_;
+    }
     while (std::isdigit(Peek())) ++pos_;
     if (Peek() == '.') {
+      integral = false;
       ++pos_;
       while (std::isdigit(Peek())) ++pos_;
     }
-    return std::stod(std::string(text_.substr(start, pos_ - start)));
+    if (Peek() == 'e' || Peek() == 'E') {
+      integral = false;
+      ++pos_;
+      if (Peek() == '+' || Peek() == '-') ++pos_;
+      while (std::isdigit(Peek())) ++pos_;
+    }
+    const std::string token = std::string(text_.substr(start, pos_ - start));
+    if (!integral) {
+      return JsonValue{std::stod(token)};
+    }
+    if (negative) {
+      return JsonValue{static_cast<std::int64_t>(std::stoll(token))};
+    }
+    return JsonValue{static_cast<std::uint64_t>(std::stoull(token))};
   }
 
   void SkipWs() {
@@ -157,10 +181,28 @@ std::string AsString(const JsonValue& value) {
   return std::get<std::string>(value.value);
 }
 std::uint64_t AsU64(const JsonValue& value) {
-  return static_cast<std::uint64_t>(std::get<double>(value.value));
+  if (const auto* v = std::get_if<std::uint64_t>(&value.value)) return *v;
+  if (const auto* v = std::get_if<std::int64_t>(&value.value)) {
+    if (*v < 0) throw std::runtime_error("expected an unsigned integer");
+    return static_cast<std::uint64_t>(*v);
+  }
+  if (const auto* v = std::get_if<double>(&value.value)) {
+    // Kept for callers that supply a fractional/exponent form; scenario
+    // integer fields never need to take this lossy path.
+    return static_cast<std::uint64_t>(*v);
+  }
+  throw std::runtime_error("expected an integer");
 }
+
 double AsDouble(const JsonValue& value) {
-  return std::get<double>(value.value);
+  if (const auto* v = std::get_if<double>(&value.value)) return *v;
+  if (const auto* v = std::get_if<std::int64_t>(&value.value)) {
+    return static_cast<double>(*v);
+  }
+  if (const auto* v = std::get_if<std::uint64_t>(&value.value)) {
+    return static_cast<double>(*v);
+  }
+  throw std::runtime_error("expected a number");
 }
 
 ScenarioDef ParseScenarioFromObject(const std::unordered_map<std::string, JsonValue>& root) {

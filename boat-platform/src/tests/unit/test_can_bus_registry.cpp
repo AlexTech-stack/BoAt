@@ -181,11 +181,13 @@ TEST_CASE("CanBusRegistry SubscribeFrame preserves iface and self-sent flags",
   std::string received_iface;
   std::uint8_t received_flags = 0;
   std::uint32_t received_id = 0;
+  std::uint64_t received_timestamp = 0;
   registry.SubscribeFrame([&](const boat::core::Frame& f) {
     got = true;
     received_iface = f.iface();
     received_flags = f.can_meta().flags;
     received_id = f.can_meta().can_id;
+    received_timestamp = f.timestamp_ns();
   });
 
   CanFrame frame{};
@@ -193,11 +195,13 @@ TEST_CASE("CanBusRegistry SubscribeFrame preserves iface and self-sent flags",
   frame.dlc = 2;
   frame.data[0] = 0xAA;
   frame.data[1] = 0xBB;
+  frame.timestamp_ns = 123456;
   REQUIRE(registry.SendFrame("can0", frame));
   REQUIRE(got);
   REQUIRE(received_iface == "can0");
   REQUIRE((received_flags & 0x08) != 0);  // BOAT_CAN_FLAG_SELF_SENT
   REQUIRE(received_id == 0x123);
+  REQUIRE(received_timestamp == 123456);  // preserved source time, not wall clock
 
   // Join the RX thread while the callback's captured locals are still alive.
   registry.StopAll();

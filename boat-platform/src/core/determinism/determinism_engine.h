@@ -8,9 +8,12 @@
 
 namespace boat::core {
 
-/* Seeds a Mersenne Twister PRNG with (seed_ ⊕ tick) at the start of every
-   simulation tick.  This guarantees bit-identical random sequences across
-   runs and environments for the same (seed, tick) pair.
+/* Seeds a Mersenne Twister PRNG from a mixed (seed, tick) pair at the start of
+   every simulation tick. This guarantees bit-identical random sequences across
+   runs and environments for the same (seed, tick) pair. The seed and tick are
+   mixed separately (SplitMix64), not XORed directly: `seed ^ tick` made
+   (seed 0, tick 1) and (seed 1, tick 0) select the same stream, and every
+   other XOR collision inherited the same flaw.
 
    Thread-safety: NOT thread-safe.  Must be called from the coordinator
    thread only (see TickScheduler::ExecuteTick).
@@ -37,7 +40,8 @@ class DeterminismEngine {
      high-water tick makes the next BeforeTick() throw "tick must be
      monotonically increasing" -- the two have to be reset together, which is
      why TickScheduler::Reset() does both under its tick mutex. The RNG is
-     reseeded per tick from (seed ^ tick), so nothing else needs clearing. */
+     reseeded per tick from the mixed (seed, tick) pair, so nothing else
+     needs clearing. */
   void Reset();
 
  private:

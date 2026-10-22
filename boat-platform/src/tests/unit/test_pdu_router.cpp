@@ -831,6 +831,19 @@ TEST_CASE("PduRouter on-change route SendPdu sends exactly once plus reps",
   REQUIRE(f.mock_can->written.size() == 4);
 }
 
+TEST_CASE("IPv4 datagram bytes are independent of process-global state",
+          "[unit][pdu][ipdum][determinism]") {
+  const uint8_t src4[4] = {10, 0, 0, 1};
+  const uint8_t dst4[4] = {10, 0, 0, 2};
+  const std::vector<uint8_t> container = {1, 2, 3, 4};
+
+  const auto first = BuildUdpIpv4(src4, dst4, 1234, 5678, 64, container);
+  const auto second = BuildUdpIpv4(src4, dst4, 1234, 5678, 64, container);
+  REQUIRE(first == second);
+  REQUIRE(first[4] == 0);
+  REQUIRE(first[5] == 0);
+}
+
 TEST_CASE("UDP builders reject containers larger than the length field",
           "[unit][pdu][ipdum]") {
   const uint8_t ip4[4] = {10, 0, 0, 1};

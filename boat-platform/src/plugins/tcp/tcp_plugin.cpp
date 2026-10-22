@@ -8,7 +8,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <random>
 
 #include <linux/if_packet.h>
 #include <net/if_arp.h>
@@ -51,15 +50,6 @@ constexpr std::uint64_t MsToNs(std::uint64_t ms) { return ms * kNsPerMs; }
 // implementation; these are the ones this plugin has always used).
 constexpr std::uint64_t kPersistBaseMs = 5000;
 constexpr std::uint64_t kPersistMaxMs  = 60000;
-
-static std::mt19937& Rng() {
-  static std::mt19937 rng(std::random_device{}());
-  return rng;
-}
-
-static uint32_t Rand32() {
-  return Rng()();
-}
 
 static int FallbackRawSocket(btcp::TcpPlugin* plugin, const char* iface) {
   if (plugin->raw_sock >= 0) return plugin->raw_sock;
@@ -256,6 +246,8 @@ static int tp_initialize(void* ctx, const char* config_json) {
     plugin->default_mss = static_cast<int>(get_val("\"mss\"", 1460));
     plugin->time_wait_ms = get_val("\"time_wait_ms\"", 120000);
     plugin->rx_window = static_cast<uint16_t>(get_val("\"rx_window\"", 65535));
+    plugin->isn_seed = get_val("\"isn_seed\"", plugin->isn_seed);
+    plugin->next_isn = plugin->isn_seed;
     // Parse nagle as int: 0=off, 1=on (default on)
     plugin->nagle_enabled = (get_val("\"nagle\"", 1) != 0);
     plugin->keepalive_idle_ms = get_val("\"keepalive_idle_ms\"", 7200000);
@@ -692,7 +684,7 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
         std::memcpy(conn.dst_ip.data(), src_ip, (af == AF_INET) ? 4 : 16);
         conn.src_port = dport;
         conn.dst_port = sport;
-        conn.my_seq = Rand32();
+        conn.my_seq = plugin->next_isn++;
         conn.my_ack = seq + 1;
         conn.their_seq = seq;
         conn.their_ack = ack;

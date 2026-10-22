@@ -3,7 +3,6 @@
 
 #include "pdu/ipdumcontainer.h"
 
-#include <atomic>
 #include <cstring>
 
 namespace boat::hil {
@@ -121,8 +120,6 @@ static uint16_t UdpChecksumIPv6(const uint8_t src_ip[16], const uint8_t dst_ip[1
 
 // ── Build functions ───────────────────────────────────────────────────────────
 
-static std::atomic<uint16_t> g_ipv4_id{1};
-
 std::vector<uint8_t> BuildUdpIpv4(const uint8_t src_ip[4],
                                    const uint8_t dst_ip[4],
                                    uint16_t src_port, uint16_t dst_port,
@@ -135,7 +132,10 @@ std::vector<uint8_t> BuildUdpIpv4(const uint8_t src_ip[4],
 
   const std::size_t udp_len   = 8 + container.size();
   const std::size_t total_len = 20 + udp_len;
-  const uint16_t ip_id        = g_ipv4_id.fetch_add(1);
+  // DF is set and this builder never fragments, so the Identification field
+  // is not used for reassembly. Keep it 0 rather than a process-global
+  // counter: two identical runs must produce identical datagrams (#79).
+  const uint16_t ip_id = 0;
 
   std::vector<uint8_t> pkt(total_len, 0);
 

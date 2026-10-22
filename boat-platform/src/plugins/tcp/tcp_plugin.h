@@ -132,6 +132,11 @@ struct TcpPlugin {
   std::unordered_map<int, TcpConnection> connections;
   std::unordered_map<int, TcpListener>  listeners;
   int next_id{1};
+  // Initial sequence numbers are a deterministic counter, not random_device:
+  // a TCP run must be reproducible from its inputs (#79). `isn_seed` is the
+  // configured starting value.
+  std::uint32_t isn_seed{1};
+  std::uint32_t next_isn{1};
   std::recursive_mutex  mutex;
 
   // v9 host clock. TCP used to run its own TX thread against
