@@ -244,7 +244,10 @@ dashboard: it spawns gateway binaries and node scripts from caller-supplied path
 `127.0.0.1` by default; `BOAT_AGENT_BIND=0.0.0.0` is the explicit opt-in for federated
 `admin_gui` use (`SECURITY.md`, issue #39). An empty `BOAT_AGENT_BIND` also means loopback.
 Host/Origin checks block DNS-rebinding and cross-origin browser writes, and `external:<pid>`
-stop only signals a positive pid whose `/proc/<pid>/comm` is `boat_gateway`.
+stop only signals a positive pid whose `/proc/<pid>/comm` is `boat_gateway`. Stopped instance/node
+definitions persist to `~/.boat/launcher_agent_state.json` (`BOAT_AGENT_STATE_FILE`); running
+gateways are deliberately not persisted because discovery reports them as `external:<pid>`, and
+`POST /api/instances/external:<pid>/adopt` promotes one to a tracked instance without restarting it.
 
 ## Other conventions & gotchas
 

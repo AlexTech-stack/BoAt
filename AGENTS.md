@@ -419,6 +419,8 @@ a positive pid whose `/proc/<pid>/comm` is `boat_gateway`.
 
 ```bash
 BOAT_AGENT_PORT=8090 python3 ui/launcher_agent.py   # default port 8090
+# Stopped definitions persist here; override for tests/containers:
+BOAT_AGENT_STATE_FILE=/var/lib/boat/agent_state.json python3 ui/launcher_agent.py
 
 # Define + start an instance (grpc_port auto-allocated if omitted)
 curl -X POST localhost:8090/api/instances -H 'Content-Type: application/json' \
@@ -432,6 +434,10 @@ curl -X POST localhost:8090/api/instances/<id>/stop
 curl -X PUT localhost:8090/api/instances/<id> -d '...'  # edit in place, refused (409) while running
 curl -X DELETE localhost:8090/api/instances/<id>    # refused (409) while running
 curl localhost:8090/api/host/info                   # interfaces, gateway binaries, plugins found on this host
+
+# Take ownership of a discovered gateway without restarting it
+curl -X POST localhost:8090/api/instances/external:<pid>/adopt \
+  -H 'Content-Type: application/json' -d '{"name":"rescued"}'
 ```
 
 `GET /api/host/info`'s `"plugins"` entries carry a `"config_schema"` alongside each `.so`'s `"path"`, read from an optional `<name>.schema.json` sidecar file next to it (`{"key": {"type","default","help",...}}`, written by the plugin's own author and copied there at build time by `add_boat_plugin()` -- `cmake/BoAtPlugin.cmake`). A compiled `.so` has nothing to import/introspect at runtime the way a node script's `build_parser()` does (see "Plugin-based node scripts" above), so this is a static, hand-maintained equivalent for the same purpose: `admin_gui`'s New/Edit Instance dialog builds one field per key from it. `can_tp.so`/`tcp.so`/`probe.so`/`someip.so` ship one; `pdu_router.so` takes no config and has none. A plugin with no sidecar just isn't offered per-key fields -- the dialog's flat JSON config field still works exactly as before.
@@ -449,15 +455,24 @@ it also scans `/proc` for any other `boat_gateway` process on the host
 (started by hand, by a script, or by a now-exited earlier agent) and
 recovers its config from `/proc/<pid>/environ`, the same `BOAT_*` vars this
 agent itself sets. Those entries get `"id": "external:<pid>"`,
-`"managed": false` (vs. `true` for agent-created ones), and can only be
-targeted by `stop` (`POST .../external:<pid>/stop` sends a plain
-`SIGTERM`/pid-based signal, which works regardless of who spawned the
-process) -- `start`/`edit`/`delete`/`GET` on an `external:` id are refused
-with 400 (no stored definition to act on), and `log` returns a fixed
-"not captured" message (stdout was never piped to this agent).
+`"managed": false` (vs. `true` for agent-created ones), and can be stopped
+(`POST .../external:<pid>/stop`, a plain `SIGTERM` by pid) or **adopted**
+(`POST .../external:<pid>/adopt`, optional `{"name": ...}`), which creates a
+tracked `GatewayInstance` with `"adopted": true` and a real (new) id without
+restarting the process. Adopted stops use the same pid-based SIGTERM/SIGKILL
+path; after it exits, the instance is editable/startable like any other.
+`start`/`edit`/`delete`/`GET` on an *unadopted* `external:` id are refused
+with 400, and `log` returns "not captured" (stdout was never piped here).
 
-Not yet built: instance persistence across an agent restart (v1 is
-in-memory only).
+Stopped gateway and node definitions persist to
+`~/.boat/launcher_agent_state.json` (override `BOAT_AGENT_STATE_FILE`), written
+atomically with mode 0600 after every create/update/start/stop/delete. A
+**running** instance is deliberately not written: on restart it survives as a
+process and discovery reports it as `external:<pid>`, so persisting it too
+would create a duplicate row. Stop it normally and the definition is saved, or
+adopt it to recover ownership without a restart. A malformed/unreadable state
+file is logged and ignored, never fatal. Nodes are persisted the same
+stopped-only way; there is no external node discovery.
 
 **Nodes** (scripts under `boat-platform/nodes/`, see below) get a parallel
 but separate registry -- `GET /api/node-scripts` (discovery),
@@ -522,7 +537,9 @@ Settings page, then moved back by request). **Settings** is currently
 empty, reserved for future app-wide config. The **Gateway** page shows
 the aggregated instance table (with a **Managed** column, `Yes`/`No` per
 the `external:` discovery above), polled every 2s on a background
-`QThread` → create/**edit**/start/stop/delete, plus a log viewer and an
+`QThread` → create/**edit**/start/stop/delete, plus **Adopt…** for a
+selected external row (confirmation, then the agent takes ownership without
+restarting the process), a log viewer and an
 **equivalent command line** panel (the `BOAT_*=... ./boat_gateway` form
 of whatever instance is selected, with a Copy button -- for pasting into
 a script) for the selected instance. The New/Edit Instance dialog has
