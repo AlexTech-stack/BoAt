@@ -58,10 +58,10 @@ void AppendCanHealthMetrics(GatewayContext& ctx, std::uint64_t tick, Emit emit) 
 }
 
 /* Every streaming RPC's cumulative overflow count, one point per stream, plus
-   the two overflow sources that are not registry-backed (replay's queue and
-   SignalRouter's own ring). Emitted with zeros when nothing has dropped: a
-   consumer must be able to tell "no drops" from "this build does not report
-   drops". */
+   the overflow sources that are not registry-backed (replay's stream queue,
+   SignalRouter's ring, EventBus, and the event-store writer queue). Emitted
+   with zeros when nothing has dropped: a consumer must be able to tell "no
+   drops" from "this build does not report drops". */
 template <typename Emit>
 void AppendStreamDropMetrics(GatewayContext& ctx, std::uint64_t tick, Emit emit) {
   for (const char* name : stream_metrics::kRegistryBacked) {
@@ -73,6 +73,12 @@ void AppendStreamDropMetrics(GatewayContext& ctx, std::uint64_t tick, Emit emit)
        static_cast<double>(ctx.sim.signal_router().DroppedEventCount()));
   emit(stream_metrics::kEventBusDropped,
        static_cast<double>(ctx.sim.event_bus().DroppedEventCount()));
+  // AsyncEventStore's queue and writer failures. Synchronous stores return
+  // zero, so "no drops" and "does not report" remain distinguishable.
+  emit("event_store.dropped",
+       static_cast<double>(ctx.event_store.DroppedEventCount()));
+  emit("event_store.write_errors",
+       static_cast<double>(ctx.event_store.WriteErrorCount()));
 }
 /* PDU deadline misses are counted inside the router plugin (the only place
    that knows which PDUs are configured and when they were last received).

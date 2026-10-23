@@ -73,6 +73,12 @@ std::string EffectiveConfig::ToJson() const {
   os << "    \"tls_client_ca_path\": \"" << JsonEscape(tls_client_ca_path) << "\"\n";
   os << "  },\n";
 
+  os << "  \"event_store\": {\n";
+  os << "    \"queue_capacity\": " << event_store_queue_capacity << ",\n";
+  os << "    \"queue_capacity_resolved_from\": \""
+     << JsonEscape(event_store_queue_capacity_resolved_from) << "\"\n";
+  os << "  },\n";
+
   os << "  \"buses\": {\n";
   os << "    \"can\": ";
   AppendStringArray(os, can_interfaces);

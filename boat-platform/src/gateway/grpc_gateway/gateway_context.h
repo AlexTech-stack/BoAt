@@ -30,7 +30,7 @@ struct GatewayContext {
 
   boat::core::SignalBus& signal_bus;
   boat::core::ScenarioLoader& scenario_loader;
-  boat::store::SqliteEventStore& event_store;
+  boat::store::IEventStore& event_store;
   boat::store::FlatFileTraceStore& trace_store;
   boat::replay::ReplayController& replay_controller;
   boat::hil::CanBusRegistry& can_bus_registry;

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -56,6 +57,7 @@
 #include "signal/signal_bus.h"
 #include "signal_service_impl.h"
 #include "simulation_service_impl.h"
+#include "event_store/async_event_store.h"
 #include "event_store/event_store.h"
 #include "trace_store/trace_store.h"
 #include "trace_service_impl.h"
@@ -193,6 +195,48 @@ int ResolveGrpcPort(boat::gateway::EffectiveConfig* cfg) {
   return static_cast<int>(parsed);
 }
 
+/* Bounds the AsyncEventStore writer queue. A malformed value is reported and
+ * falls back to the default instead of silently changing how much event
+ * history survives a slow disk. */
+void ResolveEventStoreOptions(boat::gateway::EffectiveConfig* cfg,
+                              boat::store::AsyncEventStore::Options* options) {
+  constexpr std::size_t kMaxQueueCapacity = 1'000'000;
+  options->queue_capacity =
+      static_cast<std::size_t>(boat::store::AsyncEventStore::Options{}.queue_capacity);
+  if (cfg != nullptr) {
+    cfg->event_store_queue_capacity = options->queue_capacity;
+    cfg->event_store_queue_capacity_resolved_from = "default";
+  }
+
+  const char* env = std::getenv("BOAT_EVENT_STORE_QUEUE_CAPACITY");
+  if (env == nullptr || env[0] == '\0') return;
+
+  errno = 0;
+  char* end = nullptr;
+  const long long parsed = std::strtoll(env, &end, 10);
+  if (errno != 0 || end == env || *end != '\0' || parsed <= 0 ||
+      parsed > static_cast<long long>(kMaxQueueCapacity)) {
+    std::fprintf(stderr,
+                 "[Gateway] BOAT_EVENT_STORE_QUEUE_CAPACITY='%s' is not a "
+                 "positive integer <= %zu; using default %zu\n",
+                 env, kMaxQueueCapacity, options->queue_capacity);
+    if (cfg != nullptr) {
+      cfg->warnings.push_back(
+          std::string("BOAT_EVENT_STORE_QUEUE_CAPACITY='") + env +
+          "' is not a positive integer <= " +
+          std::to_string(kMaxQueueCapacity) + "; used default");
+    }
+    return;
+  }
+
+  options->queue_capacity = static_cast<std::size_t>(parsed);
+  if (cfg != nullptr) {
+    cfg->event_store_queue_capacity = options->queue_capacity;
+    cfg->event_store_queue_capacity_resolved_from =
+        "BOAT_EVENT_STORE_QUEUE_CAPACITY";
+  }
+}
+
 /* Refuses to start if something is already listening on `port`.
  *
  * gRPC's server sets SO_REUSEPORT, so AddListeningPort() alone would succeed
@@ -298,12 +342,19 @@ int main() {
   }
 
   boat::gateway::ResolveStreamQueueCapacity(&effective_config);
+  boat::store::AsyncEventStore::Options event_store_options;
+  ResolveEventStoreOptions(&effective_config, &event_store_options);
 
   boat::gateway::RpcAuditLog audit_log;
   // Gateway bootstrap uses a fixed seed so startup behavior is deterministic across environments.
   boat::core::SimulationContext sim(kGatewayDeterminismSeed);
   boat::core::SignalBus signal_bus;
-  boat::store::SqliteEventStore event_store("boat_events.db");
+  // The async wrapper keeps SQLite off the replay/tick thread. Its bounded
+  // queue drops the oldest record when the writer falls behind, and is
+  // drained on destruction; see docs/database/database-design.md.
+  boat::store::AsyncEventStore event_store(
+      std::make_unique<boat::store::SqliteEventStore>("boat_events.db"),
+      event_store_options);
   boat::store::FlatFileTraceStore trace_store("boat_traces.db");
   boat::replay::ReplayController replay_controller(trace_store, event_store, sim.event_bus());
   boat::core::ScenarioLoader scenario_loader;

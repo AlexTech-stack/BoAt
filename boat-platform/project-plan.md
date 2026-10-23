@@ -162,7 +162,7 @@ line item here.
 | Client SDK language | Python 3.11+ | 3.11 and 3.13 in CI |
 | Build system | CMake 3.24+ | 3.24 minimum; configures under CMake 4.x |
 | API stack | gRPC 1.60+, Protocol Buffers v3 | gRPC 1.75.0, protobuf 31.1 |
-| Storage | SQLite embedded | SQLite with WAL and `synchronous=NORMAL`. Writes are synchronous on the caller's thread ([#23](https://github.com/AlexTech-stack/BoAt/issues/23)) |
+| Storage | SQLite embedded | SQLite with WAL and `synchronous=NORMAL`. Gateway writes go through `AsyncEventStore`'s bounded writer; the queue drops oldest when full and is drained on shutdown ([#23](https://github.com/AlexTech-stack/BoAt/issues/23)) |
 | IPC | Eclipse iceoryx2 | v0.4.1, pinned. Pre-1.0 upstream with no API stability promise (R10) |
 
 Dependencies are fetched at build time via CMake `FetchContent`; nothing third-party is
@@ -267,7 +267,7 @@ live. The column is now **Status**, and it says what is true.
 | R04 | Python gRPC stub drift from proto changes | **Closed.** The `proto-stubs-in-sync` CI job regenerates the stubs and fails if the committed output differs |
 | R05 | Single-process gateway as a SPOF | **Open, accepted for now.** The same architectural fact as R01, seen from the availability side. No health check, no crash recovery, no hot restart. A supervisor is one of the options under [#19](https://github.com/AlexTech-stack/BoAt/issues/19) |
 | R06 | gRPC streaming backpressure under high event rate | **Closed.** Every stream has a bounded drop-oldest queue; the metrics stream conflates latest-value-wins. Drops are cumulative and visible as `grpc.<stream>.dropped` metrics — a consumer can see its view has gaps ([#21](https://github.com/AlexTech-stack/BoAt/issues/21)) |
-| R07 | SQLite write throughput at high event rates | **Open, partially addressed.** WAL and `synchronous=NORMAL` are set; every insert is still synchronous on the caller's thread, which can delay a tick → [#23](https://github.com/AlexTech-stack/BoAt/issues/23) |
+| R07 | SQLite write throughput at high event rates | **Closed.** Gateway event writes go through `AsyncEventStore`'s bounded, ordered writer; `InsertBatch` enqueues and a worker batches SQLite transactions off the tick path. Queue-full policy is drop-oldest with counters (`event_store.dropped`, `event_store.write_errors`), and `Flush`/destructor drain accepted records. A synchronous `SqliteEventStore` remains available for unit tests and embedders ([#23](https://github.com/AlexTech-stack/BoAt/issues/23)) |
 | R08 | No TLS on the gRPC port | **Closed as a default-posture risk, documented as a deployment choice.** Opt-in TLS and mTLS exist on both sides through one `make_channel()` helper, with misconfiguration raising rather than falling back to plaintext. The default is still unauthenticated plaintext, which `SECURITY.md` states plainly |
 | R09 | Determinism broken by floating point in plugins | **Open, unmitigated.** The core avoids FP; nothing stops a plugin using it. No `-ffloat-store` or `-frounding-math` enforced. ABI v9's host-supplied time source removes the larger version of this hazard — a plugin reading its own clock — but not FP itself |
 | R10 | iceoryx2 API instability on upgrade | **Open, accepted.** Pinned to v0.4.1. The `ShmPublisher`/`ShmSubscriber` wrappers limit the blast radius. Upstream is pre-1.0 with no C++ API stability promise |

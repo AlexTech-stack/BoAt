@@ -37,6 +37,15 @@ class IEventStore {
   virtual ~IEventStore() = default;
   virtual void InsertBatch(std::span<const EventRecord> events) = 0;
   virtual std::vector<EventRecord> Query(const EventFilter& filter) = 0;
+
+  /* Wait until every accepted write has reached the backing store. The
+   * default is a no-op, which is correct for a synchronous implementation. */
+  virtual void Flush() {}
+
+  /* Cumulative queue drops / write failures. Synchronous implementations
+   * have neither and keep the default zeros. */
+  [[nodiscard]] virtual std::uint64_t DroppedEventCount() const { return 0; }
+  [[nodiscard]] virtual std::uint64_t WriteErrorCount() const { return 0; }
 };
 
 class SqliteEventStore : public IEventStore {

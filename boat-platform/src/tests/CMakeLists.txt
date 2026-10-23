@@ -90,6 +90,10 @@ add_executable(boat_unit_sqlite_event_store unit/test_sqlite_event_store.cpp)
 target_link_libraries(boat_unit_sqlite_event_store PRIVATE boat_core boat_store Catch2::Catch2WithMain)
 boat_discover_tests(boat_unit_sqlite_event_store)
 
+add_executable(boat_unit_async_event_store unit/test_async_event_store.cpp)
+target_link_libraries(boat_unit_async_event_store PRIVATE boat_core boat_store Catch2::Catch2WithMain)
+boat_discover_tests(boat_unit_async_event_store)
+
 add_executable(boat_unit_effective_config
   unit/test_effective_config.cpp
   ${CMAKE_SOURCE_DIR}/src/gateway/grpc_gateway/effective_config.cpp)
