@@ -226,6 +226,12 @@ the next tag.
 
 Test binary naming: `boat_unit_*` (unit), `boat_integration_*`, `boat_hil_*`, `boat_determinism_*`.
 
+**Performance benchmarks** are `boat_benchmark` (`src/benchmarks/benchmark_main.cpp`), not
+ctest cases. It reports `FrameSink → CanBusRegistry → driver` throughput (synthetic or
+`--iface vcan0`) and real-time tick interval jitter as JSON; the measured baseline and its
+run-to-run/CPU-oversubscription caveats live in
+`boat-platform/docs/performance-baseline.md`.
+
 Two determinism tests, and the difference matters. `boat_determinism_seed` links only `boat_core`: it seeds
 a `mt19937_64` twice and compares the streams, so it verifies the PRNG and nothing else — it cannot fail.
 `boat_determinism_replay` (`src/tests/determinism/test_replay_determinism.cpp`) is the system-level test:
