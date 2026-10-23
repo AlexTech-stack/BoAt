@@ -52,6 +52,13 @@ struct EffectiveConfig {
   /* Which knob decided stream_queue_capacity: "BOAT_STREAM_QUEUE_CAPACITY" or
      "default". */
   std::string stream_queue_capacity_resolved_from = "default";
+
+  /* Records AsyncEventStore may queue before dropping the oldest. This is
+     separate from the gRPC stream queues: it bounds the writer in front of
+     SQLite, and is recorded because a smaller cap changes how much event
+     history survives a slow disk. */
+  std::size_t event_store_queue_capacity = 16384;
+  std::string event_store_queue_capacity_resolved_from = "default";
   bool tls_enabled = false;
   bool mtls_required = false;
   std::string tls_cert_path;

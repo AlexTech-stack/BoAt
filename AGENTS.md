@@ -866,6 +866,10 @@ boat config show -o effective-config.json                 # DebugService.GetEffe
   unguarded `std::stoul`; it is now reported and the entry skipped.
 - `stream_queue_capacity` (`BOAT_STREAM_QUEUE_CAPACITY`, default 4096, max 1,000,000)
   and its `resolved_from` — see the next section for what it bounds.
+- `event_store_queue_capacity` (`BOAT_EVENT_STORE_QUEUE_CAPACITY`, default 16384,
+  max 1,000,000) and its `resolved_from` — the bounded FIFO in front of
+  `AsyncEventStore`'s SQLite writer. When full it drops the oldest record and
+  reports `event_store.dropped`; see `docs/database/database-design.md`.
 
 ### gRPC streaming backpressure
 
@@ -942,12 +946,14 @@ registers two:
 The gateway prints the interval and phase order at startup
 (`[Gateway] Tick authority: 1000 us/tick, phases: node_plugins -> replay`).
 
-This replaced two independent wall-clock threads. **`ReplayController` owns no delivery thread
-and no clock**: `Start()` maps the trace and anchors the pass, and the replay phase pumps it.
-It does own one bounded event-storage writer thread: `DispatchRecord` enqueues an
-`EventRecord`, the writer batches it into SQLite off the tick path, and `FlushEventStore()`
-drains it for tests/shutdown. Store failures are counted/logged, not allowed to abort the
-replay. Records are keyed by the trace byte offset, so same-tick/same-ID frames do not
+This replaced two independent wall-clock threads. **`ReplayController` owns no delivery thread,
+no clock and no storage writer**: `Start()` maps the trace and anchors the pass, and the replay
+phase pumps it. `DispatchRecord` calls `InsertBatch` on the configured `IEventStore`; the
+gateway wraps SQLite in `AsyncEventStore`, whose one worker batches records off the tick path.
+Its queue is bounded (default 16,384); when full it drops the oldest and counts it, matching
+the stream queues, and `FlushEventStore()`/destruction drain accepted records. Store failures
+are counted/logged (`event_store.dropped`, `event_store.write_errors`), not allowed to abort
+the replay. Records are keyed by the trace byte offset, so same-tick/same-ID frames do not
 overwrite each other and loop passes replace their own rows rather than growing the DB forever.
 A record is due when elapsed *authority ticks* (scaled by `speed_multiplier`) reach its
 offset from the session anchor — no wall clock is read, so a loaded host makes the authority

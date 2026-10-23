@@ -13,6 +13,16 @@ The plugin ABI is versioned separately from the project; see
 
 ### Added
 
+- **Event-store writes are asynchronous and bounded (#23).** The gateway wraps
+  `SqliteEventStore` in `AsyncEventStore`, which enqueues records and commits them in
+  batches from one writer thread instead of running SQLite on the tick thread. The queue
+  is bounded at 16,384 records (`BOAT_EVENT_STORE_QUEUE_CAPACITY`, also recorded in the
+  effective-config artifact); when full it drops the oldest record, matching the
+  streaming/EventBus policy, and reports drops and write failures as
+  `event_store.dropped` / `event_store.write_errors`. `Query()` flushes first so
+  read-your-writes still holds; `Flush()` and destruction drain accepted records.
+  `ReplayController` no longer owns a private replay-only writer, so every writer shares
+  the same policy.
 - **Measured performance baseline and a repeatable benchmark harness (#18).**
   `boat_benchmark` (`src/benchmarks/`) measures `FrameSink → CanBusRegistry → driver`
   throughput (synthetic or `--iface vcan0`) and real-time `TickAuthority` interval jitter,

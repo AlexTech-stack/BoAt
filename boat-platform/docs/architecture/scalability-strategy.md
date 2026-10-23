@@ -33,8 +33,14 @@
 
 ## Storage and Backpressure
 
-- The event store is SQLite (WAL, `synchronous=NORMAL`). `InsertBatch` writes
-  in transactions of up to 1000 rows, synchronously on the caller's thread
+- The gateway's event store is SQLite (WAL, `synchronous=NORMAL`) wrapped in
+  `AsyncEventStore`. `InsertBatch` enqueues into a bounded FIFO (default
+  16,384 records, `BOAT_EVENT_STORE_QUEUE_CAPACITY`) and one writer thread
+  batches rows into SQLite. When the queue is full the **oldest** record is dropped, matching the streaming and
+  EventBus policy: blocking the tick thread is the failure this design exists
+  to avoid. `Flush()` drains the queue for tests and shutdown; `Query()`
+  flushes first so read-your-writes still holds. Drops and write errors are
+  exposed as `event_store.dropped` / `event_store.write_errors`
   ([#23](https://github.com/AlexTech-stack/BoAt/issues/23)).
 - The trace store writes a flat binary file with plain `write()` and reads it
   with `mmap`; there is no `O_DIRECT` path.

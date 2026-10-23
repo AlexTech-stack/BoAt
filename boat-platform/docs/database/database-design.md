@@ -59,11 +59,18 @@ than keeping a store of its own.
 
 ## Performance Considerations
 
-- Enable WAL mode for concurrent readers and a continuous writer.
-- Insert events in transactions of 1000 rows for throughput.
+- WAL mode with `synchronous=NORMAL` lets readers proceed while the event writer runs.
+- `AsyncEventStore` owns the writer: `InsertBatch` enqueues, and one thread commits
+  transactions of up to 256 records (configurable). The default queue is 16,384 records;
+  `BOAT_EVENT_STORE_QUEUE_CAPACITY` overrides it (max 1,000,000) and is recorded in the
+  effective-config artifact.
+- When the queue is full the **oldest** record is dropped, not the newest: blocking a tick
+  deadline is worse than losing a stored observation, and the wire path has already delivered
+  the frame by that point. Drops and write failures are counted (`event_store.dropped`,
+  `event_store.write_errors`) and logged at the first and every 1000th occurrence.
+- `Flush()` drains the queue; the destructor calls it, so clean shutdown does not truncate
+  accepted records. `Query()` flushes first, preserving read-your-writes.
 - Replay reads traces via memory-mapped I/O.
-- Writes are **synchronous on the caller's thread** — there is no async batch writer yet
-  ([#23](https://github.com/AlexTech-stack/BoAt/issues/23)). A hot signal path can therefore
-  wait on SQLite; an earlier revision of this list claimed a dedicated writer thread and
-  bounded queue that do not exist.
+- An event-store record is observability, not the sole copy of a trace: a consumer that needs
+  lossless capture should record a trace on the gateway.
 

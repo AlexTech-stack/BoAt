@@ -27,6 +27,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -38,6 +39,7 @@
 #include "can_bus_registry.h"
 #include "ethernet_bus_registry.h"
 #include "event/event_bus.h"
+#include "event_store/async_event_store.h"
 #include "event_store/event_store.h"
 #include "gateway/grpc_gateway/frame_sink.h"
 #include "pdu/tick_timer.h"
@@ -148,7 +150,10 @@ RunResult RunReplayOnce(const std::string& prefix,
 
   RunResult result;
   {
-    boat::store::SqliteEventStore event_store(event_db);
+    // Exercise the production async writer in the determinism path too:
+    // batching must not reorder what a later replay reads.
+    boat::store::AsyncEventStore event_store(
+        std::make_unique<boat::store::SqliteEventStore>(event_db));
     boat::store::FlatFileTraceStore trace_store(trace_db);
 
     boat::store::TraceRecord meta;

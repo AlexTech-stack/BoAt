@@ -3,6 +3,7 @@
 
 add_library(boat_store STATIC
   event_store/event_store.cpp
+  event_store/async_event_store.cpp
   trace_store/trace_store.cpp
   config_store/config_store.cpp
 )
