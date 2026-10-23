@@ -13,6 +13,16 @@ The plugin ABI is versioned separately from the project; see
 
 ### Added
 
+- **Launcher-agent adoption and stopped-definition persistence (#40).**
+  `POST /api/instances/external:<pid>/adopt` turns a discovered orphan into a
+  tracked instance without restarting it, using the config recovered from
+  `/proc/<pid>/environ`; Stop signals the adopted pid, and Start after it exits
+  spawns normally. Stopped gateway and node definitions persist to
+  `~/.boat/launcher_agent_state.json` (`BOAT_AGENT_STATE_FILE`, atomic write,
+  mode 0600) and load on agent startup. Running instances are deliberately
+  omitted: discovery still reports them as `external:<pid>`, so persisting
+  them would duplicate the row. Admin GUI gains **Adopt…** for a selected
+  external gateway.
 - **Event-store writes are asynchronous and bounded (#23).** The gateway wraps
   `SqliteEventStore` in `AsyncEventStore`, which enqueues records and commits them in
   batches from one writer thread instead of running SQLite on the tick thread. The queue
