@@ -1406,7 +1406,7 @@ Import                Replay Engine                Core Sink                 Har
 .asc/.blf/.pcap  →  convert_to_binary()     →  Frame protobuf records
                         │                          │
                         ▼                          ▼
-                 ImportTraceData gRPC      ReplayLoop parsing
+              ImportTraceDataStream gRPC   ReplayLoop parsing
                         │                          │
                         ▼                          ▼
                    trace_store               ProtoToCoreFrame()
@@ -1492,6 +1492,12 @@ boat replay import trace.asc --trace-id myrun \
   --replay-src-ip 10.0.0.1        # IP override for reconstruction
   --replay-dst-ip 10.0.0.2        # IP override for reconstruction
 ```
+
+`boat replay import` uploads through the client-streaming
+`ReplayService.ImportTraceDataStream` in 1 MiB chunks. The old unary
+`ImportTraceData` remains for compatibility with small callers, but it is bounded
+by gRPC's default 4 MiB receive limit; the streaming path handles realistic
+tens-of-megabytes traces. The server caps one streamed import at 512 MiB.
 
 #### Stream (replay)
 ```bash

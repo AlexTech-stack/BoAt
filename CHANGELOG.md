@@ -78,6 +78,11 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **Trace import no longer fails at gRPC's 4 MiB unary limit** (#82). Added the
+  client-streaming `ReplayService.ImportTraceDataStream`; `boat replay import` now sends
+  the converted trace in 1 MiB chunks. The original unary `ImportTraceData` remains for
+  small callers, while the streaming path supports realistic tens-of-megabytes traces up to
+  the server's 512 MiB cap. Imported trace metadata now records the actual byte size too.
 - **Replay storage writes are off the tick thread, lossless across IDs, and non-fatal** (#78).
   `ReplayController` now hands event records to a bounded batching writer instead of running a
   SQLite transaction on the tick path; the writer logs/drops under backpressure and treats store

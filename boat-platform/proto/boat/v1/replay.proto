@@ -36,6 +36,17 @@ message ImportTraceDataRequest {
   bytes data = 3;
 }
 
+// Client-streaming import. The first chunk carries trace_id (and optionally
+// format); subsequent chunks carry data. Each message stays far below gRPC's
+// default 4 MiB receive limit, so realistic multi-megabyte traces no longer
+// fail with RESOURCE_EXHAUSTED. The unary ImportTraceData remains for
+// compatibility with small existing callers.
+message ImportTraceDataChunk {
+  string trace_id = 1;
+  string format = 2;
+  bytes data = 3;
+}
+
 message StartReplayFromEventsRequest {
   string simulation_id = 1;
   string signal_id = 2;
@@ -74,5 +85,6 @@ service ReplayService {
   rpc ResumeReplay(ResumeReplayRequest) returns (ReplayControlResponse);
   rpc StopReplay(StopReplayRequest) returns (ReplayControlResponse);
   rpc ImportTraceData(ImportTraceDataRequest) returns (ReplayControlResponse);
+  rpc ImportTraceDataStream(stream ImportTraceDataChunk) returns (ReplayControlResponse);
   rpc StartReplayFromEvents(StartReplayFromEventsRequest) returns (ReplayControlResponse);
 }

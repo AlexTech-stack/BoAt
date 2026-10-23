@@ -5,7 +5,7 @@
 - Root path: `proto/boat/v1/`
 - Package namespace: `boat.v1`
 <!-- BEGIN GENERATED: proto-summary -->
-- 16 proto files defining 14 gRPC services, 64 RPCs in total:
+- 16 proto files defining 14 gRPC services, 65 RPCs in total:
 
 | File | Service | RPCs |
 |---|---|---|
@@ -20,7 +20,7 @@
 | `node_plugin.proto` | NodePluginService | 3 |
 | `pdu.proto` | PduService | 10 |
 | `plugin.proto` | PluginService | 4 |
-| `replay.proto` | ReplayService | 8 |
+| `replay.proto` | ReplayService | 9 |
 | `scenario.proto` | ScenarioService | 5 |
 | `signal.proto` | SignalService | 3 |
 | `simulation.proto` | SimulationService | 9 |
@@ -161,6 +161,7 @@ which addresses the simulation-scoped one.
 - `ResumeReplay`
 - `StopReplay`
 - `ImportTraceData`
+- `ImportTraceDataStream` (client streaming)
 - `StartReplayFromEvents`
 <!-- END GENERATED: rpcs-ReplayService -->
 

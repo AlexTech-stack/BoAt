@@ -52,6 +52,7 @@ def test_replay_stub_has_new_rpcs():
     assert hasattr(replay_pb2, "ResumeReplayRequest")
     assert hasattr(replay_pb2, "StopReplayRequest")
     assert hasattr(replay_pb2, "ImportTraceDataRequest")
+    assert hasattr(replay_pb2, "ImportTraceDataChunk")
     assert hasattr(replay_pb2, "StartReplayFromEventsRequest")
     assert hasattr(replay_pb2, "ReplaySpeed")
     assert hasattr(replay_pb2, "REPLAY_SPEED_REAL_TIME")
@@ -62,6 +63,7 @@ def test_replay_stub_has_new_rpcs():
     assert hasattr(replay_pb2_grpc.ReplayServiceServicer, "ResumeReplay")
     assert hasattr(replay_pb2_grpc.ReplayServiceServicer, "StopReplay")
     assert hasattr(replay_pb2_grpc.ReplayServiceServicer, "ImportTraceData")
+    assert hasattr(replay_pb2_grpc.ReplayServiceServicer, "ImportTraceDataStream")
     assert hasattr(replay_pb2_grpc.ReplayServiceServicer, "StartReplayFromEvents")
 
 

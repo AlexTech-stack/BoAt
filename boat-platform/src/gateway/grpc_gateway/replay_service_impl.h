@@ -32,6 +32,9 @@ class ReplayServiceImpl final : public boat::v1::ReplayService::Service {
                           boat::v1::ReplayControlResponse* response) override;
   grpc::Status ImportTraceData(grpc::ServerContext* context, const boat::v1::ImportTraceDataRequest* request,
                                boat::v1::ReplayControlResponse* response) override;
+  grpc::Status ImportTraceDataStream(grpc::ServerContext* context,
+                                     grpc::ServerReader<boat::v1::ImportTraceDataChunk>* reader,
+                                     boat::v1::ReplayControlResponse* response) override;
   grpc::Status StartReplayFromEvents(grpc::ServerContext* context,
                                      const boat::v1::StartReplayFromEventsRequest* request,
                                      boat::v1::ReplayControlResponse* response) override;

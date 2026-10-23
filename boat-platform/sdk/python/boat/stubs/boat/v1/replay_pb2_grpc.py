@@ -69,6 +69,11 @@ class ReplayServiceStub:
                 request_serializer=boat_dot_v1_dot_replay__pb2.ImportTraceDataRequest.SerializeToString,
                 response_deserializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
                 _registered_method=True)
+        self.ImportTraceDataStream = channel.stream_unary(
+                '/boat.v1.ReplayService/ImportTraceDataStream',
+                request_serializer=boat_dot_v1_dot_replay__pb2.ImportTraceDataChunk.SerializeToString,
+                response_deserializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+                _registered_method=True)
         self.StartReplayFromEvents = channel.unary_unary(
                 '/boat.v1.ReplayService/StartReplayFromEvents',
                 request_serializer=boat_dot_v1_dot_replay__pb2.StartReplayFromEventsRequest.SerializeToString,
@@ -125,6 +130,12 @@ class ReplayServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ImportTraceDataStream(self, request_iterator, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def StartReplayFromEvents(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -167,6 +178,11 @@ def add_ReplayServiceServicer_to_server(servicer, server):
             'ImportTraceData': grpc.unary_unary_rpc_method_handler(
                     servicer.ImportTraceData,
                     request_deserializer=boat_dot_v1_dot_replay__pb2.ImportTraceDataRequest.FromString,
+                    response_serializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.SerializeToString,
+            ),
+            'ImportTraceDataStream': grpc.stream_unary_rpc_method_handler(
+                    servicer.ImportTraceDataStream,
+                    request_deserializer=boat_dot_v1_dot_replay__pb2.ImportTraceDataChunk.FromString,
                     response_serializer=boat_dot_v1_dot_replay__pb2.ReplayControlResponse.SerializeToString,
             ),
             'StartReplayFromEvents': grpc.unary_unary_rpc_method_handler(
@@ -363,6 +379,33 @@ class ReplayService:
             target,
             '/boat.v1.ReplayService/ImportTraceData',
             boat_dot_v1_dot_replay__pb2.ImportTraceDataRequest.SerializeToString,
+            boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ImportTraceDataStream(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_unary(
+            request_iterator,
+            target,
+            '/boat.v1.ReplayService/ImportTraceDataStream',
+            boat_dot_v1_dot_replay__pb2.ImportTraceDataChunk.SerializeToString,
             boat_dot_v1_dot_replay__pb2.ReplayControlResponse.FromString,
             options,
             channel_credentials,
