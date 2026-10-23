@@ -127,6 +127,8 @@ Register tests with **`boat_discover_tests()`** (`cmake/BoAtTest.cmake`), not
 
 Test-binary naming: `boat_unit_*`, `boat_integration_*`, `boat_hil_*`, `boat_determinism_{seed,replay}`. `src/tests/unit/test_frame.cpp` (`boat_unit_frame`) is a good reference for the unified frame model.
 
+**Performance benchmarks** are `boat_benchmark` (`src/benchmarks/benchmark_main.cpp`), not ctest cases. It reports `FrameSink → CanBusRegistry → driver` throughput (synthetic or `--iface vcan0`) and real-time tick interval jitter as JSON; the measured baseline and its run-to-run/CPU-oversubscription caveats are in `boat-platform/docs/performance-baseline.md`.
+
 **CI lives in `.github/workflows/` at the repository root**, not under `boat-platform/` —
 GitHub only discovers workflows at the root, and these sat unread in `boat-platform/.github/`
 for the project's whole history. The C++ project root is `boat-platform/`, so build jobs set

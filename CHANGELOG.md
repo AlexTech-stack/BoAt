@@ -13,6 +13,15 @@ The plugin ABI is versioned separately from the project; see
 
 ### Added
 
+- **Measured performance baseline and a repeatable benchmark harness (#18).**
+  `boat_benchmark` (`src/benchmarks/`) measures `FrameSink → CanBusRegistry → driver`
+  throughput (synthetic or `--iface vcan0`) and real-time `TickAuthority` interval jitter,
+  emitting JSON for repeatable comparison. The committed baseline records ~0.29–0.31M
+  frames/s on the real vcan0 path and ~2.13M frames/s on the synthetic core path, so the
+  plan's 1M wire-throughput target is retired; idle 1 ms tick p99 jitter is 45–370 µs (max
+  154–2,628 µs over five runs), while four busy threads push p99 to 2.09–2.97 ms. The ≤1 ms
+  claim is therefore explicitly scoped as an idle, p99 soft-real-time target
+  (`docs/performance-baseline.md`).
 - **Replay events expose the authority tick, and tick attribution is defined relative to a
   session anchor (#76).** `ReplayEvent.authority_tick` (additive field 4) and
   `ReplayController::SessionAnchorTick()` let a caller compare `authority_tick - anchor`

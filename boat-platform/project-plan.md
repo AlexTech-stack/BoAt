@@ -135,15 +135,18 @@ and `admin_gui` federation; it makes no claim that ticks are synchronized.
 | Zero-copy IPC for payloads larger than 4 KB | **Met.** iceoryx2 shared memory above the 4 KB threshold, UDS below it, with the boundary tested from both sides |
 | Gateway OS: Linux only, x86_64 and aarch64 — no Windows or macOS port is planned | **Met.** Ubuntu 22.04 and 24.04 in CI; release packages for amd64 and arm64 run on any distribution with glibc ≥ 2.28 |
 | Client side (Python SDK, CLI, Admin GUI, web tools): OS-agnostic, talks to a Linux gateway over gRPC | **Met.** Pure Python, no OS-specific paths; CI exercises Linux only |
-| Soft real-time latency: ≤1 ms jitter in simulated mode | **Not measured.** No benchmark exists anywhere in the repository ([#18](https://github.com/AlexTech-stack/BoAt/issues/18)) |
-| Throughput: ≥1,000,000 events per second | **Not measured.** Same issue |
+| Soft real-time latency: ≤1 ms p99 jitter when idle | **Measured, with a caveat.** Idle 1 ms ticks over five runs: p99 jitter 45–370 µs, max 154–2,628 µs, 99.8–100% within 1 ms. Under four busy threads (three runs): p99 2.09–2.97 ms, max 3.04–6.18 ms, 97.5–97.9% within 1 ms. The p99 bound holds when idle; the maximum does not reliably. Treat it as an idle/soft-real-time target, not a guarantee under CPU oversubscription. Harness and full baseline: [`docs/performance-baseline.md`](docs/performance-baseline.md) ([#18](https://github.com/AlexTech-stack/BoAt/issues/18)) |
+| Throughput: measured baseline (the former ≥1,000,000 wire-frames/s target is retired) | **0.29–0.31M frames/s** through the real `vcan0` path (debug, reference host). The synthetic core-dispatch path reaches **~2.13M frames/s** and may be cited only for that scope. See [`docs/performance-baseline.md`](docs/performance-baseline.md). |
 | Plugin isolation with crash containment strategy | **Containment not implemented; attribution is.** All plugins run in-process via `dlopen`, so one `abort()` still takes down the gateway, every other plugin, the gRPC server and all simulation state. A fatal-signal handler now names the plugin responsible on stderr before the process dies (`src/core/plugin/crash_attribution.{h,cpp}`). There is no watchdog, no supervisor and no restart ([#19](https://github.com/AlexTech-stack/BoAt/issues/19)) |
 
-The two unmeasured numbers were removed from the public-facing documentation during the
-release-readiness audit, so they are not being advertised without evidence. They remain here
-as requirements, which is the honest place for them — but a requirement nothing can check is
-not doing any work, and v0.3.0 exists to resolve them one way or the other. If the real
-numbers come out lower, this table gets amended to match them.
+Both numbers were withdrawn from the public-facing documentation during the release-readiness
+audit, so they were not being advertised without evidence. v0.3.0 added a committed harness
+that measures them; the result is recorded above and in
+[`docs/performance-baseline.md`](docs/performance-baseline.md). The throughput number came out
+lower on the real vcan path than the original plan assumed, so that target is retired rather
+than kept as an unmeetable claim. The jitter p99 holds when the host is idle; occasional idle
+maxima and deliberate CPU oversubscription exceed 1 ms, so the claim is stated with those
+limits rather than as a guarantee.
 
 The earlier "macOS and Windows via abstraction layer" target is withdrawn rather than
 scheduled: SocketCAN is a Linux kernel subsystem with no equivalent on either target, so a

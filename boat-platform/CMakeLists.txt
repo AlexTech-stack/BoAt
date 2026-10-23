@@ -296,6 +296,7 @@ add_subdirectory(src/store)
 add_subdirectory(src/replay)
 add_subdirectory(src/ipc)
 add_subdirectory(src/hil)
+add_subdirectory(src/benchmarks)
 
 if(BOAT_BUILD_TESTS AND BUILD_TESTING)
   add_subdirectory(src/tests)
