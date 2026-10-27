@@ -33,14 +33,31 @@ both headlessly and with a real render pass (screenshot) on a real machine.
   50051 was rejected with 400; stopping both gave clean `exit_code: 0`;
   deleting a running instance was refused with 409 until stopped.
 
+## Done (2026-10-23) — adoption + stopped-definition persistence (#40)
+
+- **Adopt.** `POST /api/instances/external:<pid>/adopt` promotes a discovered
+  gateway into a tracked `GatewayInstance` (`adopted: true`, new id) using the
+  config already recovered from `/proc/<pid>/environ`. No restart: Stop uses a
+  pid-based SIGTERM/SIGKILL path, and Start after it exits spawns a normal
+  agent-owned process. A second Adopt of the same pid, or one whose port is
+  already assigned, is refused. `admin_gui` has an **Adopt…** action for the
+  selected external row.
+- **Persistence.** Stopped gateway and node definitions are written atomically
+  to `~/.boat/launcher_agent_state.json` (mode 0600, override
+  `BOAT_AGENT_STATE_FILE`) after create/update/start/stop/delete and loaded on
+  agent startup. Running instances are deliberately omitted: after a restart
+  the process is still discoverable as `external:<pid>`, and persisting it too
+  would create a duplicate row. Stop it normally to save the definition, or
+  adopt the external row. Malformed/unreadable state is logged and ignored.
+- Verified with 8 focused tests (`ui/tests/test_launcher_agent_state.py`) for
+  adoption, adopted stop (including an unkillable-process failure), duplicate
+  refusal, API wiring, save/load, and the running-definition omission. Also
+  verified live on vcan0: started a real `boat_gateway`, recovered it from
+  `/proc`, adopted it, and stopped it through the adopted-instance path
+  (exit `-15`); a fresh module reload restored a saved stopped definition.
+
 ## Known v1 gaps (not fixed — deliberate scope cuts, revisit if they bite)
 
-- **In-memory registry only.** Agent restart forgets every *stopped*
-  instance's definition; a still-*running* gateway process is unaffected
-  (it keeps running, orphaned) but the agent no longer tracks or can
-  stop/inspect it via the API — only `pkill`/manual intervention finds it
-  again. No persistence (JSON file, SQLite) added yet. Add if agent
-  restarts during real use turn out to be common enough to be painful.
 - **No auth / no TLS — recorded decision (#39).** The agent's REST API is plain HTTP with no
   authentication. That is deliberate for a trusted lab network. The dangerous configuration is
   opt-in: it binds loopback by default (an empty or whitespace-only `BOAT_AGENT_BIND` also
@@ -275,7 +292,8 @@ Two more QoL asks:
 - **See what's actually running, not just what this agent started.** The
   agent only ever tracked instances it spawned itself -- a `boat_gateway`
   started by hand (SSH, a script, or orphaned by an earlier agent process
-  exiting -- the known in-memory-registry gap above) was invisible to
+  exiting -- the gap later closed by adoption/persistence, see the 2026-10-23
+  Done section) was invisible to
   `GET /api/instances`. Added `_discover_external_gateways()`: scans
   `/proc` for `boat_gateway` processes not already tracked, and recovers
   their full config -- `BOAT_CAN_INTERFACES`, `BOAT_ETH_INTERFACES`,
@@ -388,10 +406,11 @@ ids; reloading the same file while those instances are still running hits
 a port conflict on the explicit saved `grpc_port`, same as
 `docker-compose up` against an already-bound port.
 
-This is the client-side answer to the "agent restart loses everything"
-in-memory-registry gap above -- not automatic recovery, but "save before
-you might lose it, reload after" now has a real workflow, and it doubles
-as a way to hand a whole multi-host setup to someone else as one file.
+This was the client-side answer to the "agent restart loses everything"
+gap before agent-side persistence existed -- "save before you might lose it,
+reload after" still works across machines, and it doubles as a way to hand a
+whole multi-host setup to someone else as one file. Agent-side persisted
+stopped definitions and adoption now cover the same-host restart case.
 
 Verified on real hardware (`agn-testcomputer`) with a full round trip:
 created two agent-managed instances (one with a plugin config, an eth
@@ -907,9 +926,8 @@ afterward.
 
 ## Next steps (not started)
 
-- Decide instance persistence approach once the "agent restart loses
-  everything" gap actually costs someone time.
-- Possible future extension: an "Adopt" action turning a discovered
-  `external:<pid>` row into a real tracked `GatewayInstance` (the agent
-  already recovers enough from `/proc/<pid>/environ` to build one) --  not
-  requested yet, noted here since the discovery groundwork already exists.
+- Reconcile persisted **node** definitions with still-running node processes
+  after an agent restart; there is no `/proc` discovery equivalent for
+  arbitrary Python scripts, so running nodes are omitted from the state file.
+- Decide whether test-run definitions should also live in agent-side state;
+  `admin_gui`'s Save/Load Session already captures them client-side.

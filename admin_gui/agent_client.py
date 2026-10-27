@@ -117,6 +117,15 @@ class AgentClient:
     def stop_instance(self, instance_id: str) -> dict:
         return self._request("POST", f"/api/instances/{instance_id}/stop", timeout=_LIFECYCLE_TIMEOUT)
 
+    def adopt_instance(self, instance_id: str, name: str = "") -> dict:
+        """Promote a discovered external:<pid> row into a tracked instance.
+
+        Adoption does not restart the gateway; it only records ownership and
+        the config recovered from /proc, so a later Stop/Start is normal.
+        """
+        return self._request("POST", f"/api/instances/{instance_id}/adopt",
+                             json={"name": name})
+
     def delete_instance(self, instance_id: str) -> None:
         self._request("DELETE", f"/api/instances/{instance_id}")
 

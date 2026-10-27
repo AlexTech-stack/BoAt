@@ -86,7 +86,9 @@ reference for any future visual changes.
    `Edit`/`Start`/`Delete` don't apply to an unmanaged row (there's no
    stored definition to act on) and are refused with a clear message;
    `Stop` still works — it's a plain signal by pid, which doesn't care who
-   spawned the process.
+   spawned the process. **Adopt…** takes ownership of the running gateway
+   instead: it becomes a normal tracked instance with a new id (its
+   recovered config becomes editable once stopped), without restarting it.
 3. **New Instance…** picks a host, then defines CAN interfaces, Eth
    interfaces, and node plugins via a dropdown + **+ Add** pattern: each
    dropdown is pre-populated from that host's `GET /api/host/info`
@@ -115,7 +117,9 @@ reference for any future visual changes.
    **Parse && Fill** populates every field above from it in one shot —
    the reverse direction of that panel.
 4. Select a row, then **Start** / **Stop** / **Delete** act on it (Delete is
-   refused by the agent while the instance is running). **Edit…** reopens
+   refused by the agent while the instance is running). **Adopt…** is for a
+   discovered `Managed: No` row and takes ownership without restarting it.
+   **Edit…** reopens
    the same dialog pre-filled with that instance's current definition
    (host locked -- an instance can't move agents) and submits an update in
    place, same id, same rules as Delete: refused by the agent while running.

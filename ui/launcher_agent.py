@@ -77,14 +77,18 @@ Environment:
     BOAT_GATEWAY_BIN      — path to boat_gateway binary (default build/debug)
     BOAT_CLI_BIN          — path to the `boat` console script, for test runs
                             (default: discovered via PATH, then ~/.local/bin/boat)
+    BOAT_AGENT_STATE_FILE — JSON file for stopped instance/node definitions
+                            (default ~/.boat/launcher_agent_state.json)
 
 Requires passwordless sudo for `modprobe vcan` and `ip link add/del/set`
 (interface management endpoints only -- everything else needs no
 elevated privileges).
 
-v1 scope: in-memory instance registry only (an agent restart forgets
-definitions of stopped instances; running processes are unaffected but
-become unmanaged). Extend as real needs surface.
+Stopped gateway and node definitions persist across restarts. A gateway
+that is still running when the agent exits is deliberately not persisted:
+it survives as a process and appears as external:<pid> on the next
+discovery scan; POST /api/instances/external:<pid>/adopt takes ownership
+without restarting it.
 """
 
 from __future__ import annotations
@@ -119,6 +123,20 @@ from pydantic import BaseModel
 _PROJECT_ROOT   = Path(__file__).resolve().parent.parent / "boat-platform"
 _DEFAULT_GW_BIN = str(_PROJECT_ROOT / "build" / "debug" / "src" / "gateway" / "grpc_gateway" / "boat_gateway")
 _GW_BIN_DEFAULT = os.environ.get("BOAT_GATEWAY_BIN", _DEFAULT_GW_BIN)
+
+
+def _state_file_path() -> Path:
+    """Where stopped instance/node definitions are persisted.
+
+    Running definitions are deliberately not stored: their process is still
+    discoverable as external:<pid> after a restart, so persisting them too
+    would create a duplicate row. Adopt the running process, or stop it
+    normally and the definition is saved.
+    """
+    raw = os.environ.get("BOAT_AGENT_STATE_FILE", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / ".boat" / "launcher_agent_state.json"
 
 
 def _resolve_agent_bind(raw: Optional[str]) -> str:
@@ -211,6 +229,19 @@ def _origin_allowed(origin: Optional[str]) -> bool:
         return False
 
 
+def _pid_is_boat_gateway(pid: int) -> bool:
+    """Best-effort check used by both discovery and adopted-instance lifecycle.
+
+    Adopted rows have no ``Popen`` object, so their liveness has to come from
+    /proc. Checking ``comm`` (not just ``kill(pid, 0)``) also avoids treating a
+    recycled pid as the gateway this agent adopted.
+    """
+    try:
+        return Path(f"/proc/{pid}/comm").read_text().strip() == "boat_gateway"
+    except OSError:
+        return False
+
+
 def _external_pid(instance_id: str) -> int:
     """Resolve an `external:<pid>` id to a pid that is safe to signal.
 
@@ -279,6 +310,9 @@ class GatewayInstance:
     started_at: Optional[float] = None
     exit_code: Optional[int] = None
     process: Optional[subprocess.Popen] = field(default=None, repr=False)
+    # Set only for an instance adopted from external:<pid> discovery. There is
+    # no Popen handle for that process; it is signalled/checked by pid.
+    adopted_pid: Optional[int] = field(default=None, repr=False)
     _log: deque = field(default_factory=lambda: deque(maxlen=_LOG_LINES), repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _log_thread: Optional[threading.Thread] = field(default=None, repr=False)
@@ -295,22 +329,28 @@ class GatewayInstance:
 
     @property
     def running(self) -> bool:
-        if self.process is None:
-            return False
-        return self.process.poll() is None
+        if self.process is not None:
+            return self.process.poll() is None
+        if self.adopted_pid is not None:
+            return _pid_is_boat_gateway(self.adopted_pid)
+        return False
 
     @property
     def status(self) -> str:
-        if self.process is None:
-            return "stopped"
-        code = self.process.poll()
-        if code is None:
+        if self.process is not None:
+            code = self.process.poll()
+            if code is None:
+                return "running"
+            return "stopped" if code == 0 else f"exited:{code}"
+        if self.adopted_pid is not None and _pid_is_boat_gateway(self.adopted_pid):
             return "running"
-        return "stopped" if code == 0 else f"exited:{code}"
+        return "stopped"
 
     def pid(self) -> Optional[int]:
-        if self.running and self.process is not None:
+        if self.process is not None and self.running:
             return self.process.pid
+        if self.adopted_pid is not None and _pid_is_boat_gateway(self.adopted_pid):
+            return self.adopted_pid
         return None
 
     def uptime(self) -> Optional[float]:
@@ -344,6 +384,10 @@ class GatewayInstance:
                 raise RuntimeError(f"instance '{self.id}' is already running (PID {self.pid()})")
             if not os.path.isfile(self.gateway_bin):
                 raise FileNotFoundError(f"gateway binary not found: {self.gateway_bin}")
+            # An adopted process that has already exited leaves only a stale
+            # pid behind; starting now is a normal spawn from the recovered
+            # definition, not another adoption.
+            self.adopted_pid = None
             env = self.build_env()
             self.exit_code = None
             self.started_at = time.time()
@@ -362,6 +406,37 @@ class GatewayInstance:
 
     def stop(self, timeout: float = 5.0) -> None:
         with self._lock:
+            if self.adopted_pid is not None:
+                pid = self.adopted_pid
+                if not _pid_is_boat_gateway(pid):
+                    self.adopted_pid = None
+                    return
+                self.append_log(f"[agent] sending SIGTERM to adopted PID {pid}…")
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    self.adopted_pid = None
+                    return
+                deadline = time.time() + timeout
+                while time.time() < deadline and _pid_is_boat_gateway(pid):
+                    time.sleep(0.05)
+                if _pid_is_boat_gateway(pid):
+                    self.append_log("[agent] adopted process timed out — sending SIGKILL")
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    deadline = time.time() + timeout
+                    while time.time() < deadline and _pid_is_boat_gateway(pid):
+                        time.sleep(0.05)
+                if _pid_is_boat_gateway(pid):
+                    self.append_log(f"[agent] adopted PID {pid} is still alive after SIGKILL")
+                    raise RuntimeError(
+                        f"adopted gateway PID {pid} did not exit after SIGKILL")
+                self.exit_code = None
+                self.adopted_pid = None
+                self.append_log(f"[agent] adopted PID {pid} exited")
+                return
             if not self.running or self.process is None:
                 return
             self.append_log("[agent] sending SIGTERM…")
@@ -388,6 +463,22 @@ class GatewayInstance:
             if self.process:
                 self.exit_code = self.process.wait()
                 self.process = None
+        _save_state()
+
+    def to_definition(self) -> dict:
+        """The restart-safe half of to_dict(): no PID/process/status fields."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "gateway_bin": self.gateway_bin,
+            "can_ifaces": list(self.can_ifaces),
+            "eth_ifaces": list(self.eth_ifaces),
+            "node_plugins": list(self.node_plugins),
+            "grpc_port": self.grpc_port,
+            "tick_ms": self.tick_ms,
+            "tick_us": self.tick_us,
+            "created_at": self.created_at,
+        }
 
     def to_dict(self) -> dict:
         return {
@@ -407,6 +498,7 @@ class GatewayInstance:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "managed": True,
+            "adopted": self.adopted_pid is not None,
         }
 
 
@@ -445,6 +537,48 @@ class InstanceRegistry:
             )
             self._instances[inst_id] = inst
             return inst
+
+    def adopt(self, pid: int, name: str, row: dict) -> GatewayInstance:
+        """Promote an external:<pid> row into a tracked definition.
+
+        The process is already running and was not spawned by this agent, so
+        there is no Popen handle: GatewayInstance.adopted_pid is the handle.
+        Its configuration comes from /proc/<pid>/environ (row), the same data
+        discovery already recovered.
+        """
+        with self._lock:
+            for existing in self._instances.values():
+                if existing.adopted_pid == pid or existing.pid() == pid:
+                    raise RuntimeError(f"gateway pid {pid} is already adopted")
+                if existing.grpc_port == row["grpc_port"]:
+                    raise ValueError(
+                        f"port {row['grpc_port']} is already assigned to tracked "
+                        f"instance '{existing.id}'; delete/stop that definition first"
+                    )
+            inst_id = uuid.uuid4().hex[:8]
+            inst = GatewayInstance(
+                id=inst_id,
+                name=name or f"adopted-{pid}",
+                gateway_bin=row.get("gateway_bin") or _GW_BIN_DEFAULT,
+                can_ifaces=list(row.get("can_ifaces") or []),
+                eth_ifaces=list(row.get("eth_ifaces") or []),
+                node_plugins=list(row.get("node_plugins") or []),
+                grpc_port=row["grpc_port"],
+                tick_ms=row.get("tick_ms"),
+                tick_us=row.get("tick_us"),
+                created_at=row.get("started_at") or time.time(),
+                started_at=row.get("started_at"),
+                adopted_pid=pid,
+            )
+            self._instances[inst_id] = inst
+            return inst
+
+    def restore(self, inst: GatewayInstance) -> None:
+        """Insert a definition loaded from the agent state file."""
+        with self._lock:
+            if inst.id in self._instances:
+                raise ValueError(f"duplicate instance id '{inst.id}'")
+            self._instances[inst.id] = inst
 
     def get(self, instance_id: str) -> GatewayInstance:
         with self._lock:
@@ -487,6 +621,10 @@ class InstanceRegistry:
             inst = self.get(instance_id)
             if inst.running:
                 raise RuntimeError(f"instance '{instance_id}' is running; stop it first")
+            # An adopted process that exited on its own leaves a stale pid;
+            # editing the recovered definition is a normal stopped-instance
+            # operation from here on.
+            inst.adopted_pid = None
             reserved = {i.grpc_port for i in self._instances.values() if i.id != instance_id}
             port = _allocate_port(grpc_port, reserved)
             inst.name = name or inst.name
@@ -628,6 +766,17 @@ class NodeInstance:
             if self.process:
                 self.exit_code = self.process.wait()
                 self.process = None
+        _save_state()
+
+    def to_definition(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "script_path": self.script_path,
+            "target_host": self.target_host,
+            "extra_args": list(self.extra_args),
+            "created_at": self.created_at,
+        }
 
     def to_dict(self) -> dict:
         return {
@@ -662,6 +811,12 @@ class NodeRegistry:
             )
             self._nodes[node_id] = inst
             return inst
+
+    def restore(self, inst: NodeInstance) -> None:
+        with self._lock:
+            if inst.id in self._nodes:
+                raise ValueError(f"duplicate node id '{inst.id}'")
+            self._nodes[inst.id] = inst
 
     def get(self, node_id: str) -> NodeInstance:
         with self._lock:
@@ -954,6 +1109,7 @@ class TestRunInstance:
             if self.process:
                 self.exit_code = self.process.wait()
                 self.process = None
+        _save_state()
 
     def to_dict(self) -> dict:
         return {
@@ -1026,6 +1182,98 @@ class TestRunRegistry:
 
 
 _test_run_registry = TestRunRegistry()
+
+# ── Persistent definitions ──────────────────────────────────────────────────
+#
+# Only stopped definitions are stored. A running gateway survives an agent
+# restart as a process, and discovery reports it as external:<pid>; saving its
+# definition too would produce a second row for the same port/process. After a
+# normal stop (or adoption then stop) it is saved and loaded stopped next time.
+
+_STATE_LOCK = threading.Lock()
+
+
+def _state_payload() -> dict:
+    instances = [i.to_definition() for i in _registry.list() if not i.running]
+    nodes = [n.to_definition() for n in _node_registry.list() if not n.running]
+    return {"version": 1, "instances": instances, "nodes": nodes}
+
+
+def _save_state() -> None:
+    """Atomically persist stopped registry definitions. Failure is logged,
+    not raised into the API: a read-only home directory must not turn a
+    successful create/stop into an HTTP error."""
+    path = _state_file_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _STATE_LOCK:
+            # Snapshot under the same lock as the write: otherwise two
+            # concurrent mutations can snapshot out of order and the older
+            # snapshot can overwrite the newer one.
+            payload = json.dumps(_state_payload(), indent=2, sort_keys=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp, path)
+    except OSError as e:
+        print(f"[agent] warning: could not persist registry to {path}: {e}",
+              file=sys.stderr)
+
+
+def _load_state() -> None:
+    path = _state_file_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        print(f"[agent] warning: could not read registry {path}: {e}",
+              file=sys.stderr)
+        return
+    try:
+        doc = json.loads(raw)
+        if not isinstance(doc, dict) or doc.get("version") != 1:
+            raise ValueError("unsupported state file format")
+    except (ValueError, TypeError) as e:
+        print(f"[agent] warning: ignoring malformed registry {path}: {e}",
+              file=sys.stderr)
+        return
+
+    for item in doc.get("instances", []):
+        try:
+            inst = GatewayInstance(
+                id=str(item["id"]),
+                name=str(item.get("name") or item["id"]),
+                gateway_bin=str(item.get("gateway_bin") or _GW_BIN_DEFAULT),
+                can_ifaces=list(item.get("can_ifaces") or []),
+                eth_ifaces=list(item.get("eth_ifaces") or []),
+                node_plugins=list(item.get("node_plugins") or []),
+                grpc_port=int(item["grpc_port"]),
+                tick_ms=item.get("tick_ms"),
+                tick_us=item.get("tick_us"),
+                created_at=float(item.get("created_at") or time.time()),
+            )
+            _registry.restore(inst)
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            print(f"[agent] warning: skipping invalid persisted instance: {e}",
+                  file=sys.stderr)
+    for item in doc.get("nodes", []):
+        try:
+            node = NodeInstance(
+                id=str(item["id"]),
+                name=str(item.get("name") or item["id"]),
+                script_path=str(item["script_path"]),
+                target_host=str(item.get("target_host") or ""),
+                extra_args=list(item.get("extra_args") or []),
+                created_at=float(item.get("created_at") or time.time()),
+            )
+            _node_registry.restore(node)
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            print(f"[agent] warning: skipping invalid persisted node: {e}",
+                  file=sys.stderr)
 
 
 def _discover_test_manifests() -> List[dict]:
@@ -1321,10 +1569,10 @@ def _discover_plugins() -> List[dict]:
 # (InstanceRegistry). But "what gateways are running on this host" is a
 # reasonable question regardless of who started them -- someone SSHed in and
 # ran one by hand, or a previous agent process exited without stopping its
-# children first (see the v1 in-memory-registry gap in the backlog). Answer
-# it by scanning /proc for boat_gateway processes this registry doesn't
-# already know about, and recovering their config from /proc/<pid>/environ
-# -- the same BOAT_* env vars this agent itself sets when it spawns one.
+# children first. Answer it by scanning /proc for boat_gateway processes this
+# registry doesn't already know about, recovering their config from
+# /proc/<pid>/environ -- the same BOAT_* env vars this agent itself sets when
+# it spawns one. Rows can then be stopped by pid or adopted into the registry.
 # Linux-only (matches this project's deployment target); returns [] anywhere
 # /proc doesn't exist rather than erroring.
 
@@ -1368,6 +1616,60 @@ def _parse_plugins_env(value: str) -> List[dict]:
     return plugins
 
 
+def _external_gateway_row(pid: int) -> Optional[dict]:
+    """Recover one external gateway's row from /proc, or None if it is not a
+    readable boat_gateway process. Shared by discovery and adoption."""
+    try:
+        with open(f"/proc/{pid}/comm") as f:
+            if f.read().strip() != "boat_gateway":
+                return None
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            raw_env = f.read()
+        env = {}
+        for kv in raw_env.split(b"\0"):
+            if b"=" in kv:
+                k, _, v = kv.partition(b"=")
+                env[k.decode(errors="replace")] = v.decode(errors="replace")
+        try:
+            gateway_bin = os.readlink(f"/proc/{pid}/exe")
+        except OSError:
+            gateway_bin = None
+        try:
+            # /proc/<pid>'s ctime approximates process start time on Linux --
+            # not exact, but good enough for an uptime display.
+            started_at = os.stat(f"/proc/{pid}").st_ctime
+        except OSError:
+            started_at = None
+    except (OSError, FileNotFoundError):
+        return None  # exited mid-scan, or unreadable (different user's process)
+
+    try:
+        grpc_port = int(env.get("BOAT_GRPC_PORT", "50051"))
+    except ValueError:
+        grpc_port = 50051
+    tick_ms_str = env.get("BOAT_NODE_TICK_MS", "")
+    tick_us_str = env.get("BOAT_NODE_TICK_US", "")
+
+    return {
+        "id": f"external:{pid}",
+        "name": "(unmanaged)",
+        "gateway_bin": gateway_bin,
+        "can_ifaces": [s for s in env.get("BOAT_CAN_INTERFACES", "").split(",") if s],
+        "eth_ifaces": [s for s in env.get("BOAT_ETH_INTERFACES", "").split(",") if s],
+        "node_plugins": _parse_plugins_env(env.get("BOAT_NODE_PLUGINS", "")),
+        "grpc_port": grpc_port,
+        "tick_ms": int(tick_ms_str) if tick_ms_str.isdigit() else None,
+        "tick_us": int(tick_us_str) if tick_us_str.isdigit() else None,
+        "status": "running",
+        "pid": pid,
+        "uptime_sec": (time.time() - started_at) if started_at else None,
+        "exit_code": None,
+        "created_at": started_at,
+        "started_at": started_at,
+        "managed": False,
+    }
+
+
 def _discover_external_gateways(known_pids: set) -> List[dict]:
     if not os.path.isdir("/proc"):
         return []
@@ -1378,55 +1680,9 @@ def _discover_external_gateways(known_pids: set) -> List[dict]:
         pid = int(entry)
         if pid in known_pids:
             continue
-        try:
-            with open(f"/proc/{pid}/comm") as f:
-                if f.read().strip() != "boat_gateway":
-                    continue
-            with open(f"/proc/{pid}/environ", "rb") as f:
-                raw_env = f.read()
-            env = {}
-            for kv in raw_env.split(b"\0"):
-                if b"=" in kv:
-                    k, _, v = kv.partition(b"=")
-                    env[k.decode(errors="replace")] = v.decode(errors="replace")
-            try:
-                gateway_bin = os.readlink(f"/proc/{pid}/exe")
-            except OSError:
-                gateway_bin = None
-            try:
-                # /proc/<pid>'s ctime approximates process start time on
-                # Linux -- not exact, but good enough for an uptime display.
-                started_at = os.stat(f"/proc/{pid}").st_ctime
-            except OSError:
-                started_at = None
-        except (OSError, FileNotFoundError):
-            continue  # exited mid-scan, or unreadable (different user's process)
-
-        try:
-            grpc_port = int(env.get("BOAT_GRPC_PORT", "50051"))
-        except ValueError:
-            grpc_port = 50051
-        tick_ms_str = env.get("BOAT_NODE_TICK_MS", "")
-        tick_us_str = env.get("BOAT_NODE_TICK_US", "")
-
-        out.append({
-            "id": f"external:{pid}",
-            "name": "(unmanaged)",
-            "gateway_bin": gateway_bin,
-            "can_ifaces": [s for s in env.get("BOAT_CAN_INTERFACES", "").split(",") if s],
-            "eth_ifaces": [s for s in env.get("BOAT_ETH_INTERFACES", "").split(",") if s],
-            "node_plugins": _parse_plugins_env(env.get("BOAT_NODE_PLUGINS", "")),
-            "grpc_port": grpc_port,
-            "tick_ms": int(tick_ms_str) if tick_ms_str.isdigit() else None,
-            "tick_us": int(tick_us_str) if tick_us_str.isdigit() else None,
-            "status": "running",
-            "pid": pid,
-            "uptime_sec": (time.time() - started_at) if started_at else None,
-            "exit_code": None,
-            "created_at": started_at,
-            "started_at": started_at,
-            "managed": False,
-        })
+        row = _external_gateway_row(pid)
+        if row is not None:
+            out.append(row)
     return out
 
 
@@ -1486,16 +1742,46 @@ def api_host_info():
 
 def _reject_if_external(instance_id: str) -> None:
     """external:<pid> ids are discovered, not created by this agent -- it
-    has no stored definition for them, so Edit/Start/Delete don't make
-    sense (Stop does, and is handled separately: a plain signal by pid
-    works regardless of who spawned the process)."""
+    has no stored definition for them, so Edit/Start/Delete don't make sense
+    until adopted. Stop is handled separately (plain signal by pid), and
+    Adopt creates the tracked definition."""
     if instance_id.startswith("external:"):
         raise HTTPException(
             status_code=400,
             detail="this gateway isn't managed by this agent (discovered "
-                   "running, not started via this API) -- only Stop is "
-                   "supported for it",
+                   "running, not started via this API) -- only Stop and "
+                   "Adopt are supported for it",
         )
+
+
+class AdoptInstanceRequest(BaseModel):
+    name: str = ""
+
+
+@app.post("/api/instances/{instance_id}/adopt")
+def api_adopt_instance(instance_id: str, req: AdoptInstanceRequest):
+    """Promote a discovered external:<pid> gateway into the tracked registry.
+
+    Adoption changes only ownership/tracking -- it does not restart the
+    gateway. The recovered config becomes editable once the process is
+    stopped, and Start then spawns a normal agent-owned process.
+    """
+    if not instance_id.startswith("external:"):
+        raise HTTPException(status_code=400,
+                            detail="only an external:<pid> row can be adopted")
+    pid = _external_pid(instance_id)
+    row = _external_gateway_row(pid)
+    if row is None:
+        raise HTTPException(status_code=404,
+                            detail="gateway process is no longer readable")
+    try:
+        inst = _registry.adopt(pid, req.name, row)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    _save_state()
+    return inst.to_dict()
 
 
 @app.get("/api/instances")
@@ -1521,6 +1807,7 @@ def api_create_instance(req: CreateInstanceRequest):
         )
     except (ValueError, RuntimeError) as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _save_state()
     return inst.to_dict()
 
 
@@ -1554,6 +1841,7 @@ def api_update_instance(instance_id: str, req: CreateInstanceRequest):
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _save_state()
     return inst.to_dict()
 
 
@@ -1568,6 +1856,7 @@ def api_start_instance(instance_id: str):
         inst.start()
     except (RuntimeError, FileNotFoundError) as e:
         raise HTTPException(status_code=409, detail=str(e))
+    _save_state()
     return inst.to_dict()
 
 
@@ -1586,7 +1875,14 @@ def api_stop_instance(instance_id: str):
         inst = _registry.get(instance_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="instance not found")
-    inst.stop()
+    try:
+        inst.stop()
+    except PermissionError:
+        raise HTTPException(status_code=403,
+                            detail="no permission to signal the adopted gateway")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    _save_state()
     return inst.to_dict()
 
 
@@ -1612,6 +1908,7 @@ def api_delete_instance(instance_id: str):
         raise HTTPException(status_code=404, detail="instance not found")
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    _save_state()
     return {"ok": True}
 
 
@@ -1665,6 +1962,7 @@ def api_list_nodes():
 @app.post("/api/nodes")
 def api_create_node(req: CreateNodeRequest):
     n = _node_registry.create(req.name, req.script_path, req.target_host, req.extra_args)
+    _save_state()
     return n.to_dict()
 
 
@@ -1684,6 +1982,7 @@ def api_update_node(node_id: str, req: CreateNodeRequest):
         raise HTTPException(status_code=404, detail="node not found")
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    _save_state()
     return n.to_dict()
 
 
@@ -1697,6 +1996,7 @@ def api_start_node(node_id: str):
         n.start()
     except (RuntimeError, FileNotFoundError) as e:
         raise HTTPException(status_code=409, detail=str(e))
+    _save_state()
     return n.to_dict()
 
 
@@ -1707,6 +2007,7 @@ def api_stop_node(node_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail="node not found")
     n.stop()
+    _save_state()
     return n.to_dict()
 
 
@@ -1727,6 +2028,7 @@ def api_delete_node(node_id: str):
         raise HTTPException(status_code=404, detail="node not found")
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    _save_state()
     return {"ok": True}
 
 
@@ -2003,6 +2305,9 @@ def api_can_config(name: str, req: CanConfigRequest):
         raise HTTPException(status_code=400, detail=_ip_error_detail(e))
     return {"ok": True, "name": name, "bitrate": req.bitrate, "dbitrate": req.dbitrate,
             "fd": req.fd, "up": was_up}
+
+
+_load_state()
 
 
 if __name__ == "__main__":

@@ -2126,13 +2126,15 @@ class MainWindow(QMainWindow):
         new_btn.clicked.connect(self.new_instance)
         edit_btn = QPushButton("Edit…")
         edit_btn.clicked.connect(self.edit_selected)
+        adopt_btn = QPushButton("Adopt…")
+        adopt_btn.clicked.connect(self.adopt_selected)
         start_btn = _mark(QPushButton("Start"), "primary")
         start_btn.clicked.connect(self.start_selected)
         stop_btn = _mark(QPushButton("Stop"), "danger")
         stop_btn.clicked.connect(self.stop_selected)
         delete_btn = _mark(QPushButton("Delete"), "danger")
         delete_btn.clicked.connect(self.delete_selected)
-        for b in (new_btn, edit_btn, start_btn, stop_btn, delete_btn):
+        for b in (new_btn, edit_btn, adopt_btn, start_btn, stop_btn, delete_btn):
             actions.addWidget(b)
         actions.addStretch(1)
         layout.addLayout(actions)
@@ -2549,10 +2551,37 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self, "Not managed",
                 f"This gateway wasn't started by this agent (see the Managed "
-                f"column), so it can't be {action} here. Stop still works.",
+                f"column), so it can't be {action} here. Stop and Adopt "
+                f"still work.",
             )
             return True
         return False
+
+    def adopt_selected(self) -> None:
+        res = self._selected_client_and_id()
+        if not res:
+            return
+        client, inst_id = res
+        if not self._is_external(inst_id):
+            QMessageBox.information(
+                self, "Adopt",
+                "Only a discovered (Managed = No) gateway can be adopted.",
+            )
+            return
+        inst = self.find_instance(self._selected[0], inst_id)
+        pid = inst.get("pid") if inst else None
+        if QMessageBox.question(
+            self,
+            "Adopt gateway",
+            f"Take ownership of the running gateway at PID {pid or '?'}?\n\n"
+            "This does not restart it. Its recovered configuration becomes "
+            "editable after it is stopped.",
+        ) != QMessageBox.Yes:
+            return
+        try:
+            client.adopt_instance(inst_id)
+        except AgentError as e:
+            QMessageBox.warning(self, "Adopt failed", str(e))
 
     def start_selected(self) -> None:
         res = self._selected_client_and_id()
