@@ -121,6 +121,10 @@ BOAT_CAN_INTERFACES=vcan0 \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
+TCP's `iface` is a tag on frames it publishes through the gateway's `FrameSink`; it does
+**not** open a second wire path. The plugin's own AF_PACKET socket/RX thread is opt-in with
+`"standalone":true` and requires an iface. Gateway-resident instances leave it false.
+
 ## CAN Hardware Integration
 
 The gateway distinguishes between virtual (`vcan*`) and physical CAN interfaces at startup:
