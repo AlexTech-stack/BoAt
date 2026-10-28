@@ -983,10 +983,15 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
           }
           if (flags & 0x04) {  // RST
             if (seq == conn.my_ack) {  // RFC 5961: valid RST must match rcv.nxt
-              conn.state = btcp::TCP_CLOSED;
+              // RFC 793: a RST in SYN_RCVD returns the half-open connection
+              // to LISTEN, i.e. the listener stays and this ephemeral state
+              // disappears. Erase it here rather than leaving a CLOSED row
+              // for ServicePending to reap later.
               if (conn.on_event)
                 conn.on_event(conn.user_ctx, conn.conn_id,
                               btcp::TCP_EVENT_RST);
+              plugin->connections.erase(id);
+              return;
             } else {
               // Challenge ACK
               std::vector<uint8_t> ack_seg;
