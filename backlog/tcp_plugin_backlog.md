@@ -4,6 +4,13 @@ Remaining gaps, open points, and comments for the TCP plugin after Phase A+B+C h
 
 ---
 
+## Done (2026-10-28)
+
+- **#37** — state-machine tests added in `src/tests/unit/test_tcp_state.cpp`; they drive synthetic Ethernet frames through the v9 `on_frame` callback and cover passive open, checksum rejection, data delivery, FIN/CLOSE_WAIT, RST-in-SYN_RCVD, retransmission, RTT sampling, resource bounds, and connection reaping.
+- **#67** — standalone raw-socket mode is now an explicit `"standalone":true` config opt-in, never inferred from publisher state; `SO_RCVTIMEO` plus `shutdown()` before joining bounds raw RX shutdown.
+- **#81** — CLOSED connections are reaped, connection and out-of-order receive state are capped/configurable, receive-window checks reject future data, sequence comparisons are modular, and per-segment stderr logging is gone.
+- **#36** — RFC 6298 SRTT/RTTVAR estimator with initial-RTO override, adaptive RTO, backoff, and Karn's algorithm; `retry_ms` now means initial RTO only.
+
 ## 🔴 Protocol Gaps
 
 ### 1. Congestion Control — RFC 5681 / RFC 6582
@@ -18,7 +25,9 @@ The plugin has zero congestion control — no `cwnd`, `ssthresh`, or any congest
 
 ---
 
-### 2. RTT Estimation / Adaptive RTO / Karn's Algorithm
+### 2. RTT Estimation / Adaptive RTO / Karn's Algorithm — **Done (2026-10-28)**
+
+**Done:** per-connection RFC 6298 SRTT/RTTVAR, adaptive RTO, timeout backoff, and Karn suppression; `retry_ms` is now only the initial RTO.
 
 AUTOSAR `[SWS_TCPIP_00104]` → RFC 1122 §4.2.2.15. Retransmission timeout currently uses a fixed configurable `retry_ms` (default 1000ms) with exponential backoff. No RTT measurement (SRTT, RTTVAR). No Karn's algorithm.
 
@@ -50,7 +59,9 @@ AUTOSAR `[SWS_TCPIP_00104]` → RFC 1122 §4.2.2.5 (TCP Options). The window fie
 
 ---
 
-### 5. Listen Backlog / Connection Limit
+### 5. Listen Backlog / Connection Limit — **Done (2026-10-28)**
+
+**Done:** `max_connections` (default 1024) caps SYN-created state.
 
 AUTOSAR `[SWS_TCPIP_00104]` → RFC 1122 §4.2.2.18. Currently every valid SYN creates a connection unconditionally. No limit on listener backlog or total connections.
 
@@ -80,13 +91,9 @@ Sender-side SWS avoidance implemented via Nagle. Receiver-side (Clark's algorith
 
 ---
 
-### 8. RST in SYN_RCVD → LISTEN (Not CLOSED)
+### 8. RST in SYN_RCVD → LISTEN (Not CLOSED) — **Done (2026-10-28)**
 
-`ATS_TCP_00413` requires that an acceptable RST in SYN_RCVD returns to LISTEN state. Current code transitions to CLOSED (line 935-965). The `TcpListener` remains alive so new connections can still be accepted, but the literal state machine transition is non-compliant.
-
-**Impact:** Low. Functional behavior is the same from the caller's perspective.
-
-**Effort:** Small. After closing the connection, transition to LISTEN instead of CLOSED when the connection was created from a listener.
+**Done:** a valid RST now erases the half-open connection, leaving the listener to accept the next SYN. The old code set it to CLOSED and left the row in the map; `ATS_TCP_00413` requires the LISTEN behavior this now has.
 
 ---
 
@@ -138,11 +145,9 @@ The plugin uses a single `std::recursive_mutex` for all connections. High connec
 
 ---
 
-### 14. Missing C++ Unit Tests for State Machine
+### 14. Missing C++ Unit Tests for State Machine — **Done (2026-10-28)**
 
-Only `ParseMssOption` has a Catch2 test. The complex state machine logic (ACK validation, FIN transitions, out-of-order handling, keepalive, etc.) has no unit tests.
-
-**Not urgent** — Python integration tests with veth pairs serve as functional tests. Add Catch2 tests if the state machine logic needs to be modified again.
+**Done:** `boat_unit_tcp_state` covers passive open, checksum rejection, data delivery, FIN/CLOSE_WAIT, RST-in-SYN_RCVD, retransmission, RTT sampling, resource bounds, and connection reaping with synthetic frames -- no sockets.
 
 ---
 
@@ -150,7 +155,7 @@ Only `ParseMssOption` has a Catch2 test. The complex state machine logic (ACK va
 
 Built via `add_boat_plugin()` as a MODULE library. Can't be linked into test executables. The `ParseMssOption` function was moved to inline in the header to work around this.
 
-**Not blocking** — tests either include the header or run as Python integration.
+**Workaround:** the state-machine tests compile `tcp_plugin.cpp` directly into `boat_unit_tcp_state`, so no `.so` linking is needed. Keep this in mind if the plugin gains another translation unit.
 
 ---
 

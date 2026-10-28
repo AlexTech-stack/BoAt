@@ -13,6 +13,12 @@ The plugin ABI is versioned separately from the project; see
 
 ### Added
 
+- **TCP state-machine tests and RFC 6298 adaptive RTO (#37, #36).**
+  `boat_unit_tcp_state` drives the plugin through synthetic Ethernet frames without
+  sockets (passive open, checksum rejection, data/FIN transitions, RST-in-SYN_RCVD,
+  retransmission, RTT sampling, resource bounds). TCP now maintains per-connection
+  SRTT/RTTVAR as specified by RFC 6298, derives RTO from them, backs off on timeout, and
+  uses Karn's algorithm; `retry_ms` remains the initial-RTO override.
 - **Launcher-agent adoption and stopped-definition persistence (#40).**
   `POST /api/instances/external:<pid>/adopt` turns a discovered orphan into a
   tracked instance without restarting it, using the config recovered from
@@ -107,6 +113,14 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **TCP plugin standalone mode, shutdown, and resource bounds** (#67, #81).
+  Standalone AF_PACKET mode is now an explicit `"standalone":true` opt-in instead of being
+  inferred from the publisher pointer, which was null during `initialize()` and created a
+  second wire path/RX thread inside the gateway. Raw RX uses `SO_RCVTIMEO` and `shutdown()`
+  before joining, so unload cannot hang on a quiet link. CLOSED connections are reaped;
+  connection count and out-of-order receive entries/bytes are configurable bounded caps;
+  receive-window checks reject future-sequence data; sequence comparisons are modular across
+  2^32; and per-segment stderr logging is gone (#81). State-machine tests cover these paths.
 - **Trace import no longer fails at gRPC's 4 MiB unary limit** (#82). Added the
   client-streaming `ReplayService.ImportTraceDataStream`; `boat replay import` now sends
   the converted trace in 1 MiB chunks. The original unary `ImportTraceData` remains for

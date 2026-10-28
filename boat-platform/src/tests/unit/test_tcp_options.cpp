@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "tcp_plugin.h"
+#include "tcp_segment.h"
 
 using namespace boat::tcp;
 
@@ -20,6 +21,77 @@ TEST_CASE("Tcp plugin initial sequence number comes from deterministic config",
   REQUIRE(plugin->isn_seed == 42);
   REQUIRE(plugin->next_isn == 42);
   boat_plugin_destroy(raw);
+}
+
+TEST_CASE("TCP does not open a raw socket merely because iface is configured",
+          "[unit][tcp][standalone]") {
+  BoatPlugin* raw = boat_plugin_create();
+  REQUIRE(raw != nullptr);
+  REQUIRE(raw->vtable->initialize(raw->ctx, R"({"iface":"eth0"})") == 0);
+  auto* plugin = static_cast<TcpPlugin*>(raw->ctx);
+  REQUIRE(plugin->standalone == false);
+  REQUIRE(plugin->raw_sock == -1);
+  REQUIRE_FALSE(plugin->raw_rx_thread.joinable());
+  boat_plugin_destroy(raw);
+}
+
+TEST_CASE("TCP parses JSON booleans for nagle",
+          "[unit][tcp][config]") {
+  BoatPlugin* raw = boat_plugin_create();
+  REQUIRE(raw != nullptr);
+  REQUIRE(raw->vtable->initialize(raw->ctx, R"({"nagle":false})") == 0);
+  auto* plugin = static_cast<TcpPlugin*>(raw->ctx);
+  REQUIRE(plugin->nagle_enabled == false);
+  boat_plugin_destroy(raw);
+}
+
+TEST_CASE("TCP parses standalone as an explicit opt-in",
+          "[unit][tcp][standalone]") {
+  BoatPlugin* raw = boat_plugin_create();
+  REQUIRE(raw != nullptr);
+  REQUIRE(raw->vtable->initialize(raw->ctx, R"({"standalone":true})") == 0);
+  auto* plugin = static_cast<TcpPlugin*>(raw->ctx);
+  REQUIRE(plugin->standalone == true);
+  // No iface means no socket even in standalone mode; this is an error path,
+  // not an implicit all-interfaces bind.
+  REQUIRE(plugin->raw_sock == -1);
+  boat_plugin_destroy(raw);
+}
+
+TEST_CASE("TcpRttEstimator follows RFC 6298 and backs off on timeout",
+          "[unit][tcp][rtt]") {
+  TcpRttEstimator estimator;
+  estimator.Reset(1000);
+  REQUIRE(estimator.rto_ms == 1000);
+
+  estimator.OnSample(100.0);
+  REQUIRE(estimator.have_sample);
+  REQUIRE(estimator.srtt_ms == 100.0);
+  REQUIRE(estimator.rttvar_ms == 50.0);
+  REQUIRE(estimator.rto_ms == 300);
+
+  estimator.OnSample(200.0);
+  REQUIRE(estimator.srtt_ms == 112.5);
+  REQUIRE(estimator.rttvar_ms == 62.5);
+  REQUIRE(estimator.rto_ms == 363);
+
+  estimator.OnTimeout();
+  REQUIRE(estimator.rto_ms == 726);
+  for (int i = 0; i < 20; ++i) estimator.OnTimeout();
+  REQUIRE(estimator.rto_ms == TcpRttEstimator::kMaxRtoMs);
+
+  estimator.Reset(50);
+  REQUIRE(estimator.rto_ms == TcpRttEstimator::kMinRtoMs);
+  estimator.Reset(100000);
+  REQUIRE(estimator.rto_ms == TcpRttEstimator::kMaxRtoMs);
+}
+
+TEST_CASE("TCP sequence comparisons are modular across 2^32",
+          "[unit][tcp][sequence]") {
+  REQUIRE(SeqGreater(0x00000010U, 0xFFFFFFF0U));
+  REQUIRE_FALSE(SeqGreater(0xFFFFFFF0U, 0x00000010U));
+  REQUIRE(SeqGreaterEqual(0x00000010U, 0xFFFFFFF0U));
+  REQUIRE(SeqGreaterEqual(0x12345678U, 0x12345678U));
 }
 
 TEST_CASE("ParseMssOption - MSS option present", "[unit][tcp]") {
