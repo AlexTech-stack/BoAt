@@ -64,6 +64,17 @@ constexpr uint16_t TCP_FLAG_RST  = 0x0004;
 constexpr uint16_t TCP_FLAG_PSH  = 0x0008;
 constexpr uint16_t TCP_FLAG_ACK  = 0x0010;
 
+/* TCP sequence-space comparisons, RFC 793 §3.3. Sequence numbers wrap at
+ * 2^32; comparing them with plain > or < makes a transfer that crosses the
+ * wrap point look like it went backwards. Casting the difference to int32_t
+ * is the standard modular comparison. */
+inline bool SeqGreater(uint32_t a, uint32_t b) {
+  return static_cast<int32_t>(a - b) > 0;
+}
+inline bool SeqGreaterEqual(uint32_t a, uint32_t b) {
+  return static_cast<int32_t>(a - b) >= 0;
+}
+
 // ── Segment builders ──────────────────────────────────────────────────────
 
 inline std::vector<uint8_t> BuildIp4TcpSegment(

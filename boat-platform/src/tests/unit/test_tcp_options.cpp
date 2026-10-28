@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "tcp_plugin.h"
+#include "tcp_segment.h"
 
 using namespace boat::tcp;
 
@@ -45,6 +46,14 @@ TEST_CASE("TCP parses standalone as an explicit opt-in",
   // not an implicit all-interfaces bind.
   REQUIRE(plugin->raw_sock == -1);
   boat_plugin_destroy(raw);
+}
+
+TEST_CASE("TCP sequence comparisons are modular across 2^32",
+          "[unit][tcp][sequence]") {
+  REQUIRE(SeqGreater(0x00000010U, 0xFFFFFFF0U));
+  REQUIRE_FALSE(SeqGreater(0xFFFFFFF0U, 0x00000010U));
+  REQUIRE(SeqGreaterEqual(0x00000010U, 0xFFFFFFF0U));
+  REQUIRE(SeqGreaterEqual(0x12345678U, 0x12345678U));
 }
 
 TEST_CASE("ParseMssOption - MSS option present", "[unit][tcp]") {

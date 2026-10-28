@@ -143,10 +143,11 @@ class TcpHarness {
 
 std::vector<uint8_t> Segment(uint32_t seq, uint32_t ack, uint16_t flags,
                              const std::vector<uint8_t>& data = {},
-                             uint16_t window = 65535) {
+                             uint16_t window = 65535,
+                             uint16_t sport = 1234) {
   const std::array<uint8_t, 4> src{10, 0, 0, 1};
   const std::array<uint8_t, 4> dst{10, 0, 0, 2};
-  return BuildIp4TcpSegment(src.data(), dst.data(), 1234, 8080, seq, ack,
+  return BuildIp4TcpSegment(src.data(), dst.data(), sport, 8080, seq, ack,
                             data.empty() ? nullptr : data.data(),
                             static_cast<uint32_t>(data.size()), flags,
                             window);
@@ -270,6 +271,69 @@ TEST_CASE("TCP retransmits an unacked data segment on the retry timer",
   REQUIRE(h.sent.size() == 2);
   REQUIRE(h.sent[1].payload == std::vector<uint8_t>({1, 2, 3}));
   REQUIRE(h.sent[1].seq == h.sent[0].seq);
+}
+
+TEST_CASE("TCP caps the number of connections a SYN flood can create",
+          "[unit][tcp][state][resource]") {
+  TcpHarness h;
+  REQUIRE(h.raw() != nullptr);
+  h.Listen(8080);
+  h.plugin()->max_connections = 1;
+
+  h.Send(Segment(kClientSeq, 0, TCP_FLAG_SYN));
+  REQUIRE(h.plugin()->connections.size() == 1);
+  h.Send(Segment(kClientSeq, 0, TCP_FLAG_SYN, {}, 65535, 1235));
+  REQUIRE(h.plugin()->connections.size() == 1);
+}
+
+TEST_CASE("TCP reaps CLOSED connections on tick",
+          "[unit][tcp][state][resource]") {
+  TcpHarness h;
+  REQUIRE(h.raw() != nullptr);
+
+  TcpConnection conn;
+  conn.conn_id = 9;
+  conn.state = TCP_CLOSED;
+  h.plugin()->connections[conn.conn_id] = conn;
+
+  h.Tick();
+  REQUIRE(h.plugin()->connections.empty());
+}
+
+TEST_CASE("TCP bounds out-of-order data to the advertised receive window",
+          "[unit][tcp][state][resource]") {
+  TcpHarness h;
+  REQUIRE(h.raw() != nullptr);
+  h.Listen(8080);
+  h.plugin()->rx_window = 4;
+  h.Send(Segment(kClientSeq, 0, TCP_FLAG_SYN));
+  const auto& conn = h.plugin()->connections.begin()->second;
+  h.Send(Segment(kClientSeq + 1, conn.my_seq, TCP_FLAG_ACK));
+  REQUIRE(conn.state == TCP_ESTABLISHED);
+
+  // Starts one byte past rcv.nxt and runs 8 bytes: outside the 4-byte window.
+  h.Send(Segment(kClientSeq + 2, conn.my_seq, TCP_FLAG_ACK | TCP_FLAG_PSH,
+                 {1, 2, 3, 4, 5, 6, 7, 8}));
+  REQUIRE(conn.receive_buffer.empty());
+  REQUIRE(conn.receive_buffer_bytes == 0);
+}
+
+TEST_CASE("TCP bounds the number of out-of-order buffer entries",
+          "[unit][tcp][state][resource]") {
+  TcpHarness h;
+  REQUIRE(h.raw() != nullptr);
+  h.Listen(8080);
+  h.plugin()->max_receive_buffer_entries = 1;
+  h.Send(Segment(kClientSeq, 0, TCP_FLAG_SYN));
+  const auto& conn = h.plugin()->connections.begin()->second;
+  h.Send(Segment(kClientSeq + 1, conn.my_seq, TCP_FLAG_ACK));
+  h.plugin()->rx_window = 1024;
+
+  h.Send(Segment(kClientSeq + 2, conn.my_seq, TCP_FLAG_ACK | TCP_FLAG_PSH,
+                 {1, 2}));
+  h.Send(Segment(kClientSeq + 4, conn.my_seq, TCP_FLAG_ACK | TCP_FLAG_PSH,
+                 {3, 4}));
+  REQUIRE(conn.receive_buffer.size() == 1);
 }
 
 }  // namespace

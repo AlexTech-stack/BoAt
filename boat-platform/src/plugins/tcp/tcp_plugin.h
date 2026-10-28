@@ -96,8 +96,11 @@ struct TcpConnection {
   std::uint64_t persist_at_ns{0};
   int persist_count{0};
 
-  // Out-of-order receive buffer: seq_start → {seq_start, data}
+  // Out-of-order receive buffer: seq_start → {seq_start, data}. Bounded by
+  // the plugin's configured entry/byte caps; a peer can otherwise make the
+  // plugin buffer future sequence numbers without limit.
   std::map<uint32_t, std::vector<uint8_t>> receive_buffer;
+  std::size_t receive_buffer_bytes{0};
 
   // TIME_WAIT expiry
   std::uint64_t time_wait_until_ns{0};
@@ -158,6 +161,9 @@ struct TcpPlugin {
 
   uint32_t retry_ms{1000};
   uint32_t max_retries{5};
+  std::size_t max_connections{1024};
+  std::size_t max_receive_buffer_entries{64};
+  std::size_t max_receive_buffer_bytes{65536};
   int      default_mss{1460};
   uint16_t rx_window{65535};  // advertised receive window
   bool     nagle_enabled{true};
