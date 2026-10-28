@@ -783,10 +783,10 @@ int32_t can_tp_remove(void* tp_ctx, uint32_t nsdu_id) {
   auto it = plugin->connections.find(nsdu_id);
   if (it == plugin->connections.end()) return -1;  // not configured
 
-  // Refuse to erase a connection the TX pacing thread may still be actively
-  // working with (holds a raw NsduConnection* obtained under this same lock,
-  // used across several re-locks while streaming CFs -- see
-  // can_tp_service_pending). Only IDLE/COMPLETE are safe to erase.
+  // Refuse to erase a connection the TX pacing path may still be working
+  // with. Only IDLE/COMPLETE are safe to erase; the tick writer snapshots
+  // its payload before releasing tx_mutex and re-looks-up by nsdu_id, so an
+  // in-flight snapshot is discarded rather than dereferencing this map entry.
   if (it->second.tx_state != NsduConnection::TX_IDLE &&
       it->second.tx_state != NsduConnection::TX_COMPLETE) {
     return -2;  // busy
