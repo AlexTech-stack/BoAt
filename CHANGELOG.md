@@ -113,6 +113,15 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **CanTp TX/flow-control races and malformed FC handling** (#72, #73).
+  Multi-frame sends reserve `TX_WAIT_FC`, the buffer and the N_Bs deadline before
+  publishing the First Frame, so a fast FC is not dropped and two concurrent `Send`
+  calls cannot both start a transfer. The tick writer snapshots CF payload bytes and
+  re-looks-up the connection by `nsdu_id` before advancing state, so FC(Overflow) or
+  Remove cannot clear/erase data under a raw pointer. FC frames now require their
+  BS/STmin bytes, reserved STmin values map to 127 ms, invalid Flow Status aborts with
+  `N_INVALID_FS`, and consecutive FC(Wait) frames are capped with `N_WFT_OVRN`.
+  The plugin ABI now documents that `on_frame`/`on_tick` may run concurrently.
 - **TCP plugin standalone mode, shutdown, and resource bounds** (#67, #81).
   Standalone AF_PACKET mode is now an explicit `"standalone":true` opt-in instead of being
   inferred from the publisher pointer, which was null during `initialize()` and created a

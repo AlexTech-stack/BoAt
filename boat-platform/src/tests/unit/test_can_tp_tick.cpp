@@ -12,10 +12,13 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <boat/can_tp.h>
@@ -40,15 +43,19 @@ struct Harness {
   std::atomic<std::uint64_t> now_ns{0};
   std::mutex mu;
   std::vector<Sent> sent;
+  std::function<void()> on_publish;
   boat::core::ICanTp* tp{nullptr};
 
   Harness() {
     pm.SetTimeSource([this] { return now_ns.load(); });
     pm.SetFramePublisher([this](const BoatFrame& f) {
       if (f.bus_type != BOAT_BUS_CAN && f.bus_type != BOAT_BUS_CANFD) return;
-      std::lock_guard<std::mutex> lock(mu);
-      sent.push_back({f.meta.can.can_id,
-                      std::vector<uint8_t>(f.payload, f.payload + f.payload_len)});
+      {
+        std::lock_guard<std::mutex> lock(mu);
+        sent.push_back({f.meta.can.can_id,
+                        std::vector<uint8_t>(f.payload, f.payload + f.payload_len)});
+      }
+      if (on_publish) on_publish();
     });
     pm.Load(CAN_TP_SO, R"({"iface":"vcan0"})");
     tp = static_cast<boat::core::ICanTp*>(pm.FindService("can_tp:vcan0"));
@@ -193,6 +200,110 @@ TEST_CASE("CanTp paces consecutive frames by STmin on the host clock",
   h.AdvanceMs(500);
   for (int i = 0; i < 10; ++i) h.Tick();
   REQUIRE(h.Drain().empty());
+}
+
+TEST_CASE("CanTp reserves TX_WAIT_FC before publishing the First Frame",
+          "[unit][can_tp][tick][race]") {
+  Harness h;
+  REQUIRE(h.tp->Configure(Harness::Config()) == 0);
+
+  bool saw_wait_fc = false;
+  h.on_publish = [&] {
+    const auto sessions = h.tp->ListSessions();
+    REQUIRE(sessions.size() == 1);
+    saw_wait_fc = sessions[0].tx_state == "WAIT_FC";
+  };
+
+  const std::vector<uint8_t> payload(20, 0x44);
+  REQUIRE(h.tp->Send(kNsdu, payload.data(), payload.size()) == 0);
+  REQUIRE(saw_wait_fc);
+}
+
+TEST_CASE("CanTp allows only one of two concurrent sends to start",
+          "[unit][can_tp][tick][race]") {
+  Harness h;
+  REQUIRE(h.tp->Configure(Harness::Config()) == 0);
+  const std::vector<uint8_t> payload(20, 0x88);
+
+  int results[2] = {99, 99};
+  std::thread a([&] { results[0] = h.tp->Send(kNsdu, payload.data(), payload.size()); });
+  std::thread b([&] { results[1] = h.tp->Send(kNsdu, payload.data(), payload.size()); });
+  a.join();
+  b.join();
+
+  std::sort(std::begin(results), std::end(results));
+  REQUIRE(results[0] == -1);
+  REQUIRE(results[1] == 0);
+  REQUIRE(h.Drain().size() == 1);  // exactly one First Frame
+}
+
+TEST_CASE("CanTp ignores a truncated Flow Control frame without reading past it",
+          "[unit][can_tp][tick][fc]") {
+  Harness h;
+  REQUIRE(h.tp->Configure(Harness::Config()) == 0);
+  const std::vector<uint8_t> payload(20, 0x55);
+  REQUIRE(h.tp->Send(kNsdu, payload.data(), payload.size()) == 0);
+  h.Drain();
+
+  h.Deliver({0x30});        // no BS/STmin
+  h.Deliver({0x30, 0x00});  // no STmin
+  h.Tick();
+  auto sessions = h.tp->ListSessions();
+  REQUIRE(sessions.size() == 1);
+  REQUIRE(sessions[0].tx_state == "WAIT_FC");
+
+  h.AdvanceMs(101);
+  h.Tick();
+  REQUIRE(h.tp->ListSessions()[0].tx_state == "IDLE");
+}
+
+TEST_CASE("CanTp rejects an invalid Flow Status and an excessive Wait count",
+          "[unit][can_tp][tick][fc]") {
+  Harness h;
+  REQUIRE(h.tp->Configure(Harness::Config()) == 0);
+  std::vector<boat::core::CanTpErrorEvent> errors;
+  h.tp->SubscribeErrors({}, [&errors](const boat::core::CanTpErrorEvent& e) {
+    errors.push_back(e);
+  });
+
+  const std::vector<uint8_t> payload(20, 0x66);
+  REQUIRE(h.tp->Send(kNsdu, payload.data(), payload.size()) == 0);
+  h.Drain();
+
+  h.Deliver({0x33, 0x00, 0x00});  // invalid Flow Status
+  REQUIRE(errors.size() == 1);
+  REQUIRE(errors[0].result == CANTP_N_INVALID_FS);
+  REQUIRE(h.tp->ListSessions()[0].tx_state == "IDLE");
+
+  // Restart and send more consecutive FC(Wait) frames than N_WFTmax allows.
+  errors.clear();
+  REQUIRE(h.tp->Send(kNsdu, payload.data(), payload.size()) == 0);
+  h.Drain();
+  for (int i = 0; i < 4; ++i) h.Deliver({0x31, 0x00, 0x00});
+  REQUIRE(errors.empty());
+  h.Deliver({0x31, 0x00, 0x00});
+  REQUIRE(errors.size() == 1);
+  REQUIRE(errors[0].result == CANTP_N_WFT_OVRN);
+  REQUIRE(h.tp->ListSessions()[0].tx_state == "IDLE");
+}
+
+TEST_CASE("CanTp maps reserved STmin values to 127 ms",
+          "[unit][can_tp][tick][stmin]") {
+  Harness h;
+  REQUIRE(h.tp->Configure(Harness::Config()) == 0);
+  const std::vector<uint8_t> payload(20, 0x77);
+  REQUIRE(h.tp->Send(kNsdu, payload.data(), payload.size()) == 0);
+  h.Drain();
+
+  h.Deliver({0x30, 0x00, 0x80});  // reserved STmin -> maximum separation
+  h.Tick();
+  REQUIRE(h.Drain().size() == 1);  // first CF
+  h.AdvanceMs(126);
+  h.Tick();
+  REQUIRE(h.Drain().empty());
+  h.AdvanceMs(1);
+  h.Tick();
+  REQUIRE(h.Drain().size() == 1);  // second CF after 127 ms
 }
 
 TEST_CASE("CanTp streams unlimited-rate transfers within one tick",

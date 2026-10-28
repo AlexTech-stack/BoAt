@@ -22,6 +22,8 @@ Re-verified against current `can_tp_plugin.cpp`/`.h` after two commits landed po
 
 Note: most `:line` citations below predate the `nsdu_id`-keying refactor and no longer point at the right lines — treat them as historical, not current.
 
+**2026-10-28 — #72 and #73 fixed.** Multi-frame TX reserves `TX_WAIT_FC` and its buffer/deadline before publishing the FF; the tick writer snapshots CF bytes and re-looks-up by `nsdu_id` before advancing state. FC frames require BS/STmin, reserved STmin maps to 127 ms, invalid FS aborts with `N_INVALID_FS`, and consecutive FC(Wait) frames are capped with `N_WFT_OVRN`. New tests cover the race, truncated/invalid FC, WT cap, and reserved STmin.
+
 **2026-08-10, later the same day** — #1 (N_Bs/N_Cr) implemented on `feat/can-tp-nbs-ncr-timeouts` and verified against real PCAN USB Pro FD hardware (can0/can1 on one physical bus, agn-testcomputer): both watchdogs fire at their configured deadline (confirmed via bus capture that no frame explains the reset any other way), and a happy-path multi-frame transfer over the same dual-instance setup still round-trips byte-exact — no regression. Critical count drops to 0.
 
 **2026-08-10, quick-fix bundle** (`feat/can-tp-hardening-quickfixes`, stacked on the above) — #4, #5, #7, #12, #13 all resolved; see each item below for what actually shipped (#4 and #12 turned out to need more than the "quick" framing suggested). Also found and fixed, via hardware testing rather than review, a bug not in the original 16: **extended-addressing RX was fundamentally broken** — the PCI byte was read from the wrong position for every incoming extended-addressing frame, so it never worked at all (folded into #5's writeup, since it surfaced while verifying that fix). Full non-HIL/non-determinism test suite (133 tests) + Python suite (213 tests) green throughout; real round trips verified for classic, extended-addressing, and both timeout paths.
@@ -75,7 +77,7 @@ ISO 15765-2 §9.8 Table 21 defines six mandatory timing parameters. The plugin i
 
 ---
 
-### 2. TX Thread Dangling Pointer Race — ✅ RESOLVED (2026-08-10)
+### 2. TX Thread Dangling Pointer Race — ✅ RESOLVED (2026-08-10, revisited 2026-10-28)
 
 Original finding: the TX thread collects raw `NsduConnection*` pointers under `tx_mutex`, then releases the lock; `can_tp_configure()` overwrote `plugin->connections[source_addr]` via `operator[]`, destroying the old `NsduConnection` and leaving the TX thread with a dangling pointer.
 
@@ -84,7 +86,7 @@ Original finding: the TX thread collects raw `NsduConnection*` pointers under `t
 - `can_tp_remove()` now explicitly refuses to erase a connection unless `tx_state` is `IDLE`/`COMPLETE` (`can_tp_plugin.cpp:502-505`), so the one operation that *does* erase a map entry can't run while the TX thread might still be using it.
 - `std::unordered_map` only invalidates references/pointers on erase (not on insert/rehash), which the code now leans on explicitly (see the `tp_on_frame` locking comment).
 
-Residual, smaller issue: the TX thread still reads `conn->tx_state`/`conn->config.*` outside `tx_mutex` in a couple of spots per CF (`can_tp_plugin.cpp:87-97`) — a data race in the strict sense, just not the dangling-pointer/UAF scenario originally described. Not urgent enough to reopen as Critical; folded into #13 (triple-lock) as a locking-hygiene cleanup.
+The 2026-10-28 #72 pass removed the residual unlocked reads: the tick writer copies the CF payload and all config fields under `tx_mutex`, then re-looks-up the connection by `nsdu_id` after releasing it. A concurrent FC(Overflow)/Remove can still change state, but the stale snapshot is discarded instead of dereferencing freed or cleared storage.
 
 ---
 

@@ -44,6 +44,11 @@ uint32_t resolve_timeout_ms(uint32_t configured) {
   return configured != 0 ? configured : kDefaultTimeoutMs;
 }
 
+// ISO 15765-2 N_WFTmax. The standard leaves the exact value to the network;
+// four consecutive FC(WT) frames is enough to distinguish a peer that is
+// still alive from one that is stalling the transfer indefinitely.
+constexpr uint8_t kMaxConsecutiveWaitFrames = 4;
+
 // Resolve a 0-sentinel (== "use the ISO/AUTOSAR default") to an actual pad
 // byte. See CanTpConfig::pad_byte's doc comment for why literal 0x00
 // padding isn't independently selectable through this field.
@@ -77,12 +82,13 @@ uint8_t pad_frame(uint8_t* buf, uint8_t used, uint8_t dlc, uint8_t pad_byte) {
 // Convert ISO 15765-2 STmin byte to microseconds.
 //   0x00–0x7F : directly in ms (0–127 ms)
 //   0xF1–0xF9 : 100–900 μs (steps of 100 μs)
-//   0x81–0xF0 : reserved, treated as 0
+//   0x80–0xF0 and 0xFA–0xFF : reserved; ISO 15765-2 requires the maximum
+//   separation time (127 ms), not zero/full-speed.
 uint32_t stmin_to_us(uint8_t stmin) {
   if (stmin <= 0x7F) return static_cast<uint32_t>(stmin) * 1000;
   if (stmin >= 0xF1 && stmin <= 0xF9)
     return static_cast<uint32_t>(stmin - 0xF0) * 100;
-  return 0;
+  return 127'000;
 }
 
 // ── Connection lookup helpers ─────────────────────────────────────────────
@@ -132,132 +138,140 @@ NsduConnection* find_by_target(CanTpPlugin* plugin, uint32_t can_id,
    the host's clock alongside every other tick consumer instead of on a private
    time domain -- which is what lets a virtual clock reach ISO-TP timeouts. */
 bool can_tp_service_pending(CanTpPlugin* plugin) {
-  using namespace std::chrono;
+  if (plugin == nullptr || plugin->frame_publish_fn == nullptr) return false;
+
+  // Collect everything the send-CF phase needs while holding the lock,
+  // including a copy of the payload chunk. The old version kept a raw
+  // NsduConnection* across the unlock and re-locked to memcpy from
+  // tx_buffer; a concurrent FC(Overflow)/Remove could clear or erase that
+  // state in between. The connection is re-looked-up by nsdu_id before its
+  // state is advanced.
+  struct TxWork {
+    uint32_t nsdu_id;
+    uint32_t source_addr;
+    uint8_t seq;
+    uint32_t offset;
+    uint8_t dlc;
+    bool is_fd;
+    bool brs;
+    bool extended_addressing;
+    uint8_t address_byte;
+    uint8_t pad_byte;
+    std::vector<uint8_t> data;
+  };
+  std::vector<TxWork> to_send_cf;
 
   {
-    // Collect connections that need TX processing. Each entry captures
-    // everything the send-CF phase below needs in one locked pass, instead
-    // of that phase re-locking three separate times per CF to read tx_seq/
-    // tx_buffer, then again to update state -- keeping the scan and the
-    // "do we owe this connection a CF" decision in the single section below
-    // means the data can't change out from under the unlocked send.
-    struct TxWork {
-      NsduConnection* conn;
-      uint32_t source_addr;
-      uint8_t seq;
-      uint32_t chunk;
-    };
-    std::vector<TxWork> to_send_cf;
-
-    {
-      std::lock_guard<std::mutex> lock(plugin->tx_mutex);
-      const std::uint64_t now = plugin->NowNs();
-      for (auto& [addr, conn] : plugin->connections) {
-        if (conn.tx_state == NsduConnection::TX_SEND_CF) {
-          if (now >= conn.tx_next_send_time) {
-            const uint32_t max_payload = conn.config.can_dlc;
-            const uint32_t cf_overhead = conn.config.extended_addressing ? 2 : 1;
-            to_send_cf.push_back({
-                &conn, addr, conn.tx_seq,
-                static_cast<uint32_t>(std::min(
-                    conn.tx_buffer.size() - conn.tx_offset,
-                    static_cast<size_t>(max_payload - cf_overhead)))});
+    std::lock_guard<std::mutex> lock(plugin->tx_mutex);
+    const std::uint64_t now = plugin->NowNs();
+    for (auto& [addr, conn] : plugin->connections) {
+      (void)addr;
+      if (conn.tx_state == NsduConnection::TX_SEND_CF &&
+          now >= conn.tx_next_send_time) {
+        const uint32_t max_payload = conn.config.can_dlc;
+        const uint32_t cf_overhead = conn.config.extended_addressing ? 2 : 1;
+        if (max_payload > cf_overhead && conn.tx_offset <= conn.tx_buffer.size()) {
+          const std::size_t chunk = std::min(
+              conn.tx_buffer.size() - conn.tx_offset,
+              static_cast<std::size_t>(max_payload - cf_overhead));
+          if (chunk > 0) {
+            TxWork work;
+            work.nsdu_id = conn.nsdu_id;
+            work.source_addr = conn.source_addr;
+            work.seq = conn.tx_seq;
+            work.offset = conn.tx_offset;
+            work.dlc = conn.config.can_dlc;
+            work.is_fd = conn.config.can_dlc > 8;
+            work.brs = conn.config.brs;
+            work.extended_addressing = conn.config.extended_addressing;
+            work.address_byte = conn.config.address_byte;
+            work.pad_byte = conn.config.pad_byte;
+            work.data.assign(conn.tx_buffer.begin() + conn.tx_offset,
+                             conn.tx_buffer.begin() + conn.tx_offset + chunk);
+            to_send_cf.push_back(std::move(work));
           }
         }
+      }
 
-        // ── N_Bs watchdog: TX gave up waiting for FC ──────────────────────
-        // Fires whether we're waiting for the *first* FC after FF, or the
-        // next FC at a block boundary (both go through TX_WAIT_FC) -- ISO
-        // 15765-2 §9.8 uses N_Bs for both cases. Reset directly here rather
-        // than deferring like to_send_cf: it's just clearing local state,
-        // nothing to publish, so there's no reason to release the lock
-        // first.
-        if (conn.tx_state == NsduConnection::TX_WAIT_FC) {
-          if (now >= conn.tx_fc_deadline) {
-            conn.tx_state = NsduConnection::TX_IDLE;
-            conn.tx_buffer.clear();
-            conn.tx_offset = 0;
-            conn.tx_seq = 0;
-            plugin->NotifyError(conn.nsdu_id, CANTP_N_TIMEOUT_BS,
-                "N_Bs expired after " + std::to_string(conn.config.n_bs_ms) +
-                "ms waiting for Flow Control");
-          }
-        }
+      // ── N_Bs watchdog: TX gave up waiting for FC ──────────────────────
+      // Fires whether we're waiting for the *first* FC after FF, or the
+      // next FC at a block boundary (both go through TX_WAIT_FC) -- ISO
+      // 15765-2 §9.8 uses N_Bs for both cases.
+      if (conn.tx_state == NsduConnection::TX_WAIT_FC &&
+          now >= conn.tx_fc_deadline) {
+        conn.tx_state = NsduConnection::TX_IDLE;
+        conn.tx_buffer.clear();
+        conn.tx_offset = 0;
+        conn.tx_seq = 0;
+        conn.tx_wait_frames = 0;
+        plugin->NotifyError(conn.nsdu_id, CANTP_N_TIMEOUT_BS,
+            "N_Bs expired after " + std::to_string(conn.config.n_bs_ms) +
+            "ms waiting for Flow Control");
+      }
 
-        // ── N_Cr watchdog: RX gave up waiting for the next CF ─────────────
-        if (conn.rx_state == NsduConnection::RX_WAIT_CF) {
-          if (now >= conn.rx_cf_deadline) {
-            conn.rx_state = NsduConnection::RX_IDLE;
-            conn.rx_buffer.clear();
-            plugin->NotifyError(conn.nsdu_id, CANTP_N_TIMEOUT_CR,
-                "N_Cr expired after " + std::to_string(conn.config.n_cr_ms) +
-                "ms waiting for the next Consecutive Frame");
-          }
-        }
+      // ── N_Cr watchdog: RX gave up waiting for the next CF ─────────────
+      if (conn.rx_state == NsduConnection::RX_WAIT_CF &&
+          now >= conn.rx_cf_deadline) {
+        conn.rx_state = NsduConnection::RX_IDLE;
+        conn.rx_buffer.clear();
+        plugin->NotifyError(conn.nsdu_id, CANTP_N_TIMEOUT_CR,
+            "N_Cr expired after " + std::to_string(conn.config.n_cr_ms) +
+            "ms waiting for the next Consecutive Frame");
       }
     }
+  }
 
-    // Nothing due this tick. The watchdogs above already ran, so there is
-    // no deadline to sleep on -- the next tick rescans.
-    if (to_send_cf.empty()) return false;
+  if (to_send_cf.empty()) return false;
 
-    // Send CFs without holding the lock
-    for (auto& work : to_send_cf) {
-      auto* conn = work.conn;
-      auto addr = work.source_addr;
-      if (conn->tx_state != NsduConnection::TX_SEND_CF) continue;
+  // Send CFs without holding the lock. The connection is re-found by id
+  // before advancing state; if it was removed, reconfigured, or aborted by
+  // an FC in the meantime, this snapshot is simply discarded.
+  for (auto& work : to_send_cf) {
+    uint8_t cf_buf[64];
+    uint8_t idx = 0;
+    if (work.extended_addressing) {
+      cf_buf[idx++] = work.address_byte;
+    }
+    cf_buf[idx++] = kPciCf | (work.seq & 0x0F);
+    std::memcpy(cf_buf + idx, work.data.data(), work.data.size());
+    const uint8_t cf_dlc = pad_frame(
+        cf_buf, static_cast<uint8_t>(idx + work.data.size()), work.dlc,
+        work.pad_byte);
 
-      const uint8_t dlc = conn->config.can_dlc;
-      const bool is_fd = (conn->config.can_dlc > 8);
+    auto cf = BoatFrameOwner::Can(
+        plugin->iface, work.source_addr, cf_dlc,
+        can_flags(work.is_fd, work.brs),
+        std::vector<uint8_t>(cf_buf, cf_buf + cf_dlc), work.is_fd);
+    plugin->frame_publish_fn(plugin->frame_publisher_ctx, cf.get());
 
-      // Build and send one CF, using the seq/chunk captured under the lock
-      // above -- both are read-only snapshots of state that's about to be
-      // advanced (below) once this CF actually goes out.
-      uint8_t cf_buf[64];
-      uint8_t idx = 0;
-      if (conn->config.extended_addressing) {
-        cf_buf[idx++] = conn->config.address_byte;
+    std::lock_guard<std::mutex> lock(plugin->tx_mutex);
+    auto it = plugin->connections.find(work.nsdu_id);
+    if (it == plugin->connections.end()) continue;
+    auto& conn = it->second;
+    if (conn.tx_state != NsduConnection::TX_SEND_CF ||
+        conn.tx_offset != work.offset) {
+      continue;
+    }
+    conn.tx_offset += static_cast<uint32_t>(work.data.size());
+    conn.tx_seq = (conn.tx_seq + 1) & 0x0F;
+    if (conn.tx_bs_remaining > 0) conn.tx_bs_remaining--;
+    conn.tx_next_send_time =
+        plugin->NowNs() +
+        static_cast<std::uint64_t>(conn.tx_stmin_us) * 1000ULL;
+
+    if (conn.tx_offset < conn.tx_buffer.size()) {
+      if (conn.tx_bs_original > 0 && conn.tx_bs_remaining == 0) {
+        // Block size reached — wait for next FC
+        conn.tx_state = NsduConnection::TX_WAIT_FC;
+        conn.tx_fc_deadline =
+            plugin->NowNs() +
+            static_cast<std::uint64_t>(conn.config.n_bs_ms) * 1'000'000ULL;
       }
-      cf_buf[idx++] = kPciCf | (work.seq & 0x0F);
-      {
-        std::lock_guard<std::mutex> lock(plugin->tx_mutex);
-        std::memcpy(cf_buf + idx, conn->tx_buffer.data() + conn->tx_offset,
-                    work.chunk);
-      }
-      const uint8_t cf_dlc = pad_frame(cf_buf, static_cast<uint8_t>(idx + work.chunk), dlc,
-                                        conn->config.pad_byte);
-
-      auto cf = BoatFrameOwner::Can(
-          plugin->iface, conn->source_addr,
-          cf_dlc, can_flags(is_fd, conn->config.brs),
-          std::vector<uint8_t>(cf_buf, cf_buf + cf_dlc), is_fd);
-      plugin->frame_publish_fn(plugin->frame_publisher_ctx, cf.get());
-
-      {
-        std::lock_guard<std::mutex> lock(plugin->tx_mutex);
-        conn->tx_offset += work.chunk;
-        conn->tx_seq = (conn->tx_seq + 1) & 0x0F;
-        if (conn->tx_bs_remaining > 0) conn->tx_bs_remaining--;
-        conn->tx_next_send_time =
-            plugin->NowNs() + static_cast<std::uint64_t>(conn->tx_stmin_us) * 1000ULL;
-
-        if (conn->tx_offset < conn->tx_buffer.size()) {
-          if (conn->tx_bs_original > 0 && conn->tx_bs_remaining == 0) {
-            // Block size reached — wait for next FC
-            conn->tx_state = NsduConnection::TX_WAIT_FC;
-            conn->tx_fc_deadline =
-                plugin->NowNs() +
-                static_cast<std::uint64_t>(conn->config.n_bs_ms) * 1'000'000ULL;
-          }
-          // else: BS=0 (unlimited) — keep sending CFs without waiting
-        } else {
-          // All data sent
-          conn->tx_state = NsduConnection::TX_IDLE;
-          conn->tx_buffer.clear();
-          conn->tx_offset = 0;
-          conn->tx_seq = 0;
-        }
-      }
+    } else {
+      conn.tx_state = NsduConnection::TX_IDLE;
+      conn.tx_buffer.clear();
+      conn.tx_offset = 0;
+      conn.tx_seq = 0;
     }
   }
   return true;
@@ -427,41 +441,60 @@ void tp_on_frame(void* ctx, const BoatFrame* frame) {
 
   if (pci_type == kPciFc) {
     // ── Flow Control from peer ─────────────────────────────────────────────
-    // Data[0] = PCI (0x30 | flags)
-    // Data[1] = BS (Block Size)
-    // Data[2] = STmin (Separation Time)
+    // At least PCI + BS + STmin must be present. The old code read data[1..3]
+    // without checking dlc, so a one- or two-byte frame could read arbitrary
+    // bytes (or past the end of the payload vector).
+    if (dlc < pci_idx + 3) return;
     if (conn->tx_state != NsduConnection::TX_WAIT_FC) return;
 
     const uint8_t fc_flags = pci_byte & 0x0F;
+    if (fc_flags != kFcContinue && fc_flags != kFcWait &&
+        fc_flags != kFcOverflow) {
+      conn->tx_state = NsduConnection::TX_IDLE;
+      conn->tx_buffer.clear();
+      conn->tx_offset = 0;
+      plugin->NotifyError(conn->nsdu_id, CANTP_N_INVALID_FS,
+          "peer sent invalid Flow Status " + std::to_string(fc_flags));
+      return;
+    }
     if (fc_flags == kFcOverflow) {
       conn->tx_state = NsduConnection::TX_IDLE;
       conn->tx_buffer.clear();
       conn->tx_offset = 0;
+      conn->tx_wait_frames = 0;
       plugin->NotifyError(conn->nsdu_id, CANTP_N_BUFFER_OVFLW,
           "peer sent FC(Overflow) -- aborting transfer");
       return;
     }
     if (fc_flags == kFcWait) {
-      // Wait — stay in TX_WAIT_FC, will be retried. Per ISO 15765-2 §9.6.5.3,
-      // an FC(WT) restarts the N_Bs timer -- an unresponsive-but-alive peer
-      // that keeps sending WT before N_Bs expires can hold the session open
-      // indefinitely, which is correct behavior (it's still telling us it's
-      // there); a peer that goes silent still gets caught by the deadline.
+      // FC(WT) extends N_Bs, but only up to N_WFTmax consecutive times.
+      // Without the cap an alive-but-stalling peer can hold the session
+      // open forever.
+      if (conn->tx_wait_frames >= kMaxConsecutiveWaitFrames) {
+        conn->tx_state = NsduConnection::TX_IDLE;
+        conn->tx_buffer.clear();
+        conn->tx_offset = 0;
+        conn->tx_wait_frames = 0;
+        plugin->NotifyError(conn->nsdu_id, CANTP_N_WFT_OVRN,
+            "N_WFTmax exceeded (" +
+            std::to_string(kMaxConsecutiveWaitFrames) +
+            " consecutive FC(Wait) frames)");
+        return;
+      }
+      ++conn->tx_wait_frames;
       conn->tx_fc_deadline =
           plugin->NowNs() +
           static_cast<std::uint64_t>(conn->config.n_bs_ms) * 1'000'000ULL;
-      // Not strictly required (this only pushes the deadline later, never
-      // earlier), but notifying here too keeps "every deadline mutation
-      // notifies" simple to reason about rather than case-by-case.
       return;
     }
     // Continue
-    const uint8_t bs    = (conn->config.extended_addressing) ? data[2] : data[1];
-    const uint8_t stmin = (conn->config.extended_addressing) ? data[3] : data[2];
+    const uint8_t bs    = data[pci_idx + 1];
+    const uint8_t stmin = data[pci_idx + 2];
     conn->tx_bs_remaining = bs;
     conn->tx_bs_original  = bs;
     conn->tx_stmin_us     = stmin_to_us(stmin);
     conn->tx_state        = NsduConnection::TX_SEND_CF;
+    conn->tx_wait_frames  = 0;
     conn->tx_next_send_time = plugin->NowNs();
     return;
   }
@@ -750,10 +783,10 @@ int32_t can_tp_remove(void* tp_ctx, uint32_t nsdu_id) {
   auto it = plugin->connections.find(nsdu_id);
   if (it == plugin->connections.end()) return -1;  // not configured
 
-  // Refuse to erase a connection the TX pacing thread may still be actively
-  // working with (holds a raw NsduConnection* obtained under this same lock,
-  // used across several re-locks while streaming CFs -- see
-  // can_tp_service_pending). Only IDLE/COMPLETE are safe to erase.
+  // Refuse to erase a connection the TX pacing path may still be working
+  // with. Only IDLE/COMPLETE are safe to erase; the tick writer snapshots
+  // its payload before releasing tx_mutex and re-looks-up by nsdu_id, so an
+  // in-flight snapshot is discarded rather than dereferencing this map entry.
   if (it->second.tx_state != NsduConnection::TX_IDLE &&
       it->second.tx_state != NsduConnection::TX_COMPLETE) {
     return -2;  // busy
@@ -777,115 +810,89 @@ int32_t can_tp_send(void* tp_ctx, uint32_t nsdu_id,
   // corruption the receiver cannot detect. Fail instead.
   if (len > 4095) return -1;
 
-  // connections is keyed by nsdu_id, so lookup is direct. Copy the fields
-  // this function needs into locals while still holding tx_mutex -- a
-  // concurrent can_tp_configure() targeting the same connection overwrites
-  // NsduConnection::config in place (same map slot, same pointer), so
-  // reading conn->config.* unlocked after releasing the lock could observe
-  // a torn mix of old/new values.
-  NsduConnection* conn = nullptr;
-  uint8_t dlc;
-  bool extended_addressing;
-  bool brs;
-  uint8_t pad_byte;
-  uint8_t address_byte;
+  uint8_t frame_buf[64];
+  uint8_t frame_dlc = 0;
+  uint32_t source_addr = 0;
+  bool is_fd = false;
+  bool brs = false;
+  bool single_frame = false;
+  bool started = false;
+
+  // Build the first (and for a SF, only) frame and reserve the multi-frame
+  // state in one locked section. The old code published the FF before
+  // entering TX_WAIT_FC: a fast peer's FC could arrive first and be dropped,
+  // and two concurrent Send calls could both pass the idle check and emit
+  // two FFs. Reserving before publishing makes those races impossible.
   {
     std::lock_guard<std::mutex> lock(plugin->tx_mutex);
     auto it = plugin->connections.find(nsdu_id);
     if (it == plugin->connections.end()) return -1;
-    conn = &it->second;
+    auto& conn = it->second;
+    if (conn.tx_state != NsduConnection::TX_IDLE) return -1;  // busy
 
-    if (conn->tx_state != NsduConnection::TX_IDLE) return -1;  // busy
+    const uint8_t dlc = conn.config.can_dlc;
+    const bool extended_addressing = conn.config.extended_addressing;
+    const uint8_t pad_byte = conn.config.pad_byte;
+    const uint8_t address_byte = conn.config.address_byte;
+    const uint32_t max_payload = dlc;
+    is_fd = dlc > 8;
+    brs = conn.config.brs;
+    source_addr = conn.source_addr;
 
-    dlc = conn->config.can_dlc;
-    extended_addressing = conn->config.extended_addressing;
-    brs = conn->config.brs;
-    pad_byte = conn->config.pad_byte;
-    address_byte = conn->config.address_byte;
-  }
+    const uint32_t sf_pci_overhead = is_fd ? 2 : 1;
+    const uint32_t addr_overhead = extended_addressing ? 1 : 0;
+    if (max_payload <= sf_pci_overhead + addr_overhead) return -1;
+    const uint32_t sf_max_len = max_payload - sf_pci_overhead - addr_overhead;
 
-  const uint32_t max_payload = dlc;
-  const bool is_fd = (dlc > 8);
-
-  // SF PCI format per ISO 15765-2:2016 §9.6.2 Table 11:
-  //   - Classic CAN (dlc == 8): 1 PCI byte, SF_DL encoded in the low nibble
-  //     (0x0X), so SF_DL is capped at 7 (6 with extended addressing's extra
-  //     address byte).
-  //   - CAN FD (dlc > 8): 2 PCI bytes -- byte0 = 0x00 (escape, low nibble
-  //     zero), byte1 = SF_DL as a full byte, allowing SF_DL up to dlc-2
-  //     (dlc-3 with extended addressing).
-  const uint32_t sf_pci_overhead = is_fd ? 2 : 1;
-  const uint32_t addr_overhead = extended_addressing ? 1 : 0;
-  const uint32_t sf_max_len = max_payload - sf_pci_overhead - addr_overhead;
-
-  if (len <= sf_max_len) {
-    // Single Frame — send directly, no state machine needed
-    uint8_t sf_buf[64];
-    uint8_t idx = 0;
-    if (extended_addressing) {
-      sf_buf[idx++] = address_byte;
-    }
-    if (is_fd) {
-      sf_buf[idx++] = kPciSf;                    // escape: low nibble 0
-      sf_buf[idx++] = static_cast<uint8_t>(len);  // SF_DL as a full byte
+    if (len <= sf_max_len) {
+      // Single Frame — no state machine needed.
+      uint8_t idx = 0;
+      if (extended_addressing) frame_buf[idx++] = address_byte;
+      if (is_fd) {
+        frame_buf[idx++] = kPciSf;                    // escape: low nibble 0
+        frame_buf[idx++] = static_cast<uint8_t>(len);  // SF_DL as a full byte
+      } else {
+        frame_buf[idx++] = kPciSf | static_cast<uint8_t>(len);
+      }
+      std::memcpy(frame_buf + idx, data, len);
+      frame_dlc = pad_frame(frame_buf, static_cast<uint8_t>(idx + len), dlc,
+                            pad_byte);
+      single_frame = true;
     } else {
-      sf_buf[idx++] = kPciSf | static_cast<uint8_t>(len);
+      // Multi-frame: build the FF and reserve TX state under the same lock.
+      uint8_t idx = 0;
+      if (extended_addressing) frame_buf[idx++] = address_byte;
+      frame_buf[idx++] = kPciFf | static_cast<uint8_t>((len >> 8) & 0x0F);
+      frame_buf[idx++] = static_cast<uint8_t>(len & 0xFF);
+      const uint32_t ff_overhead = extended_addressing ? 3 : 2;
+      if (max_payload <= ff_overhead) return -1;
+      const uint32_t ff_payload = std::min(len, max_payload - ff_overhead);
+      std::memcpy(frame_buf + idx, data, ff_payload);
+      frame_dlc = pad_frame(frame_buf, static_cast<uint8_t>(idx + ff_payload),
+                            dlc, pad_byte);
+
+      conn.tx_buffer.assign(data, data + len);
+      conn.tx_offset = ff_payload;
+      conn.tx_seq = 1;
+      conn.tx_bs_remaining = 0;   // will be set when FC arrives
+      conn.tx_bs_original = 0;
+      conn.tx_stmin_us = 0;
+      conn.tx_wait_frames = 0;
+      conn.tx_state = NsduConnection::TX_WAIT_FC;
+      conn.tx_next_send_time = plugin->NowNs();
+      conn.tx_fc_deadline =
+          plugin->NowNs() +
+          static_cast<std::uint64_t>(conn.config.n_bs_ms) * 1'000'000ULL;
+      started = true;
     }
-    std::memcpy(sf_buf + idx, data, len);
-    const uint8_t sf_dlc = pad_frame(sf_buf, static_cast<uint8_t>(idx + len), dlc, pad_byte);
-
-    {
-      auto sf = BoatFrameOwner::Can(
-          plugin->iface, conn->source_addr,
-          sf_dlc, can_flags(is_fd, brs),
-          std::vector<uint8_t>(sf_buf, sf_buf + sf_dlc), is_fd);
-      plugin->frame_publish_fn(plugin->frame_publisher_ctx, sf.get());
-    }
-    return 1;
   }
 
-  // Multi-frame: send FF, then CFs via TX thread
-
-  // First Frame
-  uint8_t ff_buf[64];
-  uint8_t idx = 0;
-  if (extended_addressing) {
-    ff_buf[idx++] = address_byte;
-  }
-  ff_buf[idx++] = kPciFf | static_cast<uint8_t>((len >> 8) & 0x0F);
-  ff_buf[idx++] = static_cast<uint8_t>(len & 0xFF);
-  // FF overhead is 2 PCI bytes, plus 1 more for the target-address byte
-  // under extended addressing -- matches `idx` above exactly (1 addr byte
-  // if extended, then always 2 PCI bytes).
-  const uint32_t ff_overhead = extended_addressing ? 3 : 2;
-  const uint32_t ff_payload = std::min(len, max_payload - ff_overhead);
-  std::memcpy(ff_buf + idx, data, ff_payload);
-  const uint8_t ff_dlc = pad_frame(ff_buf, static_cast<uint8_t>(idx + ff_payload), dlc, pad_byte);
-
-  {
-    auto ff = BoatFrameOwner::Can(
-        plugin->iface, conn->source_addr,
-        ff_dlc, can_flags(is_fd, brs),
-        std::vector<uint8_t>(ff_buf, ff_buf + ff_dlc), is_fd);
-    plugin->frame_publish_fn(plugin->frame_publisher_ctx, ff.get());
-  }
-
-  // Initialize TX state machine
-  {
-    std::lock_guard<std::mutex> lock(plugin->tx_mutex);
-    conn->tx_buffer.assign(data, data + len);
-    conn->tx_offset = ff_payload;
-    conn->tx_seq = 1;
-    conn->tx_bs_remaining = 0;   // will be set when FC arrives
-    conn->tx_stmin_us = 0;
-    conn->tx_state = NsduConnection::TX_WAIT_FC;
-    conn->tx_next_send_time = plugin->NowNs();
-    conn->tx_fc_deadline =
-        plugin->NowNs() +
-        static_cast<std::uint64_t>(conn->config.n_bs_ms) * 1'000'000ULL;
-  }
-
-  return 0;  // 0 = initiated
+  auto frame = BoatFrameOwner::Can(
+      plugin->iface, source_addr, frame_dlc, can_flags(is_fd, brs),
+      std::vector<uint8_t>(frame_buf, frame_buf + frame_dlc), is_fd);
+  plugin->frame_publish_fn(plugin->frame_publisher_ctx, frame.get());
+  if (!single_frame && !started) return -1;
+  return single_frame ? 1 : 0;
 }
 
 // ── Standard BoatPlugin entry points ─────────────────────────────────────────
