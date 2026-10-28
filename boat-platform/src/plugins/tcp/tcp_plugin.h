@@ -123,6 +123,11 @@ struct TcpPlugin {
   int               raw_sock{-1};
   int               raw_ifindex{-1};
   std::string       raw_iface;
+  // Opt-in standalone wire path. This must come from config, never from
+  // "frame_publish_fn is null at initialize time": the gateway sets the
+  // publisher after initialize, so that test opened a second AF_PACKET path
+  // and RX thread inside every gateway that configured an iface (#67).
+  bool              standalone{false};
   std::thread       raw_rx_thread;
   std::atomic<bool> raw_rx_running{false};
   std::mutex        arp_mutex;

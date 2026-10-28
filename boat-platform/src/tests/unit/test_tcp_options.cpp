@@ -22,6 +22,31 @@ TEST_CASE("Tcp plugin initial sequence number comes from deterministic config",
   boat_plugin_destroy(raw);
 }
 
+TEST_CASE("TCP does not open a raw socket merely because iface is configured",
+          "[unit][tcp][standalone]") {
+  BoatPlugin* raw = boat_plugin_create();
+  REQUIRE(raw != nullptr);
+  REQUIRE(raw->vtable->initialize(raw->ctx, R"({"iface":"eth0"})") == 0);
+  auto* plugin = static_cast<TcpPlugin*>(raw->ctx);
+  REQUIRE(plugin->standalone == false);
+  REQUIRE(plugin->raw_sock == -1);
+  REQUIRE_FALSE(plugin->raw_rx_thread.joinable());
+  boat_plugin_destroy(raw);
+}
+
+TEST_CASE("TCP parses standalone as an explicit opt-in",
+          "[unit][tcp][standalone]") {
+  BoatPlugin* raw = boat_plugin_create();
+  REQUIRE(raw != nullptr);
+  REQUIRE(raw->vtable->initialize(raw->ctx, R"({"standalone":true})") == 0);
+  auto* plugin = static_cast<TcpPlugin*>(raw->ctx);
+  REQUIRE(plugin->standalone == true);
+  // No iface means no socket even in standalone mode; this is an error path,
+  // not an implicit all-interfaces bind.
+  REQUIRE(plugin->raw_sock == -1);
+  boat_plugin_destroy(raw);
+}
+
 TEST_CASE("ParseMssOption - MSS option present", "[unit][tcp]") {
   // MSS option: kind=2, len=4, value=1400
   uint8_t options[] = {0x02, 0x04, 0x05, 0x78};  // 0x0578 = 1400

@@ -2,7 +2,12 @@
   "iface": {
     "type": "string",
     "default": "",
-    "help": "Raw CAN/network interface this TCP instance is attached to"
+    "help": "Network interface for standalone mode, or the iface tag on emitted Ethernet frames when gateway-resident"
+  },
+  "standalone": {
+    "type": "bool",
+    "default": false,
+    "help": "Open the plugin's own AF_PACKET socket and RX thread. Leave false inside a gateway; the core FrameSink is the only wire path"
   },
   "retry_ms": {
     "type": "int",
