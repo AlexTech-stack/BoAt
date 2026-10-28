@@ -338,6 +338,60 @@ TEST_CASE("TCP does not take an RTT sample from a retransmitted segment",
   REQUIRE_FALSE(live.rtt.have_sample);
 }
 
+TEST_CASE("TCP FIN_WAIT_1 transitions to TIME_WAIT when the peer FIN arrives",
+          "[unit][tcp][state][close]") {
+  TcpHarness h;
+  REQUIRE(h.raw() != nullptr);
+  TcpConnection conn;
+  conn.conn_id = 11;
+  conn.af = AF_INET;
+  conn.src_ip = {10, 0, 0, 2};
+  conn.dst_ip = {10, 0, 0, 1};
+  conn.src_port = 8080;
+  conn.dst_port = 1234;
+  conn.state = TCP_FIN_WAIT_1;
+  conn.my_seq = 200;
+  conn.my_ack = kClientSeq + 1;
+  conn.peer_window = 65535;
+  conn.last_activity_ns = h.now_ns_;
+  h.plugin()->connections[conn.conn_id] = conn;
+
+  h.Send(Segment(kClientSeq + 1, 200, TCP_FLAG_FIN | TCP_FLAG_ACK));
+  const auto& live = h.plugin()->connections[11];
+  REQUIRE(live.state == TCP_TIME_WAIT);
+  REQUIRE(live.time_wait_until_ns > h.now_ns_);
+}
+
+TEST_CASE("TCP Nagle holds a small write while a segment is unacked",
+          "[unit][tcp][state][nagle]") {
+  TcpHarness h;
+  REQUIRE(h.raw() != nullptr);
+  TcpConnection conn;
+  conn.conn_id = 12;
+  conn.af = AF_INET;
+  conn.src_ip = {10, 0, 0, 2};
+  conn.dst_ip = {10, 0, 0, 1};
+  conn.src_port = 8080;
+  conn.dst_port = 1234;
+  conn.state = TCP_ESTABLISHED;
+  conn.my_seq = 100;
+  conn.my_ack = kClientSeq + 1;
+  conn.peer_window = 65535;
+  conn.mss = 1460;
+  conn.send_buffer = {1};
+  conn.unacked_segment = {0xAA};
+  conn.retransmit_at_ns = h.now_ns_ + 10'000'000'000ULL;
+  conn.last_activity_ns = h.now_ns_;
+  h.plugin()->connections[conn.conn_id] = conn;
+
+  h.Tick();
+  REQUIRE(h.sent.empty());
+  h.plugin()->connections[12].unacked_segment.clear();
+  h.Tick();
+  REQUIRE(h.sent.size() == 1);
+  REQUIRE(h.sent[0].payload == std::vector<uint8_t>({1}));
+}
+
 TEST_CASE("TCP caps the number of connections a SYN flood can create",
           "[unit][tcp][state][resource]") {
   TcpHarness h;

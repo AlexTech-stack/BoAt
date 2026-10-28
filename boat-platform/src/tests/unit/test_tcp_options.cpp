@@ -35,6 +35,16 @@ TEST_CASE("TCP does not open a raw socket merely because iface is configured",
   boat_plugin_destroy(raw);
 }
 
+TEST_CASE("TCP parses JSON booleans for nagle",
+          "[unit][tcp][config]") {
+  BoatPlugin* raw = boat_plugin_create();
+  REQUIRE(raw != nullptr);
+  REQUIRE(raw->vtable->initialize(raw->ctx, R"({"nagle":false})") == 0);
+  auto* plugin = static_cast<TcpPlugin*>(raw->ctx);
+  REQUIRE(plugin->nagle_enabled == false);
+  boat_plugin_destroy(raw);
+}
+
 TEST_CASE("TCP parses standalone as an explicit opt-in",
           "[unit][tcp][standalone]") {
   BoatPlugin* raw = boat_plugin_create();
