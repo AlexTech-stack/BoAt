@@ -75,6 +75,12 @@ typedef uint64_t (*BoatNowNsFn)(void* host_ctx);
 
 /* ── v9 Plugin VTable ────────────────────────────────────────────────── */
 
+/* Threading contract: `on_frame` may be called concurrently from multiple bus
+ * RX threads (one per interface in the gateway), and `on_tick` runs on the
+ * tick-authority thread at the same time. A plugin that keeps mutable state
+ * must synchronize it itself; the host only guarantees that `shutdown` is not
+ * entered until in-flight callbacks have returned. */
+
 typedef struct BoatPluginVTable {
   /* Required — parse config JSON, return 0 on success. */
   int  (*initialize)(void* ctx, const char* config_json);

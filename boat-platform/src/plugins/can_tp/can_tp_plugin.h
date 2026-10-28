@@ -65,6 +65,7 @@ struct NsduConnection {
   // WAIT_FC / WAIT_CF.
   std::uint64_t tx_fc_deadline{0};
   std::uint64_t rx_cf_deadline{0};
+  uint8_t  tx_wait_frames{0};  // consecutive FC(Wait) frames (N_WFTmax guard)
 };
 
 /* CanTp plugin state.

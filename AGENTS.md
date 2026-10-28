@@ -781,6 +781,7 @@ dependency above.
 - **Plugin ABI v9** (current, merged to `master`):
   - Unified `BoatFrame` type (CAN, CANFD, Ethernet, TCP, PDU)
   - Plugin vtable (10 fields): `initialize`, `on_tick`, `shutdown`, `set_publisher`, `set_bus_publisher`, `set_pdu_publisher`, `on_frame`, `set_frame_publisher`, `declared_buses`, `set_time_source`
+  - `on_frame` may run concurrently with `on_tick` and from multiple bus RX threads; a plugin with mutable state must synchronize it. The host only guarantees no callbacks after `shutdown` returns.
   - `BOAT_PLUGIN_ABI_VERSION = 9` — any other version rejected with a clear error
     (`boat_unit_plugin_time_source` loads a deliberately stale fixture to prove it)
   - `set_time_source(ctx, BoatNowNsFn, host_ctx)` — v9. The host hands each plugin a clock

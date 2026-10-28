@@ -44,6 +44,8 @@ typedef enum CanTpResult {
   CANTP_N_TIMEOUT_CR   = 2,  /* N_Cr expired: peer never sent (or stopped sending) the next CF */
   CANTP_N_WRONG_SN     = 3,  /* CF sequence number didn't match rx_next_seq */
   CANTP_N_BUFFER_OVFLW = 4,  /* FF_DL exceeded rx_buffer_size (local), or peer sent FC(Overflow) (remote) */
+  CANTP_N_INVALID_FS   = 5,  /* peer sent an FC status other than Continue/Wait/Overflow */
+  CANTP_N_WFT_OVRN     = 6,  /* too many consecutive FC(Wait) frames (N_WFTmax exceeded) */
 } CanTpResult;
 
 /* CanTp N-SDU connection configuration (ISO 15765-2).
