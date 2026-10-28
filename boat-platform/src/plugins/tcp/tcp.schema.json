@@ -12,7 +12,7 @@
   "retry_ms": {
     "type": "int",
     "default": 1000,
-    "help": "Retransmission timeout in milliseconds"
+    "help": "Initial retransmission timeout in milliseconds; after the first RTT sample RFC 6298 SRTT/RTTVAR control the RTO"
   },
   "max_retries": {
     "type": "int",

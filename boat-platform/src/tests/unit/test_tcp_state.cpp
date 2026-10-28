@@ -273,6 +273,71 @@ TEST_CASE("TCP retransmits an unacked data segment on the retry timer",
   REQUIRE(h.sent[1].seq == h.sent[0].seq);
 }
 
+TEST_CASE("TCP samples RTT from an acknowledged data segment",
+          "[unit][tcp][state][rtt]") {
+  TcpHarness h;
+  REQUIRE(h.raw() != nullptr);
+  TcpConnection conn;
+  conn.conn_id = 8;
+  conn.af = AF_INET;
+  conn.src_ip = {10, 0, 0, 2};
+  conn.dst_ip = {10, 0, 0, 1};
+  conn.src_port = 8080;
+  conn.dst_port = 1234;
+  conn.state = TCP_ESTABLISHED;
+  conn.my_seq = 100;
+  conn.my_ack = kClientSeq + 1;
+  conn.peer_window = 65535;
+  conn.mss = 1460;
+  conn.send_buffer = {1, 2, 3, 4};
+  conn.last_activity_ns = h.now_ns_;
+  conn.rtt.Reset(1000);
+  h.plugin()->connections[conn.conn_id] = conn;
+
+  h.Tick();
+  const auto& live = h.plugin()->connections[8];
+  REQUIRE(live.rtt_in_flight);
+  h.now_ns_ += 50'000'000;  // 50 ms
+  h.Send(Segment(kClientSeq + 1, live.my_seq, TCP_FLAG_ACK));
+
+  REQUIRE_FALSE(live.rtt_in_flight);
+  REQUIRE(live.rtt.have_sample);
+  REQUIRE(live.rtt.srtt_ms == 50.0);
+  REQUIRE(live.rtt.rto_ms == TcpRttEstimator::kMinRtoMs);
+}
+
+TEST_CASE("TCP does not take an RTT sample from a retransmitted segment",
+          "[unit][tcp][state][rtt][karn]") {
+  TcpHarness h;
+  REQUIRE(h.raw() != nullptr);
+  TcpConnection conn;
+  conn.conn_id = 10;
+  conn.af = AF_INET;
+  conn.src_ip = {10, 0, 0, 2};
+  conn.dst_ip = {10, 0, 0, 1};
+  conn.src_port = 8080;
+  conn.dst_port = 1234;
+  conn.state = TCP_ESTABLISHED;
+  conn.my_seq = 100;
+  conn.my_ack = kClientSeq + 1;
+  conn.peer_window = 65535;
+  conn.mss = 1460;
+  conn.send_buffer = {1, 2, 3};
+  conn.last_activity_ns = h.now_ns_;
+  conn.rtt.Reset(1000);
+  h.plugin()->connections[conn.conn_id] = conn;
+
+  h.Tick();
+  const auto& live = h.plugin()->connections[10];
+  h.now_ns_ = live.retransmit_at_ns;
+  h.Tick();
+  REQUIRE(live.rtt_retransmitted);
+
+  h.Send(Segment(kClientSeq + 1, live.my_seq, TCP_FLAG_ACK));
+  REQUIRE_FALSE(live.rtt_in_flight);
+  REQUIRE_FALSE(live.rtt.have_sample);
+}
+
 TEST_CASE("TCP caps the number of connections a SYN flood can create",
           "[unit][tcp][state][resource]") {
   TcpHarness h;

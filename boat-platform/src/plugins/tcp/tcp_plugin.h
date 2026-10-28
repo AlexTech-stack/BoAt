@@ -6,9 +6,11 @@
 #include <boat/plugin.h>
 
 #include <arpa/inet.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -49,6 +51,49 @@ enum TcpState : uint8_t {
   TCP_TIME_WAIT,
 };
 
+/* RFC 6298 round-trip estimator. `retry_ms` remains the configured initial
+ * RTO; after the first sample this takes over, with Karn's algorithm handled
+ * by the connection (a retransmitted segment is not sampled). */
+struct TcpRttEstimator {
+  static constexpr std::uint32_t kMinRtoMs = 200;
+  static constexpr std::uint32_t kMaxRtoMs = 60000;
+
+  bool          have_sample{false};
+  double        srtt_ms{0.0};
+  double        rttvar_ms{0.0};
+  std::uint32_t rto_ms{1000};
+
+  void Reset(std::uint32_t initial_rto_ms) {
+    have_sample = false;
+    srtt_ms = 0.0;
+    rttvar_ms = 0.0;
+    rto_ms = std::clamp(initial_rto_ms, kMinRtoMs, kMaxRtoMs);
+  }
+
+  void OnSample(double sample_ms) {
+    if (sample_ms < 0.0) return;
+    if (!have_sample) {
+      srtt_ms = sample_ms;
+      rttvar_ms = sample_ms / 2.0;
+      have_sample = true;
+    } else {
+      rttvar_ms = 0.75 * rttvar_ms +
+                  0.25 * std::abs(srtt_ms - sample_ms);
+      srtt_ms = 0.875 * srtt_ms + 0.125 * sample_ms;
+    }
+    const double candidate = srtt_ms + 4.0 * rttvar_ms;
+    rto_ms = static_cast<std::uint32_t>(std::ceil(
+        std::clamp(candidate, static_cast<double>(kMinRtoMs),
+                   static_cast<double>(kMaxRtoMs))));
+  }
+
+  void OnTimeout() {
+    const std::uint64_t doubled = static_cast<std::uint64_t>(rto_ms) * 2U;
+    rto_ms = static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(doubled, kMaxRtoMs));
+  }
+};
+
 // ── Per-connection state ──────────────────────────────────────────────────
 
 struct TcpConnection {
@@ -76,6 +121,12 @@ struct TcpConnection {
   std::vector<uint8_t> unacked_segment;
   std::uint64_t retransmit_at_ns{0};
   int       retry_count{0};
+  TcpRttEstimator rtt;
+  bool      rtt_in_flight{false};
+  bool      rtt_retransmitted{false};
+  std::uint64_t rtt_start_ns{0};
+  std::uint32_t rtt_seq_start{0};
+  std::uint32_t rtt_seq_len{0};
 
   // Callbacks
   TcpOnData  on_data{nullptr};

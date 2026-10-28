@@ -371,9 +371,14 @@ static void ServicePending(btcp::TcpPlugin* plugin) {
             data.data(), static_cast<uint32_t>(data.size()),
             btcp::TCP_FLAG_ACK | btcp::TCP_FLAG_PSH, plugin->rx_window);
       }
+      conn.rtt_start_ns = now;
+      conn.rtt_seq_start = conn.my_seq;
+      conn.rtt_seq_len = static_cast<uint32_t>(data.size());
+      conn.rtt_in_flight = true;
+      conn.rtt_retransmitted = false;
       conn.my_seq += static_cast<uint32_t>(data.size());
       conn.unacked_segment = seg;
-      conn.retransmit_at_ns = now + MsToNs(plugin->retry_ms);
+      conn.retransmit_at_ns = now + MsToNs(conn.rtt.rto_ms);
       conn.retry_count = 0;
       conn.last_activity_ns = now;
       need_send = true;
@@ -397,8 +402,9 @@ static void ServicePending(btcp::TcpPlugin* plugin) {
         continue;
       }
       seg = conn.unacked_segment;
-      conn.retransmit_at_ns =
-          now + MsToNs(plugin->retry_ms * (1ULL << conn.retry_count));
+      conn.rtt_retransmitted = true;
+      conn.rtt.OnTimeout();
+      conn.retransmit_at_ns = now + MsToNs(conn.rtt.rto_ms);
       conn.retry_count++;
       need_send = true;
     }
@@ -746,7 +752,8 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
         }
         conn.my_seq += 1;
         conn.unacked_segment = seg;
-        conn.retransmit_at_ns = plugin->NowNs() + MsToNs(plugin->retry_ms);
+        conn.rtt.Reset(plugin->retry_ms);
+        conn.retransmit_at_ns = plugin->NowNs() + MsToNs(conn.rtt.rto_ms);
         conn.retry_count = 0;
 
         int nid = conn.conn_id;
@@ -858,6 +865,19 @@ static void HandleIncoming(btcp::TcpPlugin* plugin, const uint8_t* payload,
             if (!conn.unacked_segment.empty() &&
                 btcp::SeqGreaterEqual(ack, conn.my_seq)) {
               conn.unacked_segment.clear();
+            }
+            if (conn.rtt_in_flight &&
+                btcp::SeqGreaterEqual(
+                    ack, conn.rtt_seq_start + conn.rtt_seq_len)) {
+              // Karn: a segment that was retransmitted has an ambiguous RTT,
+              // so it must not feed the estimator.
+              if (!conn.rtt_retransmitted && conn.rtt_start_ns != 0) {
+                const double sample_ms =
+                    static_cast<double>(plugin->NowNs() - conn.rtt_start_ns) /
+                    static_cast<double>(kNsPerMs);
+                conn.rtt.OnSample(sample_ms);
+              }
+              conn.rtt_in_flight = false;
             }
             if (tcp_payload_len > 0) {
               if (seq == conn.my_ack) {

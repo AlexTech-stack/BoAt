@@ -48,6 +48,34 @@ TEST_CASE("TCP parses standalone as an explicit opt-in",
   boat_plugin_destroy(raw);
 }
 
+TEST_CASE("TcpRttEstimator follows RFC 6298 and backs off on timeout",
+          "[unit][tcp][rtt]") {
+  TcpRttEstimator estimator;
+  estimator.Reset(1000);
+  REQUIRE(estimator.rto_ms == 1000);
+
+  estimator.OnSample(100.0);
+  REQUIRE(estimator.have_sample);
+  REQUIRE(estimator.srtt_ms == 100.0);
+  REQUIRE(estimator.rttvar_ms == 50.0);
+  REQUIRE(estimator.rto_ms == 300);
+
+  estimator.OnSample(200.0);
+  REQUIRE(estimator.srtt_ms == 112.5);
+  REQUIRE(estimator.rttvar_ms == 62.5);
+  REQUIRE(estimator.rto_ms == 363);
+
+  estimator.OnTimeout();
+  REQUIRE(estimator.rto_ms == 726);
+  for (int i = 0; i < 20; ++i) estimator.OnTimeout();
+  REQUIRE(estimator.rto_ms == TcpRttEstimator::kMaxRtoMs);
+
+  estimator.Reset(50);
+  REQUIRE(estimator.rto_ms == TcpRttEstimator::kMinRtoMs);
+  estimator.Reset(100000);
+  REQUIRE(estimator.rto_ms == TcpRttEstimator::kMaxRtoMs);
+}
+
 TEST_CASE("TCP sequence comparisons are modular across 2^32",
           "[unit][tcp][sequence]") {
   REQUIRE(SeqGreater(0x00000010U, 0xFFFFFFF0U));
