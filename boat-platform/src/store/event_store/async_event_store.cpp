@@ -47,6 +47,7 @@ void AsyncEventStore::InsertBatch(std::span<const EventRecord> events) {
     for (const auto& event : events) {
       if (queue_.size() >= options_.queue_capacity) {
         queue_.pop_front();
+        queue_seq_.pop_front();
         const auto total =
             dropped_.fetch_add(1, std::memory_order_relaxed) + 1;
         if (total == 1 || total % 1000 == 0) {
@@ -56,9 +57,12 @@ void AsyncEventStore::InsertBatch(std::span<const EventRecord> events) {
         }
       }
       queue_.push_back(event);
+      queue_seq_.push_back(++next_seq_);
     }
   }
   cv_.notify_one();
+  // A drop can retire the last record a Flush() was waiting for.
+  idle_cv_.notify_all();
 }
 
 std::vector<EventRecord> AsyncEventStore::Query(const EventFilter& filter) {
@@ -66,13 +70,20 @@ std::vector<EventRecord> AsyncEventStore::Query(const EventFilter& filter) {
   return inner_->Query(filter);
 }
 
+bool AsyncEventStore::RetiredThrough(std::uint64_t target) const {
+  // The in-flight batch is older than anything still queued.
+  if (in_flight_first_ != 0 && in_flight_first_ <= target) return false;
+  return queue_seq_.empty() || queue_seq_.front() > target;
+}
+
 void AsyncEventStore::Flush() {
   std::unique_lock<std::mutex> lock(mutex_);
-  if (queue_.empty() && !writing_) return;
+  const std::uint64_t target = next_seq_;
+  if (RetiredThrough(target)) return;
 
-  flush_requested_ = true;
+  flush_target_ = std::max(flush_target_, target);
   cv_.notify_all();
-  idle_cv_.wait(lock, [this] { return queue_.empty() && !writing_; });
+  idle_cv_.wait(lock, [this, target] { return RetiredThrough(target); });
 }
 
 std::uint64_t AsyncEventStore::DroppedEventCount() const {
@@ -88,33 +99,37 @@ void AsyncEventStore::WriterLoop() {
     std::vector<EventRecord> batch;
     {
       std::unique_lock<std::mutex> lock(mutex_);
-      cv_.wait(lock, [this] {
-        return stopping_ || !queue_.empty() || flush_requested_;
-      });
+      cv_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
 
       if (queue_.empty()) {
         if (stopping_) break;
-        flush_requested_ = false;
-        idle_cv_.notify_all();
         continue;
       }
 
-      if (!flush_requested_ && !stopping_ &&
+      // A waiting Flush() wants the front of the queue now; don't sit out
+      // flush_interval collecting a fuller batch.
+      const auto flush_pending = [this] {
+        return !queue_seq_.empty() && queue_seq_.front() <= flush_target_;
+      };
+      if (!flush_pending() && !stopping_ &&
           queue_.size() < options_.batch_size) {
-        cv_.wait_for(lock, options_.flush_interval, [this] {
-          return stopping_ || flush_requested_ ||
+        cv_.wait_for(lock, options_.flush_interval, [&] {
+          return stopping_ || flush_pending() ||
                  queue_.size() >= options_.batch_size;
         });
+        // Only this thread shrinks the queue (a drop is always followed by a
+        // push), so it is still non-empty after the wait.
       }
 
       const std::size_t count =
           std::min(queue_.size(), options_.batch_size);
       batch.reserve(count);
+      in_flight_first_ = queue_seq_.front();
       for (std::size_t i = 0; i < count; ++i) {
         batch.push_back(std::move(queue_.front()));
         queue_.pop_front();
+        queue_seq_.pop_front();
       }
-      writing_ = true;
     }
 
     try {
@@ -138,14 +153,9 @@ void AsyncEventStore::WriterLoop() {
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      writing_ = false;
-      if (queue_.empty()) {
-        flush_requested_ = false;
-        idle_cv_.notify_all();
-      } else {
-        cv_.notify_one();
-      }
+      in_flight_first_ = 0;
     }
+    idle_cv_.notify_all();
   }
 }
 

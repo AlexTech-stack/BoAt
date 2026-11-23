@@ -1711,3 +1711,21 @@ class TestReplayRejectsPcap:
         from boat.trace_replay import TraceReplayer
 
         assert not hasattr(TraceReplayer, "replay_server_side")
+
+
+class TestTcpPluginPathUnsupported:
+    """`tcp_plugin_path` used to import the removed `boat.tcp` wrapper lazily,
+    so it failed with ModuleNotFoundError halfway through a replay. It must now
+    fail at construction, before anything is sent."""
+
+    def test_tcp_plugin_path_raises_at_construction(self):
+        import pytest
+        from boat.trace_replay import TraceReplayer
+
+        with pytest.raises(NotImplementedError, match="tcp_plugin_path"):
+            TraceReplayer(tcp_plugin_path="build/debug/src/plugins/tcp/tcp.so")
+
+    def test_no_tcp_plugin_path_still_constructs(self):
+        from boat.trace_replay import TraceReplayer
+
+        assert TraceReplayer().tcp_plugin_path is None

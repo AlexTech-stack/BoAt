@@ -113,6 +113,25 @@ The plugin ABI is versioned separately from the project; see
 
 ### Fixed
 
+- **Event-store reads no longer block for as long as traffic flows.** `AsyncEventStore::Flush()`,
+  which every `Query()` runs first, waited for the write queue to be *empty*. Any producer whose
+  records arrived faster than one batch write (a running replay, for instance) kept it
+  non-empty, so `MetricsService.GetMetrics` (`boat metrics get`), `SignalService.GetSignalHistory`
+  and replay-from-events blocked until the traffic stopped -- the last while holding the replay
+  control lock, stalling Start/Stop too. Records now carry a sequence number and `Flush()` waits
+  only for those accepted before it was called, written or dropped; read-your-writes is
+  unchanged. Found while preparing v0.2.0; introduced with the asynchronous event store above.
+- **The packaged plugin header could not be compiled.** Packages installed
+  `include/boat/plugin.h` but not the `boat/frame.h` it includes, so no out-of-tree plugin
+  could build against an installed BoAt (`fatal error: boat/frame.h: No such file or
+  directory`). `frame.h` is now installed alongside it. Present since v0.1.0.
+- **The release workflow would have failed on its first v0.2.0 run.** Its "nothing but our own
+  files" package check predated the license texts (#84) and rejected
+  `share/doc/boat-platform/{LICENSE,NOTICE,THIRD_PARTY_NOTICES.md}`. The pre-release dry run it
+  recommends could not pass either: a `v0.2.0-rc.1` tag failed the version check against the
+  `0.2.0` packages (CMake versions cannot carry a suffix), and would have pushed the container
+  image as `:latest`. Pre-release tags are now checked against their `X.Y.Z` part and never move
+  `:latest`, and the workflow header documents that the GitHub release must exist before the tag.
 - **CanTp TX/flow-control races and malformed FC handling** (#72, #73).
   Multi-frame sends reserve `TX_WAIT_FC`, the buffer and the N_Bs deadline before
   publishing the First Frame, so a fast FC is not dropped and two concurrent `Send`
@@ -323,6 +342,15 @@ The plugin ABI is versioned separately from the project; see
 
 ### Changed
 
+- **The TCP plugin is documented as experimental (#117), and the paths that relied on the removed
+  TCP C API now fail clearly.** The plugin's state machine is unit-tested, but nothing outside
+  the tests can open a listener or a connection — no config key, gRPC service or exported C
+  function does it — so TCP cannot be driven end to end yet. `CLAUDE.md`/`AGENTS.md` showed a
+  `tcp.so?{"mode":"server","listen_port":8080}` config the plugin never read; the API docs said
+  to "drive TCP through the plugin's connection API", which no longer exists. The three
+  `demo/tcp_plugin/` scripts imported the deleted `boat.tcp` wrapper and failed on start; they
+  are removed. `TraceReplayer(tcp_plugin_path=...)` failed with `ModuleNotFoundError` midway
+  through a replay; it now raises `NotImplementedError` at construction.
 - **A `StartReplay` that fails leaves the running replay alone** (#63). The new trace is mapped
   before the current replay is touched, so an unknown or unreadable `trace_id` now returns its
   error with the previous replay still playing and its `replay_id` still valid; it used to stop

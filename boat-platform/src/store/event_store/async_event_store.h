@@ -54,8 +54,11 @@ class AsyncEventStore : public IEventStore {
   void InsertBatch(std::span<const EventRecord> events) override;
   std::vector<EventRecord> Query(const EventFilter& filter) override;
 
-  /* Drain the queue. Safe to call from a non-writer thread; the worker stops
-   * taking new work only for as long as it takes to empty the queue. */
+  /* Wait until every record accepted *before this call* has been handed to
+   * the inner store (or dropped as oldest by the queue-full policy). Records
+   * inserted while Flush() waits are not waited for: a producer that keeps
+   * the queue non-empty must not be able to block a reader forever. Safe to
+   * call from a non-writer thread. */
   void Flush() override;
 
   [[nodiscard]] std::uint64_t DroppedEventCount() const override;
@@ -64,6 +67,9 @@ class AsyncEventStore : public IEventStore {
  private:
   void WriterLoop();
   void WriteBatch(std::span<const EventRecord> batch);
+  /* True once every record with sequence number <= target has left the
+   * queue and is no longer in a batch being written. Requires mutex_. */
+  [[nodiscard]] bool RetiredThrough(std::uint64_t target) const;
 
   std::unique_ptr<IEventStore> inner_;
   Options options_;
@@ -72,9 +78,15 @@ class AsyncEventStore : public IEventStore {
   std::condition_variable cv_;
   std::condition_variable idle_cv_;
   std::deque<EventRecord> queue_;
+  /* Sequence number of each queued record, parallel to queue_. Records are
+   * numbered 1, 2, ... in acceptance order and leave the queue in that order
+   * (writer and drop policy both pop the front), so "everything up to N is
+   * done" is a comparison against the front, not a scan. */
+  std::deque<std::uint64_t> queue_seq_;
+  std::uint64_t next_seq_{0};       // last sequence number assigned
+  std::uint64_t in_flight_first_{0}; // first seq of the batch being written; 0 = none
+  std::uint64_t flush_target_{0};   // highest seq any Flush() is waiting for
   bool stopping_{false};
-  bool writing_{false};
-  bool flush_requested_{false};
   std::atomic<std::uint64_t> dropped_{0};
   std::atomic<std::uint64_t> write_errors_{0};
 };
