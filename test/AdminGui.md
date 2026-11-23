@@ -112,6 +112,9 @@ confirmed still `running` afterward via `GET /api/instances/{id}`.
 **Preconditions:**
 - Two reachable agents on different hosts (or two agent processes on
   different ports on one host), each with at least one instance defined
+- Since v0.2.0 an agent binds `127.0.0.1` by default: an agent on **another**
+  host must be started with `BOAT_AGENT_BIND=0.0.0.0` (or its LAN address), or
+  the GUI cannot reach it. Two agents on one host work without it.
 
 **TestSteps:**
 1. Add both hosts
@@ -1277,3 +1280,27 @@ artifacts cleaned up afterward; every one of the user's own live
 processes confirmed running under the same PIDs afterward. Full
 account: `backlog/launcher_agent_backlog.md`'s "audited the gateway's
 full env var surface, added Node tick fields" entry.
+
+---
+
+### TC_AdminGui_024_adopt_external_gateway
+
+**TestSets:** [AdminGui], [LauncherAgent]
+
+**Preconditions:**
+- An agent added as a host; a hand-started gateway visible as an unmanaged (`external:`) row
+
+**TestSteps:**
+1. Select the unmanaged row; click **Adopt…**
+2. Confirm the dialog, entering a name
+3. Stop, then Start the row
+
+**Expected:**
+- Step 1: the dialog appears only for an external row (Adopt is not offered for managed rows)
+- Step 2: the row turns managed, keeps its pid/port, and the gateway keeps running
+- Step 3: behaves as TC_LauncherAgent_011 step 4; an agent error is shown in an
+  "Adopt failed" message box, not swallowed
+
+**Verdict:** NOT_TESTED
+
+**Result:**

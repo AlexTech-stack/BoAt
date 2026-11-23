@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import os
 
+import click
+import grpc
 import typer
+from typer.core import TyperGroup
 
 from boat.client import BoAtClient
 
@@ -25,8 +28,30 @@ from .scenario import scenario_app
 from .sim import sim_app
 from .test import test_app
 from .trace import trace_app
+from .output import print_error
 
-app = typer.Typer()
+
+class _RpcErrorGroup(TyperGroup):
+    """Last-resort handler for a gRPC failure no subcommand caught itself.
+
+    Most commands format RPC errors as `RPC error [CODE]: details` and exit 1,
+    but several (e.g. `replay start/seek/pause/resume/stop`) had no handler, so
+    a NOT_FOUND from the gateway surfaced as a full Python traceback. Catching
+    it here gives every command the same one-line error and exit code without
+    each one having to remember a try/except."""
+
+    def invoke(self, ctx: click.Context):
+        try:
+            return super().invoke(ctx)
+        except grpc.RpcError as exc:
+            code = exc.code() if callable(getattr(exc, "code", None)) else None
+            details = exc.details() if callable(getattr(exc, "details", None)) else str(exc)
+            name = code.name if code is not None else "UNKNOWN"
+            print_error(f"RPC error [{name}]: {details}")
+            raise typer.Exit(code=1)
+
+
+app = typer.Typer(cls=_RpcErrorGroup)
 
 app.add_typer(ai_app,       name="ai",    help="AI-powered assistants (scenario, bus-setup, cli, plugin).")
 app.add_typer(sim_app,      name="sim")

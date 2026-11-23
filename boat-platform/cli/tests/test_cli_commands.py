@@ -837,3 +837,30 @@ def test_rendered_help_shows_every_declared_long_option(command_path) -> None:
         f"{' '.join(command_path)} --help omitted {missing} of {sorted(declared)} "
         f"[{_version_context()}]\n--- rendered ---\n{plain}"
     )
+
+
+def test_uncaught_rpc_error_is_one_line_not_a_traceback() -> None:
+    """`replay start/seek/pause/resume/stop` have no per-command handler; a
+    NOT_FOUND from the gateway used to escape as a Python traceback. The
+    top-level group now formats any uncaught RpcError and exits 1."""
+    fake_client = _fake_client()
+
+    class _NotFound(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.NOT_FOUND
+
+        def details(self):
+            return "trace id not found"
+
+    fake_client.replay.StartReplay = Mock(side_effect=_NotFound())
+    fake_client.replay.SeekReplay = Mock(side_effect=_NotFound())
+
+    with patch("boat_cli.main.BoAtClient", return_value=fake_client):
+        start = runner.invoke(app, ["replay", "start", "--trace", "missing"])
+        seek = runner.invoke(app, ["replay", "seek", "--tick", "1", "--replay-id", "r"])
+
+    for result in (start, seek):
+        assert result.exit_code == 1
+        assert "RPC error [NOT_FOUND]: trace id not found" in result.output
+        assert "Traceback" not in result.output
+        assert not isinstance(result.exception, grpc.RpcError)

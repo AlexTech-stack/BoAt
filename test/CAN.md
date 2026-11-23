@@ -172,26 +172,33 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 
 ---
 
-### TC_CAN_009_deprecated_wrapper_compat
+### TC_CAN_009_pdu_db_oneshot_send
 
-**TestSets:** [CAN], [CLI]
+**TestSets:** [CAN], [CLI], [PDU]
 
 **Preconditions:**
 - `candump vcan0` running
 
 **TestSteps:**
-1. Send a frame through the surviving wrapper:
-   `python3 -m boat --db boat-platform/config/pdu_db_example.json can send --msg Motor_1 --bus vcan0 --data AABBCCDD`
-   (note `--db` comes before the `can` subcommand). The `boat can` console
-   subcommand was removed outright in ABI v8 and no longer exists.
+1. From `boat-platform/sdk/python`, send a database-defined message through the
+   one-shot PDU-database tool:
+   `python3 -m boat --db ../../config/pdu_db_example.json can send --msg Motor_1 --bus vcan0 --data AABBCCDD`
+   (`--db` comes before the `can` subcommand). This is `boat/cmd.py`, a separate
+   tool from the `boat` console script, which has no `can` subcommand at all.
+2. `boat can --help`
 
 **Expected:**
-- The wrapper still works and produces the same on-bus result as `boat frame send`
-- Deprecation is indicated (help text or warning), pointing to `boat frame`
+- Step 1: one frame appears in `candump` with `Motor_1`'s CAN ID from the database
+  and payload `AABBCCDD`
+- Step 2: fails with Typer's "No such command 'can'" -- the removed `boat can`/`boat eth`
+  wrappers must not come back
 
 **Verdict:** NOT_TESTED
 
 **Result:**
+Rewritten for v0.2.0: the old case expected a deprecation warning from a "surviving
+wrapper", but `boat/cmd.py` is not deprecated and prints none, and `boat can` was
+removed outright (CLAUDE.md, invariant 6).
 
 ---
 
@@ -210,6 +217,30 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 **Expected:**
 - All 1000 frames arrive on the bus, no drops, gateway remains responsive
   (`boat frame list-ifaces` still answers during the burst)
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_CAN_011_tx_failure_reported
+
+**TestSets:** [CAN], [Error]
+
+**Preconditions:**
+- Gateway running with `BOAT_CAN_INTERFACES=vcan0`
+
+**TestSteps:**
+1. `sudo ip link set vcan0 down`
+2. `boat frame send --bus-type can --can-id 0x123 --iface vcan0 --data AABBCCDD; echo rc=$?`
+3. `sudo ip link set vcan0 up`, then repeat step 2
+
+**Expected:**
+- Step 2: `RPC error [UNAVAILABLE]: CAN transmit failed (driver rejected or timed out)`, `rc=1`
+  -- a failed transmit is no longer reported as success (#66)
+- Step 3: `Frame sent: bus_type=can iface=vcan0`, `rc=0`, frame visible in `candump`
+- `boat metrics get` afterwards still lists every `can.vcan0.*` series
 
 **Verdict:** NOT_TESTED
 

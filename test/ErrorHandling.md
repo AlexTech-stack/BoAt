@@ -33,3 +33,13 @@ behind, and the affected service stays alive.
 | TC_Tools_018_analyzer_invalid_input_errors | Tools.md | Bad paths/formats in analyzers |
 | TC_CLI_004_gateway_unreachable_error | CLI.md | CLI with no gateway |
 | TC_CLI_005_invalid_argument_handling | CLI.md | Malformed CLI arguments |
+| TC_Gateway_014_tls_and_mtls | Gateway.md | Plaintext/no-cert clients refused; half-configured TLS on either side |
+| TC_CAN_011_tx_failure_reported | CAN.md | Transmit on a downed interface reported as UNAVAILABLE, not success |
+| TC_Simulation_010_fault_inject_validation | Simulation.md | Unknown fault type, empty target, inverted tick range, zero delay, non-finite magnitude |
+| TC_Simulation_011_one_live_session | Simulation.md | Starting a second simulation while one is active |
+| TC_CanTp_016_ff_dl_4095_limit | CanTp.md | Payload above the 12-bit FF_DL limit |
+| TC_CanTp_017_malformed_flow_control | CanTp.md | Invalid Flow Status, truncated FC, FC(Wait) overrun |
+| TC_Replay_024_trace_id_validation | Replay.md | Path traversal / separators in a trace id |
+| TC_Replay_026_unknown_ids_clean_error | Replay.md | Unknown trace or replay id (no traceback) |
+| TC_LauncherAgent_010_loopback_bind_by_default | LauncherAgent.md | Empty bind value must not mean all interfaces |
+| TC_WebUIs_013_loopback_bind_by_default | WebUIs.md | Paths outside the config/trace roots |

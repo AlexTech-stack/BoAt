@@ -411,3 +411,55 @@ short (Single Frame) and the 20-byte (First Frame + 2 Consecutive Frames)
 cases succeeded on that one trigger, confirmed via `candump` and a log
 showing the self-heal ("send() raised (...); reconfiguring and retrying
 this trigger once...") followed by no further error.
+
+---
+
+### TC_WebUIs_013_loopback_bind_by_default
+
+**TestSets:** [WebUIs], [Error]
+
+**Preconditions:**
+- None of the UI ports in use
+
+**TestSteps:**
+1. `./start_ui.sh` and `./start_tools.sh`; `ss -ltn` for ports 8080-8089
+2. Restart one service with its bind override, e.g. `BOAT_DASH_BIND=0.0.0.0 python3 ui/dashboard.py`
+3. Request a path outside the allowed roots, e.g. `../../etc/passwd` and `/etc/passwd`, in:
+   the PDU Editor's load and save, the Trace Editor's load/save/export, a launcher or commander
+   PDU-database import, and a Recorder download (also try a sibling such as `traces_evil/x`)
+
+**Expected:**
+- Step 1: every service listens on `127.0.0.1` only (#96)
+- Step 2: that service listens on `0.0.0.0`; the others stay on loopback
+- Step 3: each is rejected with a 4xx and a readable message; nothing outside the config or
+  trace root is read or written. (The Trace and Eth Analyzers are not confined -- they only
+  read, and only files with a trace suffix; they rely on the loopback bind.)
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_WebUIs_014_dashboard_metrics_panel
+
+**TestSets:** [WebUIs]
+
+**Preconditions:**
+- Gateway with vcan0; dashboard running
+
+**TestSteps:**
+1. Open the dashboard; find the metrics panel
+2. Run `cangen vcan0 -g 1 -n 2000` (or a replay) and watch the panel
+3. Stop the gateway briefly and start it again
+
+**Expected:**
+- Step 1: the latest value per series from `MetricsService.StreamMetrics` -- `can.vcan0.*`,
+  `grpc.*.dropped`, `event_bus.dropped`, `event_store.dropped`/`write_errors` -- with the CAN
+  series highlighted (#28)
+- Any non-zero drop counter is visibly highlighted
+- Step 3: the panel reconnects without a page reload
+
+**Verdict:** NOT_TESTED
+
+**Result:**

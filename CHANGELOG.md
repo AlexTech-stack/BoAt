@@ -121,6 +121,11 @@ The plugin ABI is versioned separately from the project; see
   control lock, stalling Start/Stop too. Records now carry a sequence number and `Flush()` waits
   only for those accepted before it was called, written or dropped; read-your-writes is
   unchanged. Found while preparing v0.2.0; introduced with the asynchronous event store above.
+- **`boat replay start/seek/pause/resume/stop` printed a Python traceback on any gateway
+  error.** They had no RPC error handling, so an unknown trace or replay id surfaced as a full
+  traceback instead of a message. The top-level `boat` command group now catches any gRPC
+  error a subcommand did not handle and prints `RPC error [CODE]: details` with exit code 1,
+  and `replay import`/`stream` no longer dump the raw `_InactiveRpcError` repr.
 - **The packaged plugin header could not be compiled.** Packages installed
   `include/boat/plugin.h` but not the `boat/frame.h` it includes, so no out-of-tree plugin
   could build against an installed BoAt (`fatal error: boat/frame.h: No such file or

@@ -176,3 +176,111 @@ valid scenario available (`boat scenario list`).
 **Verdict:** NOT_TESTED
 
 **Result:**
+
+---
+
+### TC_Simulation_009_fault_inject_and_list
+
+**TestSets:** [Simulation], [CLI]
+
+**Preconditions:**
+- Gateway running; CLI connected
+
+**TestSteps:**
+1. `boat fault inject vehicle.speed --type stuck --tick 10 --end-tick 20 --magnitude 42`
+2. `boat fault inject vehicle.speed --type delay --tick 5 --delay-ticks 3`
+3. One fault of each remaining type: `noise`, `dropout`, `invert`
+4. `boat fault list`
+
+**Expected:**
+- Steps 1-3: each prints a row with a `fault-<n>` id, the target, type and tick window; a
+  single-tick fault (no `--end-tick`) shows `to` equal to `from`
+- Step 4: lists every injected fault with type, window, magnitude and delay
+- Aliases are accepted and map to the same wire type: `corruption` = `noise`,
+  `drop`/`packet-drop` = `dropout`
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_Simulation_010_fault_inject_validation
+
+**TestSets:** [Simulation], [CLI], [Error]
+
+**Preconditions:**
+- Gateway running; CLI connected
+
+**TestSteps:**
+1. `boat fault inject vehicle.speed --type bogus --tick 1`
+2. `boat fault inject '' --type stuck --tick 1`
+3. `boat fault inject vehicle.speed --type stuck --tick 20 --end-tick 10`
+4. `boat fault inject vehicle.speed --type delay --tick 1 --delay-ticks 0`
+5. `boat fault inject vehicle.speed --type noise --tick 1 --magnitude nan`
+
+**Expected:**
+- Every step exits 1 and injects nothing (`boat fault list` unchanged):
+  1. `unknown fault type 'bogus'; valid: corruption, delay, drop, dropout, invert, noise, packet-drop, stuck`
+  2. `RPC error [INVALID_ARGUMENT]: target must not be empty`
+  3. `end_tick must be greater than or equal to tick`
+  4. `RPC error [INVALID_ARGUMENT]: delay_ticks must be greater than zero for a delay fault`
+  5. `RPC error [INVALID_ARGUMENT]: magnitude must be finite`
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_Simulation_011_one_live_session
+
+**TestSets:** [Simulation], [Error]
+
+**Preconditions:**
+- Two scenarios uploaded: `boat scenario create --file boat-platform/config/scenarios/example.json`,
+  and a copy with `"id": "example_b"`
+
+**TestSteps:**
+1. `boat sim create --scenario example` (note id A), `boat sim create --scenario example_b` (id B)
+2. `boat sim start A`
+3. `boat sim start B; echo rc=$?`
+4. `boat sim list`
+5. `boat sim stop A`, then `boat sim start B`
+
+**Expected:**
+- Step 3: `RPC error [FAILED_PRECONDITION]: simulation 'A' is already active; stop or reset it
+  before starting another`, `rc=1`
+- Step 4: both rows report the one live session's state (they share one `SimulationContext`)
+- Step 5: B starts
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+`boat sim state`/`list` print the state as its `common.proto` enum number (1 = IDLE,
+2 = RUNNING, 3 = PAUSED, 4 = STOPPED, 5 = ERROR), not its name, although the help text says
+IDLE/RUNNING/PAUSED/STOPPED. Known; recorded as a v0.2.0 finding.
+
+---
+
+### TC_Simulation_012_reset_rewinds_tick
+
+**TestSets:** [Simulation]
+
+**Preconditions:**
+- A simulation created from `example`
+
+**TestSteps:**
+1. `boat sim start <id>`, wait ~1 s
+2. `boat --json sim watch <id>` for a moment (Ctrl-C) -- note the tick
+3. `boat sim reset <id>`
+4. `boat --json sim watch <id>` again; then `boat sim start <id>` and watch
+
+**Expected:**
+- Step 2: tick in the hundreds or more, `"state": 2` (RUNNING)
+- Step 4: `"tick": 0`, `"state": 1` (IDLE) right after reset; after start the tick counts up from 0 again
+  with no `tick must be monotonically increasing` INTERNAL error
+
+**Verdict:** NOT_TESTED
+
+**Result:**
