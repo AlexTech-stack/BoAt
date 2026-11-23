@@ -11,6 +11,30 @@ The plugin ABI is versioned separately from the project; see
 
 ## [Unreleased]
 
+## [0.2.0] — unreleased
+
+The "green and honest" release: the
+[v0.2.0 milestone](https://github.com/AlexTech-stack/BoAt/milestone/1). Bounded and observable
+gRPC streams, event store and EventBus; fault-injection, metrics and service wrappers in the SDK
+and CLI; hardened CanTp, TCP, replay and simulation lifecycles; a measured performance baseline;
+and the first **arm64** packages, built on a glibc 2.28 baseline so they install on older and
+non-Ubuntu distributions.
+
+**Upgrade notes.**
+
+- **BREAKING:** `ui/launcher_agent.py` binds `127.0.0.1` by default. An agent that a remote
+  `admin_gui` must reach needs `BOAT_AGENT_BIND=0.0.0.0` (or a LAN address). The web UIs and
+  tools likewise bind loopback unless their `BOAT_*_BIND` variable is set.
+- **Plugin ABI unchanged (v9)** -- existing plugins load without recompiling. `plugin.h` now
+  documents that `on_frame` may run concurrently from several RX threads and alongside
+  `on_tick`; a plugin with mutable state must synchronize it.
+- **Behaviour that changes results:** a scenario's `seed` is now honoured (#53); `InjectFault`
+  with `end_tick=0` is a one-tick window rather than two; only one simulation can be active at a
+  time, and `ResetSimulation` rewinds the tick to 0; trace ids are restricted to
+  `[A-Za-z0-9._-]+`; the TCP plugin's `retry_ms` is now only the initial RTO.
+- **The TCP plugin is experimental** (#117): nothing outside the unit tests can open a
+  connection yet.
+
 ### Added
 
 - **TCP state-machine tests and RFC 6298 adaptive RTO (#37, #36).**
@@ -96,7 +120,7 @@ The plugin ABI is versioned separately from the project; see
   `docs/api/protobuf-definitions.md` from `proto/boat/v1/`; a `doc-facts-in-sync` CI job fails
   when the committed document is stale. The hand-typed totals are no longer maintained
   anywhere in the docs.
-- **gRPC streaming is bounded, and its losses are visible.** Every streaming RPC hands each
+- **gRPC streaming is bounded, and its losses are visible** (#21). Every streaming RPC hands each
   subscriber a bounded drop-oldest queue (`BOAT_STREAM_QUEUE_CAPACITY`, default 4096, max
   1,000,000, recorded in the effective-config artifact) instead of buffering a slow client's
   backlog without limit; the metrics stream conflates latest-value-per-name instead. Overflow
@@ -111,8 +135,55 @@ The plugin ABI is versioned separately from the project; see
   both amd64 and arm64 (Raspberry Pi OS 64-bit, Jetson, Graviton, NXP i.MX8/S32G-class
   boards), not only an image.
 
+### Security
+
+Untrusted gRPC input could crash the gateway, leak its memory or write outside `/tmp`. The
+gRPC surface is still unauthenticated by default (`SECURITY.md`); these close holes behind it.
+
+- **Trace ids could escape `/tmp`** (#62). `ImportTraceData`, `ImportTraceDataStream` and
+  `TraceService.MarkStep` built `/tmp/<trace_id>.trace` from the client's id with only a
+  non-empty check, so `../../somewhere/x` wrote wherever the gateway could. Ids must now match
+  `[A-Za-z0-9._-]+`, be at most 128 characters and not be `.` or `..`; anything else is
+  `INVALID_ARGUMENT`.
+- **One `dlc` value leaked gateway stack memory to every subscriber** (#61). `FrameService`
+  narrowed a client's 32-bit `dlc` to 8 bits and `DispatchRx` then read `data + dlc` past the
+  copied payload -- up to 191 bytes of stack sent to every frame subscriber. The DLC is now
+  clamped to the payload actually copied.
+- **Large IP/UDP containers overflowed their buffer** (#60). `BuildUdpIpv4`/`BuildUdpIpv6`
+  computed 16-bit lengths that wrapped for big payloads and then copied the full payload into
+  the wrapped-size buffer; an empty `src_ip` was copied as four bytes. Payloads above the
+  IPv4/IPv6 UDP maximum (65,507 / 65,527 bytes) are now rejected, `ConfigureRoute` and both
+  send paths require 4- or 16-byte address pairs, and a builder that returns no packet fails
+  closed.
+- **A deeply nested scenario crashed the gateway** (#65). The recursive scenario-JSON parser
+  had no depth limit, so one `CreateScenario` call could overflow the stack. Nesting beyond 64
+  levels now fails with `JSON nesting too deep`.
+
 ### Fixed
 
+- **Resuming a paused replay no longer bursts** (#77). `Resume()` left the replay anchor where
+  it was, so every record that came due during the pause went out on the first tick after
+  resume. The anchor now shifts by the pause duration, measured from the first tick observed
+  paused.
+- **CanTp sent a wrong length for payloads over 4095 bytes** (#71). It announced a wrapped
+  12-bit First Frame length and then transmitted the whole payload, so the receiver reassembled
+  the wrong message while the sender reported success. `can_tp_send()` now rejects
+  `len > 4095` before publishing and `CanTpService.Send` returns `INVALID_ARGUMENT`; the
+  32-bit FF_DL escape is not implemented.
+- **The tick timers' `Stop()` raced the tick thread** (#46). `TimerfdTickTimer::Stop()` closed
+  the descriptor while the tick thread could be blocked in `read()` on it; `close()` does not
+  reliably wake that read, and the number can be recycled under it. `Stop()` now sets an
+  atomic flag and wakes the read by arming the timer 1 ns ahead, the descriptor is closed only
+  by the destructor after the owner joined, and `SleepTickTimer`/`VirtualTickTimer` got the
+  same stop/recheck treatment.
+- **Packages and the runtime image carried no license texts** (#84), although the binary
+  statically links gRPC and its dependencies. `LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES.md`
+  are installed to `share/doc/boat-platform/` and copied into the image, and the notices now
+  list gRPC's transitive libraries (Abseil, RE2, c-ares, zlib, BoringSSL, upb/utf8_range) and
+  the statically linked iceoryx2 core.
+- **`dbc2boatjson` scaled DBC Min/Max a second time** (#11). A DBC `[min|max]` range is already
+  physical, but the converter treated it as raw and re-applied factor and offset, so
+  `VehicleSpeed` 0/400 km/h became 0/4. It is now passed through unscaled.
 - **Event-store reads no longer block for as long as traffic flows.** `AsyncEventStore::Flush()`,
   which every `Query()` runs first, waited for the write queue to be *empty*. Any producer whose
   records arrived faster than one batch write (a running replay, for instance) kept it
@@ -370,6 +441,14 @@ The plugin ABI is versioned separately from the project; see
   administers this host from another machine must start the agent with
   `BOAT_AGENT_BIND=0.0.0.0`, on a trusted network; `SECURITY.md` names the exposure.
 
+### Removed
+
+- **The unimplemented `MF4` and `CSV` trace formats** (#29). `TraceRecord::Format` declared
+  both, but nothing ever read or wrote either -- `boat replay export` writes PCAPNG. Only the
+  implemented `BINARY` value remains, still `0`, so stored traces are unaffected. Internal
+  enum only; the protobuf API is unchanged.
+- **`demo/tcp_plugin/`** -- see the TCP entry under Changed.
+
 ### Documentation
 
 - **Platform support is now stated explicitly: the gateway is Linux-only, the clients are
@@ -533,6 +612,7 @@ record for anything before it.
   environment config now resolve against that file's own directory, and an unfindable
   `gateway.binary` raises instead of silently starting no gateway.
 
-[Unreleased]: https://github.com/AlexTech-stack/BoAt/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/AlexTech-stack/BoAt/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/AlexTech-stack/BoAt/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/AlexTech-stack/BoAt/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/AlexTech-stack/BoAt/releases/tag/v0.1.0

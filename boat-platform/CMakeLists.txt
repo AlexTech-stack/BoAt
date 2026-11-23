@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.24)
 
-project(boat_platform VERSION 0.1.1 LANGUAGES C CXX)
+project(boat_platform VERSION 0.2.0 LANGUAGES C CXX)
 
 # The gateway is Linux-only by design: SocketCAN/vcan, AF_PACKET, timerfd and
 # dlopen'd .so plugins have no Windows/macOS equivalent here, and no port is
