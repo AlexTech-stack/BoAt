@@ -196,7 +196,7 @@ endfunction()
 # configured against gRPC v1.65 still carry that edit and must have it reset
 # before they can update.
 boat_unpatch_dep(gRPC cmake/protobuf.cmake third_party/zlib/CMakeLists.txt)
-boat_unpatch_dep(iceoryx2 iceoryx2-ffi/c/CMakeLists.txt)
+boat_unpatch_dep(iceoryx2 iceoryx2-ffi/c/CMakeLists.txt iceoryx2-ffi/ffi/build.rs)
 
 # gRPC <= v1.65 needed cmake/protobuf.cmake patched: it read the well-known
 # .proto include dir off protobuf::libprotoc, which has none. v1.75 reads it
@@ -252,18 +252,58 @@ if(NOT _cargo_exe)
   message(FATAL_ERROR "cargo not found; install Rust via rustup first")
 endif()
 message(STATUS "Found cargo: ${_cargo_exe}")
+# Fix 3 (with the build.rs patch below): tell iceoryx2-ffi's build script where
+# to write the generated C header. It is passed iceoryx2's own
+# RUST_TARGET_DIR_FULL -- escaped, so it expands in that file's scope -- which is
+# exactly where ICEORYX2_C_INCLUDE_DIR expects iox2/iceoryx2.h.
+set(_iox2_header_env "BOAT_IOX2_HEADER_BASE=\${RUST_TARGET_DIR_FULL}")
 if(EXISTS "${_gcc_include_dir}/stddef.h")
     string(REPLACE
         "COMMAND cargo build"
-        "COMMAND \${CMAKE_COMMAND} -E env \"BINDGEN_EXTRA_CLANG_ARGS=-I${_gcc_include_dir}\" ${_cargo_exe} build"
+        "COMMAND \${CMAKE_COMMAND} -E env \"${_iox2_header_env}\" \"BINDGEN_EXTRA_CLANG_ARGS=-I${_gcc_include_dir}\" ${_cargo_exe} build"
         _iox2_content "${_iox2_content}")
 else()
     string(REPLACE
         "COMMAND cargo build"
-        "COMMAND ${_cargo_exe} build"
+        "COMMAND \${CMAKE_COMMAND} -E env \"${_iox2_header_env}\" ${_cargo_exe} build"
         _iox2_content "${_iox2_content}")
 endif()
 file(WRITE "${_iox2_c_cmake}" "${_iox2_content}")
+
+# Fix 3, the build script half. iceoryx2-ffi's build.rs locates the header's
+# output dir as OUT_DIR/../../../, assuming Cargo's build-script layout
+# <profile>/build/<pkg>-<hash>/out. Cargo 1.100 nests it one level deeper
+# (<profile>/build/<pkg>/<hash>/out), so the header landed in <profile>/build/
+# and every build on a current toolchain failed with
+# "fatal error: iox2/iceoryx2.h: No such file or directory". Prefer the
+# directory CMake passes in; keep the old traversal as the fallback for a bare
+# `cargo build` outside CMake.
+set(_iox2_build_rs "${iceoryx2_SOURCE_DIR}/iceoryx2-ffi/ffi/build.rs")
+file(READ "${_iox2_build_rs}" _iox2_build_rs_content)
+set(_iox2_rs_old [=[    let mut header_path = Path::new(&out_dir)
+        .join("../../../")
+        .canonicalize()
+        .expect("Path to iceoryx2 base dir for header generation");]=])
+set(_iox2_rs_new [=[    // Patched by BoAt's CMakeLists.txt: do not infer the output dir from
+    // Cargo's (version-dependent) OUT_DIR layout when CMake states it.
+    let mut header_path = match env::var("BOAT_IOX2_HEADER_BASE") {
+        Ok(base) => std::path::PathBuf::from(base),
+        Err(_) => Path::new(&out_dir)
+            .join("../../../")
+            .canonicalize()
+            .expect("Path to iceoryx2 base dir for header generation"),
+    };]=])
+string(FIND "${_iox2_build_rs_content}" "${_iox2_rs_old}" _iox2_rs_pos)
+if(_iox2_rs_pos EQUAL -1)
+  string(FIND "${_iox2_build_rs_content}" "BOAT_IOX2_HEADER_BASE" _iox2_rs_done)
+  if(_iox2_rs_done EQUAL -1)
+    message(FATAL_ERROR "iceoryx2-ffi/ffi/build.rs no longer matches the text BoAt patches "
+                        "(header output dir); re-check the patch after an iceoryx2 bump")
+  endif()
+else()
+  string(REPLACE "${_iox2_rs_old}" "${_iox2_rs_new}" _iox2_build_rs_content "${_iox2_build_rs_content}")
+  file(WRITE "${_iox2_build_rs}" "${_iox2_build_rs_content}")
+endif()
 add_subdirectory("${iceoryx2_SOURCE_DIR}" "${iceoryx2_BINARY_DIR}" EXCLUDE_FROM_ALL)
 
 boat_populate(sqlite3

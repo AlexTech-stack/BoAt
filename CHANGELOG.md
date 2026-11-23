@@ -197,6 +197,15 @@ gRPC surface is still unauthenticated by default (`SECURITY.md`); these close ho
   traceback instead of a message. The top-level `boat` command group now catches any gRPC
   error a subcommand did not handle and prints `RPC error [CODE]: details` with exit code 1,
   and `replay import`/`stream` no longer dump the raw `_InactiveRpcError` repr.
+- **The build failed on Rust/Cargo 1.100 and later** with `fatal error: iox2/iceoryx2.h: No
+  such file or directory`. iceoryx2-ffi's `build.rs` found its header directory as
+  `OUT_DIR/../../../`, which assumes Cargo's build-script layout; Cargo 1.100 nests `OUT_DIR`
+  one level deeper, so the generated header landed in `<profile>/build/` instead of where
+  iceoryx2's CMake looks for it. CI picked up 1.100 from the runner image, so every
+  `build-and-test` job broke without any change in BoAt -- and the release build, which takes
+  the same toolchain, would have too. The CMake patch step now passes the header directory to
+  `build.rs` explicitly (`BOAT_IOX2_HEADER_BASE`), with the old traversal kept as a fallback.
+  Verified with Cargo 1.98 and 1.100.
 - **The packaged plugin header could not be compiled.** Packages installed
   `include/boat/plugin.h` but not the `boat/frame.h` it includes, so no out-of-tree plugin
   could build against an installed BoAt (`fatal error: boat/frame.h: No such file or
