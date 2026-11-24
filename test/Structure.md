@@ -37,12 +37,13 @@ A TestCase may belong to multiple TestSets. For example, "Send CAN Frame via CLI
 
 **Expected:**
 - expected outcome
-
-**Verdict:** OK / NOK / INCONCLUSIVE / NOT_TESTED
-
-**Result:**
-comments, issue references, or empty
 ```
+
+A TestCase definition carries **no verdict and no result**. Those are recorded per
+campaign in `test/campaigns/<date>-<name>.yaml`, keyed by the TestCase id (see
+[TestSuite.md](TestSuite.md#recording-results) and the
+[workflow HOWTO](../tools/TEST_REPORT_HOWTO.md)). A definition changes only when the
+test itself changes; a campaign records what a particular run observed.
 
 ## Verdicts
 

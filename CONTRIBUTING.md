@@ -91,7 +91,7 @@ Be explicit about which you mean:
 | | What it is |
 |---|---|
 | `ctest` / `pytest` | Tests of the codebase itself. Add these. |
-| `test/*.md` | The **manual**, hand-verified release sign-off record. **Never** update these verdicts programmatically — they record what a human actually observed. |
+| `test/*.md` + `test/campaigns/*.yaml` | The **manual**, hand-verified release sign-off record: definitions in `test/*.md`, per-run verdicts in `test/campaigns/*.yaml` (via `tools/test_report.py`). **Never** update verdicts programmatically — they record what a human actually observed. |
 | `boat test run <manifest>` | An automated CI-style HIL suite runner, driven by an `EnvironmentConfig` + a `ManifestConfig`. |
 
 ## House rules

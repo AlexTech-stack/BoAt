@@ -27,14 +27,6 @@ one `ui/launcher_agent.py` reachable.
   defined yet), refreshing roughly every 2s
 - An unreachable host shows a hollow dot (○) instead of crashing the app
 
-**Verdict:** OK
-
-**Result:**
-Verified headlessly on real hardware (`agn-testcomputer`,
-`QT_QPA_PLATFORM=offscreen`, logic paths only — no real display/window
-manager exercised): `MainWindow` constructed, its background `PollWorker`
-pulled a real snapshot from a live agent within one poll cycle.
-
 ---
 
 ### TC_AdminGui_002_create_start_stop_via_ui_actions
@@ -58,18 +50,6 @@ pulled a real snapshot from a live agent within one poll cycle.
 - Log panel shows the gateway's stdout/stderr while running, including the
   `[Gateway] gRPC server listening on 0.0.0.0:<port>` line
 
-**Verdict:** OK
-
-**Result:**
-Verified headlessly on real hardware: drove the exact code paths a real
-user's clicks trigger — `AgentClient.create_instance()` (as the New Instance
-dialog's accept handler calls it) followed by the actual
-`MainWindow.stop_selected()` method against a table selection set to the new
-row. Instance transitioned stopped→running (real PID)→stopped
-(`exit_code: 0`). Log content itself not checked in this pass (covered
-already at the agent level by TC_LauncherAgent_002); UI's log-panel
-rendering not yet visually verified.
-
 ---
 
 ### TC_AdminGui_003_delete_refused_while_running
@@ -85,23 +65,6 @@ rendering not yet visually verified.
 **Expected:**
 - A warning dialog surfaces the agent's 409 rejection (`"... is running;
   stop it first"`); the instance keeps running
-
-**Verdict:** OK
-
-**Result:**
-Verified headlessly on real hardware, with a caveat worth recording: the
-first pass at this test auto-dismissed the confirmation `QMessageBox` via
-`.accept()`, which turned out to be a false positive -- `.accept()` sets the
-dialog's result code but not `clickedButton()`, so `QMessageBox.question()`
-read back `NoButton` (not `Yes`), and `delete_selected()` took its "not
-confirmed" early-return without ever calling `delete_instance()`. Fixed by
-clicking the dialog's actual `Yes` button object instead. Re-run with that
-fix: a repeating watchdog timer observed **two** modals in sequence during
-one `delete_selected()` call -- the confirmation ("Delete this instance
-definition?"), then, after it proceeded to the real `DELETE` call and got
-the agent's 409, a second dialog titled "Delete failed" with the exact
-agent message (`"... is running; stop it first"`). The instance was
-confirmed still `running` afterward via `GET /api/instances/{id}`.
 
 ---
 
@@ -125,16 +88,6 @@ confirmed still `running` afterward via `GET /api/instances/{id}`.
   identifying which; Start/Stop/Delete on a row act against the correct
   host's agent
 
-**Verdict:** OK
-
-**Result:**
-Verified headlessly on real hardware: ran two agents on the same host at
-different ports (8098, 8099) as a stand-in for two separate machines, added
-both, created one instance on each. The aggregated snapshot contained
-instances from both host URLs, and `win.rebuild_table()` produced exactly 2
-rows with distinct Host-column values (`host-a`, `host-b`) matching each
-instance's actual origin.
-
 ---
 
 ### TC_AdminGui_005_interfaces_and_plugins_columns
@@ -155,26 +108,6 @@ instance's actual origin.
   `iface` config shows it in brackets (`can_tp.so [vcan0]`), the one
   without shows just the basename (`pdu_router.so`)
 - Columns aren't truncated -- sized to their actual content
-
-**Verdict:** OK
-
-**Result:**
-Verified with a real screenshot on real hardware (`agn-testcomputer`, Xvfb +
-`QWidget.grab()`, not headless-only): created an instance with
-`can_ifaces=["vcan0","vcan1"]`, `eth_ifaces=["veth0"]`, and
-`node_plugins=[pdu_router.so (no config), can_tp.so ({"iface":"vcan0"})]`.
-Row rendered `Interfaces: vcan0, vcan1, veth0` and
-`Plugins: pdu_router.so, can_tp.so [vcan0]`, both fully visible after adding
-`resizeColumnsToContents()` (the initial pass truncated both columns under
-the default even-width split).
-
-Building this screenshot also incidentally caught a real, previously-latent
-bug unrelated to these columns: `AgentClient`'s default 5s timeout could be
-shorter than a stop call's worst-case server-side duration (SIGTERM + up to
-a 5s wait + SIGKILL fallback), so a real Stop click could read back a false
-timeout error even though the gateway did stop. Fixed by giving
-`start_instance`/`stop_instance` a dedicated 15s timeout — see
-`backlog/launcher_agent_backlog.md` for the full account.
 
 ---
 
@@ -208,28 +141,6 @@ timeout error even though the gateway did stop. Fixed by giving
 - `result_payload()`'s `can_ifaces`/`node_plugins` match exactly what was
   added via the pickers
 
-**Verdict:** OK
-
-**Result:**
-Verified with real screenshots on real hardware (`agn-testcomputer`,
-Xvfb): dropdowns were populated from a live `host_info()` call and included
-real interfaces (`vcan0`, `vcan1`, `can0`, `can1`, plus PDU-DB-imported
-ones) and real plugin paths (`can_tp.so`, `pdu_router.so`, etc.). Added
-`vcan0` (picked) and `vcan-manual-entry` (typed) to the CAN list -- both
-present. Added `can_tp.so` with `{"iface": "vcan0"}` and `pdu_router.so`
-with no config -- `plugin_picker.values()` returned exactly
-`[{"path": ".../can_tp.so", "config": {"iface": "vcan0"}}, {"path":
-".../pdu_router.so", "config": {}}]`. Invalid JSON (`{not valid json`)
-correctly showed a warning dialog and left the list unchanged.
-`result_payload()` matched the picker state exactly.
-
-The first screenshot attempt also caught a real layout bug: the plugin
-path combo, config field, and Add button crammed into one row left the
-config field showing only `"d json"` of its placeholder — fixed by
-stacking the path row and the config field onto separate lines; a second
-screenshot confirmed the fix (full paths and full placeholder text both
-visible).
-
 ---
 
 ### TC_AdminGui_007_edit_instance
@@ -255,21 +166,6 @@ visible).
 - The table row and the command-line panel both reflect the new name and
   the added interface immediately after
 
-**Verdict:** OK
-
-**Result:**
-Verified end-to-end on real hardware (`agn-testcomputer`, with a real
-screenshot): built the Edit dialog exactly as `edit_selected()` does for a
-real instance (CAN iface `vcan0` + a `can_tp.so` plugin with `{"iface":
-"vcan0"}`) and asserted every field pre-filled correctly -- host combo
-`isEnabled() == False`, name/CAN-picker/plugin-picker/port all matching
-the existing instance exactly. Added an Eth interface and a new name,
-submitted via `update_instance()` (the same call `edit_selected()` makes),
-then confirmed via `GET /api/instances/{id}` that the *same id* now carried
-the new name and eth interface while keeping its original CAN interface.
-Screenshot confirmed the table row showed `edited-name` with
-`vcan0, veth0` in Interfaces.
-
 ---
 
 ### TC_AdminGui_008_equivalent_command_line
@@ -293,21 +189,6 @@ Screenshot confirmed the table row showed `edited-name` with
 - Copy places exactly that text on the clipboard
 - Panel updates to reflect the edited config without needing to reselect
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: for an instance with `can_ifaces=["vcan0"]` and
-one plugin (`can_tp.so`, config `{"iface": "vcan0"}`) on port 50051, the
-panel read `BOAT_CAN_INTERFACES=vcan0 BOAT_GRPC_PORT=50051
-BOAT_NODE_PLUGINS=<path>/can_tp.so?{"iface":"vcan0"} <path>/boat_gateway` --
-asserted programmatically (not just visually) before and after an edit
-that added `eth_ifaces: ["veth0"]`; the post-edit panel text included
-`BOAT_ETH_INTERFACES=veth0` without any manual reselection needed (driven
-by `rebuild_table()` calling the same recompute on every poll refresh).
-Clipboard content itself not separately asserted (`_copy_command_line()`
-is a one-line `QApplication.clipboard().setText()` call on the same text
-already verified correct).
-
 ---
 
 ### TC_AdminGui_009_paste_command_line_to_fill
@@ -328,17 +209,6 @@ already verified correct).
   gateway binary) matches the pasted line exactly
 - The created instance's own "Equivalent command line" matches what was
   originally pasted (paste → parse → create → format round-trips)
-
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: pasted a line with `vcan0,vcan1`, port `50078`,
-and two plugins; `can_picker.values()`, `port_edit.text()`, and
-`plugin_picker.values()` all matched exactly after **Parse && Fill**.
-Created the instance from the parsed payload and confirmed
-`_format_command_line()` on the server's response still contained
-`BOAT_CAN_INTERFACES=vcan0,vcan1` and `BOAT_GRPC_PORT=50078` -- full
-round trip.
 
 ---
 
@@ -365,22 +235,6 @@ round trip.
   agent ... Stop still works"
 - Step 3 actually stops the manually-started process
 
-**Verdict:** OK
-
-**Result:**
-Verified end-to-end on real hardware with a screenshot: table showed
-`managed-two` (`Managed: Yes`, `vcan1`) and an externally-started gateway
-(`Managed: No`, `id: external:<pid>`, real `can0, vcan0` interfaces) side
-by side. Selecting the external row and calling
-`edit_selected()`/`start_selected()`/`delete_selected()` each produced the
-guard message (captured via a monkey-patched `QMessageBox.information`,
-three calls, all containing "wasn't started by this agent") without any
-of them reaching the network. Calling `stop_selected()` on that same row
-genuinely terminated the manually-started process, confirmed via
-`Popen.wait()` returning within the timeout. Log panel for the selected
-external row also correctly showed the server's friendly
-"log not captured" message rather than an error.
-
 ---
 
 ### TC_AdminGui_011_selection_cleared_when_selected_row_vanishes
@@ -406,38 +260,6 @@ external row also correctly showed the server's friendly
   to a tracked selection
 - After step 4: `_selected` matches A's actual id, and any action reads
   that real id -- never B's
-
-**Verdict:** OK
-
-**Result:**
-Found by the user's own manual testing, not a scripted check: create+start
-a managed instance, start an external one, stop the external one via the
-GUI (worked), then select what looked like the remaining row and click
-Stop -- got a "Stop failed" error naming the *previous* (already-stopped)
-external instance's pid, not the one actually selected on screen.
-
-Root cause: `rebuild_table()` repopulates rows inside
-`table.blockSignals(True)`. When the previously-selected id isn't in the
-new snapshot, the old code left `self._selected` untouched and never told
-Qt's selection model anything changed -- whatever row *index* was
-previously highlighted stayed highlighted with new data now underneath it,
-while `_selected` (what every action button actually reads) kept pointing
-at the vanished id. A real hazard, not just cosmetic: in a bigger table
-that stale id could coincidentally still resolve to a *different, still-
-live* instance, and an action would silently hit the wrong one with no
-error.
-
-Fixed by explicitly clearing both `table.clearSelection()` and
-`self._selected` when the previously-selected row isn't found during a
-rebuild. Verified on real hardware two ways: (1) reproduced the exact bug
-by temporarily reverting just this fix and re-running the deterministic
-test below -- it correctly *failed* (`_selected` stayed stale, a row
-stayed visually highlighted) -- then restored the fix and the same test
-passed; (2) the passing deterministic test itself: hand-crafted snapshots
-fed straight into `rebuild_table()` (no real subprocess/network timing
-involved -- a live-process version of this test hit repeated flakiness
-from SSH/agent round-trip latency in this environment) confirmed all four
-steps above.
 
 ---
 
@@ -473,86 +295,6 @@ steps above.
   -- confirmed per user request after the first pass of this feature
   auto-started them)
 
-**Verdict:** OK
-
-**Result:**
-Verified end-to-end on real hardware (`agn-testcomputer`) with a full
-round trip: created `session-inst-1` (`can_ifaces: [vcan0]`,
-`eth_ifaces: [veth0]`, `can_tp.so` with `{"iface": "vcan0"}`,
-`grpc_port: 50061`) and `session-inst-2` (`can_ifaces: [vcan1]`,
-`grpc_port: 50062`), plus an external process. `save_session()`'s output
-YAML contained exactly those two instances with every field matching, and
-no trace of the external one. Wiped the agent completely (stop+delete
-both, kill the external process, confirmed `GET /api/instances` empty).
-Constructed a **brand new** `MainWindow`/`HostStore` with zero hosts
-(simulating a different machine) and called `load_session()` on the saved
-file: zero errors, host added correctly, both instances recreated with
-`can_ifaces`/`eth_ifaces`/`node_plugins`/`grpc_port` all matching the
-original definitions exactly under **different** ids than the originals
-(recreated, not resumed) -- and, after the auto-start behavior was
-explicitly changed per user request, re-verified separately that a loaded
-instance's `status` is `"stopped"` with `pid: null` immediately after
-`load_session()` returns, not automatically running.
-
-**Update (2026-08-17):** extended to cover the Nodes tab per user request
-("include the nodes in the save/load session"). Verified two ways on real
-hardware (`agn-testcomputer`), the user's own live session confirmed
-untouched throughout: (1) headless, calling `session.py` directly against
-a live agent -- created one instance and one node
-(`script_path=can_tp_trigger_sender.py`, `target_host=localhost:50051`,
-`extra_args=[--iface, vcan0]`), saved, deleted both originals, reloaded --
-both recreated with every field matching exactly, `status: "stopped"`; (2)
-through real Qt code (`QT_QPA_PLATFORM=offscreen`) driving
-`MainWindow.save_session()`/`load_session()` with `QFileDialog`'s static
-methods monkeypatched to a fixed path so the actual button-click call
-path runs unattended -- identical result, plus confirmed the confirmation
-dialog reports both counts ("1 instance(s) and 1 node(s) created"). A
-leftover duplicate `HostStore` entry from earlier testing this session
-(two names pointing at the same physical agent) caused a confusing first
-pass with doubled counts on both instances and nodes -- not a bug in this
-feature, correct behavior for two distinct host entries that both happen
-to alias the same agent; cleaned up and re-verified cleanly with one host
-entry.
-
-**Update (2026-08-18):** extended to cover the Test Runs tab per user
-request ("Now wire it in so the tests can also be saved and loaded").
-`session.py`'s `load_session()` return tuple grew a `test_runs_created`
-count (a breaking signature change, its one call site in
-`MainWindow.load_session()` updated to match). Verified two ways on real
-hardware (`agn-testcomputer`), on an **isolated test agent (port 8097)**
--- deliberately not the usual 8090, since the user's own live agent was
-already running there; confirmed via `ps`/`ss` before starting anything,
-and confirmed untouched throughout: (1) headless, calling `session.py`
-directly -- created one instance, one node, and one test run
-(`manifest_path=config/tests/manifest_can_loopback.json`,
-`env_config_path=config/tests/env_can_loopback.json`,
-`extra_args=[--verbose]`), saved, wiped all three, reloaded -- all three
-recreated with every field matching exactly, `test_runs_created == 1`,
-`status: "stopped"`; (2) through real Qt code (`QT_QPA_PLATFORM=offscreen`)
-driving the real `MainWindow.save_session()`/`load_session()` handlers
-(`QFileDialog` statics monkeypatched to a fixed path). The real,
-unmodified save correctly also captured the user's own live host's own
-real definitions (including their own pre-existing test run) in the same
-file, since `save_session()` saves every configured host and that step is
-read-only; before exercising the real `load_session()`, the saved YAML
-was trimmed to just this test's isolated host entry first (so the load
-call -- itself untouched -- couldn't try to recreate the user's own
-managed definitions a second time against their live agent). Confirmed
-the captured info-dialog text read exactly "Session loaded: 0 new
-host(s) added, 1 instance(s), 1 node(s), and 1 test run(s) created", all
-three recreated under fresh ids, and the reloaded run visible in the real
-`test_run_table` widget. One real hang caught and fixed in the driver
-script (not a product bug): `save_session()`/`load_session()` end with a
-modal `QMessageBox.information()`/`.warning()` whose `.exec()` genuinely
-blocks the calling thread until dismissed -- true even under
-`QT_QPA_PLATFORM=offscreen` -- so with no user to click OK the first
-attempt hung indefinitely; fixed by monkeypatching `QMessageBox.
-information`/`.warning` to capture the message text instead of showing
-it. All test artifacts (instances, nodes, test runs, the isolated agent
-process, its host-store entry, session files) cleaned up afterward. Full
-account: `backlog/test_runner_backlog.md`'s "wired test runs into
-Save/Load Session" entry.
-
 ---
 
 ### TC_AdminGui_013_nodes_tab
@@ -584,31 +326,6 @@ Save/Load Session" entry.
   -- the refusal surfaces after submit); edit-while-stopped applies
   correctly
 
-**Verdict:** OK
-
-**Result:**
-Verified end-to-end on real hardware with real screenshots. New Node
-dialog's script dropdown listed `can_request_responder`/`cyclic_can_sender`;
-selecting `can_request_responder` showed its exact docstring first line.
-Filled `name=gui-responder`, `target_host=localhost:50057`, `extra_args`
-via the dialog's own fields, submitted through `result_payload()` →
-`create_node()`. Selected the new row via a real `node_table.selectRow()`
-click; `_selected_node` matched; the command-line panel read exactly
-`BOAT_HOST=localhost:50057 python3 .../can_request_responder.py --iface
-vcan0 --request-id 0x7E0 --response-id 0x7E8 --response-data 5001`.
-`start_node_selected()` started it; sending a CAN request to the target
-gateway produced the correct reply on the wire (`candump`), confirming the
-node was genuinely functioning, not merely "running". Calling
-`update_node()` directly while running returned 409 (mentioning "running");
-`stop_node_selected()` stopped it cleanly (`exit_code: 0`); the Edit
-dialog, reopened on the now-stopped node, pre-filled every field correctly
-(host combo disabled, name/target host/extra args all matching), and
-submitting a rename via its own `result_payload()` applied correctly.
-Screenshots confirmed both the Nodes tab (rich node row: script, target
-host, extra args, live log showing the actual request/reply exchange) and
-the Gateways tab (rich gateway row: multiple interfaces, two plugins) with
-tab switching working and no regression to the existing Gateways tab.
-
 ---
 
 ### TC_AdminGui_014_node_target_gateway_dropdown_and_paste
@@ -636,27 +353,6 @@ tab switching working and no regression to the existing Gateways tab.
 - Step 5: Target gateway/Script/Extra args all populated correctly from
   the parsed line; submitting creates a node matching it exactly
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware. Dropdown listed both a `running` and a
-`stopped` instance with correct labels. The **first** attempt at step 2
-caught a real bug: `result_payload()` read `target_host_combo.
-currentText()` directly, which for a picked item is the full label
-(`"main — localhost:50051 (running)"`), not the stored address -- the
-payload's `target_host` came back as that whole label. Fixed by only
-trusting `currentData()` when the displayed text still matches the
-selected index's own label (i.e. nothing was retyped after picking);
-re-verified and the payload then correctly held plain `localhost:50051`.
-Bare port `"50052"` normalized to `"localhost:50052"`; explicit
-`"otherhost:50099"` passed through unchanged. `_parse_node_command_line()`
-correctly handled both the full form (`BOAT_HOST=...` prefix + `python3` +
-a quoted `"AA BB"` arg, which correctly stayed one token) and a bare
-`<script> <args>` form with neither prefix present. Pasting a real
-formatted command line and clicking **Parse && Fill** populated Target
-gateway/Script/Extra args exactly; creating a node from that payload via
-`create_node()` matched the original definition field-for-field.
-
 ---
 
 ### TC_AdminGui_015_node_target_gateway_spans_all_hosts
@@ -682,27 +378,6 @@ gateway/Script/Extra args exactly; creating a node from that payload via
 - Step 2: roles flip -- now the second agent's gateway is the untagged
   `localhost` entry, the first agent's is the tagged cross-host one
 - Step 3: `target_host` in the payload is the real cross-host address
-
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware (`agn-testcomputer`): two agents on one physical
-box, deliberately addressed via a real IP (`10.10.7.175`) and the real
-hostname (`agn-testcomputer`) rather than `localhost`, specifically so the
-test could tell "genuinely resolved cross-host address" apart from "just
-happened to also say localhost." With Host = agent A: agent A's own
-gateway showed as `on-A — localhost:50051 (running)` (untagged); agent B's
-showed as `[host-B] on-B — agn-testcomputer:50052 (running)` (tagged, real
-hostname, not `localhost`). Switching Host to agent B flipped it exactly:
-agent B's gateway became the untagged `localhost:50052` entry, agent A's
-became `[host-A] on-A — 10.10.7.175:50051` (its real IP). Picking that
-cross-host entry produced `result_payload()["target_host"] ==
-"10.10.7.175:50051"` exactly. Bonus observation, not a bug: each agent's
-own external-gateway discovery also picked up the *other* agent's gateway
-process as an `(unmanaged)` entry (expected, since `/proc` scanning isn't
-scoped per-agent) -- these appeared in the dropdown too, which is correct:
-a real running gateway is a valid target regardless of which agent (if
-any) manages it.
 
 ---
 
@@ -737,34 +412,6 @@ any) manages it.
   fields; Extra args shows only `--not-a-real-flag xyz`
 - Step 4: the Script arguments group is empty/hidden; Extra args remains
   the only way to pass anything -- no crash, no error
-
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware (`agn-testcomputer`) via two throwaway Qt
-driver scripts run under a real Xvfb + `xcb` platform (not offscreen),
-screenshotted with `QWidget.grab()`. Step 1: agent's `/api/node-scripts`
-correctly introspected both real node scripts' `build_parser()` output
-via `importlib`, e.g. `cyclic_can_sender`'s six non-`--address` arguments
-with correct types/defaults (`--cycle-ms` default `1000` as an `int`,
-`--fd`/`--brs` as `is_flag: true`); the dialog rendered one field per
-argument, `--data`'s placeholder correctly fell back to its help text
-("Payload as hex bytes, e.g. AABBCCDD (empty = 0-byte frame)") since its
-default is `""`. Steps 3: created a node via `create_node()` with
-`extra_args=["--iface","vcan1","--cycle-ms","250","--fd",
-"--not-a-real-flag","xyz"]`, reopened it via `NewNodeDialog(existing=...)`
--- `_arg_widgets["--iface"].text() == "vcan1"`,
-`_arg_widgets["--cycle-ms"].text() == "250"`,
-`_arg_widgets["--fd"].isChecked() is True`,
-`_arg_widgets["--brs"].isChecked() is False` (untouched), and
-`extra_args_edit.text() == "--not-a-real-flag xyz"` -- exactly the
-recognized/leftover split described in `admin_gui/README.md`. Screenshots
-confirmed both dialogs visually match (see
-`admin_gui/docs/new_node_dialog.png` for the New Node case). Step 4 not
-separately screenshotted but covered by `_rebuild_arg_fields()`'s
-`specs = specs or []` guard and `_introspect_node_args()`'s broad
-`except Exception: return []` on the agent side, already exercised
-in practice by every script that predates this feature.
 
 ---
 
@@ -802,32 +449,6 @@ in practice by every script that predates this feature.
 - Step 4: the Plugin config group is empty/hidden -- the flat JSON config
   field remains the only way to configure it, unregressed
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware (`agn-testcomputer`) via a scratch agent
-instance (isolated from the reporting user's own live agent/gateway
-throughout, confirmed via `ps`/`ss` before and after) and a real Qt render
-(Xvfb + `xcb`, screenshotted via `QWidget.grab()`, not offscreen). Step 1:
-all ten `tcp.so` fields rendered with correct placeholders. Step 2:
-`mode` rendered as a real `QComboBox` pre-selected to `"both"`; `buses`
-showed `e.g. can`. Step 3: filling `iface="veth0"`, `retry_ms="500"`,
-unchecking `nagle`, then **+ Add** produced exactly `{"iface": "veth0",
-"nagle": false, "retry_ms": 500}` -- `retry_ms` a real JSON int. A first
-attempt at this step caught a real bug: `add_current()` was calling the
-same field-rebuild used on combo-selection-change defensively right
-before reading values, which destroyed and recreated every widget first,
-silently discarding whatever was just entered (`nagle` came back `true`
--- the schema's own default -- despite explicitly unchecking it, and
-`iface`/`retry_ms` were missing entirely). Fixed by removing that call;
-re-running this exact step afterward produced the correct dict. Step 4:
-confirmed `pdu_router.so` (and every legacy `.so` with no current CMake
-target) shows an empty/hidden Plugin config group, per `/api/host/info`
-returning `"config_schema": {}` for them (`_introspect_plugin_config()`'s
-missing-sidecar-file path). Full account in
-`backlog/launcher_agent_backlog.md`'s "plugin config schema fields"
-entry.
-
 ---
 
 ### TC_AdminGui_018_test_runs_tab
@@ -864,43 +485,6 @@ entry.
 - Step 5: shows the run's real `report_dir`, relative to `boat-platform/`
   on the agent's host
 
-**Verdict:** OK
-
-**Result:**
-Verified twice on real hardware (`agn-testcomputer`), on an isolated
-scratch agent (port 8090) + Xvfb (`:44`), confirmed via `ps`/`ss` not to
-disturb the user's own live agent/gateway throughout. First via raw
-`curl` against the agent directly (manifest/environment discovery,
-create, start, watched `status`→`stopped`/`result`→`PASS`, confirmed real
-`report.json`/`report.junit.xml`/`report.html`/`stdout.txt` written to
-disk, `extra_args` reaching the invocation, delete) before touching Qt at
-all. Then through the actual Qt code path (`QT_QPA_PLATFORM=xcb`, a
-throwaway driver script, not committed): constructed a real `MainWindow`,
-confirmed the Test Runs tab's 9 columns exactly. Opened `NewTestRunDialog`
-non-modally -- Manifest dropdown showed `can-loopback-routing-suite  (1
-test(s))`; selecting it auto-selected `can-loopback-routing
-(localhost:50067)` in the Environment dropdown, `currentData()` correctly
-ending in `env_can_loopback.json`. Submitted via the same
-`result_payload()` → `AgentClient.create_test_run()` call path
-`new_test_run()` itself makes, selected the resulting row via a real
-`test_run_table.selectRow()`, and called the real
-`start_test_run_selected()` method. Polled (2s cadence, same
-`PollWorker`) until the table showed `Result: PASS`/`Status: stopped`
-(~3s later): real HIL log content in the viewer (`[test] Gateway at
-localhost:50067`, `TC_CANLOOP_001: PASS (1334ms)`, `Results: 1/1 passed,
-0 failed`), report-dir field showing `reports/admin_gui/<id>`.
-Screenshots confirmed both the populated dialog (manifest/environment doc
-labels rendering correctly underneath each dropdown) and the passing tab
-row. All test artifacts (test runs, `reports/admin_gui/`, the scratch
-agent process, Xvfb, the driver script) cleaned up afterward. One test-script
-bug caught and fixed along the way, not a product bug: the driver's first
-pass treated the run's initial (never-started) `status: "stopped"` as
-"finished," racing ahead of the real completion -- fixed by waiting for a
-non-`None` `result` instead of the `"stopped"` status text, since a
-freshly-created run is also reported `"stopped"` before it's ever started.
-Full account: `backlog/test_runner_backlog.md`'s "admin_gui Test Runs
-tab" entry.
-
 ---
 
 ### TC_AdminGui_019_test_run_report_viewer
@@ -925,30 +509,6 @@ tab" entry.
   verdict, duration, and which artifact files (`report.html`/`.junit.xml`/
   stdout/stderr) exist alongside it
 - Refresh re-fetches without needing to reopen the dialog
-
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware (`agn-testcomputer`), on an isolated test agent
-(port 8097, the user's own live agent confirmed on 8090 and never
-touched), two ways. First via `curl` directly against
-`GET /api/test-runs/{id}/report`: `{"exists": false, "tests": []}` before
-starting (empty `report_dir`); a real parsed `report.json` after
-finishing, with the environment snapshot, execution timing, and verdict
-all present and correctly shaped; a 404 for an unknown run id. Then
-through the real Qt code path (Xvfb + `xcb`, a throwaway driver script,
-not committed): created and started a real test run through the actual
-agent, constructed the real `TestReportDialog` class against it (same
-class the **View Report** button opens), and confirmed
-`summary_label.text()` read `reports/admin_gui/<id> — 1/1 passed`, the
-tree held exactly one row (`TC_CANLOOP_001`, `PASS`, `1361ms`), and the
-detail pane's text included the real test description, `Verdict: PASS`,
-and `Also on disk in this folder (agent's host): report.html,
-report.junit.xml, stdout.txt`. A screenshot confirmed the tree (PASS row
-rendered in green) and detail pane visually. All test artifacts (test
-run, `reports/admin_gui/`, the isolated agent process, Xvfb, driver
-script) cleaned up afterward. Full account: `backlog/test_runner_backlog.md`'s
-"test report content viewer" entry.
 
 ---
 
@@ -1001,74 +561,6 @@ script) cleaned up afterward. Full account: `backlog/test_runner_backlog.md`'s
   the same up/down state it was in before the dialog was opened (down, in
   this case, since Down was pressed first)
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware (`agn-testcomputer`), on an isolated test agent
-(port 8098 -- the user's own live agent was on the usual 8090 and their
-own gateway was actively using real `can0`/`can1`, both confirmed via
-`ps`/`ss` and never touched throughout), two ways. First via `curl`
-directly: confirmed `operstate`/`lower_up` fields present; created,
-brought down, brought up, and deleted a test vcan; confirmed CAN config
-against it failed cleanly (`RTNETLINK answers: Operation not supported`
--- exercising the negative path deliberately, since the positive path
-needs real hardware and the box's live `can0`/`can1` were off-limits).
-This surfaced a real bug: a 15-character veth name's auto-generated
-`_peer` suffix produced a 20-character name, over Linux's `IFNAMSIZ`
-limit, previously failing with `ip`'s own cryptic `"name" not a valid
-ifname` -- fixed with server-side + live client-side validation (see
-`backlog/launcher_agent_backlog.md`'s "Interfaces tab" entry), re-verified
-after the fix with both a rejected too-long name and a real, valid veth
-pair created/confirmed/deleted (both ends removed together). Then through
-the real Qt code path (Xvfb + `xcb`, a throwaway driver script, not
-committed): confirmed the table's 6 columns; drove the real
-`NewInterfaceDialog` and confirmed its live peer-name warning text and
-`result_name()`'s client-side rejection; created a real vcan through the
-same call path `new_vcan()` makes, toggled it down/up through the real
-handlers (`QMessageBox.question` monkeypatched to auto-confirm) with the
-Up column updating correctly each time via the real poll cycle; opened
-the real `CanConfigDialog` and confirmed the same negative-path
-rejection; created and deleted a real veth pair through the dialog,
-confirming both rows appeared and disappeared together. A screenshot
-confirmed the table renders correctly, including real physical
-`can0`/`can1` shown read-only and unmodified alongside virtual
-interfaces. No unexpected info/warning dialogs fired during the run
-(asserted explicitly). All test artifacts cleaned up afterward. Full
-account: `backlog/launcher_agent_backlog.md`'s "Interfaces tab" entry.
-
-**Update (2026-08-18):** step 7 added and exercised for real by the user
-directly, on their own live `can0` (a PEAK PCAN-USB Pro FD already
-running CAN FD at 500000/2000000) -- Down, Configure CAN…, change
-bitrate, uncheck CAN FD, submit. This found two real bugs on the first
-real attempt: the dialog showed 500000/no-FD as if that were the current
-config (it was hardcoded placeholders, unrelated to the interface's
-actual FD/500000/2000000 state), and after submitting a 250000/no-FD
-change, `ip -details link show can0` showed `bitrate 250000` correctly
-applied but `<FD>` and `dbitrate 2000000` still present, and the
-interface back `up` despite Down having just been pressed. Root-caused
-(`ip -d -j link show`, structured JSON) to: (1) `CanConfigDialog` never
-fetched real interface state at all; (2) the CAN netlink interface only
-updates fields a `type can` message explicitly includes, and the
-original endpoint never sent `fd off`, only ever `fd on` when requested,
-so unchecking FD against an already-FD interface left FD genuinely
-untouched; (3) the endpoint always forced the interface back `up`
-regardless of its state beforehand. All three fixed (`GET
-/api/interfaces/{name}/can-config` for real prefill, `fd` always sent
-explicitly, prior up/down state restored instead of forced `up`) and
-re-verified directly against `can0` itself (the same interface used to
-find the bugs, since the positive path fundamentally needs real CAN
-hardware): brought it down, applied `fd: false`, confirmed via `ip -d -j
-link show` (ground truth, not the agent's own response) that `ctrlmode`
-and `data_bittiming` were both gone entirely and the interface stayed
-down; then restored the original `500000/2000000/fd: true` config with
-the interface brought back up first, confirming the final `ip -details
-link show can0` matched the user's own original (pre-incident) output
-character-for-character. `CanConfigDialog`'s pre-fill logic itself
-verified separately with three widget-construction cases (real FD state,
-classic CAN state, no current state available) -- all three correct.
-Full account: `backlog/launcher_agent_backlog.md`'s "Configure CAN found
-and fixed two real bugs on real CAN FD hardware" entry.
-
 ---
 
 ### TC_AdminGui_021_dark_theme_sidebar_redesign
@@ -1101,61 +593,6 @@ and fixed two real bugs on real CAN FD hardware" entry.
 - Settings' host management works identically to the old top-bar version
   it replaced -- moving it didn't change its behavior, only its location
 
-**Verdict:** OK
-
-**Result:**
-User provided a mockup image (sidebar nav, dark navy theme, blue/red
-accent buttons, colored status badges) and asked for the UI to be
-adapted to match it. Clarified scope first (three questions, all
-answered with the recommended option): Settings holds host management
-(moved off the always-visible top bar it used to occupy); the dark theme
-applies everywhere (all pages + all dialogs), not just the shell shown in
-the mockup; colors approximated directly from the mockup image rather
-than guessing.
-
-Implementation: `QListWidget`+`QStackedWidget` sidebar replacing
-`QTabWidget` (full control over icon/selected-item styling a tab bar
-can't easily reach); a single `_DARK_STYLESHEET` applied once via
-`QApplication.setStyleSheet()`; a `_mark()` helper tagging buttons with a
-`primary`/`danger` Qt dynamic property the stylesheet's
-`QPushButton[class="..."]` selectors key off of, applied to every
-Start/OK (blue) and Stop/Down/Delete (red) button across all four
-data pages and all five dialogs; colorized Managed/Status/Result/Up
-cells via small helper functions (`_process_status_color()`,
-`_bool_color()`, reusing the existing `_VERDICT_COLORS` dict from the
-Test Report dialog, itself re-tuned to the new dark palette). Host
-management (host list, Add/Remove Host, Save/Load Session) moved from
-the old always-visible top bar into a new Settings page.
-
-Verified on real hardware (`agn-testcomputer`), on the user's own
-configured host (read-only -- never created/modified/deleted anything):
-a throwaway Qt driver script (Xvfb + `xcb`, not committed) constructed a
-real `MainWindow`, clicked through all five sidebar pages, and
-screenshotted each one plus a real dialog (`NewInstanceDialog`). All
-five nav labels/icons render correctly with no missing-glyph boxes
-(`▤ Gateway`, `◈ Nodes`, `✓ Test Runs`, `⇄ Interfaces`, `⚙ Settings`);
-real data (real gateway instances, nodes, test runs, and interfaces
-including physical `can0`/`can1`, untouched) rendered correctly styled
-in every table; Start/OK buttons blue, Stop/Down/Delete buttons red,
-Managed "Yes" green; the dialog matched the dark theme throughout with
-no light-mode popup. Screenshots also used to regenerate
-`admin_gui/docs/screenshot.png`, `new_instance_dialog.png`,
-`nodes_tab.png`, `new_node_dialog.png` (the previously-committed ones
-were from the old light-mode/tab-bar layout, now stale). All test
-artifacts (screenshots not meant for the repo, Xvfb, driver scripts)
-cleaned up afterward.
-
-**Update (2026-08-19):** after trying it, user asked for host management
-(Add/Remove Host, Save/Load Session) to move from Settings back to the
-top of the Gateway page, with Settings left genuinely empty for now.
-Verified on real hardware (`agn-testcomputer`), read-only: a throwaway Qt
-driver script confirmed the Gateway page's host list shows real data (1
-configured host) with both button rows present at the top, and the
-Settings page renders as a blank page with no widgets. `screenshot.png`
-regenerated again to match; the dialog and Nodes-page screenshots were
-unaffected by this move. Full account: `backlog/launcher_agent_backlog.md`'s
-dark-theme entry, "continued" update.
-
 ---
 
 ### TC_AdminGui_022_can_config_column
@@ -1185,33 +622,6 @@ dark-theme entry, "continued" update.
   with fake 500000/no-FD defaults opens
 - Step 4: the real Configure CAN dialog opens as before, pre-filled from
   the interface's actual current state
-
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware (`agn-testcomputer`), strictly read-only (the
-box had two live gateways, `launcher_agent`, and four other `ui/*.py`
-services all running at once at the time -- confirmed via `ps`/`ss`
-before and after, an isolated test agent used throughout, no
-create/delete/up/down/configure calls made against anything real). First
-via `curl` directly against `GET /api/interfaces`: `can0`/`can1` (the
-user's own current real config, left exactly as found) returned full
-`can_config` with correct `sample_point_pct` (87.5/75.0) and all
-seg/sjw fields for both nominal and FD data phases; `vcan0`/`veth0`/`lo`
-all correctly returned `can_config: null`; the separate flat
-`GET .../can-config` endpoint (dialog prefill) confirmed unchanged after
-the underlying refactor. Then through the real Qt code path (Xvfb +
-`xcb`, a throwaway driver script, not committed): confirmed the table's
-7 real columns; confirmed `can0`'s real cell text
-(`"250000 bps, 87.5% SP / FD 2000000 bps, 75.0% SP"`) and tooltip
-content; confirmed `vcan0` read `"virtual"` and `veth0`/`lo` read `"—"`;
-selected `vcan0` and called the real `configure_can_selected()`,
-confirming exactly one captured info message and that `CanConfigDialog`
-was never constructed. A screenshot confirmed the column renders
-correctly across every interface type present. All test artifacts
-cleaned up afterward; every one of the user's own live processes
-confirmed running under the same PIDs afterward. Full account:
-`backlog/launcher_agent_backlog.md`'s "CAN Config column" entry.
 
 ---
 
@@ -1244,43 +654,6 @@ confirmed running under the same PIDs afterward. Full account:
 - Step 5: **Node tick (ms)** updates to the pasted value, **Node tick
   (µs)** stays blank
 
-**Verdict:** OK
-
-**Result:**
-Followed a request to audit the gateway's full environment-variable
-surface first (a source grep of every `getenv()` call in `main.cpp` +
-`replay_engine.cpp`, confirming 9 total including three genuinely
-undocumented TLS vars the user then said weren't needed for now) --
-this test case covers the follow-up: adding dedicated Node tick fields
-to the New/Edit Instance dialog, previously only reachable via a paste
-that silently dropped the value (no field existed to hold it, and
-`result_payload()` never included it, even though the agent-side
-`create_instance()`/`update_instance()` already accepted it). Also
-corrected a naming mix-up in the request itself: the real variable is
-`BOAT_NODE_TICK_US` (microseconds), not `_NS` (nanoseconds) -- confirmed
-against the actual `getenv()` call, and implemented with the real name.
-
-Verified on real hardware (`agn-testcomputer`), on an isolated test
-agent (the box had `launcher_agent` and four other `ui/*.py` services
-running at the time, confirmed via `ps`/`ss` and left untouched; no
-gateway processes were running, so nothing else needed avoiding): a
-throwaway Qt driver script (Xvfb + `xcb`, not committed) confirmed a
-fresh dialog's fields read `"1"`/`""` and `result_payload()` returned
-`{"tick_ms": 1, "tick_us": None}`; created a real instance through the
-isolated agent and confirmed the stored `tick_ms`/`tick_us` matched;
-reopened it in Edit mode and confirmed `"1"`/`""` pre-filled from the
-*saved* instance, not just the constructor default; changed `tick_us`
-to `500` and confirmed the real update persisted it; pasted a line with
-`BOAT_NODE_TICK_MS=5` and confirmed **Parse && Fill** populated the
-`ms` field with `"5"` (previously silently dropped, since the field
-didn't exist). A screenshot confirmed the fields and note render
-correctly, and was used to regenerate the stale
-`admin_gui/docs/new_instance_dialog.png`. Test instance and all test
-artifacts cleaned up afterward; every one of the user's own live
-processes confirmed running under the same PIDs afterward. Full
-account: `backlog/launcher_agent_backlog.md`'s "audited the gateway's
-full env var surface, added Node tick fields" entry.
-
 ---
 
 ### TC_AdminGui_024_adopt_external_gateway
@@ -1300,7 +673,3 @@ full env var surface, added Node tick fields" entry.
 - Step 2: the row turns managed, keeps its pid/port, and the gateway keeps running
 - Step 3: behaves as TC_LauncherAgent_011 step 4; an agent error is shown in an
   "Adopt failed" message box, not swallowed
-
-**Verdict:** NOT_TESTED
-
-**Result:**

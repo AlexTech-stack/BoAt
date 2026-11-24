@@ -21,10 +21,6 @@ driver selection, plugin loading, tick configuration, and shutdown.
 - Gateway starts without error and logs that it is serving gRPC on `0.0.0.0:50051`
 - `list-ifaces` shows `vcan0` as a CAN interface using the virtual driver
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Gateway_002_start_with_multiple_interfaces
@@ -40,10 +36,6 @@ driver selection, plugin loading, tick configuration, and shutdown.
 
 **Expected:**
 - Both interfaces are listed and usable (a frame can be sent on each)
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -65,10 +57,6 @@ driver selection, plugin loading, tick configuration, and shutdown.
   `vcan0` with the virtual driver
 - No error at startup; both interfaces accept frames
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Gateway_004_start_with_ethernet_interface
@@ -84,10 +72,6 @@ driver selection, plugin loading, tick configuration, and shutdown.
 
 **Expected:**
 - `veth0` is listed as an Ethernet interface
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -108,10 +92,6 @@ driver selection, plugin loading, tick configuration, and shutdown.
   (CAN-TP bound to `vcan0`)
 - `boat plugin list` shows both plugins as loaded
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Gateway_006_v7_plugin_rejected
@@ -128,10 +108,6 @@ driver selection, plugin loading, tick configuration, and shutdown.
 - The plugin is rejected at load with a clear error message naming the ABI version mismatch
 - The gateway either continues without the plugin or exits with a diagnostic — it must not
   crash or load the plugin partially
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -151,10 +127,6 @@ driver selection, plugin loading, tick configuration, and shutdown.
 - Cyclic frames appear at the configured cycle time within tick resolution
 - When both variables are set, `BOAT_NODE_TICK_US` takes precedence
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Gateway_008_graceful_shutdown
@@ -172,17 +144,6 @@ driver selection, plugin loading, tick configuration, and shutdown.
 - Gateway shuts down cleanly (plugins unloaded, no crash, exit code 0 or documented signal exit)
 - Restart succeeds — no leaked sockets ("address already in use") or stale lock files
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware (`agn-testcomputer`): a gateway with `vcan0` and
-a connected gRPC client, stopped via `kill` (SIGTERM/SIGKILL rather than
-literal Ctrl+C, equivalent for this check), restarted immediately with the
-identical configuration on the same port — bound and started listening
-right away, no "address already in use" refusal. This specifically
-exercises the fix in TC_Gateway_012 below; see that case for the bug this
-used to hit and its root cause.
-
 ---
 
 ### TC_Gateway_009_missing_interface_error
@@ -197,10 +158,6 @@ used to hit and its root cause.
 
 **Expected:**
 - A clear error naming the missing interface (not a crash or silent success)
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -223,13 +180,6 @@ used to hit and its root cause.
 - Both remain independently reachable at their respective ports; neither
   affects the other
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: both instances started, both logged their correct
-port, both stayed alive, and a CLI client reached each one specifically via
-`--host localhost:<port>`.
-
 ---
 
 ### TC_Gateway_011_refuses_duplicate_port_binding
@@ -248,17 +198,6 @@ port, both stayed alive, and a CLI client reached each one specifically via
   error naming the port and suggesting `BOAT_GRPC_PORT` for an intentional
   second instance
 - The first instance is completely unaffected
-
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: second instance printed `[Gateway] ERROR: port
-50051 is already in use by another process...` and exited with code 1; the
-first instance remained alive throughout. Before this fix, gRPC's
-`SO_REUSEPORT` meant the second instance would have started "successfully"
-and silently split traffic with the first (see
-`backlog/gateway_backlog.md`'s now-resolved item) -- this test specifically
-guards against that regression.
 
 ---
 
@@ -290,28 +229,6 @@ guards against that regression.
   `backlog/gateway_backlog.md`'s "second gateway silently shares a port"
   issue coming back)
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware (`agn-testcomputer`). Before the fix: killed a
-gateway with an active client connection, confirmed via `ss -tan` a
-lingering `[::1]:<port>` connection in `TIME-WAIT`, and a same-port restart
-attempt failed with `[Gateway] ERROR: port <port> is already in use...` for
-up to ~60s even though `ss -ltnp` showed no actual listener -- root cause:
-`RefuseIfPortInUse()`'s own probe `bind()` (not gRPC's real listener) was
-failing against the `TIME-WAIT` entry, having no `SO_REUSEADDR` set. Fixed
-by setting `SO_REUSEADDR` on the probe socket. After the fix and rebuild:
-repeated the identical sequence -- killed a gateway with a connected
-`cyclic_can_sender.py` client, confirmed the same `TIME-WAIT` entry via
-`ss -tan`, immediately started a new instance on the same port -- it bound
-and logged `[Gateway] gRPC server listening on 0.0.0.0:<port>` right away,
-no refusal, and the still-running client transparently reconnected and
-resumed sending on the wire (confirmed via `candump`). Step 4 (genuine
-second-instance refusal) re-verified unaffected -- `TC_Gateway_011` still
-passes with the fix in place, confirming `SO_REUSEADDR` didn't reintroduce
-the `SO_REUSEPORT` port-sharing problem. Full incident writeup in
-`backlog/gateway_backlog.md`.
-
 ---
 
 ### TC_Gateway_013_effective_config_dump_and_show
@@ -342,10 +259,6 @@ the `SO_REUSEPORT` port-sharing problem. Full incident writeup in
 - Step 5: `buses.can` is `["vcan0","vcan_missing"]`, `can_opened` is `[true, false]`, and
   `warnings` contains `CAN interface 'vcan_missing' failed to open`
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Gateway_014_tls_and_mtls
@@ -374,7 +287,3 @@ the `SO_REUSEPORT` port-sharing problem. Full incident writeup in
 - Step 5: client-side `TlsConfigError` saying the client cert and key must be set together --
   no silent fallback to plaintext
 - Step 6: `[tls] BOAT_TLS_CERT and BOAT_TLS_KEY must be set together; refusing to start`, exit 1
-
-**Verdict:** NOT_TESTED
-
-**Result:**

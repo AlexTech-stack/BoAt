@@ -27,13 +27,6 @@ default port 8090); `boat_gateway` built; at least one CAN interface
   next free one (50052) — reserved by the first instance's *definition*,
   not just while it's running
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware (`agn-testcomputer`): two instances created via
-curl with no `grpc_port` got 50051 and 50052 respectively, neither started
-yet at the time of the second create call.
-
 ---
 
 ### TC_LauncherAgent_002_start_independent_instances
@@ -53,15 +46,6 @@ yet at the time of the second create call.
   on 0.0.0.0:<their own port>`
 - Both independently reachable via the CLI at their respective ports
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: distinct PIDs, each instance's log showed its own
-port in the `[Gateway] gRPC server listening on 0.0.0.0:<port>` line, and
-`boat --host localhost:50051 frame list-ifaces` /
-`boat --host localhost:50052 frame list-ifaces` each independently listed
-`vcan0`.
-
 ---
 
 ### TC_LauncherAgent_003_rejects_duplicate_explicit_port
@@ -77,12 +61,6 @@ port in the `[Gateway] gRPC server listening on 0.0.0.0:<port>` line, and
 **Expected:**
 - Rejected with HTTP 400 and a message naming the port conflict; the
   existing instance is unaffected
-
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: `{"detail":"port 50051 is already assigned to
-another tracked instance"}`, HTTP 400.
 
 ---
 
@@ -101,14 +79,6 @@ another tracked instance"}`, HTTP 400.
 - Step 1 refused with HTTP 409 naming the instance as still running
 - Step 2's stop succeeds (`exit_code: 0`); the delete then succeeds
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: delete-while-running gave
-`{"detail":"instance 'dbfe7584' is running; stop it first"}` (409); after
-`stop` (status `stopped`, `exit_code: 0`), the delete returned `{"ok":true}`
-and the instance no longer appeared in `GET /api/instances`.
-
 ---
 
 ### TC_LauncherAgent_005_host_info
@@ -125,12 +95,6 @@ and the instance no longer appeared in `GET /api/instances`.
 - Returns the host's hostname, its system CAN/Ethernet interfaces
   (read-only listing), discovered `boat_gateway` binaries under
   `build/{debug,release}`, and discovered plugin `.so` files
-
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: response included `hostname: "agn-testcomputer"`
-and `vcan0` among the listed interfaces.
 
 ---
 
@@ -155,17 +119,6 @@ and `vcan0` among the listed interfaces.
 - Step 2 is refused with 409 (`"... is running; stop it first"`), matching
   `DELETE`'s running-refusal; the instance keeps running unaffected
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: created an instance on port 50051 with
-`can_ifaces: ["vcan0"]`; `PUT` while stopped with
-`{"name": "edit-test-renamed", "can_ifaces": ["vcan0", "vcan1"],
-"eth_ifaces": ["veth0"], "grpc_port": 50051}` applied cleanly (same id,
-all fields updated, no port-conflict error despite resubmitting its own
-port). Started it, then `PUT` with a different name returned
-`{"detail":"instance '...' is running; stop it first"}` (409) as expected.
-
 ---
 
 ### TC_LauncherAgent_007_invocation_independent_paths
@@ -185,24 +138,6 @@ port). Started it, then `PUT` with a different name returned
   not `.../admin_gui/../boat-platform/build/...` -- the agent's own path
   resolution must not depend on which directory or which relative path it
   was launched from
-
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: before the fix, launching via `cd admin_gui &&
-python3 ../ui/launcher_agent.py` (exactly reproducing a real user's
-invocation) produced `gateway_bins: [".../admin_gui/../boat-platform/
-build/debug/.../boat_gateway"]` -- confirmed against the user's own live
-agent process (`GET /api/instances` showed the same mangled path on a real
-running instance). Root cause: `Path(__file__).parent.parent` without
-`.resolve()`; Python absolutizes a relative `__file__` by prepending the
-CWD without collapsing `..`, so `.parent.parent`'s lexical (non-normalizing)
-stripping carried the `admin_gui/..` straight through. Fixed by adding
-`.resolve()` (already the convention used everywhere else in the repo,
-e.g. `tools/pdu_editor.py`). Re-verified with the same invocation after the
-fix (on a scratch port, so as not to disturb the user's own still-running
-session): `gateway_bins: [".../boat-platform/build/debug/.../boat_gateway"]`,
-clean.
 
 ---
 
@@ -233,22 +168,6 @@ clean.
 - Step 4 actually terminates the process (`SIGTERM`); it no longer appears
   in a subsequent `GET /api/instances`
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: started a `boat_gateway` by hand with
-`BOAT_CAN_INTERFACES=vcan0,vcan1 BOAT_GRPC_PORT=50077
-BOAT_NODE_PLUGINS=.../can_tp.so?{"iface":"vcan0"}` (properly quoted via a
-shell script -- a first attempt lost the JSON's quotes to shell-escaping
-across the SSH/bash layering, which the parser correctly treated as
-invalid JSON and fell back to `{}` for rather than crashing, exactly as
-designed). `GET /api/instances` returned it with `id: "external:2343356"`,
-`managed: false`, `can_ifaces: ["vcan0","vcan1"]`, `grpc_port: 50077`, and
-the plugin's config correctly as `{"iface": "vcan0"}`. `start`/`delete`/
-single-`GET` each returned the expected 400; `log` returned the fixed
-"not captured" message; `stop` sent `SIGTERM` and the process was
-confirmed gone via `ps` and absent from the next `GET /api/instances`.
-
 ---
 
 ### TC_LauncherAgent_009_node_lifecycle
@@ -274,21 +193,6 @@ confirmed gone via `ps` and absent from the next `GET /api/instances`.
 - Step 3 both refused with `409` and a message naming the running node
 - Step 5's edit-while-stopped applies cleanly; delete then succeeds
 
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware: `GET /api/node-scripts` listed
-`cyclic_can_sender`/`can_request_responder` with correct docstrings.
-Created a `can_request_responder` node with `target_host: "localhost:50056"`
-and matching `extra_args`; after `start`, sending a CAN request directly to
-that gateway produced the correct reply on the wire (`candump`:
-`0x7E0` → `0x7E8` with the configured payload) -- confirming the node's
-`BOAT_HOST` was genuinely set by the agent's own subprocess env, no
-`--address` flag involved anywhere in this path. `PUT`/`DELETE` while
-running both returned `409` naming the node id. `GET .../log` showed the
-`[agent] started PID ... (BOAT_HOST=localhost:50056)` line. After `stop`
-(`exit_code: 0`), `PUT` renamed it cleanly, and `DELETE` succeeded.
-
 ---
 
 ### TC_LauncherAgent_010_loopback_bind_by_default
@@ -309,10 +213,6 @@ running both returned `409` naming the node id. `GET .../log` showed the
   interface (this is a **BREAKING** change in v0.2.0)
 - Step 3: listens on `0.0.0.0:8095` (the explicit opt-in for federated `admin_gui` use)
 - Step 4: refused in steps 1-2, answered in step 3
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -339,10 +239,6 @@ running both returned `409` naming the node id. `GET .../log` showed the
 - Step 4: Stop signals the adopted pid and the gateway exits; Start spawns a fresh,
   normally-managed gateway with the same config (#40)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_LauncherAgent_012_stopped_definitions_persist
@@ -362,7 +258,3 @@ running both returned `409` naming the node id. `GET .../log` showed the
   only); a *running* adopted/managed gateway is deliberately **not** in the file
 - Step 3: `persist-me` is back as `stopped`, `managed: true`; a still-running hand-started
   gateway reappears as `external:<pid>`, not duplicated
-
-**Verdict:** NOT_TESTED
-
-**Result:**

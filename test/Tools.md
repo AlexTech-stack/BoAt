@@ -25,10 +25,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
   gateway-connection errors except on explicitly gateway-bound actions
   (e.g. "Push to Gateway")
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Tools_002_tool_navigation_separation
@@ -45,10 +41,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - The nav lists exactly the four standalone tools (Trace Editor, Trace Analyzer,
   Eth Analyzer, PDU Editor) in that order, current page highlighted — no gateway
   UIs mixed in
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -69,10 +61,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - Validation passes against `pdu_db.schema.json`; the file round-trips losslessly;
   `boat db show` can render it
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Tools_004_pdu_editor_schema_violation
@@ -89,10 +77,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 **Expected:**
 - Validation reports the specific violation; saving is possible only where the tool
   permits, and the error message names the offending field
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -112,10 +96,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
   classification; totals match the file; duplicate-channel (gateway-relayed) IDs are
   collapsed to their original channel with the duplicates noted
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Tools_006_trace_analyzer_counters_and_signals
@@ -132,10 +112,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - Known counters are detected with correct bit positions and wrap behavior;
   signal discovery yields clustered candidate signals (byte order, signedness,
   confidence) on the remaining bits; each stage reports its runtime
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -154,10 +130,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - A schema-valid database skeleton containing the discovered messages/signals —
   directly usable as a starting point in the PDU Editor
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Tools_008_trace_analyzer_convert_to_trace
@@ -175,10 +147,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - Conversion writes `<name>.trace` into the Trace Editor's scan location; the editor
   loads it with the same frame count as the source
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Tools_009_trace_analyzer_pcapng_input
@@ -194,10 +162,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 **Expected:**
 - CAN records are analyzed normally; Ethernet records are skipped with an explicit
   "skipped N non-CAN frame(s)" note — not an error, not silently missing
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -218,10 +182,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
   length (mismatch warns in red); the saved file reloads with the edit persisted and
   all other frames byte-identical
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Tools_011_trace_editor_insert_delete_warnings
@@ -238,10 +198,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 **Expected:**
 - Insert/delete update the table and indices correctly; save succeeds but surfaces a
   non-blocking warning about non-monotonic timestamps
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -260,10 +216,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - Export reports CAN/Ethernet counts and skipped TCP/PDU count; the file is
   Wireshark-valid and re-imports with matching frame counts
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Tools_013_trace_editor_push_to_gateway
@@ -280,10 +232,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 **Expected:**
 - Push succeeds via ImportTraceData; the replay reflects the edit (modified payload
   on the bus)
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -302,10 +250,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
   cyclic/event classification, reconstructed TCP sessions with client/server roles,
   and a DoIP / SOME/IP service catalog — counts consistent with the capture
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Tools_015_eth_analyzer_autosar_pdu_stage
@@ -322,10 +266,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - PDU-multiplex flows are flagged in stage 1; stage 2 produces a per-Header-ID
   catalog (lengths, samples, sending behavior) with routed duplicates collapsed to
   the original flow
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -345,10 +285,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - The pcapng's Ethernet records are analyzed; CAN records are skipped silently
   (mirror image of TC_Tools_009)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Tools_017_dbc2boatjson_conversion
@@ -366,10 +302,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 **Expected:**
 - Conversion succeeds and passes schema validation; messages/signals/mux/enums/
   comments/cycle times all mapped per the documented table; editor and CLI can read it
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -390,10 +322,6 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
   unsupported format listing supported suffixes / CAN-vs-Ethernet mismatch hint) —
   no stack traces in the UI, service stays up
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Tools_019_dbc2boatjson_minmax_unscaled
@@ -413,7 +341,3 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - `VehicleSpeed` Min/Max `0`/`400` and `OutsideTemp` `-50`/`77.5` -- the DBC range is already
   physical and is passed through unscaled (#11). Before the fix they came out as `0.0/4.0`
   and `-75.0/-11.25`
-
-**Verdict:** NOT_TESTED
-
-**Result:**

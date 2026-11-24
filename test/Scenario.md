@@ -22,10 +22,6 @@ Common precondition: gateway running.
 - Create succeeds and returns/accepts the scenario id
 - Get returns the same content that was submitted; list contains the id
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Scenario_002_validate_valid
@@ -40,10 +36,6 @@ Common precondition: gateway running.
 
 **Expected:**
 - Validation passes with no findings
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -63,10 +55,6 @@ Common precondition: gateway running.
 - Validate reports the specific problem (actionable message, not a stack trace)
 - Create is rejected or the scenario is unusable with the same diagnostic
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Scenario_004_delete
@@ -85,10 +73,6 @@ Common precondition: gateway running.
 - Scenario disappears from the list; creating a simulation from it now fails with a
   clear error
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Scenario_005_ai_generated_scenario
@@ -105,7 +89,3 @@ Common precondition: gateway running.
 **Expected:**
 - A scenario definition is generated; it passes validation (or the failure is in the
   generated content, clearly reported by validate — not a crash in the tooling)
-
-**Verdict:** NOT_TESTED
-
-**Result:**

@@ -23,10 +23,6 @@ valid scenario available (`boat scenario list`).
 - Create returns a simulation id; state transitions IDLE → RUNNING
 - Scenario-declared traffic appears on the bus (`candump vcan0`)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Simulation_002_pause_resume
@@ -44,10 +40,6 @@ valid scenario available (`boat scenario list`).
 - While paused: no simulation traffic on the bus, state = PAUSED
 - After resume: traffic continues, state = RUNNING
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Simulation_003_step_exact_ticks
@@ -64,10 +56,6 @@ valid scenario available (`boat scenario list`).
 **Expected:**
 - Exactly the number of frames corresponding to 500 ticks is emitted, then the
   simulation is paused again — no free-running drift
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -87,10 +75,6 @@ valid scenario available (`boat scenario list`).
 - Simulation transitions to STOPPED and disappears from (or is marked stopped in) the list
 - Simulation-scoped plugins are torn down; always-on node plugins remain loaded
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Simulation_005_list_and_watch
@@ -107,10 +91,6 @@ valid scenario available (`boat scenario list`).
 **Expected:**
 - List shows both simulations with correct states
 - Watch streams live state/tick updates until interrupted with Ctrl+C
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -131,10 +111,6 @@ valid scenario available (`boat scenario list`).
 - Both runs produce an identical frame sequence — same frames, same payloads, same
   order (timestamps may differ in wall clock but not in tick placement)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Simulation_007_different_seed_differs
@@ -153,10 +129,6 @@ valid scenario available (`boat scenario list`).
 - The runs differ (sanity check that the seed actually influences behavior — guards
   against a determinism test that trivially passes because nothing is random)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Simulation_008_invalid_scenario_error
@@ -172,10 +144,6 @@ valid scenario available (`boat scenario list`).
 **Expected:**
 - A clear error naming the unknown scenario; no simulation is created
   (`boat sim list` unchanged)
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -198,10 +166,6 @@ valid scenario available (`boat scenario list`).
 - Step 4: lists every injected fault with type, window, magnitude and delay
 - Aliases are accepted and map to the same wire type: `corruption` = `noise`,
   `drop`/`packet-drop` = `dropout`
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -227,10 +191,6 @@ valid scenario available (`boat scenario list`).
   4. `RPC error [INVALID_ARGUMENT]: delay_ticks must be greater than zero for a delay fault`
   5. `RPC error [INVALID_ARGUMENT]: magnitude must be finite`
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Simulation_011_one_live_session
@@ -254,13 +214,6 @@ valid scenario available (`boat scenario list`).
 - Step 4: both rows report the one live session's state (they share one `SimulationContext`)
 - Step 5: B starts
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-`boat sim state`/`list` print the state as its `common.proto` enum number (1 = IDLE,
-2 = RUNNING, 3 = PAUSED, 4 = STOPPED, 5 = ERROR), not its name, although the help text says
-IDLE/RUNNING/PAUSED/STOPPED. Known; recorded as a v0.2.0 finding.
-
 ---
 
 ### TC_Simulation_012_reset_rewinds_tick
@@ -280,7 +233,3 @@ IDLE/RUNNING/PAUSED/STOPPED. Known; recorded as a v0.2.0 finding.
 - Step 2: tick in the hundreds or more, `"state": 2` (RUNNING)
 - Step 4: `"tick": 0`, `"state": 1` (IDLE) right after reset; after start the tick counts up from 0 again
   with no `tick must be monotonically increasing` INTERNAL error
-
-**Verdict:** NOT_TESTED
-
-**Result:**

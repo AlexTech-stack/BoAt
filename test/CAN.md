@@ -22,10 +22,6 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 - CLI reports success
 - `candump` shows exactly one frame: ID `123`, DLC 4, data `AA BB CC DD`
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_CAN_002_receive_frame_subscribe
@@ -42,10 +38,6 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 - The subscriber prints the frame with ID `0x456`, data `DEADBEEF`, iface `vcan0`,
   and a plausible timestamp
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_CAN_003_send_canfd_frame
@@ -61,10 +53,6 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 **Expected:**
 - `candump` shows a CAN FD frame (flags indicate FDF) with a 16-byte payload
 - Bus type `canfd` implies the FD flag — no separate flag argument needed
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -83,10 +71,6 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 - The frame is transmitted with the payload padded/rounded up to the next valid FD
   length (16), not rejected and not truncated
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_CAN_005_extended_29bit_id
@@ -102,10 +86,6 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 **Expected:**
 - `candump` shows the full 29-bit identifier `1BFC829F` (EFF flag set), not a
   truncated 11-bit ID
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -125,10 +105,6 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 - The echoed frame carries `BOAT_CAN_FLAG_SELF_SENT` (0x08), allowing the plugin to
   distinguish its own transmissions from external wire RX
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_CAN_007_multi_bus_isolation
@@ -144,10 +120,6 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 
 **Expected:**
 - The frame appears on `vcan0` and NOT on `vcan1` — no cross-bus leakage
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -165,10 +137,6 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 **Expected:**
 - Both interfaces listed with their metadata (driver kind, FD capability)
 - JSON variant emits a machine-parseable array with the same content
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -193,13 +161,6 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 - Step 2: fails with Typer's "No such command 'can'" -- the removed `boat can`/`boat eth`
   wrappers must not come back
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-Rewritten for v0.2.0: the old case expected a deprecation warning from a "surviving
-wrapper", but `boat/cmd.py` is not deprecated and prints none, and `boat can` was
-removed outright (CLAUDE.md, invariant 6).
-
 ---
 
 ### TC_CAN_010_high_rate_burst
@@ -217,10 +178,6 @@ removed outright (CLAUDE.md, invariant 6).
 **Expected:**
 - All 1000 frames arrive on the bus, no drops, gateway remains responsive
   (`boat frame list-ifaces` still answers during the burst)
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -241,7 +198,3 @@ removed outright (CLAUDE.md, invariant 6).
   -- a failed transmit is no longer reported as success (#66)
 - Step 3: `Frame sent: bus_type=can iface=vcan0`, `rc=0`, frame visible in `candump`
 - `boat metrics get` afterwards still lists every `can.vcan0.*` series
-
-**Verdict:** NOT_TESTED
-
-**Result:**

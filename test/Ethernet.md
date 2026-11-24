@@ -22,10 +22,6 @@ pair `veth0`/`veth1` exists and is up (unless stated otherwise).
 - CLI reports success
 - `tcpdump` on the peer interface shows the frame with EtherType 0x0800 and the payload
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Ethernet_002_subscribe
@@ -41,10 +37,6 @@ pair `veth0`/`veth1` exists and is up (unless stated otherwise).
 
 **Expected:**
 - The subscriber prints the frame with correct src/dst MAC, EtherType, and payload
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -62,10 +54,6 @@ pair `veth0`/`veth1` exists and is up (unless stated otherwise).
 
 **Expected:**
 - The single subscriber stream shows both frames, each tagged with its bus type
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -85,10 +73,6 @@ pair `veth0`/`veth1` exists and is up (unless stated otherwise).
   not a silent failure
 - Step 2: gateway starts and registers `eth0`
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Ethernet_005_self_sent_flag
@@ -104,10 +88,6 @@ pair `veth0`/`veth1` exists and is up (unless stated otherwise).
 
 **Expected:**
 - The echo carries `BOAT_ETH_FLAG_SELF_SENT` (0x01)
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -125,7 +105,3 @@ pair `veth0`/`veth1` exists and is up (unless stated otherwise).
 **Expected:**
 - The call returns gRPC status `UNIMPLEMENTED` — TCP is driven through the TCP
   plugin's connection API, not raw frame send
-
-**Verdict:** NOT_TESTED
-
-**Result:**

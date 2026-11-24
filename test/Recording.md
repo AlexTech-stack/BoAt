@@ -26,10 +26,6 @@ a traffic generator available (e.g. `cansend` in a loop or a running simulation)
   (two interface blocks); frame counts match the generated traffic
 - File opens in Wireshark with correctly decoded CAN IDs
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Recording_002_cli_record_asc
@@ -45,10 +41,6 @@ a traffic generator available (e.g. `cansend` in a loop or a running simulation)
 **Expected:**
 - A valid `.asc` file readable by python-can/Vector tooling with all 20 frames,
   correct IDs, channels, and timestamps
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -66,10 +58,6 @@ a traffic generator available (e.g. `cansend` in a loop or a running simulation)
 **Expected:**
 - A valid `.blf` with all frames; the FD frame retains FDF/BRS flags
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Recording_004_cli_record_legacy_pcap_two_files
@@ -86,10 +74,6 @@ a traffic generator available (e.g. `cansend` in a loop or a running simulation)
 **Expected:**
 - Two files are produced (`*_can.pcap` with DLT_CAN_SOCKETCAN, `*_eth.pcap` with
   DLT_EN10MB) — classic pcap cannot mix link types; both open in Wireshark
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -111,10 +95,6 @@ a traffic generator available (e.g. `cansend` in a loop or a running simulation)
 - After stop it moves to history with file name + size; the downloaded file contains
   the recorded frames
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Recording_006_ui_format_validation
@@ -133,10 +113,6 @@ a traffic generator available (e.g. `cansend` in a loop or a running simulation)
 - Step 2: Ethernet checkboxes are disabled for CAN-only formats (ASC/BLF), enabled
   for PCAP/PCAPNG
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Recording_007_signals_sidecar_jsonl
@@ -152,10 +128,6 @@ a traffic generator available (e.g. `cansend` in a loop or a running simulation)
 **Expected:**
 - A `_bus.jsonl` sidecar exists next to the trace, one JSON object per signal with
   timestamp, name, type, value
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -176,10 +148,6 @@ a traffic generator available (e.g. `cansend` in a loop or a running simulation)
 - The replayed sequence on `vcan1` matches the originally generated sequence
   frame-for-frame — full record → import → replay round trip
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Recording_009_asc_blf_without_python_can
@@ -196,7 +164,3 @@ a traffic generator available (e.g. `cansend` in a loop or a running simulation)
 **Expected:**
 - ASC/BLF: clean error stating python-can is required (HTTP 500 with message, no crash)
 - PCAPNG: works — it has no third-party dependency
-
-**Verdict:** NOT_TESTED
-
-**Result:**

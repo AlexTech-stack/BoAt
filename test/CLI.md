@@ -26,10 +26,6 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 - Every subcommand documents its options; help text matches actual accepted flags
   (spot-check: `boat trace start --format` lists asc | blf | pcap | pcapng)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_CLI_002_host_flag
@@ -46,10 +42,6 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 **Expected:**
 - Step 1 talks to the remote gateway; step 2 fails with a connection error —
   proving the flag routes the connection
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -68,10 +60,6 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 - Output is a valid JSON array (jq parses it); content matches the table output of
   the same command without `--json`
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_CLI_004_gateway_unreachable_error
@@ -88,10 +76,6 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 **Expected:**
 - Clean, non-traceback error messages indicating the gateway is unreachable
   (gRPC UNAVAILABLE), with non-zero exit codes
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -111,10 +95,6 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 - Each rejects with a specific message (invalid CAN id / invalid hex data / file not
   found) and non-zero exit code; nothing is sent
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_CLI_006_system_test_runner
@@ -132,10 +112,6 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 - Environments are listed; the run executes, records traces in the requested format,
   and produces a result report with per-test verdicts
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_CLI_007_ai_assistants
@@ -152,10 +128,6 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 **Expected:**
 - Each returns a plausible, relevant answer/config; with the backend down, a clean
   error (no traceback)
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -182,12 +154,3 @@ Common precondition: CLI installed (`pip install -e ./boat-platform/sdk/python[d
 - Step 2 talks to `explicit:1234`, not the `BOAT_HOST` value — explicit wins
 - Step 3: `BoAtClient()`/`FrameNode()` resolve to `BOAT_HOST` when set, and to
   `localhost:50051` when unset
-
-**Verdict:** OK
-
-**Result:**
-Verified on real hardware (`agn-testcomputer`): all three steps matched
-expected resolution order. `boat --help` displayed `[default:
-192.168.9.9:50052]` with the env var set and `[default: localhost:50051]`
-without it; `BoAtClient()`/`FrameNode()` in a Python REPL picked up
-`BOAT_HOST` the same way, with an explicit constructor argument overriding it.

@@ -266,10 +266,12 @@ Manual verification runbooks for specific feature areas live under `boat-platfor
 repo -- worth being precise about which one is meant:**
 1. `ctest`/`pytest` above -- unit/integration tests of the codebase itself.
 2. `test/*.md` (`test/Structure.md`: TestSuite → TestSet → TestCase) --
-   the **manual**, hand-verified record used for release sign-off; every
-   TestCase's Verdict/Result was produced by an actual human/agent
-   running it against real hardware, not by any script. Never update
-   these verdicts programmatically.
+   the **manual**, hand-verified definitions used for release sign-off. The
+   definitions carry no verdict; what a run observed is recorded per campaign
+   in `test/campaigns/<date>-<name>.yaml` (one verdict + notes per TestCase),
+   produced by an actual human/agent running it against real hardware, not by
+   any script. Never update those verdicts programmatically. Workflow:
+   `tools/TEST_REPORT_HOWTO.md`; tool: `tools/test_report.py`.
 3. `boat test run <manifest.json>` (`boat_cli/test.py` +
    `sdk/python/boat/test/`) -- a separate, **automated** CI-style HIL
    suite runner: `EnvironmentConfig` (gateway/buses/DUT/plugins, JSON,

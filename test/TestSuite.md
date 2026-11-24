@@ -45,15 +45,36 @@ These sets exist only as `[tags]` on TestCases defined in the files above:
 | [TraceAnalysis] | Analyzer functionality | TC_Tools_005–009, TC_Tools_014–016 |
 | [TraceEditor] | Trace Editor functionality | TC_Tools_010–013 |
 
+## Recording results
+
+A **campaign** is one run of the suite against a specific build/host, stored as
+`test/campaigns/<date>-<name>.yaml`. It holds one entry per TestCase id:
+
+```yaml
+campaign: 2026-11-24-baseline
+date: 2026-11-24
+results:
+  - id: TC_CAN_001_send_frame_cli
+    verdict: OK
+    notes: "Frame seen in candump; DLC 4, data AA BB CC DD."
+```
+
+- `verdict` is one of `OK` / `NOK` / `INCONCLUSIVE` / `NOT_TESTED` (see
+  [Structure.md](Structure.md#verdicts)).
+- `notes` is free text: observation, evidence, issue references.
+- TestSet definitions never carry a verdict. Recording a run means committing a new
+  campaign file, so history lives in git instead of being overwritten in place.
+- `tools/test_report.py` validates that every TestCase has exactly one result and
+  renders the status/sign-off summary from definitions + a campaign. Step-by-step
+  workflow: [tools/TEST_REPORT_HOWTO.md](../tools/TEST_REPORT_HOWTO.md).
+- `test/campaigns/2026-11-24-baseline.yaml` is the imported pre-overhaul state and is
+  the reference for the file shape.
+
 ## Executing the suite
 
 1. Work through the TestSets in the file order above — Gateway first (everything else
    depends on a healthy gateway), Tools last (they are independent of most failures).
-2. Record the verdict (`OK` / `NOK` / `INCONCLUSIVE` / `NOT_TESTED`) and any notes in
-   each TestCase's **Result** field; reference issues where filed.
-   Run [Release] on clean, separate hosts (VMs or containers) against the downloaded
+2. Run [Release] on clean, separate hosts (VMs or containers) against the downloaded
    release artifacts, not a build tree -- it is the only set that tests what users install.
 3. If a precondition cannot be met (e.g. no physical hardware for [Hardware] cases),
-   set `NOT_TESTED` with the reason in **Result** — do not skip silently.
-4. All verdicts ship as `NOT_TESTED` in the repository; a test campaign is a commit
-   that updates verdicts + results, so campaign history lives in git.
+   set `NOT_TESTED` with the reason in `notes` — do not skip silently.

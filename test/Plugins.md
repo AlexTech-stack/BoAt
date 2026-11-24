@@ -26,10 +26,6 @@ files built under `build/debug/src/plugins/`.
 - Register loads the plugin (initialize called); list/info show it with its metadata;
   unload removes it (shutdown called) and it disappears from the list
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Plugins_002_json_config_applied
@@ -48,10 +44,6 @@ files built under `build/debug/src/plugins/`.
 - The JSON after `?` reaches the plugin's `initialize`; malformed JSON produces a
   clear load-time error
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Plugins_003_declared_buses_filtering
@@ -69,10 +61,6 @@ files built under `build/debug/src/plugins/`.
 - The plugin's `on_frame` fires for the CAN frame only — Ethernet is never delivered
   to a plugin that did not declare `eth` (pre-filtered dispatch, no O(N) fan-out)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Plugins_004_publish_path_through_frame_sink
@@ -88,10 +76,6 @@ files built under `build/debug/src/plugins/`.
 **Expected:**
 - The published frame reaches the wire (plugin → frame publisher → FrameSink →
   registry → SocketCAN) with correct ID/data
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -111,10 +95,6 @@ files built under `build/debug/src/plugins/`.
 - The simulation-scoped plugin loads at sim start and is torn down at sim stop;
   the node plugin keeps running throughout, unaffected
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Plugins_006_replayed_frames_reach_plugins
@@ -132,10 +112,6 @@ files built under `build/debug/src/plugins/`.
 - Replayed frames are delivered to the plugin's `on_frame` like live traffic
   (replay transmits through the same FrameSink/registry RX dispatch)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Plugins_007_nonexistent_so_error
@@ -152,7 +128,3 @@ files built under `build/debug/src/plugins/`.
 **Expected:**
 - Both paths produce a clear "cannot load" error naming the path; the gateway stays
   functional
-
-**Verdict:** NOT_TESTED
-
-**Result:**

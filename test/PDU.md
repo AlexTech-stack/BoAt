@@ -23,10 +23,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 **Expected:**
 - The PDU is emitted on `vcan0` as a CAN frame; the route appears in `list-routes`
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_PDU_002_cyclic_transmission_schedule
@@ -44,10 +40,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 - The PDU's frame appears every ~100 ms (within tick resolution), continuously,
   without any simulation running (the always-on node tick drives it)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_PDU_003_remove_route_stops_transmission
@@ -63,10 +55,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 
 **Expected:**
 - Cyclic transmission stops; route no longer listed
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -86,10 +74,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 - While the group is disabled neither PDU transmits; after enable both resume
 - `list-groups` shows the group with its members and current state
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_PDU_005_subscribe
@@ -104,10 +88,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 
 **Expected:**
 - Routed PDUs stream to the subscriber with PDU id and payload
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -128,10 +108,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 - Bit positions, byte order, and scaling of every signal match the database
   definition — raw = (phys − offset) / factor at the defined start bit and length
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_PDU_007_db_inspection_cli
@@ -151,10 +127,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
   all its signals; `signal-routes` lists the database's signal routing rules
   (source `DbId.SigId` → destination `DbId.SigId`)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_PDU_008_grpc_delegation_to_plugin
@@ -170,10 +142,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 **Expected:**
 - A clear error indicating the PDU router plugin is not loaded (gRPC PDU calls are
   delegated to the plugin) — not a crash, not an empty success
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -192,31 +160,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 - The frame is dispatched to the pdu_router plugin (not written to a wire directly)
   and the routed result appears on the target bus
 
-**Verdict:** OK
-
-**Result:**
-
-Regression carried over from v0.1.3-alpha ("Doesn't work at all"): `pdu_router`'s
-`declared_buses()` only reported `["can","eth"]`, so `PluginManager::DispatchFrame()`'s
-pre-filter (`src/core/plugin/plugin_manager.cpp`) never called the plugin's `on_frame`
-for `bus_type=PDU`, and `on_frame` had no PDU-handling branch anyway. Fixed by adding
-`"pdu"` to `declared_buses()` and a branch in `pdu_router_on_frame()` that forwards
-the frame's `pdu_id`/payload to the existing `PduRouter::SendPdu()` (the same path
-`boat pdu send` uses).
-
-Verified on real hardware (isolated gateway, fresh port, `BOAT_CAN_INTERFACES=vcan0`,
-`BOAT_NODE_PLUGINS=pdu_router.so`, route `0x100 -> vcan0`):
-
-```
-testuser@testcomputer:~$ boat --host 0.0.0.0:50071 frame send --bus-type PDU --pdu-id 0x100 --data DEADBEEF
-Frame sent: bus_type=PDU iface=auto
-
-# candump vcan0, concurrently:
-  vcan0  100   [4]  DE AD BE EF
-```
-
-`ctest -R pdu` (8/8) and `-R 'PluginManager|Frame'` (24/24) still pass, no regressions.
-
 ---
 
 ### TC_PDU_010_e2e_crc_protection
@@ -233,7 +176,3 @@ Frame sent: bus_type=PDU iface=auto
 **Expected:**
 - The counter increments per frame and wraps correctly; the CRC field validates
   against the E2E profile for every frame
-
-**Verdict:** NOT_TESTED
-
-**Result:**

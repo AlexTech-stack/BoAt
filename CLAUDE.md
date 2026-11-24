@@ -137,7 +137,8 @@ Python job deliberately runs from the repo root because `ui/tests` lives there.
 
 **Three different things are called "test" here** — be precise about which you mean:
 `ctest`/`pytest` (tests of the codebase itself); `test/*.md` (the **manual**, hand-verified
-release sign-off record — never update those verdicts programmatically); and
+release sign-off definitions — per-run verdicts live in `test/campaigns/*.yaml`, never
+updated programmatically; see `tools/TEST_REPORT_HOWTO.md`); and
 `boat test run <manifest.json>` (an **automated** CI-style HIL suite runner: an
 `EnvironmentConfig` + a `ManifestConfig` drive `TestSuiteRunner`, which spins up or connects
 to a gateway, runs each test file as a subprocess, and writes JSON/JUnit/HTML reports —

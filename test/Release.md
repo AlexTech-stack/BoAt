@@ -41,10 +41,6 @@ built on a glibc 2.28 baseline (AlmaLinux 8), so they must also install on older
   `"version": "0.2.0"`
 - Step 5: removes cleanly
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Release_002_rpm_install
@@ -63,10 +59,6 @@ built on a glibc 2.28 baseline (AlmaLinux 8), so they must also install on older
 - Step 1: name `boat-platform`, version `0.2.0`, license `Apache-2.0`, arch `x86_64`
 - Step 2: installs (v0.1.x's RPM could not be installed at all)
 - Step 3: the same 15 files as TC_Release_001; the gateway starts and loads plugins
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -88,10 +80,6 @@ built on a glibc 2.28 baseline (AlmaLinux 8), so they must also install on older
 - Step 3: starts and prints `gRPC server listening on 0.0.0.0:50051` -- no
   `GLIBC_2.xx not found` error
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Release_004_arm64_packages
@@ -112,10 +100,6 @@ built on a glibc 2.28 baseline (AlmaLinux 8), so they must also install on older
 - Step 1: `ELF 64-bit LSB ... ARM aarch64`
 - Step 2: `Architecture: arm64`; same file set as TC_Release_001
 - Step 3: the frame appears in `candump`; this is the first release that ships arm64
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -141,10 +125,6 @@ built on a glibc 2.28 baseline (AlmaLinux 8), so they must also install on older
 - Step 5: `:latest` equals `:v0.2.0`; a pre-release tag did **not** move `:latest`
 - Note: the image ships the gateway only, no plugins
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Release_006_out_of_tree_plugin_builds_against_package
@@ -167,10 +147,6 @@ built on a glibc 2.28 baseline (AlmaLinux 8), so they must also install on older
   not the `frame.h` it includes
 - Step 3: the gateway loads the plugin, and `boat plugin list` shows it with `scope node`
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Release_007_version_consistency
@@ -190,7 +166,3 @@ built on a glibc 2.28 baseline (AlmaLinux 8), so they must also install on older
 **Expected:**
 - Everything reads `0.2.0`; `CHANGELOG.md` has a dated `## [0.2.0]` section and an empty
   `## [Unreleased]`
-
-**Verdict:** NOT_TESTED
-
-**Result:**

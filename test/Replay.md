@@ -25,10 +25,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - All N CAN frames appear on `vcan0` with IDs/DLC/data matching the file
 - Inter-frame timing approximates the original recording (real-time pacing)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_002_direct_channel_mapping
@@ -45,10 +41,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Channel-1 frames appear on `vcan0`, channel-2 frames on `vcan1` (1-based positional
   mapping); with fewer buses than channels the last bus acts as fallback
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_003_direct_channel_and_id_filter
@@ -64,10 +56,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **Expected:**
 - Only frames from channel 4 with IDs 0x040/0x0C0 are replayed; everything else is
   filtered out
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -87,10 +75,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Durations ≈ 5 s, ≈ 20 s, and "as fast as possible" respectively (per-frame gRPC
   round-trip is the floor for max speed)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_005_direct_loop_mode
@@ -106,10 +90,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **Expected:**
 - The file replays repeatedly with ~100 ms gap between the last frame of one run and
   the first of the next; Ctrl+C stops cleanly
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -127,10 +107,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Immediate rejection with an error pointing to `boat replay import` +
   `start`/`stream`; nothing is sent
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_007_direct_pcapng_can_extraction
@@ -145,10 +121,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 
 **Expected:**
 - Only the CAN/CAN-FD records are replayed; Ethernet records are skipped without error
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -168,10 +140,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
   list-imported-traces command; `boat trace status` reports recording sessions,
   not imported traces)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_009_server_side_can_stream
@@ -187,10 +155,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **Expected:**
 - All frames appear on the bus, timing driven by the gateway tick timer (no per-frame
   gRPC overhead); a progress line updates during playback and a summary prints at the end
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -212,10 +176,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Pause halts bus output; resume continues from the pause point; seek repositions
   playback (frames from the seek target replay again); stop terminates the replay
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_011_repeat_without_reimport
@@ -232,10 +192,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **Expected:**
 - Second replay works without re-importing, onto a different interface — interface
   targeting is a replay-time decision, not baked into the import
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -255,10 +211,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - IP and UDP checksums are valid (tcpdump does not flag bad checksums)
 - UDP ports and TTL are preserved from the original capture
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_013_eth_ip_map_and_filter
@@ -276,10 +228,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Only packets involving the rewritten 192.168.0.100 are replayed; the mapping table
   rewrote each conversation to its target; the filter applied AFTER rewriting
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_014_eth_ethertype_protocol_port_filters
@@ -295,10 +243,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **Expected:**
 - Only IPv4 UDP packets to port 30490 are replayed; filters apply in the documented
   order (EtherType → protocol → port → IP rewrite → IP filters)
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -318,10 +262,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
   (UDP + ICMPv6 with pseudo-header); extension headers preserved; protocol filter
   matched the resolved L4 protocol behind extension chains
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_016_eth_mac_map_playback_time
@@ -338,10 +278,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **Expected:**
 - Frames to/from each IP carry the mapped MAC as src/dst respectively
   (direction-aware); unmapped IPs fall back to auto-detected src / broadcast dst
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -362,10 +298,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Playback delivers CAN frames to the CAN bus and Ethernet frames to the Ethernet
   interface, interleaved on the original shared timeline
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_018_export_trace_to_pcapng
@@ -385,10 +317,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
   and an Ethernet interface with correctly decoded CAN IDs
 - Re-import yields the same CAN+Ethernet frame count (round trip)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_019_export_skips_tcp_pdu
@@ -405,10 +333,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **Expected:**
 - CAN/Ethernet frames are exported; TCP/PDU frames are skipped and reported in the
   `skipped` count — no crash, no malformed output file
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -427,10 +351,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Recorded events replay onto the bus; the filtered variant replays only the matching
   signal within the tick window
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_021_import_unsupported_format
@@ -447,10 +367,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Clear "unsupported trace format" error listing the supported suffixes
   (.pcap, .pcapng, .asc, .blf); nothing is uploaded
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_022_import_corrupt_pcapng
@@ -465,10 +381,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 
 **Expected:**
 - A hard, descriptive error (invalid/truncated pcapng) — not a silent partial import
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -487,10 +399,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **Expected:**
 - `accepted True`, `frames 200000`, size ~6.2 MB -- above gRPC's 4 MiB unary limit, so this
   exercises the client-streaming `ImportTraceDataStream` path (#82); completes in seconds
-
-**Verdict:** NOT_TESTED
-
-**Result:**
 
 ---
 
@@ -513,10 +421,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Step 3: accepted, 47 frames
 - Step 4: no `/tmp/evil*`; `/tmp/ok.trace-1.trace` exists
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_025_pause_resume_no_burst
@@ -537,10 +441,6 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - After resume, the rate returns to ~1 frame/ms -- roughly 10-12 frames in any 10 ms window,
   never a burst of the ~3,000 records that came due during the pause (#77)
 
-**Verdict:** NOT_TESTED
-
-**Result:**
-
 ---
 
 ### TC_Replay_026_unknown_ids_clean_error
@@ -559,7 +459,3 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Step 1: `RPC error [NOT_FOUND]: trace id not found`, `rc=1`
 - Steps 2-3: `RPC error [NOT_FOUND]: replay not found`, `rc=1`
 - No Python traceback in any step (they used to print one before v0.2.0)
-
-**Verdict:** NOT_TESTED
-
-**Result:**

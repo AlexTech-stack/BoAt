@@ -1,0 +1,1315 @@
+campaign: 2026-11-24-baseline
+date: '2026-11-24'
+note: Baseline imported from the inline Verdict/Result fields that lived in test/*.md before they were split out into per-campaign records.
+results:
+  - id: TC_Gateway_001_start_with_vcan
+    verdict: NOT_TESTED
+  - id: TC_Gateway_002_start_with_multiple_interfaces
+    verdict: NOT_TESTED
+  - id: TC_Gateway_003_driver_selection_physical_vs_virtual
+    verdict: NOT_TESTED
+  - id: TC_Gateway_004_start_with_ethernet_interface
+    verdict: NOT_TESTED
+  - id: TC_Gateway_005_node_plugin_loading_with_json_config
+    verdict: NOT_TESTED
+  - id: TC_Gateway_006_v7_plugin_rejected
+    verdict: NOT_TESTED
+  - id: TC_Gateway_007_tick_interval_configuration
+    verdict: NOT_TESTED
+  - id: TC_Gateway_008_graceful_shutdown
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`): a gateway with `vcan0` and
+      a connected gRPC client, stopped via `kill` (SIGTERM/SIGKILL rather than
+      literal Ctrl+C, equivalent for this check), restarted immediately with the
+      identical configuration on the same port — bound and started listening
+      right away, no "address already in use" refusal. This specifically
+      exercises the fix in TC_Gateway_012 below; see that case for the bug this
+      used to hit and its root cause.
+  - id: TC_Gateway_009_missing_interface_error
+    verdict: NOT_TESTED
+  - id: TC_Gateway_010_configurable_grpc_port
+    verdict: OK
+    notes: |-
+      Verified on real hardware: both instances started, both logged their correct
+      port, both stayed alive, and a CLI client reached each one specifically via
+      `--host localhost:<port>`.
+  - id: TC_Gateway_011_refuses_duplicate_port_binding
+    verdict: OK
+    notes: |-
+      Verified on real hardware: second instance printed `[Gateway] ERROR: port
+      50051 is already in use by another process...` and exited with code 1; the
+      first instance remained alive throughout. Before this fix, gRPC's
+      `SO_REUSEPORT` meant the second instance would have started "successfully"
+      and silently split traffic with the first (see
+      `backlog/gateway_backlog.md`'s now-resolved item) -- this test specifically
+      guards against that regression.
+  - id: TC_Gateway_012_same_port_restart_after_active_connection
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`). Before the fix: killed a
+      gateway with an active client connection, confirmed via `ss -tan` a
+      lingering `[::1]:<port>` connection in `TIME-WAIT`, and a same-port restart
+      attempt failed with `[Gateway] ERROR: port <port> is already in use...` for
+      up to ~60s even though `ss -ltnp` showed no actual listener -- root cause:
+      `RefuseIfPortInUse()`'s own probe `bind()` (not gRPC's real listener) was
+      failing against the `TIME-WAIT` entry, having no `SO_REUSEADDR` set. Fixed
+      by setting `SO_REUSEADDR` on the probe socket. After the fix and rebuild:
+      repeated the identical sequence -- killed a gateway with a connected
+      `cyclic_can_sender.py` client, confirmed the same `TIME-WAIT` entry via
+      `ss -tan`, immediately started a new instance on the same port -- it bound
+      and logged `[Gateway] gRPC server listening on 0.0.0.0:<port>` right away,
+      no refusal, and the still-running client transparently reconnected and
+      resumed sending on the wire (confirmed via `candump`). Step 4 (genuine
+      second-instance refusal) re-verified unaffected -- `TC_Gateway_011` still
+      passes with the fix in place, confirming `SO_REUSEADDR` didn't reintroduce
+      the `SO_REUSEPORT` port-sharing problem. Full incident writeup in
+      `backlog/gateway_backlog.md`.
+  - id: TC_Gateway_013_effective_config_dump_and_show
+    verdict: NOT_TESTED
+  - id: TC_Gateway_014_tls_and_mtls
+    verdict: NOT_TESTED
+  - id: TC_CAN_001_send_frame_cli
+    verdict: NOT_TESTED
+  - id: TC_CAN_002_receive_frame_subscribe
+    verdict: NOT_TESTED
+  - id: TC_CAN_003_send_canfd_frame
+    verdict: NOT_TESTED
+  - id: TC_CAN_004_canfd_length_rounding
+    verdict: NOT_TESTED
+  - id: TC_CAN_005_extended_29bit_id
+    verdict: NOT_TESTED
+  - id: TC_CAN_006_self_sent_loopback_flag
+    verdict: NOT_TESTED
+  - id: TC_CAN_007_multi_bus_isolation
+    verdict: NOT_TESTED
+  - id: TC_CAN_008_list_ifaces
+    verdict: NOT_TESTED
+  - id: TC_CAN_009_pdu_db_oneshot_send
+    verdict: NOT_TESTED
+    notes: |-
+      Rewritten for v0.2.0: the old case expected a deprecation warning from a "surviving
+      wrapper", but `boat/cmd.py` is not deprecated and prints none, and `boat can` was
+      removed outright (CLAUDE.md, invariant 6).
+  - id: TC_CAN_010_high_rate_burst
+    verdict: NOT_TESTED
+  - id: TC_CAN_011_tx_failure_reported
+    verdict: NOT_TESTED
+  - id: TC_Ethernet_001_send_frame_cli
+    verdict: NOT_TESTED
+  - id: TC_Ethernet_002_subscribe
+    verdict: NOT_TESTED
+  - id: TC_Ethernet_003_mixed_subscribe_can_and_eth
+    verdict: NOT_TESTED
+  - id: TC_Ethernet_004_physical_nic_requires_raw_prefix_and_cap
+    verdict: NOT_TESTED
+  - id: TC_Ethernet_005_self_sent_flag
+    verdict: NOT_TESTED
+  - id: TC_Ethernet_006_tcp_send_unimplemented
+    verdict: NOT_TESTED
+  - id: TC_Simulation_001_create_and_start
+    verdict: NOT_TESTED
+  - id: TC_Simulation_002_pause_resume
+    verdict: NOT_TESTED
+  - id: TC_Simulation_003_step_exact_ticks
+    verdict: NOT_TESTED
+  - id: TC_Simulation_004_stop_and_cleanup
+    verdict: NOT_TESTED
+  - id: TC_Simulation_005_list_and_watch
+    verdict: NOT_TESTED
+  - id: TC_Simulation_006_determinism_same_seed_bit_identical
+    verdict: NOT_TESTED
+  - id: TC_Simulation_007_different_seed_differs
+    verdict: NOT_TESTED
+  - id: TC_Simulation_008_invalid_scenario_error
+    verdict: NOT_TESTED
+  - id: TC_Simulation_009_fault_inject_and_list
+    verdict: NOT_TESTED
+  - id: TC_Simulation_010_fault_inject_validation
+    verdict: NOT_TESTED
+  - id: TC_Simulation_011_one_live_session
+    verdict: NOT_TESTED
+    notes: |-
+      `boat sim state`/`list` print the state as its `common.proto` enum number (1 = IDLE,
+      2 = RUNNING, 3 = PAUSED, 4 = STOPPED, 5 = ERROR), not its name, although the help text says
+      IDLE/RUNNING/PAUSED/STOPPED. Known; recorded as a v0.2.0 finding.
+  - id: TC_Simulation_012_reset_rewinds_tick
+    verdict: NOT_TESTED
+  - id: TC_Scenario_001_create_and_get
+    verdict: NOT_TESTED
+  - id: TC_Scenario_002_validate_valid
+    verdict: NOT_TESTED
+  - id: TC_Scenario_003_validate_invalid
+    verdict: NOT_TESTED
+  - id: TC_Scenario_004_delete
+    verdict: NOT_TESTED
+  - id: TC_Scenario_005_ai_generated_scenario
+    verdict: NOT_TESTED
+  - id: TC_Replay_001_direct_can_replay_blf
+    verdict: NOT_TESTED
+  - id: TC_Replay_002_direct_channel_mapping
+    verdict: NOT_TESTED
+  - id: TC_Replay_003_direct_channel_and_id_filter
+    verdict: NOT_TESTED
+  - id: TC_Replay_004_direct_speed_control
+    verdict: NOT_TESTED
+  - id: TC_Replay_005_direct_loop_mode
+    verdict: NOT_TESTED
+  - id: TC_Replay_006_direct_rejects_pcap
+    verdict: NOT_TESTED
+  - id: TC_Replay_007_direct_pcapng_can_extraction
+    verdict: NOT_TESTED
+  - id: TC_Replay_008_import_blf_frame_count
+    verdict: NOT_TESTED
+  - id: TC_Replay_009_server_side_can_stream
+    verdict: NOT_TESTED
+  - id: TC_Replay_010_pause_resume_seek_stop
+    verdict: NOT_TESTED
+  - id: TC_Replay_011_repeat_without_reimport
+    verdict: NOT_TESTED
+  - id: TC_Replay_012_eth_pcap_import_global_ip_rewrite
+    verdict: NOT_TESTED
+  - id: TC_Replay_013_eth_ip_map_and_filter
+    verdict: NOT_TESTED
+  - id: TC_Replay_014_eth_ethertype_protocol_port_filters
+    verdict: NOT_TESTED
+  - id: TC_Replay_015_eth_ipv6_and_icmpv6
+    verdict: NOT_TESTED
+  - id: TC_Replay_016_eth_mac_map_playback_time
+    verdict: NOT_TESTED
+  - id: TC_Replay_017_import_mixed_pcapng
+    verdict: NOT_TESTED
+  - id: TC_Replay_018_export_trace_to_pcapng
+    verdict: NOT_TESTED
+  - id: TC_Replay_019_export_skips_tcp_pdu
+    verdict: NOT_TESTED
+  - id: TC_Replay_020_from_events
+    verdict: NOT_TESTED
+  - id: TC_Replay_021_import_unsupported_format
+    verdict: NOT_TESTED
+  - id: TC_Replay_022_import_corrupt_pcapng
+    verdict: NOT_TESTED
+  - id: TC_Replay_023_import_larger_than_4mib
+    verdict: NOT_TESTED
+  - id: TC_Replay_024_trace_id_validation
+    verdict: NOT_TESTED
+  - id: TC_Replay_025_pause_resume_no_burst
+    verdict: NOT_TESTED
+  - id: TC_Replay_026_unknown_ids_clean_error
+    verdict: NOT_TESTED
+  - id: TC_Recording_001_cli_record_pcapng_mixed
+    verdict: NOT_TESTED
+  - id: TC_Recording_002_cli_record_asc
+    verdict: NOT_TESTED
+  - id: TC_Recording_003_cli_record_blf
+    verdict: NOT_TESTED
+  - id: TC_Recording_004_cli_record_legacy_pcap_two_files
+    verdict: NOT_TESTED
+  - id: TC_Recording_005_ui_session_lifecycle
+    verdict: NOT_TESTED
+  - id: TC_Recording_006_ui_format_validation
+    verdict: NOT_TESTED
+  - id: TC_Recording_007_signals_sidecar_jsonl
+    verdict: NOT_TESTED
+  - id: TC_Recording_008_record_replay_roundtrip
+    verdict: NOT_TESTED
+  - id: TC_Recording_009_asc_blf_without_python_can
+    verdict: NOT_TESTED
+  - id: TC_PDU_001_route_and_send
+    verdict: NOT_TESTED
+  - id: TC_PDU_002_cyclic_transmission_schedule
+    verdict: NOT_TESTED
+  - id: TC_PDU_003_remove_route_stops_transmission
+    verdict: NOT_TESTED
+  - id: TC_PDU_004_ipdu_group_enable_disable
+    verdict: NOT_TESTED
+  - id: TC_PDU_005_subscribe
+    verdict: NOT_TESTED
+  - id: TC_PDU_006_signal_packing_from_database
+    verdict: NOT_TESTED
+  - id: TC_PDU_007_db_inspection_cli
+    verdict: NOT_TESTED
+  - id: TC_PDU_008_grpc_delegation_to_plugin
+    verdict: NOT_TESTED
+  - id: TC_PDU_009_frame_send_pdu_dispatch
+    verdict: OK
+    notes: |-
+      Regression carried over from v0.1.3-alpha ("Doesn't work at all"): `pdu_router`'s
+      `declared_buses()` only reported `["can","eth"]`, so `PluginManager::DispatchFrame()`'s
+      pre-filter (`src/core/plugin/plugin_manager.cpp`) never called the plugin's `on_frame`
+      for `bus_type=PDU`, and `on_frame` had no PDU-handling branch anyway. Fixed by adding
+      `"pdu"` to `declared_buses()` and a branch in `pdu_router_on_frame()` that forwards
+      the frame's `pdu_id`/payload to the existing `PduRouter::SendPdu()` (the same path
+      `boat pdu send` uses).
+
+      Verified on real hardware (isolated gateway, fresh port, `BOAT_CAN_INTERFACES=vcan0`,
+      `BOAT_NODE_PLUGINS=pdu_router.so`, route `0x100 -> vcan0`):
+
+      ```
+      testuser@testcomputer:~$ boat --host 0.0.0.0:50071 frame send --bus-type PDU --pdu-id 0x100 --data DEADBEEF
+      Frame sent: bus_type=PDU iface=auto
+
+      # candump vcan0, concurrently:
+        vcan0  100   [4]  DE AD BE EF
+      ```
+
+      `ctest -R pdu` (8/8) and `-R 'PluginManager|Frame'` (24/24) still pass, no regressions.
+  - id: TC_PDU_010_e2e_crc_protection
+    verdict: NOT_TESTED
+  - id: TC_CanTp_001_configure_session
+    verdict: OK
+    notes: |-
+      Verified on real PCAN hardware (can0/can1) throughout this session's work on
+      backlog items #1, #3, #6, #9, #10, #11, #15 -- dozens of `configure` calls
+      across every addressing mode and config combination, all accepted and
+      reflected correctly in `list-sessions`.
+  - id: TC_CanTp_002_single_frame_send
+    verdict: OK
+    notes: |-
+      `candump` capture: `7A0 [8] 02 AA BB CC CC CC CC CC` for a 2-byte payload --
+      PCI `0x02`, payload, padded with the ISO/AUTOSAR default `0xCC` (was
+      hardcoded `0x55` before backlog #6's fix). Confirmed on real hardware.
+  - id: TC_CanTp_003_multi_frame_segmentation
+    verdict: OK
+    notes: |-
+      Verified repeatedly on real PCAN hardware (can0 tester -> can1 ECU) as the
+      baseline regression check for every other change this session. Bus capture
+      for a 20-byte payload: FF (`10 14 ...`, 6 bytes) -> FC (Continue) -> CF ×2
+      (7 bytes each), reassembled payload byte-exact via `subscribe`. Also
+      confirmed with CAN FD (`--dlc 64`) using the CAN-FD SF/escape-format work
+      from backlog #4.
+  - id: TC_CanTp_004_always_on_reception
+    verdict: OK
+    notes: |-
+      Every hardware test this session ran against a bare `BOAT_NODE_PLUGINS`-loaded
+      gateway with no simulation running, confirming always-on reception
+      throughout (not a dedicated one-off check, but continuously exercised).
+  - id: TC_CanTp_005_send_without_configuration
+    verdict: OK
+    notes: |-
+      `CanTpServiceImpl::Send` checks `HasConnection()` before calling into the
+      plugin and returns `FAILED_PRECONDITION` with a message naming the
+      unconfigured `nsdu_id`; confirmed via the CLI's `_rpc_error` formatting.
+  - id: TC_CanTp_006_n_bs_timeout
+    verdict: OK
+    notes: |-
+      Verified on real hardware with precise wall-clock timestamps: `WAIT_FC` held
+      steady through checks before the deadline, flipped to `IDLE` in the check
+      immediately after it. Bus capture confirmed only the FF was ever sent (no FC
+      arrived from anywhere), proving the reset came from the timeout, not a
+      masked success. See backlog item #1.
+  - id: TC_CanTp_007_n_cr_timeout
+    verdict: OK
+    notes: |-
+      Same methodology and outcome as TC_CanTp_006, mirrored for the RX side.
+      Verified on real hardware. See backlog item #1.
+  - id: TC_CanTp_008_extended_addressing
+    verdict: OK
+    notes: |-
+      Found and fixed a fundamental bug while verifying this: the RX path read the
+      PCI byte from `payload[0]` unconditionally, but under extended addressing
+      that's the address byte, not the PCI byte -- extended-addressing RX never
+      worked at all before this fix. Verified end-to-end afterward: a 30-byte
+      transfer round-trips byte-exact; bus capture shows the correct address byte
+      on every frame in both directions (including FC, which previously hardcoded
+      `0x00` instead of the peer's address). See backlog items #3/#5.
+  - id: TC_CanTp_009_mixed_addressing_disambiguation
+    verdict: OK
+    notes: |-
+      Verified on real hardware: two receivers sharing `target_addr=0x7B0` with
+      `address_byte` 0x01/0x02 each received exactly their own payload
+      (`aaaaaa`/`bbbbbb`), no cross-talk. `find_by_target()` was reworked to
+      collect all `target_addr` matches and disambiguate by address byte when
+      there's more than one. See backlog item #15.
+  - id: TC_CanTp_010_configure_rejects_ambiguous_target_addr
+    verdict: OK
+    notes: |-
+      Verified on real hardware, both sub-cases: a `normal`-mode duplicate and a
+      `mixed`-mode duplicate with a *colliding* address byte were both rejected
+      with a clear `FAILED_PRECONDITION` message naming the conflicting
+      `target_addr`. Re-configuring a connection with the `target_addr` it already
+      owns (not a new conflict) still succeeds. See backlog item #3.
+  - id: TC_CanTp_011_configure_rejects_busy_session
+    verdict: OK
+    notes: |-
+      Verified on real hardware: reconfiguring nsdu_id 0x7F0 while `tx_state=
+      WAIT_FC` was rejected with a message naming the busy `nsdu_id`; the same
+      call succeeded once the N_Bs deadline (TC_CanTp_006) cleared it back to
+      `IDLE`. See backlog item #9.
+  - id: TC_CanTp_012_29bit_normal_fixed_addressing
+    verdict: OK
+    notes: |-
+      Found and fixed a core (non-CanTp) bug while verifying this: `SocketCanDriver
+      ::ReadFrame()` didn't mask `CAN_EFF_FLAG` off received CAN IDs, so every
+      received 29-bit frame's ID silently carried that flag bit while everything
+      else (including CanTp's `target_addr` comparison) treats CAN IDs as plain
+      values -- a 29-bit frame could never match on RX anywhere in the system, not
+      just CanTp. Fixed in `socket_can_driver.cpp`; verified afterward with a
+      5-byte payload round-tripping byte-exact over `0x18DAF110`/`0x18DA10F1`. See
+      backlog item #15.
+  - id: TC_CanTp_013_can_fd_brs
+    verdict: OK
+    notes: |-
+      Verified on real hardware with the PCAN interfaces explicitly reconfigured
+      for CAN FD + a data-phase bit rate: `candump -x` showed the `B` marker
+      present with `--brs`, absent without it, on otherwise-identical frames. See
+      backlog item #10.
+  - id: TC_CanTp_014_pad_byte_configurable
+    verdict: OK
+    notes: |-
+      Verified on real hardware: `--pad-byte 171` (0xAB) produced `02 AA BB AB AB
+      AB AB AB` on the wire. Also caught and fixed a CLI bug in the same pass:
+      `--pad-byte`/`--address-byte` were plain-decimal `int` options despite their
+      own `--help` text showing hex examples (`--address-byte 0x99` failed with
+      "not a valid integer") -- switched both to the same hex-or-decimal parsing
+      `--nsdu-id`/the address flags already use.
+  - id: TC_CanTp_015_subscribe_errors
+    verdict: OK
+    notes: |-
+      All five scenarios verified on real hardware via both the Python SDK
+      (`subscribe_errors()`) and the CLI (`subscribe-errors`), each producing
+      exactly the expected result code and a specific message (e.g. "N_Bs expired
+      after 1000ms waiting for Flow Control", "expected CF seq 1, got 2"). See
+      backlog item #11.
+  - id: TC_CanTp_016_ff_dl_4095_limit
+    verdict: NOT_TESTED
+  - id: TC_CanTp_017_malformed_flow_control
+    verdict: NOT_TESTED
+  - id: TC_Plugins_001_register_list_info_unload
+    verdict: NOT_TESTED
+  - id: TC_Plugins_002_json_config_applied
+    verdict: NOT_TESTED
+  - id: TC_Plugins_003_declared_buses_filtering
+    verdict: NOT_TESTED
+  - id: TC_Plugins_004_publish_path_through_frame_sink
+    verdict: NOT_TESTED
+  - id: TC_Plugins_005_dual_manager_independence
+    verdict: NOT_TESTED
+  - id: TC_Plugins_006_replayed_frames_reach_plugins
+    verdict: NOT_TESTED
+  - id: TC_Plugins_007_nonexistent_so_error
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_001_all_uis_reachable
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_002_shared_navigation
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_003_launcher_interface_creation
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_004_launcher_gateway_lifecycle
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_005_dashboard_live_frames
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_006_nodes_start_stop
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`) via the actual API calls the
+      web UI's own JS makes (equivalent to using the page): `GET /api/nodes`
+      correctly discovered both `cyclic_can_sender` and `can_request_responder`
+      (neither interactive -- no `input()` in either), with their module
+      docstrings shown. `POST /api/nodes/can_request_responder/start?address=
+      localhost:50055` started it; confirmed it was genuinely functioning (not
+      just "a process exists") by sending a real CAN request and capturing the
+      reply on the wire via `candump`: `0x7E0 [22 F1 90]` → `0x7E8 [50 01]`,
+      <1ms turnaround. `POST .../stop` cleanly terminated it; a subsequent
+      `GET /api/nodes` showed `status: "stopped"`. `GET /api/nodes/.../log`
+      showed the `[control-panel] started PID ...` line as expected.
+
+      **Update (2026-08-13):** user reported `cyclic_can_sender.py` running
+      consistently 3-4ms late per cycle (a 300ms-configured cycle measuring
+      303-304ms via `candump -t d`). Root cause: the script's deadline was
+      computed *after* `send_can()` (a synchronous gRPC call, a few ms even over
+      loopback) returned, silently adding that call's own duration on top of
+      every cycle -- the same class of bug the CanTp plugin's TX thread had
+      before an earlier fix in this session moved its deadline computation to
+      before the send. Fixed the same way here (deadline relative to cycle
+      start, not post-send), plus tightened the wait loop to sleep the precise
+      remaining time near the deadline instead of always rounding up to a full
+      50ms poll chunk. Re-verified on real hardware: before the fix, 12
+      consecutive cycles measured 302.96-304.49ms (mean 303.94ms) against a
+      300ms-configured cycle; after, 11 steady-state cycles measured
+      299.98-300.33ms (mean ~300.14ms, within 0.05% of the target -- the one
+      low outlier, 292ms on the very first cycle, is one-time gRPC channel/stub
+      warm-up, not a steady-state issue). Not marking this TestCase's own
+      verdict down -- the start/stop/discovery behavior it actually covers was
+      never wrong -- see `backlog/nodes_backlog.md` for the full account.
+  - id: TC_WebUIs_007_commander_raw_send
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_008_commander_pdu_composed_send
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_009_debug_grpc_inspector
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_010_ui_behavior_gateway_down
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_011_node_gateway_restart_resilience
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`), on an isolated test gateway/
+      `vcan0` pair (the user's own live 50056/`vcan1` session was confirmed
+      untouched throughout via `ps`/`ss`). This TestCase exists because of a real
+      bug found by the user running exactly this scenario through admin_gui: on
+      stopping the gateway, `cyclic_can_sender.py` crashed outright (uncaught
+      exception from `send_can()`) while `can_request_responder.py` stayed alive
+      but went silently idle forever (a bare `except: pass` around
+      `FrameNode.subscribe()`'s stream loop swallowed the disconnect, and nothing
+      ever told the main thread the subscription had died) — needing a manual
+      stop+start to work again after the gateway came back. Root-caused and fixed
+      in the SDK (`sdk/python/boat/frame_node.py`): `subscribe()` now retries with
+      capped exponential backoff instead of dying silently, `send()`/`send_can()`
+      raise instead of hanging (matched by a `try/except` added to
+      `cyclic_can_sender.py`'s send loop so it retries next cycle instead of
+      crashing), and — found only by actually testing recovery time, not just
+      "does it crash" — `FrameNode._reconnect()` discards and recreates the gRPC
+      channel on every retry, since retrying against the *same* channel left both
+      nodes stuck 90+ seconds after the gateway was already confirmed reachable
+      again (grpc-python's own per-channel reconnect backoff, independent of
+      anything this SDK's retry loop does). With all three pieces in place: killed
+      the test gateway, confirmed via log tail that neither node crashed and both
+      logged their own retry/backoff messages; restarted the gateway on the same
+      port (after an unrelated `TIME-WAIT` delay — see
+      `backlog/gateway_backlog.md`'s "Restarting a gateway on the same port" entry,
+      a separate finding, not this bug); `candump` showed the cyclic sender's
+      300ms-cycle traffic resume within seconds with zero manual action, and a
+      fresh `cansend vcan0 7E0#22F19000` got the expected `7E8 [50 01]` reply back
+      in ~3.6ms from the still-running responder process. Full account in
+      `backlog/nodes_backlog.md`'s "gateway restart left nodes stuck" entry.
+  - id: TC_WebUIs_012_plugin_based_nodes
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`) on an isolated test
+      gateway/`vcan0` pair with both plugins loaded, the user's own live session
+      confirmed untouched throughout. Step 1: `candump` showed CAN ID `0x100`
+      with payload `01 02 03 04 05 06 07 08` on a 300ms cycle as configured.
+
+      This TestCase's node was reworked mid-verification: the original design
+      (`can_tp_echo_responder.py`, reassembling and echoing back whatever ISO-TP
+      message it received) turned out to be untestable by hand -- reported by
+      the user after trying it via `cansend`: "It doesn't seem to echo the
+      messages back. However it sends out flow control messages." Root cause:
+      receiving a multi-frame message requires being a full ISO-TP *requester*
+      yourself (send Consecutive Frames in response to the plugin's own Flow
+      Control), which a single `cansend` can't do -- the plugin correctly
+      emitted Flow Control and then waited forever for Consecutive Frames
+      nobody was sending, so nothing ever reassembled and nothing was ever
+      going to echo back. Replaced with `can_tp_trigger_sender.py` per the
+      user's own design: a plain CAN trigger frame (`--trigger-id`, default
+      `0x111`) whose payload's first byte is a length causes the node to
+      `send()` a fresh incrementing-byte payload (`00 01 02 ...`) through the
+      plugin's own segmentation -- a human only needs to supply Flow Control by
+      hand to watch a real multi-frame exchange, which `cansend` *can* do.
+
+      Step 2: `cansend vcan0 111#06` (using the node's default addressing,
+      `--source-addr 0x200`) produced `0x200  06 00 01 02 03 04 05 CC` -- a
+      correct Single Frame (6 bytes fits in one frame, so the plugin correctly
+      skipped segmentation entirely). Step 3, matching the user's own worked
+      example exactly: `cansend vcan0 111#0A` produced First Frame
+      `0x200  10 0A 00 01 02 03 04 05` (length 10); `cansend vcan0
+      201#300000CCCCCCCCCC` (Flow Control: CTS, BS=0, STmin=0) produced
+      Consecutive Frame `0x200  21 06 07 08 09 CC CC CC` -- byte-for-byte what
+      the user described. A 20-byte variant (`cansend vcan0 111#14`) produced a
+      First Frame plus two Consecutive Frames (`21 06 07 08 09 0A 0B 0C` /
+      `22 0D 0E 0F 10 11 12 13`), the full `00`-`13` sequence intact across both.
+      Step 4: an empty/RTR trigger fell back to `--default-length` (8); a `00`
+      payload byte logged the "0 bytes -- nothing to send" line and sent
+      nothing, confirmed via a clean `candump` capture showing no frame.
+
+      Step 5 (both nodes against a plugin-less gateway): `pdu_cyclic_publisher.py`'s
+      `configure_route()` (`PduNode`, which catches `grpc.RpcError` internally)
+      returned `False` cleanly, printed the expected hint, and kept retrying.
+      `can_tp_trigger_sender.py`'s `configure()` (`CanTpHandle`, which does
+      **not** catch `grpc.RpcError`) raised instead, caught by the node's own
+      `ensure_configured()`; the exception's own message
+      (`NOT_FOUND: "no CanTp plugin loaded for iface 'vcan0'"`) was printed
+      verbatim, same reasoning as the earlier echo-responder's fix.
+
+      Step 6 caught a second real bug, found only by testing the exact restart
+      scenario end-to-end: the node's `state["configured"]` flag doesn't know
+      the gateway restarted until an actual `configure()`/`send()` call fails --
+      nothing else invalidates it -- so the *first* trigger after any restart
+      hit `send()`'s `FAILED_PRECONDITION` ("no N-SDU connection configured"),
+      got logged, and was silently dropped; only the *second* trigger actually
+      went out. Fixed by retrying once within the same trigger: on a `send()`
+      failure, reconfigure with a fresh `CanTpHandle` and immediately retry
+      that same payload before giving up. Re-verified after the fix: killed the
+      gateway, restarted it, waited for `FrameNode`'s own background stream to
+      reconnect, then sent a *single* trigger with no warm-up -- both the
+      short (Single Frame) and the 20-byte (First Frame + 2 Consecutive Frames)
+      cases succeeded on that one trigger, confirmed via `candump` and a log
+      showing the self-heal ("send() raised (...); reconfiguring and retrying
+      this trigger once...") followed by no further error.
+  - id: TC_WebUIs_013_loopback_bind_by_default
+    verdict: NOT_TESTED
+  - id: TC_WebUIs_014_dashboard_metrics_panel
+    verdict: NOT_TESTED
+  - id: TC_Tools_001_tools_work_offline
+    verdict: NOT_TESTED
+  - id: TC_Tools_002_tool_navigation_separation
+    verdict: NOT_TESTED
+  - id: TC_Tools_003_pdu_editor_create_validate_save
+    verdict: NOT_TESTED
+  - id: TC_Tools_004_pdu_editor_schema_violation
+    verdict: NOT_TESTED
+  - id: TC_Tools_005_trace_analyzer_stage1_messages
+    verdict: NOT_TESTED
+  - id: TC_Tools_006_trace_analyzer_counters_and_signals
+    verdict: NOT_TESTED
+  - id: TC_Tools_007_trace_analyzer_pdu_db_export
+    verdict: NOT_TESTED
+  - id: TC_Tools_008_trace_analyzer_convert_to_trace
+    verdict: NOT_TESTED
+  - id: TC_Tools_009_trace_analyzer_pcapng_input
+    verdict: NOT_TESTED
+  - id: TC_Tools_010_trace_editor_load_filter_edit_save
+    verdict: NOT_TESTED
+  - id: TC_Tools_011_trace_editor_insert_delete_warnings
+    verdict: NOT_TESTED
+  - id: TC_Tools_012_trace_editor_export_pcapng
+    verdict: NOT_TESTED
+  - id: TC_Tools_013_trace_editor_push_to_gateway
+    verdict: NOT_TESTED
+  - id: TC_Tools_014_eth_analyzer_full_analysis
+    verdict: NOT_TESTED
+  - id: TC_Tools_015_eth_analyzer_autosar_pdu_stage
+    verdict: NOT_TESTED
+  - id: TC_Tools_016_eth_analyzer_csv_export_and_pcapng
+    verdict: NOT_TESTED
+  - id: TC_Tools_017_dbc2boatjson_conversion
+    verdict: NOT_TESTED
+  - id: TC_Tools_018_analyzer_invalid_input_errors
+    verdict: NOT_TESTED
+  - id: TC_Tools_019_dbc2boatjson_minmax_unscaled
+    verdict: NOT_TESTED
+  - id: TC_CLI_001_help_all_subcommands
+    verdict: NOT_TESTED
+  - id: TC_CLI_002_host_flag
+    verdict: NOT_TESTED
+  - id: TC_CLI_003_json_mode
+    verdict: NOT_TESTED
+  - id: TC_CLI_004_gateway_unreachable_error
+    verdict: NOT_TESTED
+  - id: TC_CLI_005_invalid_argument_handling
+    verdict: NOT_TESTED
+  - id: TC_CLI_006_system_test_runner
+    verdict: NOT_TESTED
+  - id: TC_CLI_007_ai_assistants
+    verdict: NOT_TESTED
+  - id: TC_CLI_008_boat_host_env_var
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`): all three steps matched
+      expected resolution order. `boat --help` displayed `[default:
+      192.168.9.9:50052]` with the env var set and `[default: localhost:50051]`
+      without it; `BoAtClient()`/`FrameNode()` in a Python REPL picked up
+      `BOAT_HOST` the same way, with an explicit constructor argument overriding it.
+  - id: TC_LauncherAgent_001_create_and_auto_allocate_port
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`): two instances created via
+      curl with no `grpc_port` got 50051 and 50052 respectively, neither started
+      yet at the time of the second create call.
+  - id: TC_LauncherAgent_002_start_independent_instances
+    verdict: OK
+    notes: |-
+      Verified on real hardware: distinct PIDs, each instance's log showed its own
+      port in the `[Gateway] gRPC server listening on 0.0.0.0:<port>` line, and
+      `boat --host localhost:50051 frame list-ifaces` /
+      `boat --host localhost:50052 frame list-ifaces` each independently listed
+      `vcan0`.
+  - id: TC_LauncherAgent_003_rejects_duplicate_explicit_port
+    verdict: OK
+    notes: |-
+      Verified on real hardware: `{"detail":"port 50051 is already assigned to
+      another tracked instance"}`, HTTP 400.
+  - id: TC_LauncherAgent_004_delete_refused_while_running
+    verdict: OK
+    notes: |-
+      Verified on real hardware: delete-while-running gave
+      `{"detail":"instance 'dbfe7584' is running; stop it first"}` (409); after
+      `stop` (status `stopped`, `exit_code: 0`), the delete returned `{"ok":true}`
+      and the instance no longer appeared in `GET /api/instances`.
+  - id: TC_LauncherAgent_005_host_info
+    verdict: OK
+    notes: |-
+      Verified on real hardware: response included `hostname: "agn-testcomputer"`
+      and `vcan0` among the listed interfaces.
+  - id: TC_LauncherAgent_006_update_edit_in_place
+    verdict: OK
+    notes: |-
+      Verified on real hardware: created an instance on port 50051 with
+      `can_ifaces: ["vcan0"]`; `PUT` while stopped with
+      `{"name": "edit-test-renamed", "can_ifaces": ["vcan0", "vcan1"],
+      "eth_ifaces": ["veth0"], "grpc_port": 50051}` applied cleanly (same id,
+      all fields updated, no port-conflict error despite resubmitting its own
+      port). Started it, then `PUT` with a different name returned
+      `{"detail":"instance '...' is running; stop it first"}` (409) as expected.
+  - id: TC_LauncherAgent_007_invocation_independent_paths
+    verdict: OK
+    notes: |-
+      Verified on real hardware: before the fix, launching via `cd admin_gui &&
+      python3 ../ui/launcher_agent.py` (exactly reproducing a real user's
+      invocation) produced `gateway_bins: [".../admin_gui/../boat-platform/
+      build/debug/.../boat_gateway"]` -- confirmed against the user's own live
+      agent process (`GET /api/instances` showed the same mangled path on a real
+      running instance). Root cause: `Path(__file__).parent.parent` without
+      `.resolve()`; Python absolutizes a relative `__file__` by prepending the
+      CWD without collapsing `..`, so `.parent.parent`'s lexical (non-normalizing)
+      stripping carried the `admin_gui/..` straight through. Fixed by adding
+      `.resolve()` (already the convention used everywhere else in the repo,
+      e.g. `tools/pdu_editor.py`). Re-verified with the same invocation after the
+      fix (on a scratch port, so as not to disturb the user's own still-running
+      session): `gateway_bins: [".../boat-platform/build/debug/.../boat_gateway"]`,
+      clean.
+  - id: TC_LauncherAgent_008_discovers_external_gateways
+    verdict: OK
+    notes: |-
+      Verified on real hardware: started a `boat_gateway` by hand with
+      `BOAT_CAN_INTERFACES=vcan0,vcan1 BOAT_GRPC_PORT=50077
+      BOAT_NODE_PLUGINS=.../can_tp.so?{"iface":"vcan0"}` (properly quoted via a
+      shell script -- a first attempt lost the JSON's quotes to shell-escaping
+      across the SSH/bash layering, which the parser correctly treated as
+      invalid JSON and fell back to `{}` for rather than crashing, exactly as
+      designed). `GET /api/instances` returned it with `id: "external:2343356"`,
+      `managed: false`, `can_ifaces: ["vcan0","vcan1"]`, `grpc_port: 50077`, and
+      the plugin's config correctly as `{"iface": "vcan0"}`. `start`/`delete`/
+      single-`GET` each returned the expected 400; `log` returned the fixed
+      "not captured" message; `stop` sent `SIGTERM` and the process was
+      confirmed gone via `ps` and absent from the next `GET /api/instances`.
+  - id: TC_LauncherAgent_009_node_lifecycle
+    verdict: OK
+    notes: |-
+      Verified on real hardware: `GET /api/node-scripts` listed
+      `cyclic_can_sender`/`can_request_responder` with correct docstrings.
+      Created a `can_request_responder` node with `target_host: "localhost:50056"`
+      and matching `extra_args`; after `start`, sending a CAN request directly to
+      that gateway produced the correct reply on the wire (`candump`:
+      `0x7E0` → `0x7E8` with the configured payload) -- confirming the node's
+      `BOAT_HOST` was genuinely set by the agent's own subprocess env, no
+      `--address` flag involved anywhere in this path. `PUT`/`DELETE` while
+      running both returned `409` naming the node id. `GET .../log` showed the
+      `[agent] started PID ... (BOAT_HOST=localhost:50056)` line. After `stop`
+      (`exit_code: 0`), `PUT` renamed it cleanly, and `DELETE` succeeded.
+  - id: TC_LauncherAgent_010_loopback_bind_by_default
+    verdict: NOT_TESTED
+  - id: TC_LauncherAgent_011_adopt_external_gateway
+    verdict: NOT_TESTED
+  - id: TC_LauncherAgent_012_stopped_definitions_persist
+    verdict: NOT_TESTED
+  - id: TC_AdminGui_001_add_host_and_poll
+    verdict: OK
+    notes: |-
+      Verified headlessly on real hardware (`agn-testcomputer`,
+      `QT_QPA_PLATFORM=offscreen`, logic paths only — no real display/window
+      manager exercised): `MainWindow` constructed, its background `PollWorker`
+      pulled a real snapshot from a live agent within one poll cycle.
+  - id: TC_AdminGui_002_create_start_stop_via_ui_actions
+    verdict: OK
+    notes: |-
+      Verified headlessly on real hardware: drove the exact code paths a real
+      user's clicks trigger — `AgentClient.create_instance()` (as the New Instance
+      dialog's accept handler calls it) followed by the actual
+      `MainWindow.stop_selected()` method against a table selection set to the new
+      row. Instance transitioned stopped→running (real PID)→stopped
+      (`exit_code: 0`). Log content itself not checked in this pass (covered
+      already at the agent level by TC_LauncherAgent_002); UI's log-panel
+      rendering not yet visually verified.
+  - id: TC_AdminGui_003_delete_refused_while_running
+    verdict: OK
+    notes: |-
+      Verified headlessly on real hardware, with a caveat worth recording: the
+      first pass at this test auto-dismissed the confirmation `QMessageBox` via
+      `.accept()`, which turned out to be a false positive -- `.accept()` sets the
+      dialog's result code but not `clickedButton()`, so `QMessageBox.question()`
+      read back `NoButton` (not `Yes`), and `delete_selected()` took its "not
+      confirmed" early-return without ever calling `delete_instance()`. Fixed by
+      clicking the dialog's actual `Yes` button object instead. Re-run with that
+      fix: a repeating watchdog timer observed **two** modals in sequence during
+      one `delete_selected()` call -- the confirmation ("Delete this instance
+      definition?"), then, after it proceeded to the real `DELETE` call and got
+      the agent's 409, a second dialog titled "Delete failed" with the exact
+      agent message (`"... is running; stop it first"`). The instance was
+      confirmed still `running` afterward via `GET /api/instances/{id}`.
+  - id: TC_AdminGui_004_multi_host_aggregation
+    verdict: OK
+    notes: |-
+      Verified headlessly on real hardware: ran two agents on the same host at
+      different ports (8098, 8099) as a stand-in for two separate machines, added
+      both, created one instance on each. The aggregated snapshot contained
+      instances from both host URLs, and `win.rebuild_table()` produced exactly 2
+      rows with distinct Host-column values (`host-a`, `host-b`) matching each
+      instance's actual origin.
+  - id: TC_AdminGui_005_interfaces_and_plugins_columns
+    verdict: OK
+    notes: |-
+      Verified with a real screenshot on real hardware (`agn-testcomputer`, Xvfb +
+      `QWidget.grab()`, not headless-only): created an instance with
+      `can_ifaces=["vcan0","vcan1"]`, `eth_ifaces=["veth0"]`, and
+      `node_plugins=[pdu_router.so (no config), can_tp.so ({"iface":"vcan0"})]`.
+      Row rendered `Interfaces: vcan0, vcan1, veth0` and
+      `Plugins: pdu_router.so, can_tp.so [vcan0]`, both fully visible after adding
+      `resizeColumnsToContents()` (the initial pass truncated both columns under
+      the default even-width split).
+
+      Building this screenshot also incidentally caught a real, previously-latent
+      bug unrelated to these columns: `AgentClient`'s default 5s timeout could be
+      shorter than a stop call's worst-case server-side duration (SIGTERM + up to
+      a 5s wait + SIGKILL fallback), so a real Stop click could read back a false
+      timeout error even though the gateway did stop. Fixed by giving
+      `start_instance`/`stop_instance` a dedicated 15s timeout — see
+      `backlog/launcher_agent_backlog.md` for the full account.
+  - id: TC_AdminGui_006_new_instance_dropdown_pickers
+    verdict: OK
+    notes: |-
+      Verified with real screenshots on real hardware (`agn-testcomputer`,
+      Xvfb): dropdowns were populated from a live `host_info()` call and included
+      real interfaces (`vcan0`, `vcan1`, `can0`, `can1`, plus PDU-DB-imported
+      ones) and real plugin paths (`can_tp.so`, `pdu_router.so`, etc.). Added
+      `vcan0` (picked) and `vcan-manual-entry` (typed) to the CAN list -- both
+      present. Added `can_tp.so` with `{"iface": "vcan0"}` and `pdu_router.so`
+      with no config -- `plugin_picker.values()` returned exactly
+      `[{"path": ".../can_tp.so", "config": {"iface": "vcan0"}}, {"path":
+      ".../pdu_router.so", "config": {}}]`. Invalid JSON (`{not valid json`)
+      correctly showed a warning dialog and left the list unchanged.
+      `result_payload()` matched the picker state exactly.
+
+      The first screenshot attempt also caught a real layout bug: the plugin
+      path combo, config field, and Add button crammed into one row left the
+      config field showing only `"d json"` of its placeholder — fixed by
+      stacking the path row and the config field onto separate lines; a second
+      screenshot confirmed the fix (full paths and full placeholder text both
+      visible).
+  - id: TC_AdminGui_007_edit_instance
+    verdict: OK
+    notes: |-
+      Verified end-to-end on real hardware (`agn-testcomputer`, with a real
+      screenshot): built the Edit dialog exactly as `edit_selected()` does for a
+      real instance (CAN iface `vcan0` + a `can_tp.so` plugin with `{"iface":
+      "vcan0"}`) and asserted every field pre-filled correctly -- host combo
+      `isEnabled() == False`, name/CAN-picker/plugin-picker/port all matching
+      the existing instance exactly. Added an Eth interface and a new name,
+      submitted via `update_instance()` (the same call `edit_selected()` makes),
+      then confirmed via `GET /api/instances/{id}` that the *same id* now carried
+      the new name and eth interface while keeping its original CAN interface.
+      Screenshot confirmed the table row showed `edited-name` with
+      `vcan0, veth0` in Interfaces.
+  - id: TC_AdminGui_008_equivalent_command_line
+    verdict: OK
+    notes: |-
+      Verified on real hardware: for an instance with `can_ifaces=["vcan0"]` and
+      one plugin (`can_tp.so`, config `{"iface": "vcan0"}`) on port 50051, the
+      panel read `BOAT_CAN_INTERFACES=vcan0 BOAT_GRPC_PORT=50051
+      BOAT_NODE_PLUGINS=<path>/can_tp.so?{"iface":"vcan0"} <path>/boat_gateway` --
+      asserted programmatically (not just visually) before and after an edit
+      that added `eth_ifaces: ["veth0"]`; the post-edit panel text included
+      `BOAT_ETH_INTERFACES=veth0` without any manual reselection needed (driven
+      by `rebuild_table()` calling the same recompute on every poll refresh).
+      Clipboard content itself not separately asserted (`_copy_command_line()`
+      is a one-line `QApplication.clipboard().setText()` call on the same text
+      already verified correct).
+  - id: TC_AdminGui_009_paste_command_line_to_fill
+    verdict: OK
+    notes: |-
+      Verified on real hardware: pasted a line with `vcan0,vcan1`, port `50078`,
+      and two plugins; `can_picker.values()`, `port_edit.text()`, and
+      `plugin_picker.values()` all matched exactly after **Parse && Fill**.
+      Created the instance from the parsed payload and confirmed
+      `_format_command_line()` on the server's response still contained
+      `BOAT_CAN_INTERFACES=vcan0,vcan1` and `BOAT_GRPC_PORT=50078` -- full
+      round trip.
+  - id: TC_AdminGui_010_managed_column_and_external_guard
+    verdict: OK
+    notes: |-
+      Verified end-to-end on real hardware with a screenshot: table showed
+      `managed-two` (`Managed: Yes`, `vcan1`) and an externally-started gateway
+      (`Managed: No`, `id: external:<pid>`, real `can0, vcan0` interfaces) side
+      by side. Selecting the external row and calling
+      `edit_selected()`/`start_selected()`/`delete_selected()` each produced the
+      guard message (captured via a monkey-patched `QMessageBox.information`,
+      three calls, all containing "wasn't started by this agent") without any
+      of them reaching the network. Calling `stop_selected()` on that same row
+      genuinely terminated the manually-started process, confirmed via
+      `Popen.wait()` returning within the timeout. Log panel for the selected
+      external row also correctly showed the server's friendly
+      "log not captured" message rather than an error.
+  - id: TC_AdminGui_011_selection_cleared_when_selected_row_vanishes
+    verdict: OK
+    notes: |-
+      Found by the user's own manual testing, not a scripted check: create+start
+      a managed instance, start an external one, stop the external one via the
+      GUI (worked), then select what looked like the remaining row and click
+      Stop -- got a "Stop failed" error naming the *previous* (already-stopped)
+      external instance's pid, not the one actually selected on screen.
+
+      Root cause: `rebuild_table()` repopulates rows inside
+      `table.blockSignals(True)`. When the previously-selected id isn't in the
+      new snapshot, the old code left `self._selected` untouched and never told
+      Qt's selection model anything changed -- whatever row *index* was
+      previously highlighted stayed highlighted with new data now underneath it,
+      while `_selected` (what every action button actually reads) kept pointing
+      at the vanished id. A real hazard, not just cosmetic: in a bigger table
+      that stale id could coincidentally still resolve to a *different, still-
+      live* instance, and an action would silently hit the wrong one with no
+      error.
+
+      Fixed by explicitly clearing both `table.clearSelection()` and
+      `self._selected` when the previously-selected row isn't found during a
+      rebuild. Verified on real hardware two ways: (1) reproduced the exact bug
+      by temporarily reverting just this fix and re-running the deterministic
+      test below -- it correctly *failed* (`_selected` stayed stale, a row
+      stayed visually highlighted) -- then restored the fix and the same test
+      passed; (2) the passing deterministic test itself: hand-crafted snapshots
+      fed straight into `rebuild_table()` (no real subprocess/network timing
+      involved -- a live-process version of this test hit repeated flakiness
+      from SSH/agent round-trip latency in this environment) confirmed all four
+      steps above.
+  - id: TC_AdminGui_012_save_and_load_session
+    verdict: OK
+    notes: |-
+      Verified end-to-end on real hardware (`agn-testcomputer`) with a full
+      round trip: created `session-inst-1` (`can_ifaces: [vcan0]`,
+      `eth_ifaces: [veth0]`, `can_tp.so` with `{"iface": "vcan0"}`,
+      `grpc_port: 50061`) and `session-inst-2` (`can_ifaces: [vcan1]`,
+      `grpc_port: 50062`), plus an external process. `save_session()`'s output
+      YAML contained exactly those two instances with every field matching, and
+      no trace of the external one. Wiped the agent completely (stop+delete
+      both, kill the external process, confirmed `GET /api/instances` empty).
+      Constructed a **brand new** `MainWindow`/`HostStore` with zero hosts
+      (simulating a different machine) and called `load_session()` on the saved
+      file: zero errors, host added correctly, both instances recreated with
+      `can_ifaces`/`eth_ifaces`/`node_plugins`/`grpc_port` all matching the
+      original definitions exactly under **different** ids than the originals
+      (recreated, not resumed) -- and, after the auto-start behavior was
+      explicitly changed per user request, re-verified separately that a loaded
+      instance's `status` is `"stopped"` with `pid: null` immediately after
+      `load_session()` returns, not automatically running.
+
+      **Update (2026-08-17):** extended to cover the Nodes tab per user request
+      ("include the nodes in the save/load session"). Verified two ways on real
+      hardware (`agn-testcomputer`), the user's own live session confirmed
+      untouched throughout: (1) headless, calling `session.py` directly against
+      a live agent -- created one instance and one node
+      (`script_path=can_tp_trigger_sender.py`, `target_host=localhost:50051`,
+      `extra_args=[--iface, vcan0]`), saved, deleted both originals, reloaded --
+      both recreated with every field matching exactly, `status: "stopped"`; (2)
+      through real Qt code (`QT_QPA_PLATFORM=offscreen`) driving
+      `MainWindow.save_session()`/`load_session()` with `QFileDialog`'s static
+      methods monkeypatched to a fixed path so the actual button-click call
+      path runs unattended -- identical result, plus confirmed the confirmation
+      dialog reports both counts ("1 instance(s) and 1 node(s) created"). A
+      leftover duplicate `HostStore` entry from earlier testing this session
+      (two names pointing at the same physical agent) caused a confusing first
+      pass with doubled counts on both instances and nodes -- not a bug in this
+      feature, correct behavior for two distinct host entries that both happen
+      to alias the same agent; cleaned up and re-verified cleanly with one host
+      entry.
+
+      **Update (2026-08-18):** extended to cover the Test Runs tab per user
+      request ("Now wire it in so the tests can also be saved and loaded").
+      `session.py`'s `load_session()` return tuple grew a `test_runs_created`
+      count (a breaking signature change, its one call site in
+      `MainWindow.load_session()` updated to match). Verified two ways on real
+      hardware (`agn-testcomputer`), on an **isolated test agent (port 8097)**
+      -- deliberately not the usual 8090, since the user's own live agent was
+      already running there; confirmed via `ps`/`ss` before starting anything,
+      and confirmed untouched throughout: (1) headless, calling `session.py`
+      directly -- created one instance, one node, and one test run
+      (`manifest_path=config/tests/manifest_can_loopback.json`,
+      `env_config_path=config/tests/env_can_loopback.json`,
+      `extra_args=[--verbose]`), saved, wiped all three, reloaded -- all three
+      recreated with every field matching exactly, `test_runs_created == 1`,
+      `status: "stopped"`; (2) through real Qt code (`QT_QPA_PLATFORM=offscreen`)
+      driving the real `MainWindow.save_session()`/`load_session()` handlers
+      (`QFileDialog` statics monkeypatched to a fixed path). The real,
+      unmodified save correctly also captured the user's own live host's own
+      real definitions (including their own pre-existing test run) in the same
+      file, since `save_session()` saves every configured host and that step is
+      read-only; before exercising the real `load_session()`, the saved YAML
+      was trimmed to just this test's isolated host entry first (so the load
+      call -- itself untouched -- couldn't try to recreate the user's own
+      managed definitions a second time against their live agent). Confirmed
+      the captured info-dialog text read exactly "Session loaded: 0 new
+      host(s) added, 1 instance(s), 1 node(s), and 1 test run(s) created", all
+      three recreated under fresh ids, and the reloaded run visible in the real
+      `test_run_table` widget. One real hang caught and fixed in the driver
+      script (not a product bug): `save_session()`/`load_session()` end with a
+      modal `QMessageBox.information()`/`.warning()` whose `.exec()` genuinely
+      blocks the calling thread until dismissed -- true even under
+      `QT_QPA_PLATFORM=offscreen` -- so with no user to click OK the first
+      attempt hung indefinitely; fixed by monkeypatching `QMessageBox.
+      information`/`.warning` to capture the message text instead of showing
+      it. All test artifacts (instances, nodes, test runs, the isolated agent
+      process, its host-store entry, session files) cleaned up afterward. Full
+      account: `backlog/test_runner_backlog.md`'s "wired test runs into
+      Save/Load Session" entry.
+  - id: TC_AdminGui_013_nodes_tab
+    verdict: OK
+    notes: |-
+      Verified end-to-end on real hardware with real screenshots. New Node
+      dialog's script dropdown listed `can_request_responder`/`cyclic_can_sender`;
+      selecting `can_request_responder` showed its exact docstring first line.
+      Filled `name=gui-responder`, `target_host=localhost:50057`, `extra_args`
+      via the dialog's own fields, submitted through `result_payload()` →
+      `create_node()`. Selected the new row via a real `node_table.selectRow()`
+      click; `_selected_node` matched; the command-line panel read exactly
+      `BOAT_HOST=localhost:50057 python3 .../can_request_responder.py --iface
+      vcan0 --request-id 0x7E0 --response-id 0x7E8 --response-data 5001`.
+      `start_node_selected()` started it; sending a CAN request to the target
+      gateway produced the correct reply on the wire (`candump`), confirming the
+      node was genuinely functioning, not merely "running". Calling
+      `update_node()` directly while running returned 409 (mentioning "running");
+      `stop_node_selected()` stopped it cleanly (`exit_code: 0`); the Edit
+      dialog, reopened on the now-stopped node, pre-filled every field correctly
+      (host combo disabled, name/target host/extra args all matching), and
+      submitting a rename via its own `result_payload()` applied correctly.
+      Screenshots confirmed both the Nodes tab (rich node row: script, target
+      host, extra args, live log showing the actual request/reply exchange) and
+      the Gateways tab (rich gateway row: multiple interfaces, two plugins) with
+      tab switching working and no regression to the existing Gateways tab.
+  - id: TC_AdminGui_014_node_target_gateway_dropdown_and_paste
+    verdict: OK
+    notes: |-
+      Verified on real hardware. Dropdown listed both a `running` and a
+      `stopped` instance with correct labels. The **first** attempt at step 2
+      caught a real bug: `result_payload()` read `target_host_combo.
+      currentText()` directly, which for a picked item is the full label
+      (`"main — localhost:50051 (running)"`), not the stored address -- the
+      payload's `target_host` came back as that whole label. Fixed by only
+      trusting `currentData()` when the displayed text still matches the
+      selected index's own label (i.e. nothing was retyped after picking);
+      re-verified and the payload then correctly held plain `localhost:50051`.
+      Bare port `"50052"` normalized to `"localhost:50052"`; explicit
+      `"otherhost:50099"` passed through unchanged. `_parse_node_command_line()`
+      correctly handled both the full form (`BOAT_HOST=...` prefix + `python3` +
+      a quoted `"AA BB"` arg, which correctly stayed one token) and a bare
+      `<script> <args>` form with neither prefix present. Pasting a real
+      formatted command line and clicking **Parse && Fill** populated Target
+      gateway/Script/Extra args exactly; creating a node from that payload via
+      `create_node()` matched the original definition field-for-field.
+  - id: TC_AdminGui_015_node_target_gateway_spans_all_hosts
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`): two agents on one physical
+      box, deliberately addressed via a real IP (`10.10.7.175`) and the real
+      hostname (`agn-testcomputer`) rather than `localhost`, specifically so the
+      test could tell "genuinely resolved cross-host address" apart from "just
+      happened to also say localhost." With Host = agent A: agent A's own
+      gateway showed as `on-A — localhost:50051 (running)` (untagged); agent B's
+      showed as `[host-B] on-B — agn-testcomputer:50052 (running)` (tagged, real
+      hostname, not `localhost`). Switching Host to agent B flipped it exactly:
+      agent B's gateway became the untagged `localhost:50052` entry, agent A's
+      became `[host-A] on-A — 10.10.7.175:50051` (its real IP). Picking that
+      cross-host entry produced `result_payload()["target_host"] ==
+      "10.10.7.175:50051"` exactly. Bonus observation, not a bug: each agent's
+      own external-gateway discovery also picked up the *other* agent's gateway
+      process as an `(unmanaged)` entry (expected, since `/proc` scanning isn't
+      scoped per-agent) -- these appeared in the dropdown too, which is correct:
+      a real running gateway is a valid target regardless of which agent (if
+      any) manages it.
+  - id: TC_AdminGui_016_node_dynamic_argument_fields
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`) via two throwaway Qt
+      driver scripts run under a real Xvfb + `xcb` platform (not offscreen),
+      screenshotted with `QWidget.grab()`. Step 1: agent's `/api/node-scripts`
+      correctly introspected both real node scripts' `build_parser()` output
+      via `importlib`, e.g. `cyclic_can_sender`'s six non-`--address` arguments
+      with correct types/defaults (`--cycle-ms` default `1000` as an `int`,
+      `--fd`/`--brs` as `is_flag: true`); the dialog rendered one field per
+      argument, `--data`'s placeholder correctly fell back to its help text
+      ("Payload as hex bytes, e.g. AABBCCDD (empty = 0-byte frame)") since its
+      default is `""`. Steps 3: created a node via `create_node()` with
+      `extra_args=["--iface","vcan1","--cycle-ms","250","--fd",
+      "--not-a-real-flag","xyz"]`, reopened it via `NewNodeDialog(existing=...)`
+      -- `_arg_widgets["--iface"].text() == "vcan1"`,
+      `_arg_widgets["--cycle-ms"].text() == "250"`,
+      `_arg_widgets["--fd"].isChecked() is True`,
+      `_arg_widgets["--brs"].isChecked() is False` (untouched), and
+      `extra_args_edit.text() == "--not-a-real-flag xyz"` -- exactly the
+      recognized/leftover split described in `admin_gui/README.md`. Screenshots
+      confirmed both dialogs visually match (see
+      `admin_gui/docs/new_node_dialog.png` for the New Node case). Step 4 not
+      separately screenshotted but covered by `_rebuild_arg_fields()`'s
+      `specs = specs or []` guard and `_introspect_node_args()`'s broad
+      `except Exception: return []` on the agent side, already exercised
+      in practice by every script that predates this feature.
+  - id: TC_AdminGui_017_plugin_config_schema_fields
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`) via a scratch agent
+      instance (isolated from the reporting user's own live agent/gateway
+      throughout, confirmed via `ps`/`ss` before and after) and a real Qt render
+      (Xvfb + `xcb`, screenshotted via `QWidget.grab()`, not offscreen). Step 1:
+      all ten `tcp.so` fields rendered with correct placeholders. Step 2:
+      `mode` rendered as a real `QComboBox` pre-selected to `"both"`; `buses`
+      showed `e.g. can`. Step 3: filling `iface="veth0"`, `retry_ms="500"`,
+      unchecking `nagle`, then **+ Add** produced exactly `{"iface": "veth0",
+      "nagle": false, "retry_ms": 500}` -- `retry_ms` a real JSON int. A first
+      attempt at this step caught a real bug: `add_current()` was calling the
+      same field-rebuild used on combo-selection-change defensively right
+      before reading values, which destroyed and recreated every widget first,
+      silently discarding whatever was just entered (`nagle` came back `true`
+      -- the schema's own default -- despite explicitly unchecking it, and
+      `iface`/`retry_ms` were missing entirely). Fixed by removing that call;
+      re-running this exact step afterward produced the correct dict. Step 4:
+      confirmed `pdu_router.so` (and every legacy `.so` with no current CMake
+      target) shows an empty/hidden Plugin config group, per `/api/host/info`
+      returning `"config_schema": {}` for them (`_introspect_plugin_config()`'s
+      missing-sidecar-file path). Full account in
+      `backlog/launcher_agent_backlog.md`'s "plugin config schema fields"
+      entry.
+  - id: TC_AdminGui_018_test_runs_tab
+    verdict: OK
+    notes: |-
+      Verified twice on real hardware (`agn-testcomputer`), on an isolated
+      scratch agent (port 8090) + Xvfb (`:44`), confirmed via `ps`/`ss` not to
+      disturb the user's own live agent/gateway throughout. First via raw
+      `curl` against the agent directly (manifest/environment discovery,
+      create, start, watched `status`→`stopped`/`result`→`PASS`, confirmed real
+      `report.json`/`report.junit.xml`/`report.html`/`stdout.txt` written to
+      disk, `extra_args` reaching the invocation, delete) before touching Qt at
+      all. Then through the actual Qt code path (`QT_QPA_PLATFORM=xcb`, a
+      throwaway driver script, not committed): constructed a real `MainWindow`,
+      confirmed the Test Runs tab's 9 columns exactly. Opened `NewTestRunDialog`
+      non-modally -- Manifest dropdown showed `can-loopback-routing-suite  (1
+      test(s))`; selecting it auto-selected `can-loopback-routing
+      (localhost:50067)` in the Environment dropdown, `currentData()` correctly
+      ending in `env_can_loopback.json`. Submitted via the same
+      `result_payload()` → `AgentClient.create_test_run()` call path
+      `new_test_run()` itself makes, selected the resulting row via a real
+      `test_run_table.selectRow()`, and called the real
+      `start_test_run_selected()` method. Polled (2s cadence, same
+      `PollWorker`) until the table showed `Result: PASS`/`Status: stopped`
+      (~3s later): real HIL log content in the viewer (`[test] Gateway at
+      localhost:50067`, `TC_CANLOOP_001: PASS (1334ms)`, `Results: 1/1 passed,
+      0 failed`), report-dir field showing `reports/admin_gui/<id>`.
+      Screenshots confirmed both the populated dialog (manifest/environment doc
+      labels rendering correctly underneath each dropdown) and the passing tab
+      row. All test artifacts (test runs, `reports/admin_gui/`, the scratch
+      agent process, Xvfb, the driver script) cleaned up afterward. One test-script
+      bug caught and fixed along the way, not a product bug: the driver's first
+      pass treated the run's initial (never-started) `status: "stopped"` as
+      "finished," racing ahead of the real completion -- fixed by waiting for a
+      non-`None` `result` instead of the `"stopped"` status text, since a
+      freshly-created run is also reported `"stopped"` before it's ever started.
+      Full account: `backlog/test_runner_backlog.md`'s "admin_gui Test Runs
+      tab" entry.
+  - id: TC_AdminGui_019_test_run_report_viewer
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`), on an isolated test agent
+      (port 8097, the user's own live agent confirmed on 8090 and never
+      touched), two ways. First via `curl` directly against
+      `GET /api/test-runs/{id}/report`: `{"exists": false, "tests": []}` before
+      starting (empty `report_dir`); a real parsed `report.json` after
+      finishing, with the environment snapshot, execution timing, and verdict
+      all present and correctly shaped; a 404 for an unknown run id. Then
+      through the real Qt code path (Xvfb + `xcb`, a throwaway driver script,
+      not committed): created and started a real test run through the actual
+      agent, constructed the real `TestReportDialog` class against it (same
+      class the **View Report** button opens), and confirmed
+      `summary_label.text()` read `reports/admin_gui/<id> — 1/1 passed`, the
+      tree held exactly one row (`TC_CANLOOP_001`, `PASS`, `1361ms`), and the
+      detail pane's text included the real test description, `Verdict: PASS`,
+      and `Also on disk in this folder (agent's host): report.html,
+      report.junit.xml, stdout.txt`. A screenshot confirmed the tree (PASS row
+      rendered in green) and detail pane visually. All test artifacts (test
+      run, `reports/admin_gui/`, the isolated agent process, Xvfb, driver
+      script) cleaned up afterward. Full account: `backlog/test_runner_backlog.md`'s
+      "test report content viewer" entry.
+  - id: TC_AdminGui_020_interfaces_tab
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`), on an isolated test agent
+      (port 8098 -- the user's own live agent was on the usual 8090 and their
+      own gateway was actively using real `can0`/`can1`, both confirmed via
+      `ps`/`ss` and never touched throughout), two ways. First via `curl`
+      directly: confirmed `operstate`/`lower_up` fields present; created,
+      brought down, brought up, and deleted a test vcan; confirmed CAN config
+      against it failed cleanly (`RTNETLINK answers: Operation not supported`
+      -- exercising the negative path deliberately, since the positive path
+      needs real hardware and the box's live `can0`/`can1` were off-limits).
+      This surfaced a real bug: a 15-character veth name's auto-generated
+      `_peer` suffix produced a 20-character name, over Linux's `IFNAMSIZ`
+      limit, previously failing with `ip`'s own cryptic `"name" not a valid
+      ifname` -- fixed with server-side + live client-side validation (see
+      `backlog/launcher_agent_backlog.md`'s "Interfaces tab" entry), re-verified
+      after the fix with both a rejected too-long name and a real, valid veth
+      pair created/confirmed/deleted (both ends removed together). Then through
+      the real Qt code path (Xvfb + `xcb`, a throwaway driver script, not
+      committed): confirmed the table's 6 columns; drove the real
+      `NewInterfaceDialog` and confirmed its live peer-name warning text and
+      `result_name()`'s client-side rejection; created a real vcan through the
+      same call path `new_vcan()` makes, toggled it down/up through the real
+      handlers (`QMessageBox.question` monkeypatched to auto-confirm) with the
+      Up column updating correctly each time via the real poll cycle; opened
+      the real `CanConfigDialog` and confirmed the same negative-path
+      rejection; created and deleted a real veth pair through the dialog,
+      confirming both rows appeared and disappeared together. A screenshot
+      confirmed the table renders correctly, including real physical
+      `can0`/`can1` shown read-only and unmodified alongside virtual
+      interfaces. No unexpected info/warning dialogs fired during the run
+      (asserted explicitly). All test artifacts cleaned up afterward. Full
+      account: `backlog/launcher_agent_backlog.md`'s "Interfaces tab" entry.
+
+      **Update (2026-08-18):** step 7 added and exercised for real by the user
+      directly, on their own live `can0` (a PEAK PCAN-USB Pro FD already
+      running CAN FD at 500000/2000000) -- Down, Configure CAN…, change
+      bitrate, uncheck CAN FD, submit. This found two real bugs on the first
+      real attempt: the dialog showed 500000/no-FD as if that were the current
+      config (it was hardcoded placeholders, unrelated to the interface's
+      actual FD/500000/2000000 state), and after submitting a 250000/no-FD
+      change, `ip -details link show can0` showed `bitrate 250000` correctly
+      applied but `<FD>` and `dbitrate 2000000` still present, and the
+      interface back `up` despite Down having just been pressed. Root-caused
+      (`ip -d -j link show`, structured JSON) to: (1) `CanConfigDialog` never
+      fetched real interface state at all; (2) the CAN netlink interface only
+      updates fields a `type can` message explicitly includes, and the
+      original endpoint never sent `fd off`, only ever `fd on` when requested,
+      so unchecking FD against an already-FD interface left FD genuinely
+      untouched; (3) the endpoint always forced the interface back `up`
+      regardless of its state beforehand. All three fixed (`GET
+      /api/interfaces/{name}/can-config` for real prefill, `fd` always sent
+      explicitly, prior up/down state restored instead of forced `up`) and
+      re-verified directly against `can0` itself (the same interface used to
+      find the bugs, since the positive path fundamentally needs real CAN
+      hardware): brought it down, applied `fd: false`, confirmed via `ip -d -j
+      link show` (ground truth, not the agent's own response) that `ctrlmode`
+      and `data_bittiming` were both gone entirely and the interface stayed
+      down; then restored the original `500000/2000000/fd: true` config with
+      the interface brought back up first, confirming the final `ip -details
+      link show can0` matched the user's own original (pre-incident) output
+      character-for-character. `CanConfigDialog`'s pre-fill logic itself
+      verified separately with three widget-construction cases (real FD state,
+      classic CAN state, no current state available) -- all three correct.
+      Full account: `backlog/launcher_agent_backlog.md`'s "Configure CAN found
+      and fixed two real bugs on real CAN FD hardware" entry.
+  - id: TC_AdminGui_021_dark_theme_sidebar_redesign
+    verdict: OK
+    notes: |-
+      User provided a mockup image (sidebar nav, dark navy theme, blue/red
+      accent buttons, colored status badges) and asked for the UI to be
+      adapted to match it. Clarified scope first (three questions, all
+      answered with the recommended option): Settings holds host management
+      (moved off the always-visible top bar it used to occupy); the dark theme
+      applies everywhere (all pages + all dialogs), not just the shell shown in
+      the mockup; colors approximated directly from the mockup image rather
+      than guessing.
+
+      Implementation: `QListWidget`+`QStackedWidget` sidebar replacing
+      `QTabWidget` (full control over icon/selected-item styling a tab bar
+      can't easily reach); a single `_DARK_STYLESHEET` applied once via
+      `QApplication.setStyleSheet()`; a `_mark()` helper tagging buttons with a
+      `primary`/`danger` Qt dynamic property the stylesheet's
+      `QPushButton[class="..."]` selectors key off of, applied to every
+      Start/OK (blue) and Stop/Down/Delete (red) button across all four
+      data pages and all five dialogs; colorized Managed/Status/Result/Up
+      cells via small helper functions (`_process_status_color()`,
+      `_bool_color()`, reusing the existing `_VERDICT_COLORS` dict from the
+      Test Report dialog, itself re-tuned to the new dark palette). Host
+      management (host list, Add/Remove Host, Save/Load Session) moved from
+      the old always-visible top bar into a new Settings page.
+
+      Verified on real hardware (`agn-testcomputer`), on the user's own
+      configured host (read-only -- never created/modified/deleted anything):
+      a throwaway Qt driver script (Xvfb + `xcb`, not committed) constructed a
+      real `MainWindow`, clicked through all five sidebar pages, and
+      screenshotted each one plus a real dialog (`NewInstanceDialog`). All
+      five nav labels/icons render correctly with no missing-glyph boxes
+      (`▤ Gateway`, `◈ Nodes`, `✓ Test Runs`, `⇄ Interfaces`, `⚙ Settings`);
+      real data (real gateway instances, nodes, test runs, and interfaces
+      including physical `can0`/`can1`, untouched) rendered correctly styled
+      in every table; Start/OK buttons blue, Stop/Down/Delete buttons red,
+      Managed "Yes" green; the dialog matched the dark theme throughout with
+      no light-mode popup. Screenshots also used to regenerate
+      `admin_gui/docs/screenshot.png`, `new_instance_dialog.png`,
+      `nodes_tab.png`, `new_node_dialog.png` (the previously-committed ones
+      were from the old light-mode/tab-bar layout, now stale). All test
+      artifacts (screenshots not meant for the repo, Xvfb, driver scripts)
+      cleaned up afterward.
+
+      **Update (2026-08-19):** after trying it, user asked for host management
+      (Add/Remove Host, Save/Load Session) to move from Settings back to the
+      top of the Gateway page, with Settings left genuinely empty for now.
+      Verified on real hardware (`agn-testcomputer`), read-only: a throwaway Qt
+      driver script confirmed the Gateway page's host list shows real data (1
+      configured host) with both button rows present at the top, and the
+      Settings page renders as a blank page with no widgets. `screenshot.png`
+      regenerated again to match; the dialog and Nodes-page screenshots were
+      unaffected by this move. Full account: `backlog/launcher_agent_backlog.md`'s
+      dark-theme entry, "continued" update.
+  - id: TC_AdminGui_022_can_config_column
+    verdict: OK
+    notes: |-
+      Verified on real hardware (`agn-testcomputer`), strictly read-only (the
+      box had two live gateways, `launcher_agent`, and four other `ui/*.py`
+      services all running at once at the time -- confirmed via `ps`/`ss`
+      before and after, an isolated test agent used throughout, no
+      create/delete/up/down/configure calls made against anything real). First
+      via `curl` directly against `GET /api/interfaces`: `can0`/`can1` (the
+      user's own current real config, left exactly as found) returned full
+      `can_config` with correct `sample_point_pct` (87.5/75.0) and all
+      seg/sjw fields for both nominal and FD data phases; `vcan0`/`veth0`/`lo`
+      all correctly returned `can_config: null`; the separate flat
+      `GET .../can-config` endpoint (dialog prefill) confirmed unchanged after
+      the underlying refactor. Then through the real Qt code path (Xvfb +
+      `xcb`, a throwaway driver script, not committed): confirmed the table's
+      7 real columns; confirmed `can0`'s real cell text
+      (`"250000 bps, 87.5% SP / FD 2000000 bps, 75.0% SP"`) and tooltip
+      content; confirmed `vcan0` read `"virtual"` and `veth0`/`lo` read `"—"`;
+      selected `vcan0` and called the real `configure_can_selected()`,
+      confirming exactly one captured info message and that `CanConfigDialog`
+      was never constructed. A screenshot confirmed the column renders
+      correctly across every interface type present. All test artifacts
+      cleaned up afterward; every one of the user's own live processes
+      confirmed running under the same PIDs afterward. Full account:
+      `backlog/launcher_agent_backlog.md`'s "CAN Config column" entry.
+  - id: TC_AdminGui_023_node_tick_fields
+    verdict: OK
+    notes: |-
+      Followed a request to audit the gateway's full environment-variable
+      surface first (a source grep of every `getenv()` call in `main.cpp` +
+      `replay_engine.cpp`, confirming 9 total including three genuinely
+      undocumented TLS vars the user then said weren't needed for now) --
+      this test case covers the follow-up: adding dedicated Node tick fields
+      to the New/Edit Instance dialog, previously only reachable via a paste
+      that silently dropped the value (no field existed to hold it, and
+      `result_payload()` never included it, even though the agent-side
+      `create_instance()`/`update_instance()` already accepted it). Also
+      corrected a naming mix-up in the request itself: the real variable is
+      `BOAT_NODE_TICK_US` (microseconds), not `_NS` (nanoseconds) -- confirmed
+      against the actual `getenv()` call, and implemented with the real name.
+
+      Verified on real hardware (`agn-testcomputer`), on an isolated test
+      agent (the box had `launcher_agent` and four other `ui/*.py` services
+      running at the time, confirmed via `ps`/`ss` and left untouched; no
+      gateway processes were running, so nothing else needed avoiding): a
+      throwaway Qt driver script (Xvfb + `xcb`, not committed) confirmed a
+      fresh dialog's fields read `"1"`/`""` and `result_payload()` returned
+      `{"tick_ms": 1, "tick_us": None}`; created a real instance through the
+      isolated agent and confirmed the stored `tick_ms`/`tick_us` matched;
+      reopened it in Edit mode and confirmed `"1"`/`""` pre-filled from the
+      *saved* instance, not just the constructor default; changed `tick_us`
+      to `500` and confirmed the real update persisted it; pasted a line with
+      `BOAT_NODE_TICK_MS=5` and confirmed **Parse && Fill** populated the
+      `ms` field with `"5"` (previously silently dropped, since the field
+      didn't exist). A screenshot confirmed the fields and note render
+      correctly, and was used to regenerate the stale
+      `admin_gui/docs/new_instance_dialog.png`. Test instance and all test
+      artifacts cleaned up afterward; every one of the user's own live
+      processes confirmed running under the same PIDs afterward. Full
+      account: `backlog/launcher_agent_backlog.md`'s "audited the gateway's
+      full env var surface, added Node tick fields" entry.
+  - id: TC_AdminGui_024_adopt_external_gateway
+    verdict: NOT_TESTED
+  - id: TC_Release_001_deb_install_and_contents
+    verdict: NOT_TESTED
+  - id: TC_Release_002_rpm_install
+    verdict: NOT_TESTED
+  - id: TC_Release_003_tarball_on_old_distro
+    verdict: NOT_TESTED
+  - id: TC_Release_004_arm64_packages
+    verdict: NOT_TESTED
+  - id: TC_Release_005_container_image_multiarch
+    verdict: NOT_TESTED
+  - id: TC_Release_006_out_of_tree_plugin_builds_against_package
+    verdict: NOT_TESTED
+  - id: TC_Release_007_version_consistency
+    verdict: NOT_TESTED
