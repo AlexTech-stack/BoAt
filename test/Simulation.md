@@ -94,22 +94,28 @@ valid scenario available (`boat scenario list`).
 
 ---
 
-### TC_Simulation_006_determinism_same_seed_bit_identical
+### TC_Simulation_006_determinism_same_seed_identical
 
 **TestSets:** [Simulation], [Determinism]
 
 **Preconditions:**
-- A scenario with seeded randomness (e.g. fault injection or randomized payloads)
-- Recorder available
+- Gateway running; CLI + SDK installed
+- `boat-platform/config/scenarios/example.json` available (declares `vehicle.speed`)
+- `test/fixtures/scripts/determinism_probe.py`: uploads a copy of the scenario with the
+  requested seed, injects a seeded `noise` fault on `vehicle.speed`, then steps the paused
+  simulation one tick at a time and injects a fixed signal value at each tick, recording
+  every `(tick, name, value)` the gateway emits
 
 **TestSteps:**
-1. Run the scenario with seed S while recording all traffic to a trace file; stop
-2. Reset, run the identical scenario with the same seed S recording to a second file
-3. Compare the two recordings' frame sequences (IDs, payloads, tick order)
+1. `python3 test/fixtures/scripts/determinism_probe.py --seed 1234 --ticks 32 --out run1.jsonl`
+2. Repeat with the same seed: `--out run2.jsonl`
+3. Compare the two recordings
 
 **Expected:**
-- Both runs produce an identical frame sequence — same frames, same payloads, same
-  order (timestamps may differ in wall clock but not in tick placement)
+- Both runs produce an identical `(tick, name, value)` sequence — the gateway's per-tick
+  PRNG reseed makes the seeded noise reproducible (wall-clock timing is irrelevant because
+  the probe advances ticks explicitly with `StepSimulation`)
+- This is the signal-event guarantee; it does not require a frame recorder
 
 ---
 
@@ -118,16 +124,17 @@ valid scenario available (`boat scenario list`).
 **TestSets:** [Simulation], [Determinism]
 
 **Preconditions:**
-- Same scenario as TC_Simulation_006
+- Same gateway, scenario and probe script as TC_Simulation_006
 
 **TestSteps:**
-1. Run the scenario with seed S1, record
-2. Run the scenario with seed S2 ≠ S1, record
+1. `python3 test/fixtures/scripts/determinism_probe.py --seed 1234 --ticks 32 --out run1.jsonl`
+2. `python3 test/fixtures/scripts/determinism_probe.py --seed 4321 --ticks 32 --out run2.jsonl`
 3. Compare the recordings
 
 **Expected:**
-- The runs differ (sanity check that the seed actually influences behavior — guards
-  against a determinism test that trivially passes because nothing is random)
+- The runs differ (at least one `(tick, value)` pair changes) — sanity check that the
+  seed actually influences the noise stream, guarding against a determinism test that
+  passes trivially because nothing is random
 
 ---
 

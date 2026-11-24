@@ -1,0 +1,16 @@
+{
+  "id": "invalid_semantic",
+  "name": "Semantically invalid scenario",
+  "version": "1.0.0",
+  "duration_ticks": 100,
+  "seed": 1,
+  "plugins": [
+    { "so_path": "/no/such/boat-plugin.so", "config_json": "{}" }
+  ],
+  "signals": [
+    { "id": "vehicle.speed", "name": "Vehicle speed", "type": "double", "unit": "km/h" }
+  ],
+  "faults": [
+    { "tick": 10, "signal_id": "vehicle.missing", "fault_type": "noise", "magnitude": 1.0 }
+  ]
+}

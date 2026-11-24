@@ -44,6 +44,12 @@ class ScenarioLoader {
   static ScenarioDef LoadFromFile(const std::string& path);
   static ScenarioDef LoadFromJson(const std::string& json_text);
   static ScenarioDef LoadFromYaml(const std::string& yaml_text);
+
+  /* Semantic checks beyond structural parsing: duplicate signal ids, faults
+     that target an undeclared signal, and plugin .so paths that do not
+     exist. Returns one human-readable issue per problem; empty means valid.
+     Structural parse failures are reported by the Load* functions instead. */
+  static std::vector<std::string> Validate(const ScenarioDef& scenario);
 };
 
 }  // namespace boat::core

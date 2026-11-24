@@ -11,6 +11,26 @@ The plugin ABI is versioned separately from the project; see
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scheduled signal faults are actually applied.** `SimulationContext` now attaches
+  its `FaultInjector` to the `SignalRouter`; previously only the gateway integration
+  test wired the two together, so `boat fault inject` recorded and listed faults but
+  never applied one to a routed signal (including the seeded `noise` stream).
+- **Scenario validation reports semantic problems and clear structural errors.**
+  `boat scenario validate` now flags duplicate signal ids, faults that target an
+  undeclared signal, and plugin `.so` paths that do not exist; a missing required
+  field reports `missing required field '<name>'` instead of `map::at`.
+
+### Changed — system-test suite
+
+- Corrected test cases that asserted features the platform does not have:
+  `TC_PDU_010` is now an E2E *metadata* round-trip (runtime E2E is tracked in
+  `backlog/pdu_e2e.md`); `TC_Simulation_006/007` now exercise the real determinism
+  guarantee over seeded signal events.
+- `frame_meta_plugin` takes a `buses` config so a CAN-only instance can prove
+  pre-filtered dispatch; `TC_Gateway_006` uses the actual previous-ABI fixture.
+
 ## [0.2.0] — unreleased
 
 The "green and honest" release: the

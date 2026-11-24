@@ -24,6 +24,25 @@ grpc::Status ScenarioServiceImpl::CreateScenario(grpc::ServerContext*, const boa
   if (request->scenario().content().empty()) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "scenario content must be non-empty");
   }
+  // Never store a scenario that cannot be parsed, or that references a
+  // signal/plugin that does not exist. Those used to be accepted here and
+  // only surface at simulation start; validation is the same code path
+  // `boat scenario validate` uses, so the diagnostics match.
+  try {
+    const boat::core::ScenarioDef scenario =
+        boat::core::ScenarioLoader::LoadFromJson(request->scenario().content());
+    const std::vector<std::string> issues = boat::core::ScenarioLoader::Validate(scenario);
+    if (!issues.empty()) {
+      std::string joined;
+      for (const auto& issue : issues) {
+        if (!joined.empty()) joined += "; ";
+        joined += issue;
+      }
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, joined);
+    }
+  } catch (const std::exception& ex) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, ex.what());
+  }
   {
     std::lock_guard<std::mutex> lock(scenarios_mutex_);
     scenarios_[request->scenario().scenario_id()] = request->scenario();
@@ -70,8 +89,12 @@ grpc::Status ScenarioServiceImpl::ListScenarios(grpc::ServerContext*, const boat
 grpc::Status ScenarioServiceImpl::ValidateScenario(grpc::ServerContext*, const boat::v1::ValidateScenarioRequest* request,
                                                    boat::v1::ValidateScenarioResponse* response) {
   try {
-    (void)boat::core::ScenarioLoader::LoadFromJson(request->content());
-    response->set_valid(true);
+    const boat::core::ScenarioDef scenario =
+        boat::core::ScenarioLoader::LoadFromJson(request->content());
+    for (const auto& issue : boat::core::ScenarioLoader::Validate(scenario)) {
+      response->add_issues(issue);
+    }
+    response->set_valid(response->issues_size() == 0);
   } catch (const std::exception& ex) {
     response->set_valid(false);
     response->add_issues(ex.what());

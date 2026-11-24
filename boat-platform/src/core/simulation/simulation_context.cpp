@@ -14,6 +14,13 @@ SimulationContext::SimulationContext(std::uint64_t seed,
       fault_injector_(determinism_),
       state_machine_(),
       plugin_manager_(),
-      scheduler_(clock_, event_bus_, determinism_, worker_threads) {}
+      scheduler_(clock_, event_bus_, determinism_, worker_threads) {
+  /* Faults are applied where signal events are routed. Without this call the
+     gateway accepted and listed scheduled faults but never applied one: only
+     the gateway integration test wired the two together manually. It is
+     harmless to attach once, here -- FaultInjector::Clear() (called on
+     create/reset) is the reset half. */
+  signal_router_.SetFaultInjector(&fault_injector_);
+}
 
 }  // namespace boat::core

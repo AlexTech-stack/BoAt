@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "signal/signal_router.h"
+#include "simulation/simulation_context.h"
 
 TEST_CASE("SignalRouter subscribe publish and unsubscribe", "[unit][signal_router]") {
   boat::core::SignalRouter router;
@@ -92,4 +93,43 @@ TEST_CASE("SignalRouter reports ring overflow in one aggregate",
   // reason for an aggregate rather than the per-subscription counter.
   router.Unsubscribe(handle);
   REQUIRE(router.DroppedEventCount() >= dropped);
+}
+
+
+TEST_CASE("SimulationContext applies scheduled faults to routed signals",
+          "[unit][signal_router][fault]") {
+  /* Regression guard: SimulationContext owns both the SignalRouter and the
+     FaultInjector, and must attach them. Before this, only the gateway
+     integration test wired them by hand, so the real gateway recorded
+     scheduled faults but never applied one. */
+  boat::core::SimulationContext sim(7, 1);
+
+  std::atomic<int> hits{0};
+  std::atomic<double> value{0.0};
+  const auto handle = sim.signal_router().Subscribe(
+      42, boat::core::FilterPredicate{.signal_id = 42},
+      [&](const boat::core::SignalEvent& event) {
+        if (const auto* d = std::get_if<double>(&event.value)) {
+          value.store(*d);
+        }
+        hits.fetch_add(1);
+      });
+
+  sim.fault_injector().Schedule(boat::core::FaultSpec{
+      .signal_id = 42,
+      .start_tick = 1,
+      .end_tick = 10,
+      .type = boat::core::FaultType::STUCK,
+      .magnitude = 99.0,
+  });
+  sim.signal_router().Publish(
+      boat::core::SignalEvent{.signal_id = 42, .tick = 2, .value = 1.0});
+
+  for (int i = 0; i < 200 && hits.load() < 1; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  REQUIRE(hits.load() == 1);
+  REQUIRE(value.load() == 99.0);
+
+  sim.signal_router().Unsubscribe(handle);
 }

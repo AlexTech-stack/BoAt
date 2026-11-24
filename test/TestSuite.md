@@ -12,11 +12,11 @@ from the **user's perspective** — CLI, gRPC via SDK, web UIs, tools, and the w
 | [Gateway] | [Gateway.md](Gateway.md) | 14 | Startup, interface registration, driver selection, plugin loading, tick config, shutdown, configurable/duplicate gRPC port, same-port restart after active connection, effective-config dump/`config show` (byte-identical across runs, recorded warnings), TLS/mTLS |
 | [CAN] | [CAN.md](CAN.md) | 11 | CAN / CAN FD / extended-ID send+receive, loopback flag, bus isolation, PDU-database one-shot send, burst, TX failure reported (#66) |
 | [Ethernet] | [Ethernet.md](Ethernet.md) | 6 | Ethernet send/subscribe, veth + raw: physical NICs, capabilities, TCP-send rejection |
-| [Simulation] | [Simulation.md](Simulation.md) | 12 | Lifecycle (create/start/pause/step/stop/list/watch), determinism (seed reproducibility), fault inject/list + input validation, one live session (FAILED_PRECONDITION), reset rewinds the tick |
+| [Simulation] | [Simulation.md](Simulation.md) | 12 | Lifecycle (create/start/pause/step/stop/list/watch), determinism (seeded signal-event reproducibility), fault inject/list + input validation, one live session (FAILED_PRECONDITION), reset rewinds the tick |
 | [Scenario] | [Scenario.md](Scenario.md) | 5 | Create/get/list/delete/validate, AI-generated scenarios |
 | [Replay] | [Replay.md](Replay.md) | 26 | Direct + server-side replay, all formats, filters, IP/MAC rewriting, pcapng export, from-events, >4 MiB streamed import, trace-id validation, no burst after pause/resume, clean errors for unknown ids |
 | [Recording] | [Recording.md](Recording.md) | 9 | CLI + Recorder UI recording in ASC/BLF/PCAP/PCAPNG, signal sidecar, record→replay round trip |
-| [PDU] | [PDU.md](PDU.md) | 10 | Routes, cyclic schedules, I-PDU groups, signal packing, E2E, db inspection, plugin delegation |
+| [PDU] | [PDU.md](PDU.md) | 10 | Routes, cyclic schedules, I-PDU groups, signal packing, E2E metadata round-trip (runtime E2E not implemented — `backlog/pdu_e2e.md`), db inspection, plugin delegation |
 | [CanTp] | [CanTp.md](CanTp.md) | 17 | ISO 15765-2 sessions, single/multi-frame, flow control, N_Bs/N_Cr timeouts, extended/mixed/29-bit addressing, CAN FD BRS, padding, error/event reporting, always-on reception, 4095-byte FF_DL limit, malformed Flow Control (INVALID_FS / ignored short FC / WFT_OVRN) |
 | [Plugins] | [Plugins.md](Plugins.md) | 7 | Register/list/info/unload, JSON config, bus-type filtering, dual managers, replay delivery |
 | [WebUIs] | [WebUIs.md](WebUIs.md) | 14 | Launcher, Dashboard, Nodes, Commander, Recorder UI, Debug inspector, nav, gateway-down behavior, node gateway-restart resilience, plugin-based nodes, loopback bind by default + path confinement, dashboard metrics panel |

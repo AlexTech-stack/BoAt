@@ -4,12 +4,14 @@
 #include "scenario/scenario_loader.h"
 
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 
 namespace boat::core {
@@ -205,27 +207,36 @@ double AsDouble(const JsonValue& value) {
   throw std::runtime_error("expected a number");
 }
 
+const JsonValue& RequireField(const std::unordered_map<std::string, JsonValue>& obj, const char* key) {
+  const auto it = obj.find(key);
+  if (it == obj.end()) {
+    throw std::runtime_error(std::string("missing required field '") + key + "'");
+  }
+  return it->second;
+}
+
 ScenarioDef ParseScenarioFromObject(const std::unordered_map<std::string, JsonValue>& root) {
   ScenarioDef scenario;
-  scenario.id = AsString(root.at("id"));
-  scenario.name = AsString(root.at("name"));
-  scenario.version = AsString(root.at("version"));
-  scenario.duration_ticks = AsU64(root.at("duration_ticks"));
-  scenario.seed = AsU64(root.at("seed"));
+  scenario.id = AsString(RequireField(root, "id"));
+  scenario.name = AsString(RequireField(root, "name"));
+  scenario.version = AsString(RequireField(root, "version"));
+  scenario.duration_ticks = AsU64(RequireField(root, "duration_ticks"));
+  scenario.seed = AsU64(RequireField(root, "seed"));
 
-  for (const auto& plugin_v : AsArray(root.at("plugins"))) {
+  for (const auto& plugin_v : AsArray(RequireField(root, "plugins"))) {
     const auto& obj = AsObject(plugin_v);
-    scenario.plugins.push_back({AsString(obj.at("so_path")), AsString(obj.at("config_json"))});
+    scenario.plugins.push_back({AsString(RequireField(obj, "so_path")), AsString(RequireField(obj, "config_json"))});
   }
-  for (const auto& signal_v : AsArray(root.at("signals"))) {
+  for (const auto& signal_v : AsArray(RequireField(root, "signals"))) {
     const auto& obj = AsObject(signal_v);
-    scenario.signals.push_back({AsString(obj.at("id")), AsString(obj.at("name")), AsString(obj.at("type")),
-                                AsString(obj.at("unit"))});
+    scenario.signals.push_back({AsString(RequireField(obj, "id")), AsString(RequireField(obj, "name")),
+                                AsString(RequireField(obj, "type")), AsString(RequireField(obj, "unit"))});
   }
-  for (const auto& fault_v : AsArray(root.at("faults"))) {
+  for (const auto& fault_v : AsArray(RequireField(root, "faults"))) {
     const auto& obj = AsObject(fault_v);
-    scenario.faults.push_back(
-        {AsU64(obj.at("tick")), AsString(obj.at("signal_id")), AsString(obj.at("fault_type")), AsDouble(obj.at("magnitude"))});
+    scenario.faults.push_back({AsU64(RequireField(obj, "tick")), AsString(RequireField(obj, "signal_id")),
+                               AsString(RequireField(obj, "fault_type")),
+                               AsDouble(RequireField(obj, "magnitude"))});
   }
   return scenario;
 }
@@ -352,6 +363,48 @@ ScenarioDef ScenarioLoader::LoadFromYaml(const std::string& yaml_text) {
   }
   flush_item();
   return scenario;
+}
+
+std::vector<std::string> ScenarioLoader::Validate(const ScenarioDef& scenario) {
+  std::vector<std::string> issues;
+
+  if (scenario.id.empty()) {
+    issues.push_back("scenario id must not be empty");
+  }
+  if (scenario.name.empty()) {
+    issues.push_back("scenario name must not be empty");
+  }
+
+  std::unordered_set<std::string> signal_ids;
+  for (const auto& signal : scenario.signals) {
+    if (signal.id.empty()) {
+      issues.push_back("signal definition has an empty id");
+      continue;
+    }
+    if (!signal_ids.insert(signal.id).second) {
+      issues.push_back("duplicate signal id '" + signal.id + "'");
+    }
+  }
+
+  for (const auto& fault : scenario.faults) {
+    if (signal_ids.find(fault.signal_id) == signal_ids.end()) {
+      issues.push_back("fault at tick " + std::to_string(fault.tick) +
+                       " references undeclared signal '" + fault.signal_id + "'");
+    }
+  }
+
+  for (const auto& plugin : scenario.plugins) {
+    if (plugin.so_path.empty()) {
+      issues.push_back("plugin entry has an empty so_path");
+      continue;
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(plugin.so_path, ec) || ec) {
+      issues.push_back("plugin not found: '" + plugin.so_path + "'");
+    }
+  }
+
+  return issues;
 }
 
 }  // namespace boat::core

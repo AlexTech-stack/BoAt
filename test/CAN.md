@@ -94,8 +94,11 @@ Common precondition for all cases: gateway running with `BOAT_CAN_INTERFACES=vca
 **TestSets:** [CAN], [Plugins]
 
 **Preconditions:**
-- Gateway running with a test plugin that logs `on_frame` calls including frame flags
-  (any plugin declaring the `can` bus type)
+- Gateway running with the test metadata plugin, CAN-only, which logs each
+  `on_frame` call's iface/flags/can_id:
+  `BOAT_NODE_PLUGINS=<build>/src/tests/frame_meta_plugin.so?{"out":"/tmp/can_meta.log","buses":"can"}`
+  (`frame_meta_plugin` is built with the test targets; `"buses":"can"` makes
+  `declared_buses()` return `["can"]`)
 
 **TestSteps:**
 1. Have the plugin publish one CAN frame on `vcan0`

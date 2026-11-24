@@ -30,10 +30,13 @@ pair `veth0`/`veth1` exists and is up (unless stated otherwise).
 
 **Preconditions:**
 - `boat frame subscribe --bus-types ethernet` running
+- Root/CAP_NET_RAW (raw `AF_PACKET` send, same privilege the replay path needs)
 
 **TestSteps:**
-1. Inject a frame from outside the gateway onto `veth1` (e.g. with `scapy` or a
-   pre-built pcap replayed by `tcpreplay`)
+1. Inject a frame from outside the gateway onto `veth1`:
+   `sudo python3 test/fixtures/eth/send_raw_frame.py --iface veth1 --src 02:00:00:00:00:01 --dst 02:00:00:00:00:02 --ethertype 0x88B5 --data DEADBEEF`
+   (no scapy/tcpreplay dependency; the script builds the Ethernet header and
+   sends one frame on a raw socket)
 
 **Expected:**
 - The subscriber prints the frame with correct src/dst MAC, EtherType, and payload
@@ -80,7 +83,8 @@ pair `veth0`/`veth1` exists and is up (unless stated otherwise).
 **TestSets:** [Ethernet], [Plugins]
 
 **Preconditions:**
-- A test plugin declaring the `eth` bus type and logging received frame flags
+- The test metadata plugin declaring only `eth`, logging received frame flags:
+  `BOAT_NODE_PLUGINS=<build>/src/tests/frame_meta_plugin.so?{"out":"/tmp/eth_meta.log","buses":"eth"}`
 
 **TestSteps:**
 1. Have the plugin publish one Ethernet frame

@@ -12,7 +12,7 @@ behind, and the affected service stays alive.
 
 | TestCase | Defined in | Failure mode covered |
 |---|---|---|
-| TC_Gateway_006_v7_plugin_rejected | Gateway.md | Outdated plugin ABI rejected at load |
+| TC_Gateway_006_outdated_abi_plugin_rejected | Gateway.md | Outdated plugin ABI rejected at load |
 | TC_Gateway_009_missing_interface_error | Gateway.md | Startup with nonexistent interface |
 | TC_CAN_004_canfd_length_rounding | CAN.md | Invalid CAN FD payload length |
 | TC_Ethernet_004_physical_nic_requires_raw_prefix_and_cap | Ethernet.md | Missing CAP_NET_RAW on physical NIC |

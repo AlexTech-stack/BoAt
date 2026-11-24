@@ -1,0 +1,9 @@
+{
+  "id": "invalid_structural",
+  "name": "Structurally invalid scenario",
+  "version": "1.0.0",
+  "seed": 1,
+  "plugins": [],
+  "signals": [],
+  "faults": []
+}

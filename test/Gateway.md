@@ -94,15 +94,18 @@ driver selection, plugin loading, tick configuration, and shutdown.
 
 ---
 
-### TC_Gateway_006_v7_plugin_rejected
+### TC_Gateway_006_outdated_abi_plugin_rejected
 
 **TestSets:** [Gateway], [Plugins], [Error]
 
 **Preconditions:**
-- A plugin `.so` built against plugin ABI v7 (or a stub reporting `BOAT_PLUGIN_ABI_VERSION` = 7)
+- A plugin `.so` built against the *previous* plugin ABI. `src/tests/fixtures/
+  stale_abi_plugin.cpp` is exactly that fixture: it reports
+  `BOAT_PLUGIN_ABI_VERSION - 1` (v8 while the host requires v9), built as
+  `build/<preset>/src/tests/stale_abi_plugin.so`
 
 **TestSteps:**
-1. Start the gateway with `BOAT_NODE_PLUGINS=<v7_plugin.so>`
+1. Start the gateway with `BOAT_NODE_PLUGINS=<build>/src/tests/stale_abi_plugin.so`
 
 **Expected:**
 - The plugin is rejected at load with a clear error message naming the ABI version mismatch

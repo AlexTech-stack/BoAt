@@ -44,16 +44,20 @@ Common precondition: gateway running.
 **TestSets:** [Scenario], [CLI], [Error]
 
 **Preconditions:**
-- A scenario definition with a deliberate error (e.g. reference to an undefined bus
-  or plugin, malformed schedule)
+- `test/fixtures/scenarios/scenario_invalid_semantic.json`: structurally valid, but a
+  fault targets an undeclared signal and a plugin path does not exist
+- `test/fixtures/scenarios/scenario_invalid_structural.json`: missing a required
+  field (`duration_ticks`)
 
 **TestSteps:**
-1. `boat scenario validate` with the broken definition
-2. Attempt `boat scenario create` with it
+1. `boat scenario validate --file test/fixtures/scenarios/scenario_invalid_semantic.json`
+2. `boat scenario create --file test/fixtures/scenarios/scenario_invalid_structural.json`
 
 **Expected:**
-- Validate reports the specific problem (actionable message, not a stack trace)
-- Create is rejected or the scenario is unusable with the same diagnostic
+- Step 1: reports each specific issue and `valid=false` — `fault ... references
+  undeclared signal '...'` and `plugin not found: '...'` — with no stack trace
+- Step 2: rejected with the structural parse error (missing required field), and the
+  scenario is not stored
 
 ---
 

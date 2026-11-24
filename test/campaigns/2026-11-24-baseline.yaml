@@ -12,7 +12,7 @@ results:
     verdict: NOT_TESTED
   - id: TC_Gateway_005_node_plugin_loading_with_json_config
     verdict: NOT_TESTED
-  - id: TC_Gateway_006_v7_plugin_rejected
+  - id: TC_Gateway_006_outdated_abi_plugin_rejected
     verdict: NOT_TESTED
   - id: TC_Gateway_007_tick_interval_configuration
     verdict: NOT_TESTED
@@ -117,7 +117,7 @@ results:
     verdict: NOT_TESTED
   - id: TC_Simulation_005_list_and_watch
     verdict: NOT_TESTED
-  - id: TC_Simulation_006_determinism_same_seed_bit_identical
+  - id: TC_Simulation_006_determinism_same_seed_identical
     verdict: NOT_TESTED
   - id: TC_Simulation_007_different_seed_differs
     verdict: NOT_TESTED
@@ -254,7 +254,7 @@ results:
       ```
 
       `ctest -R pdu` (8/8) and `-R 'PluginManager|Frame'` (24/24) still pass, no regressions.
-  - id: TC_PDU_010_e2e_crc_protection
+  - id: TC_PDU_010_e2e_metadata_roundtrip
     verdict: NOT_TESTED
   - id: TC_CanTp_001_configure_session
     verdict: OK

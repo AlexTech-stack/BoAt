@@ -77,7 +77,8 @@ TEST_CASE("Gateway integration runs lifecycle and queries events via RPC", "[int
   boat::core::PluginManager plugin_manager;
   boat::gateway::FrameSink frame_sink(can_registry, eth_registry);
   boat::gateway::RpcAuditLog audit_log;
-  sim.signal_router().SetFaultInjector(&sim.fault_injector());
+  // SimulationContext attaches its FaultInjector to the SignalRouter itself;
+  // no manual wiring here, so this test exercises the production path.
 
   boat::gateway::GatewayContext ctx{
       .sim = sim,

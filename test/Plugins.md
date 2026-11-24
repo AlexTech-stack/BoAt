@@ -51,7 +51,9 @@ files built under `build/debug/src/plugins/`.
 **TestSets:** [Plugins], [CAN], [Ethernet]
 
 **Preconditions:**
-- A test plugin declaring ONLY the `can` bus type, logging every `on_frame`
+- The test metadata plugin configured CAN-only, logging every `on_frame`:
+  `BOAT_NODE_PLUGINS=<build>/src/tests/frame_meta_plugin.so?{"out":"/tmp/can_only.log","buses":"can"}`
+  (its `declared_buses()` returns `["can"]`; the default would declare both)
 - Gateway with both a CAN and an Ethernet interface
 
 **TestSteps:**

@@ -162,17 +162,20 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 
 ---
 
-### TC_PDU_010_e2e_crc_protection
+### TC_PDU_010_e2e_metadata_roundtrip
 
 **TestSets:** [PDU]
 
 **Preconditions:**
-- A database message configured with E2E CRC protection and a rolling counter
+- `boat-platform/config/pdu_db_example.json` (its `Motor_1_GW` entry has `isE2E: 4`)
 
 **TestSteps:**
-1. Route and cyclically transmit the protected message
-2. Capture ≥ 16 consecutive frames and check the counter and CRC fields
+1. `boat db show --db boat-platform/config/pdu_db_example.json --msg Motor_1_GW --pack`
+2. Inspect the `isE2E` field and the signal layout in the printed table
 
 **Expected:**
-- The counter increments per frame and wraps correctly; the CRC field validates
-  against the E2E profile for every frame
+- `isE2E` is shown as `4`; the message and its signals (start bit, length, byte order,
+  scaling) and the packed InitValue bytes are rendered as defined by the database
+- **Runtime E2E protection is not implemented**: `isE2E` is import/analysis metadata, and
+  nothing recomputes a rolling counter or CRC per transmitted frame. This case covers the
+  metadata round-trip only; the runtime feature is tracked in `backlog/pdu_e2e.md`
