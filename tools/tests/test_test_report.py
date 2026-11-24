@@ -15,9 +15,19 @@ _TOOLS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_TOOLS_DIR))
 
 from test_report import (  # noqa: E402
+    Context,
+    FilterForm,
+    LineEditor,
+    ReviewFilter,
+    ReviewPlain,
+    ReviewSession,
+    ReviewTUI,
     load_campaign,
     main,
+    osc52_sequence,
     parse_definitions,
+    resolve_definition,
+    section_offsets,
     validate_campaign,
 )
 
@@ -290,3 +300,258 @@ def test_real_suite_parses_and_baseline_validates():
         pytest.skip("baseline campaign not present")
     errors, _warnings = validate_campaign(defs, load_campaign(baseline), tests_dir=tests_dir)
     assert errors == []
+
+
+# ── QoL: campaign memory, short ids, review, discovery ───────────────────────
+
+
+def _session(tree: dict[str, Path], campaign: str) -> ReviewSession:
+    defs = parse_definitions(tree["tests"])
+    ctx = Context(tree["root"], tree["tests"], tree["campaigns"], defs)
+    return ReviewSession(ctx, tree["campaigns"] / f"{campaign}.yaml")
+
+
+def test_resolve_definition_accepts_short_forms(tree):
+    defs = parse_definitions(tree["tests"])
+    assert resolve_definition("TC_Alpha_001_one", defs).id == "TC_Alpha_001_one"
+    assert resolve_definition("Alpha_001", defs).id == "TC_Alpha_001_one"
+    assert resolve_definition("two", defs).id == "TC_Alpha_002_two"
+    assert resolve_definition("@3", defs).id == "TC_Beta_001_one"
+    with pytest.raises(Exception, match="ambiguous"):
+        resolve_definition("001", defs)
+    with pytest.raises(Exception, match="unknown"):
+        resolve_definition("does-not-exist", defs)
+
+
+def test_campaign_is_remembered_and_env_overrides(tree, monkeypatch):
+    assert main(_args(tree, "new", "run1")) == 0
+    assert main(_args(tree, "new", "run2")) == 0
+
+    # run2 is current after `new`; set it explicitly to run1 for the test.
+    assert main(_args(tree, "use", "run1")) == 0
+    # No campaign positional: resolves through the remembered campaign.
+    assert main(_args(tree, "set", "TC_Alpha_001_one", "OK")) == 0
+    assert load_campaign(tree["campaigns"] / "run1.yaml").get("TC_Alpha_001_one").verdict == "OK"
+    assert load_campaign(tree["campaigns"] / "run2.yaml").results == []
+
+    monkeypatch.setenv("BOAT_TEST_CAMPAIGN", "run2")
+    assert main(_args(tree, "set", "TC_Alpha_002_two", "NOK")) == 0
+    assert load_campaign(tree["campaigns"] / "run2.yaml").get("TC_Alpha_002_two").verdict == "NOK"
+
+    # Explicit positional wins over the env var.
+    assert main(_args(tree, "set", "run1", "TC_Beta_001_one", "NOT_TESTED")) == 0
+    assert load_campaign(tree["campaigns"] / "run1.yaml").get("TC_Beta_001_one") is not None
+    assert load_campaign(tree["campaigns"] / "run2.yaml").get("TC_Beta_001_one") is None
+
+
+def test_review_plain_records_and_advances(tree):
+    assert main(_args(tree, "new", "run1")) == 0
+    session = _session(tree, "run1")
+    inputs = iter(["o", "q"])
+    view = ReviewPlain(
+        session,
+        input_fn=lambda _prompt: next(inputs),
+        output=lambda _line: None,
+        ask_notes=False,
+    )
+    assert view.run() == 0
+    campaign = load_campaign(tree["campaigns"] / "run1.yaml")
+    assert campaign.get("TC_Alpha_001_one").verdict == "OK"
+    assert campaign.get("TC_Alpha_002_two") is None
+
+
+def test_review_session_undo_and_filters(tree):
+    assert main(_args(tree, "new", "run1")) == 0
+    session = _session(tree, "run1")
+    assert session.current().id == "TC_Alpha_001_one"
+    session.set_verdict("NOK")
+    assert load_campaign(tree["campaigns"] / "run1.yaml").get("TC_Alpha_001_one").verdict == "NOK"
+    assert session.undo() == "TC_Alpha_001_one"
+    assert load_campaign(tree["campaigns"] / "run1.yaml").get("TC_Alpha_001_one") is None
+
+    session.filter = ReviewFilter(kind="set", set_name="Beta")
+    session.rebuild()
+    assert [tid for tid in session.visible] == ["TC_Beta_001_one"]
+
+
+def test_review_handle_key_navigation_and_verdict(tree):
+    assert main(_args(tree, "new", "run1")) == 0
+    session = _session(tree, "run1")
+    tui = ReviewTUI(session, ask_notes=False)
+    assert tui._handle_key(None, ord("j")) is True
+    assert session.current().id == "TC_Alpha_002_two"
+    assert tui._handle_key(None, ord("o")) is True
+    assert session.campaign.get("TC_Alpha_002_two").verdict == "OK"
+    assert tui._handle_key(None, ord("u")) is True
+    assert session.campaign.get("TC_Alpha_002_two") is None
+    assert tui._handle_key(None, ord("q")) is False
+
+
+def test_list_filters_and_ids_only(tree, capsys):
+    assert main(_args(tree, "new", "run1")) == 0
+    assert main(_args(tree, "set", "run1", "TC_Alpha_001_one", "OK")) == 0
+
+    capsys.readouterr()
+    assert main(_args(tree, "list", "run1", "--set", "Alpha", "--ids-only")) == 0
+    assert capsys.readouterr().out.splitlines() == ["TC_Alpha_001_one", "TC_Alpha_002_two"]
+
+    assert main(_args(tree, "list", "run1", "--set", "Alpha", "--unrecorded", "--ids-only")) == 0
+    assert capsys.readouterr().out.splitlines() == ["TC_Alpha_002_two"]
+
+    assert main(_args(tree, "list", "run1", "--verdict", "OK", "--ids-only")) == 0
+    assert capsys.readouterr().out.splitlines() == ["TC_Alpha_001_one"]
+
+
+def test_unset_clears_a_result(tree, capsys):
+    assert main(_args(tree, "new", "run1")) == 0
+    assert main(_args(tree, "set", "run1", "TC_Alpha_001_one", "OK")) == 0
+    assert main(_args(tree, "unset", "run1", "Alpha_001")) == 0
+    assert load_campaign(tree["campaigns"] / "run1.yaml").get("TC_Alpha_001_one") is None
+    assert main(_args(tree, "unset", "run1", "Alpha_001")) == 0
+    assert "not recorded" in capsys.readouterr().out
+
+
+def test_completion_and_campaigns(tree, capsys):
+    assert main(_args(tree, "new", "run1")) == 0
+    capsys.readouterr()
+    assert main(_args(tree, "campaigns")) == 0
+    assert "run1" in capsys.readouterr().out
+    assert main(_args(tree, "completion", "bash")) == 0
+    script = capsys.readouterr().out
+    assert "_test_report_complete" in script
+    assert "list --ids-only" in script
+
+
+# ── TUI UX: line editor, filter form, focus, clear ───────────────────────────
+
+
+def test_line_editor_accept_cancel_and_edit():
+    editor = LineEditor("ab")
+    assert editor.feed(ord("c")) is None
+    assert editor.text == "abc"
+    assert editor.feed(127) is None
+    assert editor.text == "ab"
+    assert editor.feed(21) is None
+    assert editor.text == ""
+    for char in "hey":
+        assert editor.feed(ord(char)) is None
+    assert editor.feed(10) == ("accept", "hey")
+    assert LineEditor().feed(27) == ("cancel", None)
+    assert LineEditor("x").feed("\x1b") == ("cancel", None)
+
+
+def test_filter_form_navigation_apply_and_clear():
+    form = FilterForm(sets=["CAN", "Gateway"], tags=["AI", "Timeout"])
+    assert form.handle_key(9) is None                 # Tab: Set -> Tag
+    assert form.handle_key(ord("l")) is None          # Tag: any -> AI
+    assert form.handle_key(9) is None                 # Tag -> Verdict
+    assert form.handle_key(ord("l")) is None          # Verdict: any -> OK
+    assert form.handle_key(9) is None                 # Verdict -> Unrecorded
+    assert form.handle_key(ord(" ")) is None          # toggle on
+    assert form.handle_key(9) is None                 # Unrecorded -> Text
+    for char in "abc":
+        assert form.handle_key(ord(char)) is None
+    review_filter = form.to_filter()
+    assert review_filter.set_name == ""
+    assert review_filter.tag == "AI"
+    assert review_filter.verdict == "OK"
+    assert review_filter.unrecorded is True
+    assert review_filter.text == "abc"
+
+    # 'c' clears from a non-text field, but types in the text field.
+    assert form.handle_key(9) is None                 # Text -> Set
+    assert form.handle_key(ord("c")) == "clear"
+    assert form.to_filter() == ReviewFilter()
+
+
+def test_filter_form_preview_and_cancel(tree):
+    defs = parse_definitions(tree["tests"])
+    form = FilterForm.from_filter(ReviewFilter(kind="set", set_name="Alpha"), ["Alpha", "Beta"], [])
+    assert form.preview_count(defs, {}) == 2
+    assert form.handle_key(27) == "cancel"
+    # From the current filter round-trip.
+    assert FilterForm.from_filter(ReviewFilter(tag="Cross"), ["Alpha"], ["Cross"]).to_filter().tag == "Cross"
+
+
+def test_handle_key_scroll_and_clear(tree):
+    assert main(_args(tree, "new", "run1")) == 0
+    session = _session(tree, "run1")
+    tui = ReviewTUI(session, ask_notes=False)
+
+    assert session.current().id == "TC_Alpha_001_one"
+    assert tui._handle_key(None, ord("j")) is True
+    assert session.current().id == "TC_Alpha_002_two"
+    assert tui._handle_key(None, ord("k")) is True
+    assert session.current().id == "TC_Alpha_001_one"
+
+    import curses
+
+    session.detail_scroll = 0
+    tui._handle_key(None, ord("J"))
+    assert session.detail_scroll == 1
+    tui._handle_key(None, ord("K"))
+    assert session.detail_scroll == 0
+    tui._handle_key(None, curses.KEY_NPAGE)
+    assert session.detail_scroll == 10
+    tui._handle_key(None, curses.KEY_PPAGE)
+    assert session.detail_scroll == 0
+
+    session.set_filter(ReviewFilter(kind="set", set_name="Alpha", text="alpha_001"))
+    assert session.visible == ["TC_Alpha_001_one"]
+    assert tui._handle_key(None, ord("x")) is True
+    assert session.filter.set_name == ""
+    assert session.filter.text == ""
+    assert len(session.visible) == 3
+
+
+def test_handle_key_copy_and_section_jumps(tree):
+    assert main(_args(tree, "new", "run1")) == 0
+    session = _session(tree, "run1")
+    tui = ReviewTUI(session, ask_notes=False)
+
+    copied = []
+    tui._copy = lambda stdscr, text, label: copied.append((label, text))
+    assert tui._handle_key(None, ord("y")) is True
+    assert copied == [("case id", "TC_Alpha_001_one")]
+
+    tui._detail_text = "RENDERED"
+    assert tui._handle_key(None, ord("Y")) is True
+    assert copied[-1] == ("definition", "RENDERED")
+
+    tui._section_offsets = [0, 5, 10]
+    session.detail_scroll = 6
+    assert tui._handle_key(None, ord("{")) is True
+    assert session.detail_scroll == 5
+    assert tui._handle_key(None, ord("}")) is True
+    assert session.detail_scroll == 10
+
+
+def test_osc52_sequence_and_section_offsets():
+    lines = [
+        ("TC_X_001_one  [X.md]", 0),
+        ("TestSets: [X]", 0),
+        ("**Preconditions:**", 0),
+        ("- a", 0),
+        ("**TestSteps:**", 0),
+        ("**Expected:**", 0),
+        ("Notes:", 0),
+        ("text", 0),
+    ]
+    assert section_offsets(lines) == [0, 2, 4, 5, 6]
+    assert osc52_sequence("abc") == "\x1b]52;c;YWJj\x07"
+
+
+def test_cycle_filter_clears_a_stale_set(tree):
+    assert main(_args(tree, "new", "run1")) == 0
+    session = _session(tree, "run1")
+    session.set_filter(ReviewFilter(kind="set", set_name="Alpha"))
+    session.cycle_filter()
+    assert session.filter.kind == "all"
+    assert session.filter.set_name == ""
+
+
+def test_filter_composition_set_and_tag(tree):
+    defs = parse_definitions(tree["tests"])
+    review_filter = ReviewFilter(kind="set", set_name="Alpha", tag="Cross")
+    matched = [d.id for d in defs if review_filter.matches(d, None)]
+    assert matched == ["TC_Alpha_002_two"]

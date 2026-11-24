@@ -31,6 +31,8 @@ boat-platform/config/*_pdu_db*.json
 
 # Runtime state files
 .last_import
+# test_report.py's remembered current campaign (repo-local, per checkout)
+test/.test_report_state.json
 
 # Local specification references (gitignored — symlink or copy your specs here)
 spec/
