@@ -34,6 +34,9 @@ boat-platform/config/*_pdu_db*.json
 # test_report.py's remembered current campaign (repo-local, per checkout)
 test/.test_report_state.json
 
+# Generated on demand by test/fixtures/make_fixtures.py --big (~12.8 MB)
+test/fixtures/can/big.asc
+
 # Local specification references (gitignored — symlink or copy your specs here)
 spec/
 
