@@ -241,6 +241,13 @@ add_dependencies(boat_integration_gateway frame_meta_plugin)
 target_compile_definitions(boat_integration_gateway PRIVATE
   FRAME_META_PLUGIN_SO="$<TARGET_FILE:frame_meta_plugin>")
 
+# Deterministic periodic CAN source for the manual system tests: scenario
+# traffic (Simulation_001/002/003, Plugins_005) and node-plugin publish path
+# (Plugins_004). Test-only; not a shipped plugin.
+add_library(traffic_plugin MODULE fixtures/traffic_plugin.cpp)
+target_include_directories(traffic_plugin PRIVATE ${CMAKE_SOURCE_DIR}/sdk/cpp/include)
+set_target_properties(traffic_plugin PROPERTIES PREFIX "" SUFFIX ".so")
+
 add_executable(boat_unit_can_tp_tick unit/test_can_tp_tick.cpp)
 target_include_directories(boat_unit_can_tp_tick PRIVATE
   ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/sdk/cpp/include)

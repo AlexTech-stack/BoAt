@@ -1,0 +1,114 @@
+{
+  "can/recording.blf": {
+    "kind": "can-blf",
+    "frames": 432,
+    "channels": [1, 2, 3, 4],
+    "notes": "10 s, IDs 0x040/0x0C0 on channel 4, one 29-bit and one CAN-FD frame",
+    "used_by": ["TC_Replay_001", "TC_Replay_002", "TC_Replay_003", "TC_Replay_004", "TC_Replay_008", "TC_Tools_005", "TC_Tools_008"]
+  },
+  "can/recording_short.blf": {
+    "kind": "can-blf",
+    "frames": 20,
+    "channels": [1],
+    "notes": "~1 s, IDs 0x100..0x113",
+    "used_by": ["TC_Replay_005"]
+  },
+  "can/small.asc": {
+    "kind": "can-asc",
+    "frames": 47,
+    "notes": "first 50 lines of big.asc",
+    "used_by": ["TC_Replay_024"]
+  },
+  "can/big.asc": {
+    "kind": "can-asc",
+    "frames": 200000,
+    "notes": "generated on demand with --big (~12.8 MB), not committed",
+    "used_by": ["TC_Replay_023", "TC_Replay_025"]
+  },
+  "eth/capture.pcap": {
+    "kind": "ethernet-pcap",
+    "packets": 12,
+    "notes": "IPv4 UDP only; conversations 10.10.10.10<->.11 and .12<->.10; port 30490",
+    "used_by": ["TC_Replay_006", "TC_Replay_012", "TC_Replay_013", "TC_Replay_016"]
+  },
+  "eth/capture_rich.pcap": {
+    "kind": "ethernet-pcap",
+    "packets": 12,
+    "notes": "IPv4/IPv6, UDP/TCP/ICMPv6, VLAN, DoIP, SOME/IP, AUTOSAR PDU-mux, IPv6 extension header",
+    "used_by": ["TC_Replay_014", "TC_Replay_015", "TC_Tools_014", "TC_Tools_015"]
+  },
+  "eth/eth_inject.pcap": {
+    "kind": "ethernet-pcap",
+    "packets": 1,
+    "notes": "single frame for external injection; send_raw_frame.py is the no-scapy alternative",
+    "used_by": ["TC_Ethernet_002"]
+  },
+  "eth/notes.txt": {
+    "kind": "not-a-trace",
+    "notes": "unsupported suffix",
+    "used_by": ["TC_Replay_021", "TC_Tools_018"]
+  },
+  "mixed/mixed.pcapng": {
+    "kind": "mixed-pcapng",
+    "frames": 30,
+    "notes": "20 CAN (vcan0) + 10 Ethernet (veth0) on one timeline",
+    "used_by": ["TC_Replay_007", "TC_Replay_017", "TC_Replay_018", "TC_Tools_009", "TC_Tools_016"]
+  },
+  "mixed/corrupt.pcapng": {
+    "kind": "mixed-pcapng",
+    "frames": 30,
+    "notes": "mixed.pcapng with the last 3 bytes removed",
+    "used_by": ["TC_Replay_022"]
+  },
+  "mixed/edited.trace": {
+    "kind": "boat-trace",
+    "frames": 7,
+    "notes": "3 CAN + 2 Ethernet + 1 TCP + 1 PDU record",
+    "used_by": ["TC_Replay_019", "TC_Tools_010", "TC_Tools_011", "TC_Tools_012", "TC_Tools_013"]
+  },
+  "pdu_db/pdu_db_mixed_signals.json": {
+    "kind": "pdu-db",
+    "notes": "one CAN message with an Intel and a Motorola signal, both scaled",
+    "used_by": ["TC_PDU_006", "TC_WebUIs_008"]
+  },
+  "dbc/sample.dbc": {
+    "kind": "dbc",
+    "notes": "Intel + Motorola, mux, VAL_, CM_, GenMsgCycleTime, scaled Min/Max",
+    "used_by": ["TC_Tools_017", "TC_Tools_019"]
+  },
+  "scenarios/example_b.json": {
+    "kind": "scenario",
+    "notes": "copy of boat-platform/config/scenarios/example.json with id example_b",
+    "used_by": ["TC_Simulation_011"]
+  },
+  "scenarios/scenario_traffic.json": {
+    "kind": "scenario",
+    "notes": "declares traffic_plugin.so; plugin path is relative to the gateway CWD (boat-platform/)",
+    "used_by": ["TC_Simulation_001", "TC_Simulation_002", "TC_Simulation_003", "TC_Plugins_005"]
+  },
+  "scenarios/scenario_invalid_semantic.json": {
+    "kind": "scenario",
+    "notes": "structurally valid; undeclared fault target + missing plugin path",
+    "used_by": ["TC_Scenario_003"]
+  },
+  "scenarios/scenario_invalid_structural.json": {
+    "kind": "scenario",
+    "notes": "missing required duration_ticks",
+    "used_by": ["TC_Scenario_003"]
+  },
+  "scripts/determinism_probe.py": {
+    "kind": "script",
+    "notes": "seeded signal-event determinism probe",
+    "used_by": ["TC_Simulation_006", "TC_Simulation_007"]
+  },
+  "eth/send_raw_frame.py": {
+    "kind": "script",
+    "notes": "AF_PACKET single-frame sender (root/CAP_NET_RAW)",
+    "used_by": ["TC_Ethernet_002"]
+  },
+  "tls/gen_tls_certs.sh": {
+    "kind": "script",
+    "notes": "generates the throwaway CA/gateway/client certs; not committed",
+    "used_by": ["TC_Gateway_014"]
+  }
+}

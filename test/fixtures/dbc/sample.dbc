@@ -1,0 +1,34 @@
+VERSION ""
+
+NS_ :
+    CM_
+    BA_
+    VAL_
+
+BS_:
+
+BU_: ECU1 ECU2 ECU3
+
+BO_ 100 SampleMsg: 8 ECU1
+ SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|400] "km/h" ECU2
+ SG_ OutsideTemp : 16|8@0+ (0.5,-50) [-50|77.5] "degC" ECU2
+ SG_ MuxState M : 24|8@1+ (1,0) [0|3] "" ECU2
+ SG_ SignalA m0 : 32|8@1+ (1,0) [0|255] "" ECU3
+ SG_ SignalB m1 : 32|8@1+ (1,0) [0|255] "" ECU3
+ SG_ FourWheelDrive : 40|1@1+ (1,0) [0|1] "" ECU2
+
+BO_ 200 ScaledMsg: 4 ECU2
+ SG_ Pressure : 0|16@1- (0.1,0) [-1000|1000] "bar" ECU1
+ SG_ Temperature : 16|16@1- (0.01,-40) [-40|150] "degC" ECU1
+
+VAL_ 100 MuxState 0 "Off" 1 "On" 2 "Error" 3 "NotAvailable" ;
+VAL_ 100 FourWheelDrive 0 "Off" 1 "On" ;
+
+CM_ BO_ 100 "Sample message for the system-test fixture set.";
+CM_ SG_ 100 VehicleSpeed "Vehicle speed from the wheel-speed ECU.";
+CM_ SG_ 100 OutsideTemp "Outside temperature, scaled with a negative offset.";
+CM_ BO_ 200 "Second message, signed signals with scaling.";
+CM_ SG_ 200 Pressure "Signed pressure value.";
+
+BA_ "GenMsgCycleTime" BO_ 100 100;
+BA_ "GenMsgCycleTime" BO_ 200 250;

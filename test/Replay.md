@@ -6,8 +6,8 @@ System-level tests for both replay paths: direct client-paced CAN replay
 filtering, address rewriting, and export.
 
 Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
-`BOAT_ETH_INTERFACES=veth0`; CLI installed; sample traces available
-(a 2-channel `.blf` CAN recording and a `.pcap` with at least two IP conversations).
+`BOAT_ETH_INTERFACES=veth0`; CLI installed; fixtures available under
+`test/fixtures/` (`can/`, `eth/`, `mixed/`).
 
 ---
 
@@ -16,10 +16,10 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **TestSets:** [Replay], [CAN], [CLI]
 
 **Preconditions:**
-- `recording.blf` with known frame count N; `candump vcan0` running
+- `test/fixtures/can/recording.blf` with known frame count N = 432; `candump vcan0` running
 
 **TestSteps:**
-1. `boat trace replay recording.blf --buses vcan0`
+1. `boat trace replay test/fixtures/can/recording.blf --buses vcan0`
 
 **Expected:**
 - All N CAN frames appear on `vcan0` with IDs/DLC/data matching the file
@@ -35,7 +35,7 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - A trace with frames on channels 1 and 2; `candump vcan0` and `candump vcan1` running
 
 **TestSteps:**
-1. `boat trace replay recording.blf --buses vcan0,vcan1`
+1. `boat trace replay test/fixtures/can/recording.blf --buses vcan0,vcan1`
 
 **Expected:**
 - Channel-1 frames appear on `vcan0`, channel-2 frames on `vcan1` (1-based positional
@@ -51,7 +51,7 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - A trace containing multiple channels and IDs including 0x040 and 0x0C0 on channel 4
 
 **TestSteps:**
-1. `boat trace replay recording.blf --channel 4 --id 0x040,0x0C0 --buses vcan0`
+1. `boat trace replay test/fixtures/can/recording.blf --channel 4 --id 0x040,0x0C0 --buses vcan0`
 
 **Expected:**
 - Only frames from channel 4 with IDs 0x040/0x0C0 are replayed; everything else is
@@ -82,10 +82,10 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **TestSets:** [Replay], [CAN]
 
 **Preconditions:**
-- A short trace (~1 s)
+- The ~1 s trace `test/fixtures/can/recording_short.blf` (20 frames)
 
 **TestSteps:**
-1. `boat trace replay recording.blf --loop 100 --buses vcan0`, let it run ≥ 3 iterations, Ctrl+C
+1. `boat trace replay test/fixtures/can/recording_short.blf --loop 100 --buses vcan0`, let it run ≥ 3 iterations, Ctrl+C
 
 **Expected:**
 - The file replays repeatedly with ~100 ms gap between the last frame of one run and
@@ -101,7 +101,7 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - Any `.pcap` file
 
 **TestSteps:**
-1. `boat trace replay capture.pcap --buses vcan0`
+1. `boat trace replay test/fixtures/eth/capture.pcap --buses vcan0`
 
 **Expected:**
 - Immediate rejection with an error pointing to `boat replay import` +
@@ -117,7 +117,7 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - A mixed `.pcapng` containing CAN and Ethernet records; `candump vcan0` running
 
 **TestSteps:**
-1. `boat trace replay mixed.pcapng --buses vcan0`
+1. `boat trace replay test/fixtures/mixed/mixed.pcapng --buses vcan0`
 
 **Expected:**
 - Only the CAN/CAN-FD records are replayed; Ethernet records are skipped without error
@@ -129,10 +129,10 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **TestSets:** [Replay], [CLI]
 
 **Preconditions:**
-- `recording.blf` with known frame count N
+- `test/fixtures/can/recording.blf` with known frame count N = 432
 
 **TestSteps:**
-1. `boat replay import recording.blf --trace-id demo`
+1. `boat replay import test/fixtures/can/recording.blf --trace-id demo`
 
 **Expected:**
 - Import is accepted; the reported frame count equals N and a size is shown
@@ -200,10 +200,10 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **TestSets:** [Replay], [Ethernet]
 
 **Preconditions:**
-- `capture.pcap` with IPv4 UDP traffic; `tcpdump -i veth1 -n` running
+- `test/fixtures/eth/capture.pcap` with IPv4 UDP traffic; `tcpdump -i veth1 -n` running
 
 **TestSteps:**
-1. `boat replay import capture.pcap --trace-id eth1 --replay-src-ip 192.168.1.1 --replay-dst-ip 192.168.1.100`
+1. `boat replay import test/fixtures/eth/capture.pcap --trace-id eth1 --replay-src-ip 192.168.1.1 --replay-dst-ip 192.168.1.100`
 2. `boat replay stream --trace eth1 --eth-iface veth0`
 
 **Expected:**
@@ -221,7 +221,7 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - A pcap with (at least) two conversations: 10.10.10.10↔x and 10.10.10.11↔y
 
 **TestSteps:**
-1. `boat replay import capture.pcap --trace-id eth2 --ip-map 10.10.10.10=192.168.0.100,10.10.10.11=192.168.0.101 --ip-filter 192.168.0.100`
+1. `boat replay import test/fixtures/eth/capture.pcap --trace-id eth2 --ip-map 10.10.10.10=192.168.0.100,10.10.10.11=192.168.0.101 --ip-filter 192.168.0.100`
 2. Stream and capture with tcpdump
 
 **Expected:**
@@ -235,7 +235,7 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **TestSets:** [Replay], [Ethernet]
 
 **Preconditions:**
-- A pcap mixing IPv4/IPv6, UDP/ICMP/TCP, and several UDP ports
+- `test/fixtures/eth/capture_rich.pcap` (IPv4/IPv6, UDP/ICMP/TCP, several UDP ports incl. 30490)
 
 **TestSteps:**
 1. Import with `--ethertype ipv4 --protocol udp --dst-port 30490`, stream, capture
@@ -251,8 +251,8 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **TestSets:** [Replay], [Ethernet]
 
 **Preconditions:**
-- A pcap with IPv6 UDP and ICMPv6 traffic (including at least one packet with an
-  extension header)
+- `test/fixtures/eth/capture_rich.pcap` (IPv6 UDP, ICMPv6, and a packet with a
+  Hop-by-Hop extension header)
 
 **TestSteps:**
 1. Import with `--ethertype ipv6 --ip-map <orig>=fe80::100,...`, stream, capture
@@ -286,10 +286,10 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **TestSets:** [Replay], [PCAPNG], [CAN], [Ethernet]
 
 **Preconditions:**
-- A mixed `.pcapng` (CAN + Ethernet interfaces, known counts)
+- `test/fixtures/mixed/mixed.pcapng` (CAN + Ethernet, known counts: 20 CAN + 10 Ethernet)
 
 **TestSteps:**
-1. `boat replay import mixed.pcapng --trace-id mix1`
+1. `boat replay import test/fixtures/mixed/mixed.pcapng --trace-id mix1`
 2. `boat replay stream --trace mix1 --buses vcan0 --eth-iface veth0`
 3. Observe `candump vcan0` and `tcpdump -i veth1` simultaneously
 
@@ -328,7 +328,7 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
   Editor) alongside CAN frames
 
 **TestSteps:**
-1. `boat replay export edited.trace out.pcapng`
+1. `boat replay export test/fixtures/mixed/edited.trace out.pcapng`
 
 **Expected:**
 - CAN/Ethernet frames are exported; TCP/PDU frames are skipped and reported in the
@@ -358,10 +358,10 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **TestSets:** [Replay], [Error]
 
 **Preconditions:**
-- A file `notes.txt`
+- A file `test/fixtures/eth/notes.txt`
 
 **TestSteps:**
-1. `boat replay import notes.txt --trace-id bad`
+1. `boat replay import test/fixtures/eth/notes.txt --trace-id bad`
 
 **Expected:**
 - Clear "unsupported trace format" error listing the supported suffixes
@@ -377,7 +377,7 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 - A truncated/corrupted `.pcapng` (e.g. valid file with the last 3 bytes removed)
 
 **TestSteps:**
-1. `boat replay import corrupt.pcapng --trace-id bad`
+1. `boat replay import test/fixtures/mixed/corrupt.pcapng --trace-id bad`
 
 **Expected:**
 - A hard, descriptive error (invalid/truncated pcapng) — not a silent partial import
@@ -390,11 +390,12 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 
 **Preconditions:**
 - Gateway running with `BOAT_CAN_INTERFACES=vcan0`
-- A large synthetic ASC (200,000 frames at 1 ms, ~12.8 MB):
-  `python3 -c "import sys;o=open('big.asc','w');o.write('date Mon Nov 23 12:00:00.000 am 2026\nbase hex  timestamps absolute\nno internal events logged\n');[o.write('%11.6f 1  %X             Rx   d 8 %s 00 00 00 00\n'%(i*0.001,0x100+i%16,' '.join('%02X'%((i>>s)&255) for s in (0,8,16,24)))) for i in range(200000)]"`
+- A large synthetic ASC (200,000 frames at 1 ms, ~12.8 MB), generated with
+  `python3 test/fixtures/make_fixtures.py --big`
+  (`test/fixtures/can/big.asc`; not committed because of its size)`
 
 **TestSteps:**
-1. `boat replay import big.asc --trace-id big_trace`
+1. `boat replay import test/fixtures/can/big.asc --trace-id big_trace`
 
 **Expected:**
 - `accepted True`, `frames 200000`, size ~6.2 MB -- above gRPC's 4 MiB unary limit, so this
@@ -407,12 +408,12 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **TestSets:** [Replay], [Error]
 
 **Preconditions:**
-- `small.asc`: the first 50 lines of `big.asc` from TC_Replay_023
+- `test/fixtures/can/small.asc` (47 frames; the first 50 lines of the generated `big.asc`)
 
 **TestSteps:**
-1. `boat replay import small.asc --trace-id ../../tmp/evil; echo rc=$?`
-2. `boat replay import small.asc --trace-id a/b; echo rc=$?`
-3. `boat replay import small.asc --trace-id ok.trace-1; echo rc=$?`
+1. `boat replay import test/fixtures/can/small.asc --trace-id ../../tmp/evil; echo rc=$?`
+2. `boat replay import test/fixtures/can/small.asc --trace-id a/b; echo rc=$?`
+3. `boat replay import test/fixtures/can/small.asc --trace-id ok.trace-1; echo rc=$?`
 4. `ls /tmp/evil* /tmp/*.trace`
 
 **Expected:**

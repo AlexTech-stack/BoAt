@@ -133,7 +133,7 @@ via `./start_ui.sh`.
 **TestSets:** [WebUIs], [PDU]
 
 **Preconditions:**
-- A PDU database with scaled signals loaded in the Commander
+- `test/fixtures/pdu_db/pdu_db_mixed_signals.json` loaded in the Commander
 
 **TestSteps:**
 1. Select a message, set signal values in engineering units, send

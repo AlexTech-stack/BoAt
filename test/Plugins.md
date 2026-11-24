@@ -70,7 +70,8 @@ files built under `build/debug/src/plugins/`.
 **TestSets:** [Plugins], [CAN]
 
 **Preconditions:**
-- A test plugin that publishes a CAN frame from `on_tick`
+- The test traffic plugin, publishing a CAN frame from `on_tick`:
+  `BOAT_NODE_PLUGINS=<build>/src/tests/traffic_plugin.so?{"iface":"vcan0","can_id":"0x321","period_ticks":100}`
 
 **TestSteps:**
 1. Load the plugin; watch `candump vcan0`
@@ -86,8 +87,8 @@ files built under `build/debug/src/plugins/`.
 **TestSets:** [Plugins], [Simulation]
 
 **Preconditions:**
-- A node plugin loaded via `BOAT_NODE_PLUGINS` and a scenario declaring a
-  simulation-scoped plugin
+- A node plugin loaded via `BOAT_NODE_PLUGINS` and `test/fixtures/scenarios/scenario_traffic.json`
+  declaring the simulation-scoped `traffic_plugin.so`
 
 **TestSteps:**
 1. Start the simulation; confirm both plugins are active

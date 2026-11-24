@@ -96,8 +96,8 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0` and
 **TestSets:** [PDU], [WebUIs]
 
 **Preconditions:**
-- A PDU database with a message containing Intel and Motorola signals with
-  factor/offset scaling; Commander UI running (port 8082)
+- `test/fixtures/pdu_db/pdu_db_mixed_signals.json` (a message with Intel and
+  Motorola signals, both factor/offset scaled); Commander UI running (port 8082)
 
 **TestSteps:**
 1. In the Commander, load the database, set signal values (e.g. MotorSpeed = 1000),

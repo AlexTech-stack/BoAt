@@ -1,0 +1,15 @@
+{
+  "id": "scenario_traffic",
+  "name": "Scenario traffic generator",
+  "version": "1.0.0",
+  "duration_ticks": 1000000,
+  "seed": 7,
+  "plugins": [
+    {
+      "so_path": "build/debug/src/tests/traffic_plugin.so",
+      "config_json": "{\"iface\":\"vcan0\",\"can_id\":\"0x321\",\"period_ticks\":100,\"payload\":\"0102030405060708\"}"
+    }
+  ],
+  "signals": [],
+  "faults": []
+}

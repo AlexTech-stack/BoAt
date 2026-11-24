@@ -6,7 +6,7 @@ and the `dbc2boatjson.py` converter. These must work **without** a running gatew
 except where a test explicitly says otherwise.
 
 Common precondition: tools running (`./start_tools.sh`); sample traces available
-(a CAN `.blf`, an Ethernet `.pcap` with DoIP/SOME/IP traffic, a mixed `.pcapng`).
+(`test/fixtures/can/recording.blf`, `test/fixtures/eth/capture_rich.pcap`, `test/fixtures/mixed/mixed.pcapng`).
 
 ---
 
@@ -88,7 +88,7 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - Common preconditions of this TestSet (see top of file)
 
 **TestSteps:**
-1. In the Trace Analyzer (8088), enter the path to the sample `.blf`, run the
+1. In the Trace Analyzer (8088), enter the path to `test/fixtures/can/recording.blf`, run the
    message-identification stage
 
 **Expected:**
@@ -140,7 +140,7 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - Common preconditions of this TestSet (see top of file)
 
 **TestSteps:**
-1. Use the analyzer's Convert action on the sample `.blf`
+1. Use the analyzer's Convert action on `test/fixtures/can/recording.blf`
 2. Open the produced `.trace` in the Trace Editor
 
 **Expected:**
@@ -157,7 +157,7 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - Common preconditions of this TestSet (see top of file)
 
 **TestSteps:**
-1. Analyze a mixed `.pcapng` in the Trace Analyzer (8088)
+1. Analyze `test/fixtures/mixed/mixed.pcapng` in the Trace Analyzer (8088)
 
 **Expected:**
 - CAN records are analyzed normally; Ethernet records are skipped with an explicit
@@ -173,7 +173,7 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - Common preconditions of this TestSet (see top of file)
 
 **TestSteps:**
-1. In the Trace Editor (8089), load a `.trace`; filter by CAN ID; edit one frame's
+1. In the Trace Editor (8089), load `test/fixtures/mixed/edited.trace`; filter by CAN ID; edit one frame's
    payload; observe the DLC field
 2. Save; reload the file
 
@@ -206,7 +206,7 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 **TestSets:** [Tools], [TraceEditor], [PCAPNG]
 
 **Preconditions:**
-- A loaded trace containing CAN and Ethernet frames (and, if available, a PDU frame)
+- The loaded `test/fixtures/mixed/edited.trace` (CAN + Ethernet + TCP + PDU records)
 
 **TestSteps:**
 1. Click **Export to PCAPNG**, give a filename
@@ -243,7 +243,7 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 - Common preconditions of this TestSet (see top of file)
 
 **TestSteps:**
-1. In the Eth Analyzer (8090), analyze the sample `.pcap`
+1. In the Eth Analyzer (8090), analyze `test/fixtures/eth/capture_rich.pcap`
 
 **Expected:**
 - EtherType/VLAN histograms, MAC/IP node inventory with role hints, UDP flows with
@@ -257,7 +257,7 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 **TestSets:** [Tools], [TraceAnalysis]
 
 **Preconditions:**
-- A capture containing AUTOSAR PDU-multiplexed UDP flows
+- `test/fixtures/eth/capture_rich.pcap` (AUTOSAR PDU-multiplexed UDP flows)
 
 **TestSteps:**
 1. Run stage 1; then the AUTOSAR PDU stage
@@ -278,7 +278,7 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 
 **TestSteps:**
 1. Export a results table to CSV; open it
-2. Analyze a mixed `.pcapng` with the Eth Analyzer
+2. Analyze `test/fixtures/mixed/mixed.pcapng` with the Eth Analyzer
 
 **Expected:**
 - CSV matches the on-screen table (headers + rows)
@@ -292,11 +292,11 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 **TestSets:** [Tools], [PDU], [CLI]
 
 **Preconditions:**
-- A representative `.dbc` with messages, signals (Intel + Motorola), multiplexing,
-  value tables, comments, and GenMsgCycleTime attributes
+- `test/fixtures/dbc/sample.dbc`: messages, signals (Intel + Motorola),
+  multiplexing, value tables, comments, and GenMsgCycleTime attributes
 
 **TestSteps:**
-1. `python3 tools/dbc2boatjson.py boat-platform/config/pdu_db.schema.json input.dbc out.json --validate`
+1. `python3 tools/dbc2boatjson.py boat-platform/config/pdu_db.schema.json test/fixtures/dbc/sample.dbc out.json --validate`
 2. Open `out.json` in the PDU Editor; `boat db show --db out.json --msg <MessageName>`
 
 **Expected:**
@@ -314,8 +314,8 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 
 **TestSteps:**
 1. In the Trace Analyzer, submit a path that does not exist, then a file with an
-   unsupported suffix (e.g. `.txt`), then (CAN analyzer) a `.pcap`
-2. In the Eth Analyzer, submit a `.blf`
+   unsupported suffix (`test/fixtures/eth/notes.txt`), then (CAN analyzer) `test/fixtures/eth/capture.pcap`
+2. In the Eth Analyzer, submit `test/fixtures/can/recording.blf`
 
 **Expected:**
 - Each case returns a specific, human-readable error (404 file not found / 400
@@ -329,9 +329,9 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 **TestSets:** [Tools], [PDU]
 
 **Preconditions:**
-- A `.dbc` with a scaled signal, e.g.
-  `SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|400] "km/h" Vector__XXX` and an offset signal
-  `SG_ OutsideTemp : 16|8@1+ (0.5,-50) [-50|77.5] "degC" Vector__XXX`
+- `test/fixtures/dbc/sample.dbc`, which contains the scaled signal
+  `SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|400] "km/h" ECU2` and the offset signal
+  `SG_ OutsideTemp : 16|8@0+ (0.5,-50) [-50|77.5] "degC" ECU2`
 
 **TestSteps:**
 1. Convert with `tools/dbc2boatjson.py` as in TC_Tools_017

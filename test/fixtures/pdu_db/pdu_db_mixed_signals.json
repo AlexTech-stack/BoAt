@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "messages": [
+    {
+      "DbId": 100,
+      "MessageName": "MixedSignals",
+      "Bus": "Test_CAN",
+      "BusType": "CAN",
+      "MessageType": 0,
+      "Direction": 0,
+      "RoutingType": 0,
+      "TargetDbIds": null,
+      "SourceDbId": null,
+      "isE2E": 0,
+      "SendType": "Cyclic",
+      "CycleTime": 100,
+      "CycleTimeFast": 0,
+      "NrOfRepetitions": 0,
+      "Identifier": 801,
+      "FrameType": 0,
+      "Length": 8,
+      "BRS": false,
+      "signalcount": 2,
+      "signals": [
+        {
+          "id": 1,
+          "SignalName": "MotorSpeed",
+          "Length": 16,
+          "StartPos": 0,
+          "ByteOrder": 0,
+          "ValueType": "Unsigned",
+          "SigSendType": true,
+          "Repetitions": 0,
+          "InitValue": 0,
+          "Factor": 0.5,
+          "Offset": 0.0,
+          "Min": 0.0,
+          "Max": 32767.5,
+          "Unit": "rpm",
+          "EnumValues": null
+        },
+        {
+          "id": 2,
+          "SignalName": "OutsideTemp",
+          "Length": 8,
+          "StartPos": 23,
+          "ByteOrder": 1,
+          "ValueType": "Signed",
+          "SigSendType": false,
+          "Repetitions": 0,
+          "InitValue": 0,
+          "Factor": 0.5,
+          "Offset": -50.0,
+          "Min": -50.0,
+          "Max": 77.5,
+          "Unit": "degC",
+          "EnumValues": null
+        }
+      ]
+    }
+  ],
+  "signal_routes": []
+}

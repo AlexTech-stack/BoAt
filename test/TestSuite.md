@@ -45,6 +45,15 @@ These sets exist only as `[tags]` on TestCases defined in the files above:
 | [TraceAnalysis] | Analyzer functionality | TC_Tools_005–009, TC_Tools_014–016 |
 | [TraceEditor] | Trace Editor functionality | TC_Tools_010–013 |
 
+## Fixtures
+
+Input files the cases refer to live under [`fixtures/`](fixtures/) — CAN
+recordings, Ethernet captures, mixed pcapng/trace files, PDU databases, DBCs,
+scenarios, and the test-only plugin sources. Regenerate the binary ones with
+`python3 test/fixtures/make_fixtures.py` (add `--big` for the 12.8 MB ASC) and
+build the test plugins with `cmake --build --preset debug`. See
+[`fixtures/README.md`](fixtures/README.md) and `fixtures/manifest.json`.
+
 ## Recording results
 
 A **campaign** is one run of the suite against a specific build/host, stored as

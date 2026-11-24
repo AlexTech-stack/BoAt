@@ -2,8 +2,10 @@
 
 System-level tests for the simulation lifecycle and the determinism guarantee.
 
-Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0`; at least one
-valid scenario available (`boat scenario list`).
+Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0`; the
+`test/fixtures/scenarios/` files are available and the test-only plugins are
+built (`cmake --build --preset debug`, giving
+`build/debug/src/tests/traffic_plugin.so`).
 
 ---
 
@@ -12,12 +14,14 @@ valid scenario available (`boat scenario list`).
 **TestSets:** [Simulation], [CLI]
 
 **Preconditions:**
-- Scenario `my_scenario` exists
+- `test/fixtures/scenarios/scenario_traffic.json` available (its
+  `traffic_plugin.so` publishes one CAN frame every 100 ticks on `vcan0`)
 
 **TestSteps:**
-1. `boat sim create --scenario my_scenario` (note the returned simulation id)
-2. `boat sim start <id>`
-3. `boat sim state <id>`
+1. `boat scenario create --file test/fixtures/scenarios/scenario_traffic.json`
+2. `boat sim create --scenario scenario_traffic` (note the returned simulation id)
+3. `boat sim start <id>`
+4. `boat sim state <id>`
 
 **Expected:**
 - Create returns a simulation id; state transitions IDLE → RUNNING
@@ -30,7 +34,7 @@ valid scenario available (`boat scenario list`).
 **TestSets:** [Simulation], [CLI]
 
 **Preconditions:**
-- A running simulation producing cyclic traffic
+- A running simulation from `scenario_traffic` (its plugin publishes every 100 ticks)
 
 **TestSteps:**
 1. `boat sim pause <id>` — watch `candump vcan0`
@@ -47,7 +51,7 @@ valid scenario available (`boat scenario list`).
 **TestSets:** [Simulation], [CLI], [Determinism]
 
 **Preconditions:**
-- A paused simulation whose scenario sends one frame every N ticks
+- A paused simulation from `scenario_traffic` (the plugin's `period_ticks` is 100)
 
 **TestSteps:**
 1. `boat sim step <id> --ticks 500`
@@ -55,7 +59,9 @@ valid scenario available (`boat scenario list`).
 
 **Expected:**
 - Exactly the number of frames corresponding to 500 ticks is emitted, then the
-  simulation is paused again — no free-running drift
+  simulation is paused again — no free-running drift. With `period_ticks: 100`
+  that is `floor((T+500)/100) - floor(T/100)` frames, where `T` is the tick the
+  simulation was paused at (5 or 6 unless `T` is a multiple of 100)
 
 ---
 
@@ -205,8 +211,8 @@ valid scenario available (`boat scenario list`).
 **TestSets:** [Simulation], [Error]
 
 **Preconditions:**
-- Two scenarios uploaded: `boat scenario create --file boat-platform/config/scenarios/example.json`,
-  and a copy with `"id": "example_b"`
+- Two scenarios uploaded: `boat scenario create --file boat-platform/config/scenarios/example.json`
+  and `boat scenario create --file test/fixtures/scenarios/example_b.json`
 
 **TestSteps:**
 1. `boat sim create --scenario example` (note id A), `boat sim create --scenario example_b` (id B)
