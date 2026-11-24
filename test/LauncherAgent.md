@@ -288,3 +288,81 @@ that gateway produced the correct reply on the wire (`candump`:
 running both returned `409` naming the node id. `GET .../log` showed the
 `[agent] started PID ... (BOAT_HOST=localhost:50056)` line. After `stop`
 (`exit_code: 0`), `PUT` renamed it cleanly, and `DELETE` succeeded.
+
+---
+
+### TC_LauncherAgent_010_loopback_bind_by_default
+
+**TestSets:** [LauncherAgent], [Error]
+
+**Preconditions:**
+- No agent on port 8095
+
+**TestSteps:**
+1. `BOAT_AGENT_PORT=8095 python3 ui/launcher_agent.py`; `ss -ltn | grep 8095`
+2. Repeat with `BOAT_AGENT_BIND=` (set but empty)
+3. Repeat with `BOAT_AGENT_BIND=0.0.0.0`
+4. From another host, `curl http://<this-host>:8095/api/host/info` in each configuration
+
+**Expected:**
+- Steps 1 and 2: listens on `127.0.0.1:8095` only -- an empty value means loopback, not every
+  interface (this is a **BREAKING** change in v0.2.0)
+- Step 3: listens on `0.0.0.0:8095` (the explicit opt-in for federated `admin_gui` use)
+- Step 4: refused in steps 1-2, answered in step 3
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_LauncherAgent_011_adopt_external_gateway
+
+**TestSets:** [LauncherAgent]
+
+**Preconditions:**
+- A gateway started by hand (not by the agent), e.g. on port 50061 with vcan0 and plugins
+- Agent running on 8095
+
+**TestSteps:**
+1. `curl -s localhost:8095/api/instances` -- find the `external:<pid>` row
+2. `curl -s -X POST localhost:8095/api/instances/external:<pid>/adopt -H 'content-type: application/json' -d '{"name":"adopted-gw"}'`
+3. `curl -s localhost:8095/api/instances`
+4. Stop the adopted instance through the agent; then Start it
+
+**Expected:**
+- Step 1: row with `"managed": false`, `"status": "running"`, the gateway's real port,
+  interfaces and plugin configs (recovered from `/proc/<pid>/environ`)
+- Step 2: returns a new short id, `"name": "adopted-gw"`, `"managed": true`, same pid --
+  the gateway is **not** restarted
+- Step 3: the `external:` row is gone, replaced by the managed one
+- Step 4: Stop signals the adopted pid and the gateway exits; Start spawns a fresh,
+  normally-managed gateway with the same config (#40)
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_LauncherAgent_012_stopped_definitions_persist
+
+**TestSets:** [LauncherAgent]
+
+**Preconditions:**
+- Agent running with `BOAT_AGENT_STATE_FILE=/tmp/agent_state.json`
+
+**TestSteps:**
+1. `curl -s -X POST localhost:8095/api/instances -H 'content-type: application/json' -d '{"name":"persist-me","can_ifaces":["vcan0"],"grpc_port":50071}'`
+2. `ls -l /tmp/agent_state.json`; inspect its JSON
+3. Restart the agent with the same state file; `curl -s localhost:8095/api/instances`
+
+**Expected:**
+- Step 2: mode `-rw-------` (0600); contains `persist-me` with `status` absent (definitions
+  only); a *running* adopted/managed gateway is deliberately **not** in the file
+- Step 3: `persist-me` is back as `stopped`, `managed: true`; a still-running hand-started
+  gateway reappears as `external:<pid>`, not duplicated
+
+**Verdict:** NOT_TESTED
+
+**Result:**

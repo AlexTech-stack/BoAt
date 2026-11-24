@@ -265,7 +265,20 @@ TEST_CASE("TraceService StreamTrace readers survive repeated StartReplay/StopRep
   constexpr std::uint64_t kEvents = 512;
   constexpr std::uint32_t kPayload = 1024;
   constexpr int kReaders = 4;
+  // TSan slows this loop ~25x: 200 cycles took 293 s against the preset's
+  // 300 s timeout, so the job was one slow runner away from red. TSan is here
+  // to catch the race, which needs interleavings, not repetitions.
+#if defined(__SANITIZE_THREAD__)
+  constexpr int kCycles = 40;
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+  constexpr int kCycles = 40;
+#else
   constexpr int kCycles = 200;
+#endif
+#else
+  constexpr int kCycles = 200;
+#endif
 
   TraceFixture f("trace_svc_cycle");
   f.AddTrace("trace_svc_cycle", BuildHeaderTrace(kEvents, kPayload));

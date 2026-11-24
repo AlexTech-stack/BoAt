@@ -1144,8 +1144,9 @@ node.run()                              <span class="cm"># block until stop()</s
 
 <p class="note">There is deliberately no <code>send_tcp()</code>. TCP is
 connection-oriented, so <code>FrameService.SendFrame</code> rejects a TCP frame with
-<code>UNIMPLEMENTED</code> by design — drive TCP through the <code>tcp.so</code> plugin's
-own connection API instead.</p>
+<code>UNIMPLEMENTED</code> by design. The <code>tcp.so</code> plugin is experimental and
+does not yet expose an API to open a connection, so TCP cannot be driven from the SDK
+today.</p>
 
 <!-- ═══ SDK BUSNODE ═══ -->
 <h2 id="sdk-busnode">Python SDK — BusNode</h2>

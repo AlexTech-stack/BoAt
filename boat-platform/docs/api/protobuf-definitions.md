@@ -89,8 +89,9 @@ can be diffed. `boat config show` is the CLI front end.
 <!-- END GENERATED: rpcs-FrameService -->
 
 The unified send/subscribe path for every bus type (`can`, `canfd`, `eth`, `tcp`,
-`pdu`). A `tcp` send returns `UNIMPLEMENTED` (TCP is driven through the TCP
-plugin's connection API); a `pdu` send is dispatched to the `pdu_router` plugin.
+`pdu`). A `tcp` send returns `UNIMPLEMENTED`: TCP is connection-oriented, and the
+experimental TCP plugin does not yet expose an API to open a connection; a `pdu` send
+is dispatched to the `pdu_router` plugin.
 
 `ListInterfaces` supersedes the deleted `CanService.ListBuses` and
 `EthernetService.ListInterfaces`, returning one repeated `InterfaceInfo` across

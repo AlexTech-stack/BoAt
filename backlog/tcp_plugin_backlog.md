@@ -166,4 +166,10 @@ Built via `add_boat_plugin()` as a MODULE library. Can't be linked into test exe
 - **Phase C (flow control)** — all 5 items (C5 excluded) implemented. Keepalive default timers (2h idle, 75s interval, 9 retries) match RFC 1122 recommendations.
 - **Nagle** defaults to ON (`"nagle": true`), matching AUTOSAR `[SRS_Eth_00109]` MUST requirement.
 - **Congestion control** is the single largest remaining gap, excluded by design.
-- **The relay script (`tcp_relay.py`)** no longer needs the workaround queue after the recursive mutex fix (B1).
+- **No external API yet (open, v0.2.0, #117).** Nothing outside the unit tests can open a listener or a
+  connection: no config key, gRPC service or exported C function does it, so the plugin is
+  documented as **experimental** and cannot be driven end to end. The `demo/tcp_plugin/` scripts
+  (`tcp_relay.py` etc.) depended on the removed `boat.tcp` C-API wrapper and were deleted, and
+  `TraceReplayer(tcp_plugin_path=...)` now raises `NotImplementedError`. A listen/connect surface
+  (most likely a gRPC service delegated to the plugin, like PDU) is the prerequisite for any TCP
+  system test.

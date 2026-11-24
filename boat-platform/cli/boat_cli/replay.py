@@ -14,6 +14,17 @@ import typer
 from boat.v1 import replay_pb2
 
 from .output import print_error, print_table
+
+
+def _rpc_error_text(exc: Exception) -> str:
+    """Format a gRPC failure the way the other commands do
+    (`RPC error [CODE]: details`) instead of dumping the raw _InactiveRpcError
+    repr with its debug_error_string. Non-gRPC exceptions pass through."""
+    code = getattr(exc, "code", None)
+    details = getattr(exc, "details", None)
+    if callable(code) and callable(details):
+        return f"RPC error [{code().name}]: {details()}"
+    return str(exc)
 from .trace import _resolve_value, _ETHERTYPE_NAMES, _PROTOCOL_NAMES
 
 replay_app = typer.Typer(help="Trace replay: import/export trace files, and start/seek/pause/resume/stop live replays.")
@@ -140,7 +151,7 @@ def stream_replay(
             )
         )
     except Exception as e:
-        print_error(f"StartReplay failed: {e}")
+        print_error(f"StartReplay failed: {_rpc_error_text(e)}")
         raise typer.Exit(1)
 
     if not resp.accepted:
@@ -391,7 +402,7 @@ def cmd_import(
     try:
         response = ctx.obj["client"].replay.ImportTraceDataStream(upload_chunks())
     except Exception as e:
-        print_error(f"ImportTraceDataStream failed: {e}")
+        print_error(f"ImportTraceDataStream failed: {_rpc_error_text(e)}")
         raise typer.Exit(1)
 
     if not response.accepted:

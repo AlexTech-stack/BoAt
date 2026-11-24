@@ -56,7 +56,7 @@ Windows-port scaffolding or docs that imply one.
     - `pdu_router/` — PduRouter plugin (routes PDUs over CAN/Ethernet, transmission engine, deadline monitoring, groups)
     - `can_tp/` — ISO 15765-2 CAN Transport Protocol (segmentation/reassembly)
     - `someip/` — SOME/IP plugin (experimental: protocol constants + a service-discovery stub; the request/response responder is not wired)
-    - `tcp/` — TCP transport plugin (state machine only; transmits via the core Eth registry when gateway-resident)
+    - `tcp/` — TCP transport plugin (experimental: state machine only, no API yet to open a listener or connection; transmits via the core Eth registry when gateway-resident)
     - `probe/` — gateway conformance probe (verifies delivery, declared_buses filtering, self-sent tagging, round-trip from inside the dispatch loop)
   - `src/replay/` — Replay engine
   - `proto/boat/v1/` — the protobuf files declaring the gRPC services; counts and the
@@ -117,13 +117,20 @@ BOAT_CAN_INTERFACES=vcan0 \
   BOAT_NODE_PLUGINS=./build/debug/src/plugins/pdu_router/pdu_router.so,\
 ./build/debug/src/plugins/can_tp/can_tp.so?{\"iface\":\"vcan0\"},\
 ./build/debug/src/plugins/someip/someip.so,\
-./build/debug/src/plugins/tcp/tcp.so?{\"mode\":\"server\",\"listen_port\":8080,\"iface\":\"eth0\"} \
+./build/debug/src/plugins/tcp/tcp.so?{\"iface\":\"eth0\"} \
   ./build/debug/src/gateway/grpc_gateway/boat_gateway
 ```
 
 TCP's `iface` is a tag on frames it publishes through the gateway's `FrameSink`; it does
 **not** open a second wire path. The plugin's own AF_PACKET socket/RX thread is opt-in with
 `"standalone":true` and requires an iface. Gateway-resident instances leave it false.
+
+**The TCP plugin is experimental.** Its state machine is unit-tested (`boat_unit_tcp_state`,
+`boat_unit_tcp_options`), but nothing outside those tests can open a listener or a connection:
+there is no config key, gRPC service or exported C function that does it, so the plugin cannot
+be driven end to end yet. Its config keys are the ones in `src/plugins/tcp/tcp.schema.json` —
+there is no `mode` or `listen_port` key. The `demo/tcp_plugin/` scripts that used the removed
+`boat.tcp` C-API wrapper are gone with it.
 
 ## CAN Hardware Integration
 
@@ -801,7 +808,7 @@ dependency above.
   - `boat plugin list` shows loaded plugins from **both** `PluginManager` instances (sim-scoped + always-on `node_manager`) in one table with a `scope` column — `PluginService` (register/list/info/unload) only ever reaches the sim-scoped one; `NodePluginService` (list/info/unload, no register) reaches `node_manager`. `boat plugin info|unload` need `--scope {sim,node}`; `--scope node` unload additionally needs `--yes`. See `README.md`'s "Dual PluginManager".
   - `FrameService` gRPC provides unified send/subscribe for all bus types
   - `boat frame send` / `boat frame subscribe` CLI replaces `boat can` / `boat eth`
-  - TCP plugin uses v9 ABI (config-driven, gateway-resident); old C API removed
+  - TCP plugin uses v9 ABI (gateway-resident, experimental — no listen/connect API yet); old C API removed
   - `BoatCanFrame`, `BoatEthFrame` and their associated typedefs are removed
   - Architecture reference: `boat-platform/docs/architecture/system-architecture.md`
 

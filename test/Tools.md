@@ -393,3 +393,27 @@ Common precondition: tools running (`./start_tools.sh`); sample traces available
 **Verdict:** NOT_TESTED
 
 **Result:**
+
+---
+
+### TC_Tools_019_dbc2boatjson_minmax_unscaled
+
+**TestSets:** [Tools], [PDU]
+
+**Preconditions:**
+- A `.dbc` with a scaled signal, e.g.
+  `SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|400] "km/h" Vector__XXX` and an offset signal
+  `SG_ OutsideTemp : 16|8@1+ (0.5,-50) [-50|77.5] "degC" Vector__XXX`
+
+**TestSteps:**
+1. Convert with `tools/dbc2boatjson.py` as in TC_Tools_017
+2. Inspect both signals' `Min`/`Max` in the output
+
+**Expected:**
+- `VehicleSpeed` Min/Max `0`/`400` and `OutsideTemp` `-50`/`77.5` -- the DBC range is already
+  physical and is passed through unscaled (#11). Before the fix they came out as `0.0/4.0`
+  and `-75.0/-11.25`
+
+**Verdict:** NOT_TESTED
+
+**Result:**

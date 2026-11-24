@@ -8,6 +8,13 @@
 # after them (issue #51: native amd64 + arm64 builds via portable-build.yml), so
 # the current shape has not run on a tag yet -- push a pre-release tag first and
 # check every job before tagging a real release.
+#
+# The package job *attaches* to a release (`gh release upload`); it does not
+# create one, so the release must exist when the tag is pushed. Create both at
+# once, e.g. for a dry run:
+#   gh release create v0.2.0-rc.1 --prerelease --target master --title "BoAt v0.2.0-rc.1" --notes "dry run"
+# A pre-release tag (anything with a "-") is verified against its X.Y.Z part and
+# never moves the image's :latest tag.
 
 name: release
 
@@ -72,7 +79,11 @@ jobs:
             echo "$deb declares: $pkg $ver $arch"
             test "$pkg" = "boat-platform"
             test "$arch" = "$deb_arch"
-            case "$ver" in ${GITHUB_REF_NAME#v}*) ;; *) echo "::error::deb version $ver does not match tag ${GITHUB_REF_NAME}"; exit 1 ;; esac
+            # Compare against the tag's X.Y.Z only: CMake's project VERSION cannot
+            # carry a pre-release suffix, so a v0.2.0-rc.1 dry run builds 0.2.0
+            # packages and must still pass this check.
+            tag_ver=${GITHUB_REF_NAME#v}; tag_ver=${tag_ver%%-*}
+            case "$ver" in "${tag_ver}"*) ;; *) echo "::error::deb version $ver does not match tag ${GITHUB_REF_NAME}"; exit 1 ;; esac
 
             # And it must actually contain the gateway -- for this architecture.
             rm -rf x && mkdir x && dpkg-deb -x "$deb" x
@@ -82,7 +93,9 @@ jobs:
             # Abseil and upb headers, static libs, CMake configs, .pc files and
             # /usr/bin/protoc, which collides with the distro's protobuf-compiler
             # -- because fetched deps' install rules ran into our install tree.
-            stray=$(cd x && find . -type f | grep -vE '^\./usr/(bin/boat_gateway|include/boat/[^/]+\.h|lib/boat/plugins/[^/]+\.(so|schema\.json))$' || true)
+            # The license texts under share/doc are ours too (#84): without them
+            # this check failed every package once they started shipping.
+            stray=$(cd x && find . -type f | grep -vE '^\./usr/(bin/boat_gateway|include/boat/[^/]+\.h|lib/boat/plugins/[^/]+\.(so|schema\.json)|share/doc/boat-platform/(LICENSE|NOTICE|THIRD_PARTY_NOTICES\.md))$' || true)
             if [ -n "$stray" ]; then
               echo "::error::$deb contains files that are not BoAt's:"; echo "$stray" | head -20
               exit 1
@@ -136,7 +149,17 @@ jobs:
         # registry rejects uppercase, which `github.repository` contains. Derive
         # and lowercase it so this works in whatever namespace the repo lives.
         id: img
-        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+        # A pre-release tag (anything with a "-", e.g. v0.2.0-rc.1) is pushed
+        # under its own tag only; it must never move :latest.
+        run: |
+          name="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "${name}:${GITHUB_REF_NAME}"
+            case "${GITHUB_REF_NAME}" in *-*) ;; *) echo "${name}:latest" ;; esac
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Set up QEMU
         # Only for the arm64 stage's `apt-get install ca-certificates`; nothing
         # is compiled under emulation.
@@ -157,6 +180,4 @@ jobs:
           file: boat-platform/Dockerfile.runtime
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ${{ steps.img.outputs.name }}:${{ github.ref_name }}
-            ${{ steps.img.outputs.name }}:latest
+          tags: ${{ steps.img.outputs.tags }}

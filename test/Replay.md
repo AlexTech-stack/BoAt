@@ -469,3 +469,97 @@ Common precondition: gateway running with `BOAT_CAN_INTERFACES=vcan0,vcan1` and
 **Verdict:** NOT_TESTED
 
 **Result:**
+
+---
+
+### TC_Replay_023_import_larger_than_4mib
+
+**TestSets:** [Replay], [CLI]
+
+**Preconditions:**
+- Gateway running with `BOAT_CAN_INTERFACES=vcan0`
+- A large synthetic ASC (200,000 frames at 1 ms, ~12.8 MB):
+  `python3 -c "import sys;o=open('big.asc','w');o.write('date Mon Nov 23 12:00:00.000 am 2026\nbase hex  timestamps absolute\nno internal events logged\n');[o.write('%11.6f 1  %X             Rx   d 8 %s 00 00 00 00\n'%(i*0.001,0x100+i%16,' '.join('%02X'%((i>>s)&255) for s in (0,8,16,24)))) for i in range(200000)]"`
+
+**TestSteps:**
+1. `boat replay import big.asc --trace-id big_trace`
+
+**Expected:**
+- `accepted True`, `frames 200000`, size ~6.2 MB -- above gRPC's 4 MiB unary limit, so this
+  exercises the client-streaming `ImportTraceDataStream` path (#82); completes in seconds
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_Replay_024_trace_id_validation
+
+**TestSets:** [Replay], [Error]
+
+**Preconditions:**
+- `small.asc`: the first 50 lines of `big.asc` from TC_Replay_023
+
+**TestSteps:**
+1. `boat replay import small.asc --trace-id ../../tmp/evil; echo rc=$?`
+2. `boat replay import small.asc --trace-id a/b; echo rc=$?`
+3. `boat replay import small.asc --trace-id ok.trace-1; echo rc=$?`
+4. `ls /tmp/evil* /tmp/*.trace`
+
+**Expected:**
+- Steps 1-2: `ImportTraceDataStream failed: RPC error [INVALID_ARGUMENT]: trace_id must match
+  [A-Za-z0-9._-]+ and must not be '.' or '..'`, `rc=1` -- one line, no gRPC repr dump (#62)
+- Step 3: accepted, 47 frames
+- Step 4: no `/tmp/evil*`; `/tmp/ok.trace-1.trace` exists
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_Replay_025_pause_resume_no_burst
+
+**TestSets:** [Replay]
+
+**Preconditions:**
+- `big_trace` imported (TC_Replay_023); `candump -L vcan0 > dump.txt` running
+
+**TestSteps:**
+1. `boat replay start --trace big_trace --buses vcan0` (note the replay_id)
+2. After ~2 s: `boat replay pause --replay-id <id>`; wait 3 s
+3. `boat replay resume --replay-id <id>`; after ~2 s `boat replay stop --replay-id <id>`
+4. In `dump.txt`, count frames in the pause window and the densest 10 ms window after resume
+
+**Expected:**
+- No frames during the pause (a ~3 s gap in the timestamps)
+- After resume, the rate returns to ~1 frame/ms -- roughly 10-12 frames in any 10 ms window,
+  never a burst of the ~3,000 records that came due during the pause (#77)
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_Replay_026_unknown_ids_clean_error
+
+**TestSets:** [Replay], [CLI], [Error]
+
+**Preconditions:**
+- Gateway running
+
+**TestSteps:**
+1. `boat replay start --trace no_such_trace; echo rc=$?`
+2. `boat replay seek --tick 5 --replay-id nope; echo rc=$?`
+3. `boat replay pause --replay-id nope`, `resume`, `stop` likewise
+
+**Expected:**
+- Step 1: `RPC error [NOT_FOUND]: trace id not found`, `rc=1`
+- Steps 2-3: `RPC error [NOT_FOUND]: replay not found`, `rc=1`
+- No Python traceback in any step (they used to print one before v0.2.0)
+
+**Verdict:** NOT_TESTED
+
+**Result:**

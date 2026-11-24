@@ -60,12 +60,13 @@ Built and in use:
   oversubscription, a vcan HIL smoke test, and native amd64 + arm64 portable builds that
   also produce the multi-arch container image.
 - **Releases** — `v0.1.0` and `v0.1.1` tagged; TGZ, DEB and RPM packages verified by name,
-  version and content, and attached to the release. amd64 and arm64 packages (and the
-  per-architecture image) are built and exercised on every PR since [#56](https://github.com/AlexTech-stack/BoAt/pull/56);
-  they ship with the next tag.
+  version and content, and attached to the release. `v0.2.0` is the first release to ship
+  amd64 **and** arm64 packages and a per-architecture image, built natively on a glibc 2.28
+  baseline ([#56](https://github.com/AlexTech-stack/BoAt/pull/56)).
 
-Test baseline on `master`: **185 C++ cases** (100% passing in debug and release; 7 HIL cases
-skipped without `BOAT_HIL_ENABLED=1`) and **553 Python cases passing** (8 skipped).
+Test baseline for `v0.2.0` (2026-11-23): **296 C++ cases**, 100% passing in debug, release,
+ASan and TSan with `BOAT_HIL_ENABLED=1` on vcan0 (7 HIL cases skip without it), and **691
+Python cases passing**. The manual system TestSuite (`test/`) has 201 cases.
 
 The pipeline is **green**, TSan included. The [v0.2.0 milestone](https://github.com/AlexTech-stack/BoAt/milestone/1)
 stays open for a consumer-reported defect and the documentation items below, but nothing on

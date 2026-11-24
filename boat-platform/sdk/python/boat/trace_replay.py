@@ -187,12 +187,11 @@ class TraceReplayer:
                         the map fall back to the default behavior
                         (source = auto-detected from interface, destination =
                         broadcast).  Empty dict = default behavior.
-        tcp_plugin_path: Path to the shared library for TCP replay
-                         (e.g. ``"build/debug/src/plugins/tcp/tcp.so"``).
-                         When set, TCP packets from the pcap are replayed
-                         statefully through the plugin rather than being
-                         sent as raw packets.  Protocol filter is applied
-                         against next-header 6 (TCP).
+        tcp_plugin_path: Not supported. Stateful TCP replay went through the
+                         ``boat.tcp`` C-API wrapper, which was removed with
+                         TCP's old C API; the v9 TCP plugin is experimental
+                         and exposes no connection API yet. Passing a value
+                         raises ``NotImplementedError``.
     """
 
     def __init__(
@@ -220,6 +219,14 @@ class TraceReplayer:
         mac_map: Optional[dict[str, str]] = None,
         tcp_plugin_path: Optional[str] = None,
     ) -> None:
+        if tcp_plugin_path:
+            # Fail here rather than with ModuleNotFoundError halfway through a
+            # replay, after the non-TCP frames have already been sent.
+            raise NotImplementedError(
+                "stateful TCP replay (tcp_plugin_path) is not supported: the "
+                "boat.tcp wrapper was removed with TCP's old C API and the v9 "
+                "TCP plugin exposes no connection API yet"
+            )
         # Resolved so the channel opened in _connect() honours BOAT_HOST.
         self.gateway          = resolve_address(gateway)
         self.buses            = buses or []

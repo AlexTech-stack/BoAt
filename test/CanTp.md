@@ -425,3 +425,55 @@ after 1000ms waiting for Flow Control", "expected CF seq 1, got 2"). See
 backlog item #11.
 
 ---
+
+---
+
+### TC_CanTp_016_ff_dl_4095_limit
+
+**TestSets:** [CanTp], [Error]
+
+**Preconditions:**
+- Gateway with `can_tp.so?{"iface":"vcan0"}`; `candump -L vcan0` running
+- `boat can-tp configure --nsdu-id 0x10 --source-addr 0x7E0 --target-addr 0x7E8 --n-bs-ms 300`
+
+**TestSteps:**
+1. `boat can-tp send --nsdu-id 0x10 --data $(python3 -c "print('AB'*4096)"); echo rc=$?`
+2. `boat can-tp send --nsdu-id 0x10 --data $(python3 -c "print('AB'*4095)"); echo rc=$?`
+
+**Expected:**
+- Step 1: `RPC error [INVALID_ARGUMENT]: payload exceeds the 4095-byte ISO 15765-2 FF_DL limit;
+  the 32-bit length escape is not implemented`, `rc=1`, nothing on the bus (#71)
+- Step 2: `multi-frame initiated`, `rc=0`; `candump` shows a First Frame `7E0#1FFF...`
+  (FF_DL = 0xFFF); with no peer it ends in an N_Bs timeout
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_CanTp_017_malformed_flow_control
+
+**TestSets:** [CanTp], [Error], [Timeout]
+
+**Preconditions:**
+- As TC_CanTp_016 (session 0x10, N_Bs 300 ms)
+- `PYTHONUNBUFFERED=1 boat can-tp subscribe-errors` running in a second terminal
+  (unbuffered, or redirected output is lost when the subscriber is stopped)
+
+**TestSteps:**
+1. Send a 20-byte payload (`--data $(python3 -c "print('11'*20)")`), then immediately
+   `cansend vcan0 7E8#33000000` (Flow Status 3 is invalid)
+2. Send again, then `cansend vcan0 7E8#30` (FC missing its BS/STmin bytes)
+3. Send again, then six times `cansend vcan0 7E8#31000000` (FC Wait) in quick succession
+
+**Expected:**
+- Step 1: error `INVALID_FS` -- `peer sent invalid Flow Status 3`
+- Step 2: the short FC is ignored; ~300 ms later `TIMEOUT_BS` -- `N_Bs expired after 300ms
+  waiting for Flow Control`
+- Step 3: `WFT_OVRN` -- `N_WFTmax exceeded (4 consecutive FC(Wait) frames)`
+- Each error carries `nsdu_id 0x10` and `iface vcan0`; the gateway stays up (#72, #73)
+
+**Verdict:** NOT_TESTED
+
+**Result:**

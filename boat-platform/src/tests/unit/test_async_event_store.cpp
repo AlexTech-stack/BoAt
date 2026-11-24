@@ -214,6 +214,101 @@ TEST_CASE("AsyncEventStore counts write failures and keeps draining",
   REQUIRE(flaky->inserted[0].id == "e2");
 }
 
+TEST_CASE("AsyncEventStore Flush is not starved by a steady producer",
+          "[unit][event_store][async]") {
+  // Flush() used to wait for the queue to be *empty*. A producer whose
+  // inter-arrival time is shorter than one batch write keeps it non-empty, so
+  // Query() -- and MetricsService.GetMetrics / GetSignalHistory behind it --
+  // blocked for as long as traffic flowed (e.g. a whole replay).
+  struct SlowStore : boat::store::IEventStore {
+    void InsertBatch(std::span<const boat::store::EventRecord>) override {
+      std::this_thread::sleep_for(2ms);
+    }
+    std::vector<boat::store::EventRecord> Query(
+        const boat::store::EventFilter&) override {
+      return {};
+    }
+  };
+  boat::store::AsyncEventStore::Options options;
+  options.queue_capacity = 1024;
+  options.batch_size = 16;
+  options.flush_interval = 1ms;
+  boat::store::AsyncEventStore store(std::make_unique<SlowStore>(), options);
+
+  std::atomic<bool> run{true};
+  std::thread producer([&] {
+    const std::array<boat::store::EventRecord, 1> event{MakeRecord("p")};
+    while (run.load()) {
+      store.InsertBatch(std::span<const boat::store::EventRecord>(
+          event.data(), event.size()));
+      std::this_thread::sleep_for(50us);
+    }
+  });
+  std::this_thread::sleep_for(50ms);  // let the queue reach steady state
+
+  std::atomic<bool> returned{false};
+  std::thread reader([&] {
+    (void)store.Query({});
+    returned = true;
+  });
+  const bool ok = WaitFor([&] { return returned.load(); }, 2s);
+
+  run = false;
+  producer.join();
+  reader.join();
+  REQUIRE(ok);
+}
+
+TEST_CASE("AsyncEventStore Flush still waits for an older in-flight batch",
+          "[unit][event_store][async]") {
+  // Read-your-writes: records dropped *after* Flush() starts must not let it
+  // return while an older record is still being written.
+  auto inner = std::make_unique<BlockingStore>();
+  auto* blocking = inner.get();
+  boat::store::AsyncEventStore::Options options;
+  options.queue_capacity = 2;
+  options.batch_size = 1;
+  options.flush_interval = 1ms;
+  boat::store::AsyncEventStore store(std::move(inner), options);
+
+  const std::array<boat::store::EventRecord, 1> first{MakeRecord("e1")};
+  store.InsertBatch(
+      std::span<const boat::store::EventRecord>(first.data(), first.size()));
+  REQUIRE(WaitFor([&] {
+    std::lock_guard<std::mutex> lock(blocking->mutex);
+    return blocking->entered;
+  }));
+
+  std::atomic<bool> flushed{false};
+  std::thread flusher([&] {
+    store.Flush();
+    flushed = true;
+  });
+  std::this_thread::sleep_for(20ms);
+
+  // Newer records arrive and overflow the two-slot queue while e1 is in flight.
+  for (const char* id : {"e2", "e3", "e4", "e5"}) {
+    const std::array<boat::store::EventRecord, 1> event{MakeRecord(id)};
+    store.InsertBatch(std::span<const boat::store::EventRecord>(
+        event.data(), event.size()));
+  }
+  REQUIRE(store.DroppedEventCount() == 2);
+  std::this_thread::sleep_for(50ms);
+  REQUIRE_FALSE(flushed.load());
+
+  {
+    std::lock_guard<std::mutex> lock(blocking->mutex);
+    blocking->release = true;
+  }
+  blocking->cv.notify_all();
+  REQUIRE(WaitFor([&] { return flushed.load(); }));
+  flusher.join();
+
+  std::lock_guard<std::mutex> lock(blocking->mutex);
+  REQUIRE(!blocking->inserted.empty());
+  REQUIRE(blocking->inserted.front().id == "e1");
+}
+
 TEST_CASE("AsyncEventStore destructor drains accepted records",
           "[unit][event_store][async]") {
   auto state = std::make_shared<RecordingState>();

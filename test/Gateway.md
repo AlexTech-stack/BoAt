@@ -311,3 +311,70 @@ second-instance refusal) re-verified unaffected -- `TC_Gateway_011` still
 passes with the fix in place, confirming `SO_REUSEADDR` didn't reintroduce
 the `SO_REUSEPORT` port-sharing problem. Full incident writeup in
 `backlog/gateway_backlog.md`.
+
+---
+
+### TC_Gateway_013_effective_config_dump_and_show
+
+**TestSets:** [Gateway], [CLI]
+
+**Preconditions:**
+- vcan0 up; no gateway on port 50061
+
+**TestSteps:**
+1. Start: `BOAT_GRPC_PORT=50061 BOAT_CAN_INTERFACES=vcan0 BOAT_CONFIG_DUMP=/tmp/eff1.json BOAT_NODE_PLUGINS='<build>/pdu_router.so,<build>/can_tp.so?{"iface":"vcan0"}' boat_gateway`
+2. `BOAT_HOST=localhost:50061 boat config show -o /tmp/eff2.json`
+3. Stop the gateway, start it again with identical settings, dump to `/tmp/eff3.json`
+4. Restart once more with `BOAT_NODE_TICK_US=abc` (a typo) and dump again
+5. Restart with `BOAT_CAN_INTERFACES=vcan0,vcan_missing`
+
+**Expected:**
+- Step 1: stderr ends with `1 configuration warning(s)` / `TLS not configured; gRPC is serving
+  in the clear on all interfaces` and `Effective config written to '/tmp/eff1.json'`
+- `/tmp/eff1.json` has `"schema": "boat.gateway.effective_config/v1"`, `"version": "0.2.0"`,
+  `grpc.port` 50061, `event_store.queue_capacity` 16384, `buses.can_opened: [true]`, both
+  plugins with `"loaded": true` and can_tp's verbatim `{"iface":"vcan0"}` config,
+  `tick.interval_ns` 1000000 / `resolved_from: "default"`
+- Step 2: `/tmp/eff2.json` is byte-identical to `/tmp/eff1.json`
+- Step 3: `cmp /tmp/eff1.json /tmp/eff3.json` reports no difference (no timestamp/hostname)
+- Step 4: `warnings` contains `BOAT_NODE_TICK_US='abc' is not a positive integer; ignored`
+  and `tick.interval_ns` stays 1000000 -- recorded, not silent
+- Step 5: `buses.can` is `["vcan0","vcan_missing"]`, `can_opened` is `[true, false]`, and
+  `warnings` contains `CAN interface 'vcan_missing' failed to open`
+
+**Verdict:** NOT_TESTED
+
+**Result:**
+
+---
+
+### TC_Gateway_014_tls_and_mtls
+
+**TestSets:** [Gateway], [CLI], [Error]
+
+**Preconditions:**
+- A throwaway CA, a gateway cert for `localhost` (SAN `DNS:localhost,IP:127.0.0.1`) and a
+  client cert signed by the same CA, e.g.:
+  `openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=boat-test-ca -keyout ca.key -out ca.pem`,
+  then `openssl req -newkey ... | openssl x509 -req -CA ca.pem -CAkey ca.key ...` for `gw.pem/gw.key`
+  and `cl.pem/cl.key`
+
+**TestSteps:**
+1. `BOAT_GRPC_PORT=50062 BOAT_TLS_CERT=gw.pem BOAT_TLS_KEY=gw.key BOAT_TLS_CLIENT_CA=ca.pem boat_gateway`
+2. `export BOAT_HOST=localhost:50062`; `boat frame list-ifaces` (plaintext)
+3. `BOAT_TLS_CA=ca.pem boat frame list-ifaces` (TLS, no client cert)
+4. `BOAT_TLS_CA=ca.pem BOAT_TLS_CLIENT_CERT=cl.pem BOAT_TLS_CLIENT_KEY=cl.key boat frame list-ifaces`
+5. `BOAT_TLS_CA=ca.pem BOAT_TLS_CLIENT_CERT=cl.pem boat frame list-ifaces` (key missing)
+6. Start a gateway with only `BOAT_TLS_CERT` set
+
+**Expected:**
+- Step 1: starts; no "TLS not configured" warning
+- Steps 2 and 3: refused (`UNAVAILABLE ... Socket closed`), non-zero exit
+- Step 4: interface table printed
+- Step 5: client-side `TlsConfigError` saying the client cert and key must be set together --
+  no silent fallback to plaintext
+- Step 6: `[tls] BOAT_TLS_CERT and BOAT_TLS_KEY must be set together; refusing to start`, exit 1
+
+**Verdict:** NOT_TESTED
+
+**Result:**
