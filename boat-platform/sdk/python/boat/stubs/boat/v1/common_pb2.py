@@ -24,13 +24,14 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14\x62oat/v1/common.proto\x12\x07\x62oat.v1\":\n\x11PaginationRequest\x12\x11\n\tpage_size\x18\x01 \x01(\r\x12\x12\n\npage_token\x18\x02 \x01(\t\"A\n\x12PaginationResponse\x12\x17\n\x0fnext_page_token\x18\x01 \x01(\t\x12\x12\n\ntotal_size\x18\x02 \x01(\r\"\x93\x01\n\x0b\x45rrorDetail\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x34\n\x08metadata\x18\x03 \x03(\x0b\x32\".boat.v1.ErrorDetail.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01*\xc3\x01\n\x0fSimulationState\x12 \n\x1cSIMULATION_STATE_UNSPECIFIED\x10\x00\x12\x19\n\x15SIMULATION_STATE_IDLE\x10\x01\x12\x1c\n\x18SIMULATION_STATE_RUNNING\x10\x02\x12\x1b\n\x17SIMULATION_STATE_PAUSED\x10\x03\x12\x1c\n\x18SIMULATION_STATE_STOPPED\x10\x04\x12\x1a\n\x16SIMULATION_STATE_ERROR\x10\x05\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x14\x62oat/v1/common.proto\x12\x07\x62oat.v1\":\n\x11PaginationRequest\x12\x11\n\tpage_size\x18\x01 \x01(\r\x12\x12\n\npage_token\x18\x02 \x01(\t\"A\n\x12PaginationResponse\x12\x17\n\x0fnext_page_token\x18\x01 \x01(\t\x12\x12\n\ntotal_size\x18\x02 \x01(\r\"\x93\x01\n\x0b\x45rrorDetail\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x34\n\x08metadata\x18\x03 \x03(\x0b\x32\".boat.v1.ErrorDetail.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01*\xc3\x01\n\x0fSimulationState\x12 \n\x1cSIMULATION_STATE_UNSPECIFIED\x10\x00\x12\x19\n\x15SIMULATION_STATE_IDLE\x10\x01\x12\x1c\n\x18SIMULATION_STATE_RUNNING\x10\x02\x12\x1b\n\x17SIMULATION_STATE_PAUSED\x10\x03\x12\x1c\n\x18SIMULATION_STATE_STOPPED\x10\x04\x12\x1a\n\x16SIMULATION_STATE_ERROR\x10\x05\x42\x15\n\x11\x63om.boat.proto.v1P\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boat.v1.common_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
+  _globals['DESCRIPTOR']._loaded_options = None
+  _globals['DESCRIPTOR']._serialized_options = b'\n\021com.boat.proto.v1P\001'
   _globals['_ERRORDETAIL_METADATAENTRY']._loaded_options = None
   _globals['_ERRORDETAIL_METADATAENTRY']._serialized_options = b'8\001'
   _globals['_SIMULATIONSTATE']._serialized_start=311

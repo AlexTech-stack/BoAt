@@ -24,13 +24,14 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x15\x62oat/v1/control.proto\x12\x07\x62oat.v1\"\x0e\n\x0cStartCommand\"\x0e\n\x0cPauseCommand\"\x1c\n\x0bStepCommand\x12\r\n\x05ticks\x18\x01 \x01(\r\"\x0e\n\x0cResetCommand\"\r\n\x0bStopCommand\"%\n\x12InjectFaultCommand\x12\x0f\n\x07payload\x18\x01 \x01(\x0c\"\x13\n\x11QueryStateCommand\"\x97\x03\n\x11UdsControlMessage\x12&\n\x05start\x18\x01 \x01(\x0b\x32\x15.boat.v1.StartCommandH\x00\x12&\n\x05pause\x18\x02 \x01(\x0b\x32\x15.boat.v1.PauseCommandH\x00\x12$\n\x04step\x18\x03 \x01(\x0b\x32\x14.boat.v1.StepCommandH\x00\x12&\n\x05reset\x18\x04 \x01(\x0b\x32\x15.boat.v1.ResetCommandH\x00\x12$\n\x04stop\x18\x05 \x01(\x0b\x32\x14.boat.v1.StopCommandH\x00\x12\x33\n\x0cinject_fault\x18\x06 \x01(\x0b\x32\x1b.boat.v1.InjectFaultCommandH\x00\x12\x31\n\x0bquery_state\x18\x07 \x01(\x0b\x32\x1a.boat.v1.QueryStateCommandH\x00\x12\x15\n\rpayload_bytes\x18\x08 \x01(\x0c\x12\x19\n\x11shm_payload_topic\x18\t \x01(\t\x12\x19\n\x11shm_payload_token\x18\n \x01(\x04\x42\t\n\x07\x63ommand\"H\n\x12UdsControlResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x15\n\rpayload_bytes\x18\x03 \x01(\x0c\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x15\x62oat/v1/control.proto\x12\x07\x62oat.v1\"\x0e\n\x0cStartCommand\"\x0e\n\x0cPauseCommand\"\x1c\n\x0bStepCommand\x12\r\n\x05ticks\x18\x01 \x01(\r\"\x0e\n\x0cResetCommand\"\r\n\x0bStopCommand\"%\n\x12InjectFaultCommand\x12\x0f\n\x07payload\x18\x01 \x01(\x0c\"\x13\n\x11QueryStateCommand\"\x97\x03\n\x11UdsControlMessage\x12&\n\x05start\x18\x01 \x01(\x0b\x32\x15.boat.v1.StartCommandH\x00\x12&\n\x05pause\x18\x02 \x01(\x0b\x32\x15.boat.v1.PauseCommandH\x00\x12$\n\x04step\x18\x03 \x01(\x0b\x32\x14.boat.v1.StepCommandH\x00\x12&\n\x05reset\x18\x04 \x01(\x0b\x32\x15.boat.v1.ResetCommandH\x00\x12$\n\x04stop\x18\x05 \x01(\x0b\x32\x14.boat.v1.StopCommandH\x00\x12\x33\n\x0cinject_fault\x18\x06 \x01(\x0b\x32\x1b.boat.v1.InjectFaultCommandH\x00\x12\x31\n\x0bquery_state\x18\x07 \x01(\x0b\x32\x1a.boat.v1.QueryStateCommandH\x00\x12\x15\n\rpayload_bytes\x18\x08 \x01(\x0c\x12\x19\n\x11shm_payload_topic\x18\t \x01(\t\x12\x19\n\x11shm_payload_token\x18\n \x01(\x04\x42\t\n\x07\x63ommand\"H\n\x12UdsControlResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x15\n\rpayload_bytes\x18\x03 \x01(\x0c\x42\x15\n\x11\x63om.boat.proto.v1P\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boat.v1.control_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
+  _globals['DESCRIPTOR']._loaded_options = None
+  _globals['DESCRIPTOR']._serialized_options = b'\n\021com.boat.proto.v1P\001'
   _globals['_STARTCOMMAND']._serialized_start=34
   _globals['_STARTCOMMAND']._serialized_end=48
   _globals['_PAUSECOMMAND']._serialized_start=50
